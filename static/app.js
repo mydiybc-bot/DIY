@@ -5,8 +5,6 @@ const roleSelect = document.getElementById("role");
 const employeeLoginFields = document.getElementById("employee-login-fields");
 const sessionTitle = document.getElementById("session-title");
 const sessionSubtitle = document.getElementById("session-subtitle");
-const sessionRoleChip = document.getElementById("session-role-chip");
-const chatForm = document.getElementById("chat-form");
 const sectionSelect = document.getElementById("section-select");
 const startButton = document.getElementById("start-button");
 const activeSection = document.getElementById("active-section");
@@ -20,6 +18,7 @@ const practiceExitWrap = document.getElementById("practice-exit-wrap");
 const practiceLogoutButton = document.getElementById("practice-logout-button");
 const practiceTab = document.getElementById("practice-tab");
 const adminTab = document.getElementById("admin-tab");
+const modeSwitch = document.querySelector(".mode-switch");
 const practiceView = document.getElementById("practice-view");
 const adminView = document.getElementById("admin-view");
 const rulesForm = document.getElementById("rules-form");
@@ -40,18 +39,25 @@ const reportsList = document.getElementById("reports-list");
 const addEmployeeButton = document.getElementById("add-employee-button");
 const adminFeedback = document.getElementById("admin-feedback");
 const adminLogoutButton = document.getElementById("admin-logout-button");
+const adminNavButtons = [...document.querySelectorAll("[data-admin-nav]")];
+const adminPanels = [...document.querySelectorAll("[data-admin-panel]")];
 
 let trainingActive = false;
 let lastCoachMessage = "";
-let recognition = null;
 let speechReady = false;
-let recognitionReady = false;
+let mediaReady = false;
 let isListening = false;
+let mediaRecorder = null;
+let mediaStream = null;
+let recordedChunks = [];
+let discardRecording = false;
+let responsePending = false;
 let currentConfig = null;
 let currentSessionInfo = null;
 let currentRole = null;
 let currentAuth = null;
 let currentReports = [];
+let currentAdminSection = "accounts";
 let reportFilters = {
   employee_id: "",
   section_id: "",
@@ -59,7 +65,6 @@ let reportFilters = {
   date_to: "",
 };
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const RULE_FIELDS = [
   { key: "assistant_role", label: "AI 角色設定", type: "textarea" },
   { key: "question_suffix", label: "每題結尾句" },
@@ -81,7 +86,6 @@ const AUTH_FIELDS = [
 function updateSessionBanner(title, subtitle, roleLabel = null) {
   sessionTitle.textContent = title;
   sessionSubtitle.textContent = subtitle;
-  if (roleLabel) sessionRoleChip.textContent = roleLabel;
 }
 
 function setVoiceStatus(text) {
@@ -92,16 +96,31 @@ function setMode(mode) {
   const practice = mode === "practice";
   practiceView.classList.toggle("hidden", !practice);
   adminView.classList.toggle("hidden", practice);
-  practiceTab.classList.toggle("active", practice);
-  adminTab.classList.toggle("active", !practice);
+  if (practiceTab) practiceTab.classList.toggle("active", practice);
+  if (adminTab) adminTab.classList.toggle("active", !practice);
+}
+
+function setAdminSection(section) {
+  currentAdminSection = section;
+  adminNavButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.adminNav === section);
+  });
+  adminPanels.forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.adminPanel !== section);
+  });
 }
 
 function updateRoleUi() {
   const isAdmin = currentRole === "admin";
-  adminTab.classList.toggle("hidden", !isAdmin);
-  if (!isAdmin) {
-    setMode("practice");
+  if (modeSwitch) {
+    modeSwitch.classList.add("hidden");
   }
+  if (isAdmin) {
+    setMode("admin");
+    setAdminSection(currentAdminSection);
+    return;
+  }
+  setMode("practice");
 }
 
 function speak(text) {
@@ -113,10 +132,105 @@ function speak(text) {
   window.speechSynthesis.speak(utterance);
 }
 
+function refreshActionState() {
+  voiceButton.disabled = responsePending || !trainingActive || !mediaReady;
+  startButton.disabled = responsePending || isListening;
+  speakButton.disabled = responsePending || isListening;
+}
+
 function stopListeningUi() {
   isListening = false;
   voiceButton.classList.remove("listening");
   voiceButton.textContent = "開始說話";
+  refreshActionState();
+}
+
+function releaseRecordingResources() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+  }
+  mediaRecorder = null;
+  recordedChunks = [];
+}
+
+function getRecordingMimeType() {
+  if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/mp4",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+  ];
+  return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+async function startRecording() {
+  if (!mediaReady || responsePending || isListening || !trainingActive) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getRecordingMimeType();
+    const options = mimeType ? { mimeType } : undefined;
+    mediaStream = stream;
+    mediaRecorder = new MediaRecorder(stream, options);
+    recordedChunks = [];
+    discardRecording = false;
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onerror = (event) => {
+      releaseRecordingResources();
+      stopListeningUi();
+      setVoiceStatus(`錄音失敗：${event.error?.message || "請再試一次。"}`);
+    };
+
+    mediaRecorder.onstop = async () => {
+      const blobType = mediaRecorder?.mimeType || mimeType || recordedChunks[0]?.type || "audio/webm";
+      const audioBlob = new Blob(recordedChunks, { type: blobType });
+      releaseRecordingResources();
+      stopListeningUi();
+      if (discardRecording) {
+        discardRecording = false;
+        setVoiceStatus("已取消這次錄音。");
+        return;
+      }
+      if (!audioBlob.size) {
+        setVoiceStatus("沒有收到清楚的語音內容，請再說一次。");
+        return;
+      }
+      await submitAudio(audioBlob, blobType);
+    };
+
+    mediaRecorder.start();
+    isListening = true;
+    voiceButton.classList.add("listening");
+    voiceButton.textContent = "結束並送出";
+    setVoiceStatus("教練正在聽你回答，說完後再按一次送出。");
+    refreshActionState();
+  } catch (error) {
+    releaseRecordingResources();
+    stopListeningUi();
+    setVoiceStatus(`無法開始錄音：${error.message || "請確認麥克風權限後再試一次。"}`);
+  }
+}
+
+function stopRecording(discard = false) {
+  if (!mediaRecorder || mediaRecorder.state === "inactive") {
+    if (discard) {
+      releaseRecordingResources();
+      stopListeningUi();
+    }
+    return;
+  }
+  discardRecording = discard;
+  setVoiceStatus(discard ? "已取消這次錄音。" : "已收到你的回答，正在送給教練。");
+  mediaRecorder.stop();
 }
 
 function toggleExitButtons(showPracticeExit = false, showAdminExit = false) {
@@ -141,6 +255,7 @@ async function goToLoginPage() {
   currentAuth = null;
   currentReports = [];
   trainingActive = false;
+  stopRecording(true);
   stopListeningUi();
   toggleExitButtons(false, false);
   adminFeedback.textContent = "";
@@ -154,16 +269,20 @@ async function goToLoginPage() {
   toggleLoginFields();
   appPanel.classList.add("hidden");
   loginPanel.classList.remove("hidden");
-  updateSessionBanner("準備開始今天的口語訓練", "選擇單元後，直接說話就能開始練習。", "員工練習");
-  setVoiceStatus("登入後可直接用語音回答，系統也會朗讀題目與回饋。");
+  updateSessionBanner("準備開始今天的口語訓練", "選好單元後就能直接開口。", "員工練習");
+  setVoiceStatus(mediaReady ? "按下開始說話，說完後再按一次送出。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function resetPracticeHome(summaryMessage = "") {
+  if (currentRole === "admin") {
+    return;
+  }
   trainingActive = false;
+  stopRecording(true);
   stopListeningUi();
   toggleExitButtons(Boolean(summaryMessage), false);
-  activeSection.textContent = "請先選擇一個訓練單元。";
+  activeSection.textContent = "請先選擇單元。";
   messageInput.value = "";
   chat.innerHTML = "";
   const homeMessage = summaryMessage
@@ -176,12 +295,12 @@ function resetPracticeHome(summaryMessage = "") {
     const employeeId = currentSessionInfo?.employee_id ? `（${currentSessionInfo.employee_id}）` : "";
     updateSessionBanner(
       `${name}${employeeId}，準備開始今天的口語訓練`,
-      "選擇單元後按下「開始本單元」，就能直接用語音回答。",
+      "選好單元後按下開始本單元。",
       "員工練習",
     );
   }
   addBubble("coach", homeMessage);
-  setVoiceStatus("已返回練習首頁，可重新開始新的單元。");
+  setVoiceStatus(mediaReady ? "按下開始說話，說完後再按一次送出。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -192,6 +311,8 @@ function addBubble(role, text) {
   chat.appendChild(node);
   chat.scrollTop = chat.scrollHeight;
   if (role === "coach") lastCoachMessage = text;
+  refreshActionState();
+  return node;
 }
 
 function showError(target, message) {
@@ -203,6 +324,16 @@ function showError(target, message) {
   target.appendChild(el);
 }
 
+function removePendingCoachBubble() {
+  const pendingBubble = chat.querySelector(".bubble.pending");
+  if (pendingBubble) pendingBubble.remove();
+}
+
+function setResponsePending(pending) {
+  responsePending = pending;
+  refreshActionState();
+}
+
 function showAdminFeedback(message, kind = "ok") {
   adminFeedback.textContent = message;
   adminFeedback.className = kind === "error" ? "status-text status-error" : "status-text status-ok";
@@ -210,16 +341,28 @@ function showAdminFeedback(message, kind = "ok") {
 }
 
 async function api(path, payload, method = "POST") {
-  const response = await fetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: method === "GET" ? undefined : JSON.stringify(payload),
-  });
-  const data = await response.json();
-  if (!response.ok || data.ok === false) {
-    throw new Error(data.error || "發生未預期錯誤");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || "發生未預期錯誤");
+    }
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("目前連線比較慢，教練暫時沒有回應，請再試一次。");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return data;
 }
 
 function createField(labelText, inputEl, full = false) {
@@ -555,11 +698,15 @@ async function loadConfig() {
   const name = data.employee_name || "夥伴";
   const employeeId = data.employee_id ? `（${data.employee_id}）` : "";
   const isAdmin = data.role === "admin";
-  updateSessionBanner(
-    isAdmin ? "管理與練習都已準備完成" : `${name}${employeeId}，歡迎回來`,
-    isAdmin ? "可切換後台管理題庫，也可回到練習模式自行測試。" : "選擇單元後按下「開始本單元」，就能直接用語音回答。",
-    isAdmin ? "管理員" : "員工練習",
-  );
+  if (isAdmin) {
+    updateSessionBanner("後台管理", "登入後可直接管理題庫、帳號與規則。", "管理員");
+  } else {
+    updateSessionBanner(
+      `${name}${employeeId}，歡迎回來`,
+      "選好單元後按下開始本單元。",
+      "員工練習",
+    );
+  }
   sectionSelect.innerHTML = "";
   for (const section of data.sections) {
     const option = document.createElement("option");
@@ -567,7 +714,7 @@ async function loadConfig() {
     option.textContent = section.title;
     sectionSelect.appendChild(option);
   }
-  messageInput.placeholder = `可直接說話；若不方便，也可輸入回答。輸入「${data.rules.end_phrase}」會立即結束本次練習。`;
+  messageInput.value = "";
 }
 
 async function loadAdminContent() {
@@ -592,49 +739,82 @@ async function loadAdminView() {
   renderAdmin();
   renderReportFilters();
   await loadReports();
+  setAdminSection(currentAdminSection);
 }
 
 function setupVoice() {
   speechReady = "speechSynthesis" in window;
-  if (!speechReady) {
-    setVoiceStatus("這台裝置不支援自動朗讀，但仍可用文字模式練習。");
+  mediaReady = Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+  if (!mediaReady) {
+    setVoiceStatus("這台裝置目前不支援站內錄音，請改用新版 Chrome 或 Safari。");
+    voiceButton.textContent = "不支援錄音";
+  } else if (!speechReady) {
+    setVoiceStatus("可錄音作答，但這台裝置不支援自動朗讀教練回覆。");
+  } else {
+    setVoiceStatus("按下開始說話，說完後再按一次送出。");
   }
+  refreshActionState();
+}
 
-  if (!SpeechRecognition) {
-    setVoiceStatus("這台手機瀏覽器不支援站內語音辨識，建議改用 Android Chrome，或使用下方文字備援。");
-    voiceButton.disabled = true;
-    return;
+function buildAudioFilename(blobType) {
+  if (blobType.includes("mp4")) return "reply.m4a";
+  if (blobType.includes("ogg")) return "reply.ogg";
+  return "reply.webm";
+}
+
+async function submitAudio(audioBlob, blobType) {
+  if (!trainingActive) return;
+
+  setResponsePending(true);
+  removePendingCoachBubble();
+  const pendingBubble = addBubble("coach", "教練正在聽你的錄音，請稍候...");
+  pendingBubble.classList.add("pending");
+  setVoiceStatus("教練正在整理你的回答。");
+
+  try {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, buildAudioFilename(blobType));
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45000);
+    let data;
+    try {
+      const response = await fetch("/api/respond-audio", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      data = await response.json();
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || "語音送出失敗");
+      }
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new Error("教練這次聽得比較久，請稍候再試一次。");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+
+    removePendingCoachBubble();
+    addBubble("user", data.transcript || "已收到你的語音回答。");
+    addBubble("coach", data.message);
+    if (speechReady) speak(data.message);
+    if (data.done) {
+      await loadConfig();
+      resetPracticeHome(data.message);
+      return;
+    }
+    setVoiceStatus("可再次按下開始說話，繼續回答。");
+  } catch (err) {
+    removePendingCoachBubble();
+    addBubble("coach", `這次沒有成功收到完整語音。\n原因：${err.message}\n請重新錄一次。`);
+    setVoiceStatus("這次錄音沒有成功送出，請再試一次。");
+    showError(appPanel, err.message);
+  } finally {
+    setResponsePending(false);
   }
-
-  recognitionReady = true;
-  recognition = new SpeechRecognition();
-  recognition.lang = "zh-TW";
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-
-  recognition.onstart = () => {
-    isListening = true;
-    voiceButton.classList.add("listening");
-    voiceButton.textContent = "聆聽中...";
-    setVoiceStatus("正在聽你說話，說完後會自動送出。");
-  };
-
-  recognition.onresult = async (event) => {
-    const transcript = event.results[0][0].transcript.trim();
-    messageInput.value = transcript;
-    setVoiceStatus(`已收到語音內容：${transcript}`);
-    await submitMessage(transcript);
-  };
-
-  recognition.onerror = (event) => {
-    stopListeningUi();
-    setVoiceStatus(`語音辨識失敗：${event.error}。可再試一次，或改用文字備援。`);
-  };
-
-  recognition.onend = () => {
-    stopListeningUi();
-    if (trainingActive) setVoiceStatus("可再次按下「開始說話」繼續回答。");
-  };
 }
 
 async function submitMessage(rawMessage) {
@@ -643,14 +823,25 @@ async function submitMessage(rawMessage) {
     return;
   }
 
+  if (responsePending) {
+    setVoiceStatus("教練正在回應上一句，請稍等一下。");
+    return;
+  }
+
   const message = rawMessage.trim();
   if (!message) return;
 
   addBubble("user", message);
   messageInput.value = "";
+  setResponsePending(true);
+  removePendingCoachBubble();
+  const pendingBubble = addBubble("coach", "教練思考中，請稍候...");
+  pendingBubble.classList.add("pending");
+  setVoiceStatus("教練正在整理回應，請稍候。");
 
   try {
     const result = await api("/api/respond", { message });
+    removePendingCoachBubble();
     addBubble("coach", result.message);
     if (speechReady) speak(result.message);
     if (result.done) {
@@ -658,7 +849,12 @@ async function submitMessage(rawMessage) {
       resetPracticeHome(result.message);
     }
   } catch (err) {
+    removePendingCoachBubble();
+    addBubble("coach", `目前暫時沒有收到教練回應。\n原因：${err.message}\n請再說一次。`);
+    setVoiceStatus("這次沒有成功取得教練回應，可再試一次。");
     showError(appPanel, err.message);
+  } finally {
+    setResponsePending(false);
   }
 }
 
@@ -678,11 +874,14 @@ loginForm.addEventListener("submit", async (event) => {
     toggleExitButtons(false, false);
     await loadConfig();
     if (currentRole === "admin") {
+      currentAdminSection = "accounts";
       await loadAdminView();
+      setMode("admin");
+      showAdminFeedback("管理員已登入，可直接在這裡進行設定。");
+      return;
     }
-    setMode("practice");
     resetPracticeHome();
-    if (speechReady) speak("登入成功。請選擇練習單元，然後按下開始本單元。");
+    if (speechReady) speak("登入成功。請選好單元，然後按下開始本單元。");
   } catch (err) {
     showError(loginPanel, err.message);
   }
@@ -695,6 +894,12 @@ adminTab.addEventListener("click", async () => {
   setMode("admin");
 });
 
+adminNavButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setAdminSection(button.dataset.adminNav);
+  });
+});
+
 startButton.addEventListener("click", async () => {
   try {
     const result = await api("/api/start", { section_id: sectionSelect.value });
@@ -703,11 +908,11 @@ startButton.addEventListener("click", async () => {
     activeSection.textContent = result.title;
     updateSessionBanner(
       `目前練習：${result.title}`,
-      "題目已送出，直接按「開始說話」回答；不方便說話時也能用下方文字備援。",
+      "按開始說話，說完後再按一次送出。",
       currentRole === "admin" ? "管理員測試" : "員工練習",
     );
     addBubble("coach", result.message);
-    setVoiceStatus("題目已送出，按下「開始說話」即可直接口說回答。");
+    setVoiceStatus("按下開始說話，說完後再按一次送出。");
     if (speechReady) speak(result.message);
   } catch (err) {
     showError(appPanel, err.message);
@@ -715,27 +920,23 @@ startButton.addEventListener("click", async () => {
 });
 
 voiceButton.addEventListener("click", () => {
-  if (!recognitionReady) return;
   if (!trainingActive) {
     showError(appPanel, "請先開始一個練習單元。");
     return;
   }
-  if (isListening) {
-    recognition.stop();
+  if (!mediaReady) {
+    setVoiceStatus("這台裝置目前不支援站內錄音。");
     return;
   }
-  recognition.start();
+  if (isListening) {
+    stopRecording(false);
+    return;
+  }
+  startRecording();
 });
 
-speakButton.addEventListener("click", () => {
-  if (!lastCoachMessage) return;
-  speak(lastCoachMessage);
-  setVoiceStatus("已重新朗讀上一段內容。");
-});
-
-chatForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await submitMessage(messageInput.value);
+speakButton.addEventListener("click", async () => {
+  await goToLoginPage();
 });
 
 addSectionButton.addEventListener("click", () => addSectionEditor());
@@ -832,3 +1033,4 @@ saveAdminButton.addEventListener("click", async () => {
 
 setupVoice();
 toggleLoginFields();
+refreshActionState();

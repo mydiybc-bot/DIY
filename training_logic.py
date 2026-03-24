@@ -19,6 +19,68 @@ POLITE_TERMS = (
     "我懂",
 )
 
+CUSTOMER_FACING_TERMS = (
+    "您",
+    "你",
+    "請問",
+    "這邊",
+    "幫您",
+    "跟您",
+    "如果",
+    "可以",
+    "我們",
+    "我先",
+    "我幫",
+)
+
+CONNECTIVE_TERMS = (
+    "因為",
+    "所以",
+    "如果",
+    "先",
+    "再",
+    "會",
+    "可以",
+    "請問",
+    "幫您",
+    "這邊",
+)
+
+META_RESPONSE_TERMS = (
+    "請再回答一次",
+    "應該補上",
+    "參考答案",
+    "公布答案",
+    "評分",
+)
+
+PROFANITY_TERMS = (
+    "靠北",
+    "靠杯",
+    "靠邀",
+    "靠腰",
+    "幹你",
+    "干你",
+    "幹爆",
+    "干爆",
+    "幹死",
+    "干死",
+    "媽的",
+    "他媽的",
+    "三小",
+    "殺小",
+    "白痴",
+    "智障",
+    "北七",
+    "垃圾",
+    "去死",
+)
+
+PROFANITY_PATTERNS = (
+    r"幹(?!嘛|麻|話|線|部|事|活|員|道)",
+    r"干(?!嘛|麻|話|線|部|事|活|員|道)",
+)
+
 
 def build_catalog(sections: list[dict]) -> dict[str, dict]:
     return {section["id"]: deepcopy(section) for section in sections}
@@ -72,26 +134,69 @@ def score_answer(question: dict, answer: str, rules: dict) -> dict:
         else:
             missing.append(point["label"])
 
-    matched_ratio = len(matched) / max(len(question["required_points"]), 1)
+    point_count = max(len(question["required_points"]), 1)
+    matched_ratio = len(matched) / point_count
     polite_hits = sum(1 for term in POLITE_TERMS if term in answer)
-    polite_score = 2 if polite_hits >= 2 else 1 if polite_hits == 1 else 0
-    raw_score = round(matched_ratio * 8 + polite_score)
+    customer_hits = sum(1 for term in CUSTOMER_FACING_TERMS if term in answer)
+    connective_hits = sum(1 for term in CONNECTIVE_TERMS if term in answer)
+    punctuation_hits = sum(answer.count(term) for term in "。！？!?～~")
+    delimiter_hits = sum(answer.count(term) for term in "、，,；;")
+    copied_labels = sum(1 for point in question["required_points"] if normalize_text(point["label"]) in normalized_answer)
+    has_meta_response = any(term in answer for term in META_RESPONSE_TERMS)
+    uses_profanity = any(normalize_text(term) in normalized_answer for term in PROFANITY_TERMS) or any(
+        re.search(pattern, answer) for pattern in PROFANITY_PATTERNS
+    )
+    minimum_length = max(18, point_count * 6)
+    has_enough_length = len(normalized_answer) >= minimum_length
+    looks_like_outline = copied_labels >= max(2, point_count - 1) or (
+        delimiter_hits >= max(2, point_count - 1)
+        and customer_hits == 0
+        and connective_hits <= 1
+        and punctuation_hits <= 1
+    )
+
+    keyword_score = round(matched_ratio * 6)
+    tone_score = 2 if polite_hits >= 2 else 1 if (polite_hits == 1 or customer_hits >= 1) else 0
+    expression_score = 0
+    if has_enough_length:
+        expression_score += 1
+    if not looks_like_outline and not has_meta_response and (customer_hits >= 1 or connective_hits >= 2 or punctuation_hits >= 2):
+        expression_score += 1
+
+    raw_score = keyword_score + tone_score + expression_score
     score = min(10, max(0, raw_score))
 
-    if not missing:
+    needs_better_expression = not has_enough_length or looks_like_outline or has_meta_response or (customer_hits == 0 and connective_hits <= 1)
+
+    if not missing and not needs_better_expression and tone_score >= 1:
         score = 10
+    elif not missing:
+        score = min(score, 9)
+
+    if uses_profanity:
+        score = min(score, 2)
 
     if score == 10:
         feedback = rules["pass_feedback"]
         coaching = "很好，這題已經達標。"
     else:
         feedback = rules["retry_feedback"]
-        coaching = "應該補上：" + "、".join(missing) + "。" + rules["retry_prompt"]
+        coaching_parts = []
+        if missing:
+            coaching_parts.append("應該補上：" + "、".join(missing) + "。")
+        if uses_profanity:
+            coaching_parts.append("回答內容不能帶髒話或攻擊字眼，請改成尊重客人的說法。")
+        if needs_better_expression:
+            coaching_parts.append("也請改成直接對客人說的完整句子，語氣自然一點，不要只列重點或照抄提示。")
+        coaching_parts.append(rules["retry_prompt"])
+        coaching = "".join(coaching_parts)
 
     return {
         "score": score,
         "matched": matched,
         "missing": missing,
+        "needs_better_expression": needs_better_expression,
+        "uses_profanity": uses_profanity,
         "feedback": feedback,
         "coaching": coaching,
     }

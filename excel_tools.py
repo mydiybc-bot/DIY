@@ -18,15 +18,13 @@ QUESTION_HEADERS = [
     "keywords",
 ]
 REPORT_HEADERS = [
-    "created_at",
-    "role",
-    "employee_id",
-    "employee_name",
-    "section_id",
-    "section_title",
-    "question_count",
-    "scores",
-    "average_score",
+    "練習時間",
+    "員工編號",
+    "員工姓名",
+    "單元名稱",
+    "題目數",
+    "各題分數",
+    "平均分數",
 ]
 
 
@@ -136,10 +134,8 @@ def export_reports_to_excel(reports: list[dict]) -> bytes:
         sheet.append(
             [
                 report.get("created_at", ""),
-                report.get("role", ""),
                 report.get("employee_id", ""),
                 report.get("employee_name", ""),
-                report.get("section_id", ""),
                 report.get("section_title", ""),
                 report.get("question_count", 0),
                 "；".join(report.get("scores", [])),
