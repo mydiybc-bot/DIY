@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from email.parser import BytesParser
+from email.policy import default as email_policy
 import json
 import os
 import secrets
@@ -14,9 +16,13 @@ from urllib.parse import parse_qs, urlparse
 from auth_store import AuthStore
 from data_store import TrainingContentStore
 from excel_tools import export_content_to_excel, export_reports_to_excel, import_content_from_excel
+from google_reviews_dashboard import load_google_reviews_dashboard
 from progress_store import ProgressStore
+from reimbursement_dashboard import load_reimbursement_dashboard
 from report_store import ReportStore
+from self_dashboard import load_self_dashboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
+from voice_transcription import TranscriptionError, transcribe_audio
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -35,6 +41,15 @@ class TrainingHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.serve_file("index.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/dashboard":
+            self.serve_file("dashboard.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/self-dashboard":
+            self.serve_file("self-dashboard.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/google-reviews":
+            self.serve_file("google-reviews.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/config":
             content = STORE.load()
             session = self._current_session()
@@ -52,6 +67,25 @@ class TrainingHandler(BaseHTTPRequestHandler):
                     "employee_id": session.get("employee_id") if session else None,
                 }
             )
+            return
+        if parsed.path == "/api/reimbursements":
+            self.send_json(load_reimbursement_dashboard())
+            return
+        if parsed.path == "/api/self-dashboard":
+            filters = parse_qs(parsed.query)
+            self.send_json(
+                load_self_dashboard(
+                    {
+                        "start_date": _first_query_value(filters, "start_date"),
+                        "end_date": _first_query_value(filters, "end_date"),
+                        "store": _first_query_value(filters, "store"),
+                        "coupon": _first_query_value(filters, "coupon"),
+                    }
+                )
+            )
+            return
+        if parsed.path == "/api/google-reviews":
+            self.send_json(load_google_reviews_dashboard())
             return
         if parsed.path == "/api/admin/content":
             session = self._require_auth(role="admin")
@@ -203,26 +237,40 @@ class TrainingHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/respond":
             body = self.read_json()
             user_message = body.get("message", "")
-            training = session.get("training")
-            if not training:
-                self.send_json({"ok": False, "error": "請先選擇練習單元。"}, status=400)
+            try:
+                result = self._handle_training_reply(session, user_message)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
                 return
-            result = respond(training, user_message)
-            if session.get("role") == "employee" and session.get("employee_id"):
-                PROGRESS_STORE.save_section_progress(
-                    session["employee_id"],
-                    training["section_id"],
-                    build_progress_snapshot(training),
-                )
-            if result.get("done"):
-                report = build_report_record(training)
-                report["created_at"] = datetime.now().isoformat(timespec="seconds")
-                report["role"] = session.get("role", "employee")
-                report["employee_id"] = session.get("employee_id", "")
-                report["employee_name"] = session.get("employee_name", "")
-                REPORT_STORE.append(report)
-                session["training"] = None
             self.send_json({"ok": True, **result})
+            return
+
+        if parsed.path == "/api/respond-audio":
+            try:
+                form = self.read_multipart_form()
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            audio_field = form.get("audio")
+            if not audio_field or not audio_field.get("data"):
+                self.send_json({"ok": False, "error": "沒有收到語音檔案，請再試一次。"}, status=400)
+                return
+
+            try:
+                transcript = transcribe_audio(
+                    audio_bytes=audio_field["data"],
+                    filename=audio_field.get("filename") or "reply.webm",
+                    content_type=audio_field.get("content_type") or "application/octet-stream",
+                )
+                result = self._handle_training_reply(session, transcript)
+            except TranscriptionError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=502)
+                return
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+
+            self.send_json({"ok": True, "transcript": transcript, **result})
             return
 
         if parsed.path == "/api/admin/content":
@@ -262,6 +310,8 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(data)
 
@@ -274,6 +324,26 @@ class TrainingHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return self.rfile.read(length) if length else b""
 
+    def read_multipart_form(self) -> dict[str, dict[str, str | bytes]]:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            raise ValueError("語音上傳格式不正確，請重新錄音一次。")
+        raw = self.read_body_bytes()
+        message = BytesParser(policy=email_policy).parsebytes(
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + raw
+        )
+        parts: dict[str, dict[str, str | bytes]] = {}
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            parts[name] = {
+                "filename": part.get_filename() or "",
+                "content_type": part.get_content_type(),
+                "data": part.get_payload(decode=True) or b"",
+            }
+        return parts
+
     def send_json(
         self,
         payload: dict,
@@ -285,6 +355,8 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
         if cookies:
             for name, value in cookies.items():
                 cookie = SimpleCookie()
@@ -303,6 +375,8 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _guess_content_type(self, filename: str) -> str:
+        if filename.endswith(".html"):
+            return "text/html; charset=utf-8"
         if filename.endswith(".css"):
             return "text/css; charset=utf-8"
         if filename.endswith(".js"):
@@ -349,6 +423,28 @@ class TrainingHandler(BaseHTTPRequestHandler):
             filtered = [item for item in filtered if item.get("created_at", "")[:10] <= date_to]
         return filtered
 
+    def _handle_training_reply(self, session: dict, user_message: str) -> dict:
+        training = session.get("training")
+        if not training:
+            raise ValueError("請先選擇練習單元。")
+
+        result = respond(training, user_message)
+        if session.get("role") == "employee" and session.get("employee_id"):
+            PROGRESS_STORE.save_section_progress(
+                session["employee_id"],
+                training["section_id"],
+                build_progress_snapshot(training),
+            )
+        if result.get("done"):
+            report = build_report_record(training)
+            report["created_at"] = datetime.now().isoformat(timespec="seconds")
+            report["role"] = session.get("role", "employee")
+            report["employee_id"] = session.get("employee_id", "")
+            report["employee_name"] = session.get("employee_name", "")
+            REPORT_STORE.append(report)
+            session["training"] = None
+        return result
+
     def log_message(self, format: str, *args) -> None:
         return
 
@@ -372,6 +468,10 @@ def detect_lan_ip() -> str | None:
         return ip if ip and not ip.startswith("127.") else None
     except OSError:
         return None
+
+
+def _first_query_value(filters: dict[str, list[str]], key: str) -> str:
+    return (filters.get(key) or [""])[0].strip()
 
 
 if __name__ == "__main__":
