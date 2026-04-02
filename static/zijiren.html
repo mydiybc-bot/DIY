@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自己做烘焙聚樂部 | 自己人計畫 動態儀表板</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --primary: #C4412F; --primary-light: #E87060; --primary-dark: #8B2D1F;
+  --accent: #F4A620; --accent-light: #FDD99B;
+  --green: #52B788; --blue: #4A9BB8;
+  --bg: #FFF8F6; --card: #FFFFFF; --text: #2D1A14; --muted: #8B6A63;
+  --border: #F0D9D5; --hover: #FFF0ED;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); }
+
+/* HEADER */
+.header { background: linear-gradient(135deg, var(--primary-dark), var(--primary), var(--primary-light)); color: white; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 20px rgba(196,65,47,.3); }
+.header h1 { font-size: 23px; font-weight: 700; }
+.header p { font-size: 12px; opacity: .85; margin-top: 3px; }
+.header-badge { background: rgba(255,255,255,.2); border-radius: 20px; padding: 6px 16px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.3); white-space: nowrap; }
+
+/* DATE CONTROL BAR */
+.date-bar { background: white; border-bottom: 2px solid var(--border); padding: 14px 40px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+.date-label { font-size: 13px; font-weight: 700; color: var(--primary-dark); white-space: nowrap; }
+.date-selects { display: flex; align-items: center; gap: 8px; }
+.date-selects select { border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 13px; color: var(--text); background: white; cursor: pointer; font-family: inherit; outline: none; }
+.date-selects select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(196,65,47,.15); }
+.date-sep { color: var(--muted); font-size: 13px; }
+.quick-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.quick-btn { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .15s; }
+.quick-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
+.quick-btn.active { background: var(--primary); color: white; border-color: var(--primary); font-weight: 600; }
+.period-info { margin-left: auto; font-size: 12px; color: var(--muted); background: var(--bg); padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); white-space: nowrap; }
+
+/* LOADING OVERLAY */
+.loading-overlay { display: none; position: fixed; inset: 0; background: rgba(255,248,246,.85); z-index: 999; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.loading-overlay.show { display: flex; }
+.spinner { width: 44px; height: 44px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 14px; color: var(--muted); font-weight: 600; }
+
+/* LAYOUT */
+.container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+.section { margin-bottom: 32px; }
+.section-title { font-size: 15px; font-weight: 700; color: var(--primary-dark); margin-bottom: 14px; padding-left: 12px; border-left: 4px solid var(--primary); display: flex; align-items: center; gap: 8px; }
+
+/* KPI CARDS */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+.kpi-card { background: var(--card); border-radius: 14px; padding: 18px 22px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(196,65,47,.06); position: relative; overflow: hidden; }
+.kpi-card::before { content:''; position:absolute; top:0; left:0; width:4px; height:100%; background: var(--primary); border-radius:4px 0 0 4px; }
+.kpi-card.a::before { background: var(--accent); }
+.kpi-card.g::before { background: var(--green); }
+.kpi-card.b::before { background: var(--blue); }
+.kpi-label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
+.kpi-value { font-size: 32px; font-weight: 800; color: var(--primary); margin: 5px 0 3px; line-height: 1; }
+.kpi-card.a .kpi-value { color: #B87A00; }
+.kpi-card.g .kpi-value { color: #2D7A55; }
+.kpi-card.b .kpi-value { color: #1E6A88; }
+.kpi-sub { font-size: 11px; color: var(--muted); }
+
+/* CHARTS */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+.chart-card { background: var(--card); border-radius: 14px; padding: 20px 22px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(196,65,47,.05); }
+.chart-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.badge { background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; font-size: 10px; color: var(--muted); font-weight: 500; }
+canvas { max-height: 280px; }
+
+/* FILTER BUTTONS */
+.filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.filter-btn { padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border); background: white; font-size: 11px; cursor: pointer; color: var(--muted); transition: all .15s; font-family: inherit; }
+.filter-btn:hover, .filter-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+/* TABS */
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab { padding: 5px 14px; border-radius: 8px; border: none; background: transparent; font-size: 12px; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .15s; }
+.tab.active { background: var(--primary); color: white; font-weight: 600; }
+.tab:hover:not(.active) { background: var(--hover); }
+
+/* LEGEND */
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* TABLE */
+.table-wrapper { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+thead { background: linear-gradient(90deg, var(--primary), var(--primary-light)); color: white; }
+thead th { padding: 11px 13px; text-align: left; font-weight: 600; font-size: 11px; cursor: pointer; white-space: nowrap; user-select: none; }
+thead th:hover { background: rgba(255,255,255,.15); }
+tbody tr:nth-child(even) { background: #FFFBFA; }
+tbody tr:hover { background: var(--hover); }
+tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.rank-badge { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; font-weight:700; font-size:10px; }
+.r1{background:#FFD700;color:#5A3E00;} .r2{background:#C0C0C0;color:#3A3A3A;} .r3{background:#CD7F32;color:#fff;} .r0{background:var(--bg);color:var(--muted);}
+.bar-cell { display:flex; align-items:center; gap:7px; }
+.mini-bar { height:7px; border-radius:4px; background:var(--primary-light); min-width:3px; }
+.mini-bar.a{background:var(--accent);} .mini-bar.g{background:var(--green);}
+
+/* NO DATA */
+.no-data { display:flex; align-items:center; justify-content:center; height:200px; color:var(--muted); font-size:14px; flex-direction:column; gap:8px; }
+
+::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">正在查詢資料…</div>
+</div>
+
+<div class="header">
+  <div>
+    <h1>🍰 自己做烘焙聚樂部・自己人計畫 動態儀表板</h1>
+    <p>資料來源：Google Sheets 即時查詢 ｜ 12 間門市會員行為分析</p>
+  </div>
+  <div class="header-badge" id="headerRange">載入中…</div>
+</div>
+
+<!-- DATE CONTROL BAR -->
+<div class="date-bar">
+  <div class="date-label">📅 分析期間</div>
+  <div class="date-selects">
+    <select id="fromMonth" onchange="onDateChange()"></select>
+    <span class="date-sep">至</span>
+    <select id="toMonth" onchange="onDateChange()"></select>
+  </div>
+  <div class="quick-btns">
+    <button class="quick-btn" onclick="setQuick(1)">單月</button>
+    <button class="quick-btn" onclick="setQuick(3)">最近3個月</button>
+    <button class="quick-btn" onclick="setQuick(6)">最近6個月</button>
+    <button class="quick-btn active" id="qAll" onclick="setQuick(0)">全部期間</button>
+  </div>
+  <div class="period-info" id="periodInfo">共 12 個月</div>
+</div>
+
+<div class="container">
+  <!-- KPIs -->
+  <div class="kpi-grid" id="kpiGrid">
+    <div class="kpi-card"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
+    <div class="kpi-card a"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
+    <div class="kpi-card g"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
+    <div class="kpi-card b"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
+  </div>
+
+  <!-- 招募趨勢 -->
+  <div class="section">
+    <div class="section-title">📈 各店會員招募趨勢</div>
+    <div class="grid-3">
+      <div class="chart-card">
+        <div class="chart-title">每月新增會員數 <span class="badge" id="trendBadge">全期間</span></div>
+        <div class="filter-row" id="storeFilter"></div>
+        <canvas id="monthlyChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">期間招募排名</div>
+        <canvas id="membersBar"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 忠誠度 -->
+  <div class="section">
+    <div class="section-title">🔁 會員忠誠度分析</div>
+    <div class="grid-2">
+      <div class="chart-card">
+        <div class="chart-title">消費頻率分布 <span class="badge">期間內每位會員消費次數</span></div>
+        <canvas id="freqChart"></canvas>
+        <div class="legend" id="freqLegend"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">回購率 & 平均消費次數</div>
+        <div class="tabs">
+          <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回購率 (%)</button>
+          <button class="tab" id="tab-avg" onclick="switchLoyalty('avg',this)">平均消費次數</button>
+        </div>
+        <canvas id="loyaltyChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 跨店消費 -->
+  <div class="section">
+    <div class="section-title">🗺 跨店消費分析</div>
+    <div class="grid-2">
+      <div class="chart-card">
+        <div class="chart-title">各店跨店消費率 <span class="badge">該店會員去其他店消費的比例</span></div>
+        <canvas id="crossChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">各店被消費次數 <span class="badge">流量吸引力</span></div>
+        <canvas id="visitsChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 排名表 -->
+  <div class="section">
+    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">點欄位標題可排序</span></div>
+    <div class="chart-card">
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortTable('members')">排名 ↕</th>
+              <th onclick="sortTable('store')">門市 ↕</th>
+              <th onclick="sortTable('members')">新增會員數 ↕</th>
+              <th onclick="sortTable('visits')">消費次數 ↕</th>
+              <th onclick="sortTable('avg')">平均消費次數 ↕</th>
+              <th onclick="sortTable('repeat')">回購率 ↕</th>
+              <th onclick="sortTable('cross')">跨店率 ↕</th>
+            </tr>
+          </thead>
+          <tbody id="rankTableBody"><tr><td colspan="7" class="no-data">載入中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── CONSTANTS ────────────────────────────────────────────────
+const SHEET_ID = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
+const PROXY_URL = 'https://script.google.com/macros/s/AKfycbx61-Ww1W3CCAA1luawfKaO3lsc7kVrDw5sB0_z21HWtAbJ9BMy_Mm8T4fnkqU91QsP/exec';
+const STORE_NAMES = ["台北南京店","台中草悟道店","台北士林店","台南Focus店","高雄SKM Park店","新竹文化店","台中精明店","新北板橋店","台北遠百信義A13店","桃園中壢店","新北新店店","桃園藝文店"];
+const COLORS = ['#C4412F','#E87060','#F4A620','#52B788','#4A9BB8','#8B6AB5','#D4754E','#6BAE8E','#E8A0BF','#5B8DB8','#C9963A','#7B7B9A'];
+
+// Available months (gviz month is 0-indexed → April=month3 in gviz)
+// Format: { label, fromDate, toDate, gvizYear, gvizMonth }
+const MONTHS = [
+  {label:'2025年4月',  fromDate:'2025-04-01', toDate:'2025-04-30'},
+  {label:'2025年5月',  fromDate:'2025-05-01', toDate:'2025-05-31'},
+  {label:'2025年6月',  fromDate:'2025-06-01', toDate:'2025-06-30'},
+  {label:'2025年7月',  fromDate:'2025-07-01', toDate:'2025-07-31'},
+  {label:'2025年8月',  fromDate:'2025-08-01', toDate:'2025-08-31'},
+  {label:'2025年9月',  fromDate:'2025-09-01', toDate:'2025-09-30'},
+  {label:'2025年10月', fromDate:'2025-10-01', toDate:'2025-10-31'},
+  {label:'2025年11月', fromDate:'2025-11-01', toDate:'2025-11-30'},
+  {label:'2025年12月', fromDate:'2025-12-01', toDate:'2025-12-31'},
+  {label:'2026年1月',  fromDate:'2026-01-01', toDate:'2026-01-31'},
+  {label:'2026年2月',  fromDate:'2026-02-01', toDate:'2026-02-28'},
+  {label:'2026年3月',  fromDate:'2026-03-01', toDate:'2026-03-31'},
+];
+
+// ─── STATE ────────────────────────────────────────────────────
+let charts = {};
+let activeStores = new Set(['台北南京店','台北士林店','高雄SKM Park店','新北板橋店']);
+let loyaltyMode = 'repeat';
+let sortKey = 'members'; let sortAsc = false;
+let currentData = null;
+let _rawCache = null; // 全年資料快取，載入一次後切換日期不再重新查詢
+
+// ─── DATE SELECTORS ───────────────────────────────────────────
+function initDateSelectors() {
+  const from = document.getElementById('fromMonth');
+  const to   = document.getElementById('toMonth');
+  MONTHS.forEach((m,i) => {
+    from.innerHTML += `<option value="${i}">${m.label}</option>`;
+    to.innerHTML   += `<option value="${i}">${m.label}</option>`;
+  });
+  to.value = MONTHS.length - 1; // default: full period
+}
+
+function getSelectedRange() {
+  const fi = parseInt(document.getElementById('fromMonth').value);
+  const ti = parseInt(document.getElementById('toMonth').value);
+  const from = Math.min(fi, ti);
+  const to   = Math.max(fi, ti);
+  return { fromIdx: from, toIdx: to, fromDate: MONTHS[from].fromDate, toDate: MONTHS[to].toDate };
+}
+
+function onDateChange() {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  updatePeriodInfo();
+  if (_rawCache) { applyRange(); } else { initLoad(); }
+}
+
+function setQuick(n) {
+  const last = MONTHS.length - 1;
+  document.getElementById('toMonth').value = last;
+  document.getElementById('fromMonth').value = n === 0 ? 0 : Math.max(0, last - n + 1);
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  updatePeriodInfo();
+  if (_rawCache) { applyRange(); } else { initLoad(); }
+}
+
+function updatePeriodInfo() {
+  const { fromIdx, toIdx } = getSelectedRange();
+  const n = toIdx - fromIdx + 1;
+  document.getElementById('periodInfo').textContent = n === 1 ? '單月分析' : `共 ${n} 個月`;
+}
+
+// ─── GVIZ QUERY（透過 Google Apps Script Proxy，繞過 CORS）────
+function gvizQuery(tql) {
+  return new Promise((resolve, reject) => {
+    const cbName = '_gvcb' + Date.now() + '_' + Math.floor(Math.random() * 1e8);
+    let script, timer;
+
+    function cleanup() {
+      clearTimeout(timer);
+      delete window[cbName];
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    timer = setTimeout(() => { cleanup(); reject(new Error('TIMEOUT')); }, 30000);
+
+    window[cbName] = function(data) {
+      cleanup();
+      if (data && data.status === 'error') {
+        reject(new Error(data.message || (data.errors ? data.errors[0].message : 'GViz Error')));
+      } else {
+        resolve(data);
+      }
+    };
+
+    // 呼叫 Apps Script Proxy（伺服器端以帳號身份存取試算表，回傳 JSONP）
+    const url = PROXY_URL
+      + '?tql=' + encodeURIComponent(tql)
+      + '&callback=' + cbName;
+
+    script = document.createElement('script');
+    script.src = url;
+    script.onerror = () => { cleanup(); reject(new Error('SCRIPT_ERROR')); };
+    document.head.appendChild(script);
+  });
+}
+
+function parseRows(res) { return (res && res.table && res.table.rows) ? res.table.rows : []; }
+
+// ─── 批次 JSONP（一次請求取回所有資料）─────────────────────────
+function gvizBatch(tqls) {
+  return new Promise((resolve, reject) => {
+    const cbName = '_gvcb' + Date.now() + '_' + Math.floor(Math.random() * 1e8);
+    let script, timer;
+    function cleanup() {
+      clearTimeout(timer);
+      delete window[cbName];
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    }
+    timer = setTimeout(() => { cleanup(); reject(new Error('TIMEOUT')); }, 60000);
+    window[cbName] = function(data) {
+      cleanup();
+      if (!Array.isArray(data)) { reject(new Error('批次查詢回傳格式錯誤')); return; }
+      resolve(data);
+    };
+    const url = PROXY_URL
+      + '?queries=' + encodeURIComponent(JSON.stringify(tqls))
+      + '&callback=' + cbName;
+    script = document.createElement('script');
+    script.src = url;
+    script.onerror = () => { cleanup(); reject(new Error('SCRIPT_ERROR')); };
+    document.head.appendChild(script);
+  });
+}
+
+const TQL_QA = `SELECT B, year(A), month(A), COUNT(C) WHERE D = '加入群友' AND A IS NOT NULL GROUP BY B, year(A), month(A) ORDER BY year(A), month(A)`;
+const TQL_QB = `SELECT B, E, year(A), month(A), COUNT(C) WHERE D = '得到點數： 1 點' AND E IS NOT NULL AND A IS NOT NULL GROUP BY B, E, year(A), month(A) ORDER BY year(A), month(A)`;
+const TQL_QC = `SELECT C, B, year(A), month(A), COUNT(C) WHERE D = '得到點數： 1 點' AND A IS NOT NULL GROUP BY C, B, year(A), month(A)`;
+// 取消事件（扣除用）
+const TQL_QD = `SELECT B, E, year(A), month(A), COUNT(C) WHERE D = '取消 得到點數： 1 點' AND E IS NOT NULL AND A IS NOT NULL GROUP BY B, E, year(A), month(A) ORDER BY year(A), month(A)`;
+const TQL_QE = `SELECT C, B, year(A), month(A), COUNT(C) WHERE D = '取消 得到點數： 1 點' AND A IS NOT NULL GROUP BY C, B, year(A), month(A)`;
+
+async function initLoad() {
+  if (_rawCache) { applyRange(); return; }
+  showLoading(true, '正在載入全年資料…首次約需 5-10 秒，完成後切換月份即時顯示');
+  try {
+    const results = await gvizBatch([TQL_QA, TQL_QB, TQL_QC, TQL_QD, TQL_QE]);
+    _rawCache = { qa: results[0], qb: results[1], qc: results[2], qd: results[3], qe: results[4] };
+    showLoading(false);
+    applyRange();
+  } catch(e) {
+    showLoading(false);
+    const code = e.message || 'UNKNOWN';
+    let msg = code === 'TIMEOUT'
+      ? '查詢逾時（60 秒）\n\n可能原因：\n• 網路速度較慢\n• Google Sheets 回應緩慢\n\n請按「重新嘗試」'
+      : '資料載入失敗：' + code + '\n\n請按「重新嘗試」，或重新整理頁面';
+    showError(msg);
+  }
+}
+
+function applyRange() {
+  const { fromIdx, toIdx } = getSelectedRange();
+  const data = processFromCache(_rawCache, fromIdx, toIdx);
+  currentData = data;
+  renderAll(data);
+  document.getElementById('headerRange').textContent = `${MONTHS[fromIdx].label} ～ ${MONTHS[toIdx].label}`;
+  document.getElementById('trendBadge').textContent = toIdx - fromIdx + 1 === 1 ? '單月' : `${toIdx - fromIdx + 1} 個月`;
+}
+
+function showLoading(show, text='') {
+  document.getElementById('loadingOverlay').classList.toggle('show', show);
+  if (text) document.getElementById('loadingText').textContent = text;
+}
+
+// ─── DATA PROCESSING ──────────────────────────────────────────
+function processFromCache(cache, fromIdx, toIdx) {
+  const monthKeys = MONTHS.slice(fromIdx, toIdx + 1).map(m => {
+    const [y, mo] = m.fromDate.split('-').map(Number);
+    return { label: m.label, year: y, gvizMonth: mo - 1 };
+  });
+  const validKeys = new Set(monthKeys.map(mk => `${mk.year}/${mk.gvizMonth}`));
+
+  // QA: monthly new members per store
+  const monthlyMap = {};
+  const membersMap = {};
+  parseRows(cache.qa).forEach(r => {
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2]) return;
+    const store = r.c[0].v, y = r.c[1].v, gm = r.c[2].v;
+    const cnt = (r.c[3] && r.c[3].v != null) ? r.c[3].v : 0;
+    const key = `${y}/${gm}`;
+    if (!validKeys.has(key)) return;
+    if (!monthlyMap[store]) monthlyMap[store] = {};
+    monthlyMap[store][key] = cnt;
+    membersMap[store] = (membersMap[store] || 0) + cnt;
+  });
+  const monthlySeries = {};
+  STORE_NAMES.forEach(s => {
+    monthlySeries[s] = monthKeys.map(mk => (monthlyMap[s] || {})[`${mk.year}/${mk.gvizMonth}`] || 0);
+  });
+
+  // QB: visits per store + cross-store（先加入正常消費）
+  const visitsMap = {};
+  const crossJoin = {};
+  parseRows(cache.qb).forEach(r => {
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
+    const join = r.c[0].v, consume = r.c[1].v, y = r.c[2].v, gm = r.c[3].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    if (!validKeys.has(`${y}/${gm}`)) return;
+    visitsMap[consume] = (visitsMap[consume] || 0) + cnt;
+    if (!crossJoin[join]) crossJoin[join] = { total: 0, cross: 0 };
+    crossJoin[join].total += cnt;
+    if (join !== consume) crossJoin[join].cross += cnt;
+  });
+  // QD: 扣除「取消 得到點數」事件
+  parseRows(cache.qd).forEach(r => {
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
+    const join = r.c[0].v, consume = r.c[1].v, y = r.c[2].v, gm = r.c[3].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    if (!validKeys.has(`${y}/${gm}`)) return;
+    visitsMap[consume] = Math.max(0, (visitsMap[consume] || 0) - cnt);
+    if (crossJoin[join]) {
+      crossJoin[join].total = Math.max(0, crossJoin[join].total - cnt);
+      if (join !== consume) crossJoin[join].cross = Math.max(0, crossJoin[join].cross - cnt);
+    }
+  });
+
+  // ─�  整體回購率：固定用全年資料，並扣除取消事件 ─────────────────
+  const allMemberTotalCounts = {};
+  parseRows(cache.qc).forEach(r => {
+    if (!r.c || !r.c[0]) return;
+    const member = r.c[0].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    allMemberTotalCounts[member] = (allMemberTotalCounts[member] || 0) + cnt;
+  });
+  parseRows(cache.qe).forEach(r => {
+    if (!r.c || !r.c[0]) return;
+    const member = r.c[0].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    allMemberTotalCounts[member] = Math.max(0, (allMemberTotalCounts[member] || 0) - cnt);
+  });
+  const totalConsumersFullYear  = Object.values(allMemberTotalCounts).filter(c => c > 0).length;
+  const repeatConsumersFullYear = Object.values(allMemberTotalCounts).filter(c => c >= 2).length;
+  const fullYearRepeatRate = totalConsumersFullYear > 0
+    ? Math.round(repeatConsumersFullYear / totalConsumersFullYear * 100) : 0;
+
+  // QC: per-member visit frequency（先加入正常消費，限選定期間）
+  const memberVisits = {};
+  const allUniqueConsumers = new Set();
+  const uniqueMembersPerStore = {};
+  parseRows(cache.qc).forEach(r => {
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
+    const member = r.c[0].v, store = r.c[1].v, y = r.c[2].v, gm = r.c[3].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    if (!validKeys.has(`${y}/${gm}`)) return;
+    const k = member + '\u0000' + store;
+    memberVisits[k] = (memberVisits[k] || 0) + cnt;
+  });
+  // QE: 扣除「取消 得到點數」事件（限選定期間）
+  parseRows(cache.qe).forEach(r => {
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
+    const member = r.c[0].v, store = r.c[1].v, y = r.c[2].v, gm = r.c[3].v;
+    const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+    if (!validKeys.has(`${y}/${gm}`)) return;
+    const k = member + '\u0000' + store;
+    memberVisits[k] = Math.max(0, (memberVisits[k] || 0) - cnt);
+  });
+  // 重新建立不重複消費會員集合（取消後淨消費 > 0 才算）
+  Object.entries(memberVisits).forEach(([k, cnt]) => {
+    if (cnt <= 0) return;
+    const parts = k.split('\u0000');
+    const member = parts[0], store = parts[1];
+    allUniqueConsumers.add(member);
+    if (!uniqueMembersPerStore[store]) uniqueMembersPerStore[store] = new Set();
+    uniqueMembersPerStore[store].add(member);
+  });
+  const freqMap = {};
+  Object.entries(memberVisits).forEach(([k, cnt]) => {
+    const store = k.split('\u0000')[1];
+    if (!freqMap[store]) freqMap[store] = { once:0, twice:0, thrice5:0, six10:0, eleven:0, total:0 };
+    freqMap[store].total++;
+    if      (cnt === 1) freqMap[store].once++;
+    else if (cnt === 2) freqMap[store].twice++;
+    else if (cnt <= 5)  freqMap[store].thrice5++;
+    else if (cnt <= 10) freqMap[store].six10++;
+    else                freqMap[store].eleven++;
+  });
+
+  const stores = STORE_NAMES.map(s => {
+    const members        = membersMap[s] || 0;
+    const visits         = visitsMap[s] || 0;
+    const uniqueConsumers = uniqueMembersPerStore[s] ? uniqueMembersPerStore[s].size : 0;
+    const cross          = crossJoin[s] || { total: 0, cross: 0 };
+    const freq           = freqMap[s]   || { once:0, twice:0, thrice5:0, six10:0, eleven:0, total:0 };
+    const repeatRate = freq.total > 0 ? Math.round((freq.total - freq.once) / freq.total * 100) : 0;
+    const crossRate  = cross.total > 0 ? Math.round(cross.cross / cross.total * 100) : 0;
+    // 平均消費次數 = 期間消費次數 ÷ 期間不重複消費會員數
+    const avg = uniqueConsumers > 0 ? (visits / uniqueConsumers).toFixed(2) : '0.00';
+    return { store: s, members, visits, uniqueConsumers, avg: parseFloat(avg), repeatRate, crossRate,
+             once: freq.once, twice: freq.twice, thrice5: freq.thrice5, six10: freq.six10,
+             eleven: freq.eleven, freqTotal: freq.total };
+  });
+
+  return {
+    monthLabels: monthKeys.map(m => m.label),
+    monthlySeries,
+    stores,
+    fullYearRepeatRate,
+    totalUniqueConsumers: allUniqueConsumers.size
+  };
+}
+
+// ─── RENDER ALL ───────────────────────────────────────────────
+function renderAll(data) {
+  renderKPI(data);
+  renderStoreFilter();
+  renderMonthlyChart(data);
+  renderMembersBar(data);
+  renderFreqChart(data);
+  renderLoyaltyChart(data);
+  renderCrossChart(data);
+  renderVisitsChart(data);
+  renderTable(data);
+}
+
+// ─── KPI ──────────────────────────────────────────────────────
+function renderKPI(data) {
+  const totalMembers  = data.stores.reduce((s,r) => s + r.members, 0);
+  const totalVisits   = data.stores.reduce((s,r) => s + r.visits, 0);
+  // 平均消費次數 = 期間消費次數 ÷ 期間不重複消費會員數（跨店去重）
+  const avgVisits     = data.totalUniqueConsumers > 0
+    ? (totalVisits / data.totalUniqueConsumers).toFixed(2) : '0.00';
+  // 整體回購率 = 全年資料中，消費 2 次以上的會員 ÷ 有任何消費紀錄的會員
+  const repeatRate    = data.fullYearRepeatRate;
+
+  document.getElementById('kpiGrid').innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">加入群友事件數</div></div>
+    <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">得到點數事件數</div></div>
+    <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">消費次數 ÷ 不重複消費會員數</div></div>
+    <div class="kpi-card b"><div class="kpi-label">整體回購率（全年）</div><div class="kpi-value">${repeatRate}%</div><div class="kpi-sub">全年消費 2 次以上比例</div></div>`;
+}
+
+// ─── MONTHLY TREND ────────────────────────────────────────────
+function renderStoreFilter() {
+  document.getElementById('storeFilter').innerHTML = STORE_NAMES.map(s =>
+    `<button class="filter-btn ${activeStores.has(s)?'active':''}" onclick="toggleStore('${s}')">${s.replace(/店$/, '')}</button>`
+  ).join('');
+}
+function toggleStore(s) {
+  if (activeStores.has(s)) { if (activeStores.size > 1) activeStores.delete(s); }
+  else activeStores.add(s);
+  renderStoreFilter();
+  if (currentData) renderMonthlyChart(currentData);
+}
+function renderMonthlyChart(data) {
+  const datasets = [...activeStores].map(store => {
+    const ci = STORE_NAMES.indexOf(store) % COLORS.length;
+    return { label: store, data: data.monthlySeries[store] || [], borderColor: COLORS[ci], backgroundColor: COLORS[ci]+'22', borderWidth: 2.5, pointRadius: 3, tension: 0.35, fill: false };
+  });
+  if (charts.monthly) { charts.monthly.destroy(); }
+  charts.monthly = new Chart(document.getElementById('monthlyChart'), {
+    type: 'line',
+    data: { labels: data.monthLabels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position:'bottom', labels:{font:{size:10},boxWidth:10,padding:8} } },
+      scales: { x:{grid:{color:'#F0D9D5'},ticks:{font:{size:10}}}, y:{grid:{color:'#F0D9D5'},beginAtZero:true,ticks:{font:{size:10}}} }
+    }
+  });
+}
+
+// ─── MEMBERS BAR ──────────────────────────────────────────────
+function renderMembersBar(data) {
+  const sorted = [...data.stores].sort((a,b) => b.members - a.members).filter(s => s.members > 0);
+  if (charts.members) charts.members.destroy();
+  if (sorted.length === 0) { document.getElementById('membersBar').parentElement.innerHTML += '<div class="no-data">本期無招募資料</div>'; return; }
+  charts.members = new Chart(document.getElementById('membersBar'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.store.replace(/店$/,'')),
+      datasets: [{ label:'新增會員', data: sorted.map(s => s.members),
+        backgroundColor: sorted.map((_,i)=>i===0?'#C4412F':i===1?'#E87060':i===2?'#F4A620':'#F0C0B8'), borderRadius:5, borderSkipped:false }]
+    },
+    options: { indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw.toLocaleString()} 人`}}},
+      scales:{x:{grid:{color:'#F0D9D5'},ticks:{font:{size:10},callback:v=>v.toLocaleString()}},y:{grid:{display:false},ticks:{font:{size:10}}}} }
+  });
+}
+
+// ─── FREQ CHART ───────────────────────────────────────────────
+function renderFreqChart(data) {
+  const sorted = [...data.stores].filter(s => s.freqTotal > 0).sort((a,b) => b.repeatRate - a.repeatRate);
+  if (charts.freq) charts.freq.destroy();
+  charts.freq = new Chart(document.getElementById('freqChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.store.replace(/店$/,'')),
+      datasets: [
+        {label:'1次',  data:sorted.map(s=>s.once),    backgroundColor:'#F0C0B8', stack:'s'},
+        {label:'2次',  data:sorted.map(s=>s.twice),   backgroundColor:'#E87060', stack:'s'},
+        {label:'3~5次',data:sorted.map(s=>s.thrice5), backgroundColor:'#C4412F', stack:'s'},
+        {label:'6~10次',data:sorted.map(s=>s.six10),  backgroundColor:'#8B2D1F', stack:'s'},
+        {label:'11次+',data:sorted.map(s=>s.eleven),  backgroundColor:'#4A1A10', stack:'s'},
+      ]
+    },
+    options: { responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{mode:'index'}},
+      scales:{x:{stacked:true,grid:{display:false},ticks:{font:{size:9}}},y:{stacked:true,grid:{color:'#F0D9D5'},ticks:{font:{size:10},callback:v=>v.toLocaleString()}}} }
+  });
+  document.getElementById('freqLegend').innerHTML = [
+    ['#F0C0B8','1次（單次消費）'],['#E87060','2次'],['#C4412F','3~5次'],['#8B2D1F','6~10次'],['#4A1A10','11次以上']
+  ].map(([c,l])=>`<div class="legend-item"><div class="legend-dot" style="background:${c}"></div>${l}</div>`).join('');
+}
+
+// ─── LOYALTY CHART ────────────────────────────────────────────
+function switchLoyalty(mode, el) {
+  loyaltyMode = mode;
+  document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  if (currentData) renderLoyaltyChart(currentData);
+}
+function renderLoyaltyChart(data) {
+  const sorted = [...data.stores].sort((a,b) => loyaltyMode==='repeat' ? b.repeatRate-a.repeatRate : b.avg-a.avg);
+  const values = sorted.map(s => loyaltyMode==='repeat' ? s.repeatRate : s.avg);
+  const color  = loyaltyMode==='repeat' ? '#C4412F' : '#F4A620';
+  const label  = loyaltyMode==='repeat' ? '回購率 (%)' : '平均消費次數';
+  if (charts.loyalty) charts.loyalty.destroy();
+  charts.loyalty = new Chart(document.getElementById('loyaltyChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.store.replace(/店$/,'')),
+      datasets: [{ label, data: values, backgroundColor: values.map((_,i)=>i===0?color:color+'99'), borderRadius:5, borderSkipped:false }]
+    },
+    options: { responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw}${loyaltyMode==='repeat'?'%':' 次'}`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:9}}},y:{grid:{color:'#F0D9D5'},beginAtZero:true,ticks:{font:{size:10}}}} }
+  });
+}
+
+// ─── CROSS CHART ─────────────────────────────────────────────
+function renderCrossChart(data) {
+  const sorted = [...data.stores].filter(s=>s.visits>0).sort((a,b)=>b.crossRate-a.crossRate);
+  if (charts.cross) charts.cross.destroy();
+  charts.cross = new Chart(document.getElementById('crossChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s=>s.store.replace(/店$/,'')),
+      datasets:[{label:'跨店率(%)',data:sorted.map(s=>s.crossRate),backgroundColor:sorted.map((_,i)=>i===0?'#52B788':'#52B78888'),borderRadius:5,borderSkipped:false}]
+    },
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw}%`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:9}}},y:{grid:{color:'#F0D9D5'},beginAtZero:true,ticks:{font:{size:10},callback:v=>v+'%'}}} }
+  });
+}
+
+// ─── VISITS CHART ─────────────────────────────────────────────
+function renderVisitsChart(data) {
+  const sorted = [...data.stores].filter(s=>s.visits>0).sort((a,b)=>b.visits-a.visits);
+  if (charts.visits) charts.visits.destroy();
+  charts.visits = new Chart(document.getElementById('visitsChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s=>s.store.replace(/店$/,'')),
+      datasets:[{label:'消費次數',data:sorted.map(s=>s.visits),backgroundColor:sorted.map((_,i)=>i===0?'#4A9BB8':'#4A9BB888'),borderRadius:5,borderSkipped:false}]
+    },
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw.toLocaleString()} 次`}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:9}}},y:{grid:{color:'#F0D9D5'},beginAtZero:true,ticks:{font:{size:10},callback:v=>v.toLocaleString()}}} }
+  });
+}
+
+// ─── RANK TABLE ───────────────────────────────────────────────
+function sortTable(key) {
+  sortAsc = (sortKey === key) ? !sortAsc : false;
+  sortKey = key;
+  if (currentData) renderTable(currentData);
+}
+function renderTable(data) {
+  const sorted = [...data.stores].sort((a,b) => {
+    let av = sortKey==='store' ? a.store : (sortKey==='avg' ? a.avg : sortKey==='repeat' ? a.repeatRate : sortKey==='cross' ? a.crossRate : a[sortKey]);
+    let bv = sortKey==='store' ? b.store : (sortKey==='avg' ? b.avg : sortKey==='repeat' ? b.repeatRate : sortKey==='cross' ? b.crossRate : b[sortKey]);
+    const r = typeof av==='string' ? av.localeCompare(bv) : bv - av;
+    return sortAsc ? -r : r;
+  });
+  const byMem = [...data.stores].sort((a,b)=>b.members-a.members);
+  const rankMap = {}; byMem.forEach((s,i)=>rankMap[s.store]=i+1);
+  const maxM = Math.max(...data.stores.map(s=>s.members),1);
+  const maxV = Math.max(...data.stores.map(s=>s.visits),1);
+  document.getElementById('rankTableBody').innerHTML = sorted.map(s=>{
+    const rk = rankMap[s.store];
+    const rc = rk===1?'r1':rk===2?'r2':rk===3?'r3':'r0';
+    return `<tr>
+      <td><span class="rank-badge ${rc}">${rk}</span></td>
+      <td><strong>${s.store}</strong></td>
+      <td><div class="bar-cell"><div class="mini-bar" style="width:${Math.round(s.members/maxM*80)}px"></div>${s.members.toLocaleString()} 人</div></td>
+      <td><div class="bar-cell"><div class="mini-bar a" style="width:${Math.round(s.visits/maxV*80)}px"></div>${s.visits.toLocaleString()} 次</div></td>
+      <td><strong>${s.avg}</strong> 次</td>
+      <td style="color:${s.repeatRate>=22?'#C4412F':s.repeatRate>=20?'#B87A00':'#8B6A63'};font-weight:600">${s.repeatRate}%</td>
+      <td style="color:${s.crossRate>=10?'#2D7A55':s.crossRate>=6?'#1E6A88':'#8B6A63'};font-weight:600">${s.crossRate}%</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted)">本期間無資料</td></tr>';
+}
+
+// ─── ERROR DISPLAY ────────────────────────────────────────────
+function showError(msg) {
+  const overlay = document.getElementById('loadingOverlay');
+  overlay.classList.add('show');
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:16px;padding:32px 40px;max-width:480px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.15)">
+      <div style="font-size:40px;margin-bottom:16px">⚠️</div>
+      <div style="font-size:15px;font-weight:700;color:#C4412F;margin-bottom:12px">無法讀取 Google Sheets</div>
+      <div style="font-size:13px;color:#8B6A63;line-height:1.7;white-space:pre-wrap;text-align:left">${msg}</div>
+      <button onclick="document.getElementById('loadingOverlay').classList.remove('show');initLoad()"
+        style="margin-top:20px;padding:10px 28px;background:#C4412F;color:white;border:none;border-radius:20px;font-size:13px;cursor:pointer;font-weight:600">
+        重新嘗試
+      </button>
+    </div>`;
+}
+
+// ─── INIT ─────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  initDateSelectors();
+  updatePeriodInfo();
+  initLoad();
+});
+</script>
+</body>
+</html>
