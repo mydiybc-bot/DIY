@@ -100,6 +100,24 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 .mini-bar { height:7px; border-radius:4px; background:var(--primary-light); min-width:3px; }
 .mini-bar.a{background:var(--accent);} .mini-bar.g{background:var(--green);}
 
+/* TARGET SECTION */
+.target-grid { display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: start; }
+.target-summary { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding: 10px 0; }
+.target-ring { position:relative; width:150px; height:150px; }
+.target-ring-label { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
+.target-ring-pct { font-size:28px; font-weight:800; color:var(--primary); line-height:1; }
+.target-ring-sub { font-size:10px; color:var(--muted); margin-top:2px; }
+.target-meta { margin-top:10px; font-size:11px; color:var(--muted); line-height:1.8; }
+.target-meta strong { color: var(--text); }
+.store-target-row { display:grid; grid-template-columns:108px 1fr 52px 72px; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:11px; }
+.store-target-row:last-child { border-bottom:none; }
+.store-target-name { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.progress-track { position:relative; height:8px; background:var(--border); border-radius:4px; overflow:visible; }
+.progress-fill { height:100%; border-radius:4px; transition: width .4s; }
+.progress-marker { position:absolute; top:-3px; width:2px; height:14px; background:#8B6A63; border-radius:1px; }
+.target-pct-text { text-align:right; font-weight:700; }
+.target-abs-text { text-align:right; color:var(--muted); }
+
 /* NO DATA */
 .no-data { display:flex; align-items:center; justify-content:center; height:200px; color:var(--muted); font-size:14px; flex-direction:column; gap:8px; }
 
@@ -145,6 +163,12 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
     <div class="kpi-card a"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
     <div class="kpi-card g"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
     <div class="kpi-card b"><div class="kpi-label">載入中</div><div class="kpi-value">—</div></div>
+  </div>
+
+  <!-- 2026 目標達成追蹤 -->
+  <div class="section">
+    <div class="section-title">🎯 2026 年度自己人目標達成追蹤 <span style="font-weight:400;font-size:12px;color:var(--muted)">固定顯示全年進度，不受日期篩選影響</span></div>
+    <div id="targetSection"><div class="chart-card no-data">資料載入中…</div></div>
   </div>
 
   <!-- 招募趨勢 -->
@@ -228,6 +252,16 @@ const SHEET_ID = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const PROXY_URL = 'https://script.google.com/macros/s/AKfycbx61-Ww1W3CCAA1luawfKaO3lsc7kVrDw5sB0_z21HWtAbJ9BMy_Mm8T4fnkqU91QsP/exec';
 const STORE_NAMES = ["台北南京店","台中草悟道店","台北士林店","台南Focus店","高雄SKM Park店","新竹文化店","台中精明店","新北板橋店","台北遠百信義A13店","桃園中壢店","新北新店店","桃園藝文店"];
 const COLORS = ['#C4412F','#E87060','#F4A620','#52B788','#4A9BB8','#8B6AB5','#D4754E','#6BAE8E','#E8A0BF','#5B8DB8','#C9963A','#7B7B9A'];
+
+// ─── 2026 年度目標 ────────────────────────────────────────────
+const TARGETS_2026 = {
+  "台北南京店":4580,"台中草悟道店":7190,"台北士林店":10116,
+  "台南Focus店":7409,"高雄SKM Park店":6838,"新竹文化店":5434,
+  "台中精明店":7084,"新北板橋店":3854,"台北遠百信義A13店":4774,
+  "桃園中壢店":3971,"新北新店店":6693,"桃園藝文店":4584
+};
+const TOTAL_TARGET_2026 = 72528;
+const ELAPSED_MONTHS_2026 = 3; // Q1 已結束（1~3月）
 
 // Available months (gviz month is 0-indexed → April=month3 in gviz)
 // Format: { label, fromDate, toDate, gvizYear, gvizMonth }
@@ -449,7 +483,7 @@ function processFromCache(cache, fromIdx, toIdx) {
     }
   });
 
-  // ─�  整體回購率：固定用全年資料，並扣除取消事件 ─────────────────
+  // ── 整體回購率：固定用全年資料，並扣除取消事件 ─────────────────
   const allMemberTotalCounts = {};
   parseRows(cache.qc).forEach(r => {
     if (!r.c || !r.c[0]) return;
@@ -534,9 +568,102 @@ function processFromCache(cache, fromIdx, toIdx) {
   };
 }
 
+// ─── 2026 TARGET SECTION ──────────────────────────────────────
+function renderTargetSection() {
+  if (!_rawCache || !_rawCache.qa) return;
+  const rows = parseRows(_rawCache.qa);
+
+  // 計算各店 2026 年 Q1（1~3月）實際招募數，gviz month 0-indexed
+  const actual2026 = {};
+  STORE_NAMES.forEach(s => actual2026[s] = 0);
+  rows.forEach(r => {
+    const cols = r.c || [];
+    const store  = cols[0] && cols[0].v != null ? cols[0].v : null;
+    const yr     = cols[1] && cols[1].v != null ? cols[1].v : null;
+    const mo     = cols[2] && cols[2].v != null ? cols[2].v : null; // 0-indexed
+    const cnt    = cols[3] && cols[3].v != null ? cols[3].v : 0;
+    if (yr === 2026 && mo >= 0 && mo <= 2 && store && actual2026.hasOwnProperty(store)) {
+      actual2026[store] += cnt;
+    }
+  });
+
+  const totalActual = Object.values(actual2026).reduce((s, v) => s + v, 0);
+  const overallPct  = Math.round(totalActual / TOTAL_TARGET_2026 * 100);
+  const elapsedPct  = Math.round(ELAPSED_MONTHS_2026 / 12 * 100); // 25%
+
+  // SVG donut ring
+  const radius = 58; const circ = 2 * Math.PI * radius;
+  const filled = circ * Math.min(overallPct / 100, 1);
+  const elapsed = circ * (elapsedPct / 100);
+  const pctColor = overallPct >= elapsedPct ? '#52B788' : overallPct >= elapsedPct * 0.8 ? '#F4A620' : '#C4412F';
+
+  const svgRing = `<svg width="150" height="150" viewBox="0 0 150 150">
+    <circle cx="75" cy="75" r="${radius}" fill="none" stroke="#F0D9D5" stroke-width="14"/>
+    <circle cx="75" cy="75" r="${radius}" fill="none" stroke="${pctColor}" stroke-width="14"
+      stroke-dasharray="${filled.toFixed(1)} ${(circ-filled).toFixed(1)}"
+      stroke-dashoffset="${circ/4}" stroke-linecap="round"/>
+    <circle cx="75" cy="75" r="${radius}" fill="none" stroke="#8B6A6355" stroke-width="2"
+      stroke-dasharray="2 ${(circ/100*elapsedPct - 2).toFixed(1)} ${(circ - circ/100*elapsedPct).toFixed(1)}"
+      stroke-dashoffset="${circ/4}"/>
+  </svg>`;
+
+  // 各店排列（按達成率排序）
+  const storeRows = STORE_NAMES.map(s => ({
+    store: s,
+    target: TARGETS_2026[s] || 0,
+    actual: actual2026[s] || 0,
+    pct: TARGETS_2026[s] ? Math.round(actual2026[s] / TARGETS_2026[s] * 100) : 0
+  })).sort((a,b) => b.pct - a.pct);
+
+  const rowsHtml = storeRows.map(r => {
+    const barW = Math.min(r.pct, 100);
+    const barColor = r.pct >= 25 ? '#52B788' : r.pct >= 20 ? '#F4A620' : '#C4412F';
+    const shortName = r.store.replace(/店$/, '');
+    return `<div class="store-target-row">
+      <div class="store-target-name" title="${r.store}">${shortName}</div>
+      <div class="progress-track">
+        <div class="progress-fill" style="width:${barW}%;background:${barColor}"></div>
+        <div class="progress-marker" style="left:25%"></div>
+      </div>
+      <div class="target-pct-text" style="color:${barColor}">${r.pct}%</div>
+      <div class="target-abs-text">${r.actual.toLocaleString()} / ${r.target.toLocaleString()}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('targetSection').innerHTML = `
+    <div class="chart-card">
+      <div class="target-grid">
+        <div class="target-summary">
+          <div class="target-ring">
+            ${svgRing}
+            <div class="target-ring-label">
+              <div class="target-ring-pct" style="color:${pctColor}">${overallPct}%</div>
+              <div class="target-ring-sub">整體達成率</div>
+            </div>
+          </div>
+          <div class="target-meta">
+            <strong>${totalActual.toLocaleString()}</strong> 人 已招募<br>
+            目標 <strong>${TOTAL_TARGET_2026.toLocaleString()}</strong> 人（全年）<br>
+            Q1 進度目標 25%<br>
+            <span style="color:${overallPct>=25?'#2D7A55':overallPct>=20?'#B87A00':'#C4412F'};font-weight:600">
+              ${overallPct >= 25 ? '✅ 達標' : overallPct >= 20 ? '⚠️ 接近目標' : '❗ 低於目標'}
+            </span>
+          </div>
+        </div>
+        <div>
+          <div style="display:grid;grid-template-columns:108px 1fr 52px 72px;gap:8px;padding:4px 0 6px;font-size:10px;color:var(--muted);font-weight:600;border-bottom:2px solid var(--border)">
+            <div>門市</div><div>進度 <span style="font-weight:400">（｜= Q1 目標25%）</span></div><div style="text-align:right">達成率</div><div style="text-align:right">實際 / 目標</div>
+          </div>
+          ${rowsHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
 // ─── RENDER ALL ───────────────────────────────────────────────
 function renderAll(data) {
   renderKPI(data);
+  renderTargetSection();
   renderStoreFilter();
   renderMonthlyChart(data);
   renderMembersBar(data);
