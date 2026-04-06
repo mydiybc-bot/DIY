@@ -109,7 +109,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 .target-ring-sub { font-size:10px; color:var(--muted); margin-top:2px; }
 .target-meta { margin-top:10px; font-size:11px; color:var(--muted); line-height:1.8; }
 .target-meta strong { color: var(--text); }
-.store-target-row { display:grid; grid-template-columns:108px 1fr 52px 72px; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:11px; }
+.store-target-row { display:grid; grid-template-columns:108px 1fr 52px 72px 68px; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:11px; }
 .store-target-row:last-child { border-bottom:none; }
 .store-target-name { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .progress-track { position:relative; height:8px; background:var(--border); border-radius:4px; overflow:visible; }
@@ -117,6 +117,11 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 .progress-marker { position:absolute; top:-3px; width:2px; height:14px; background:#8B6A63; border-radius:1px; }
 .target-pct-text { text-align:right; font-weight:700; }
 .target-abs-text { text-align:right; color:var(--muted); }
+    .store-trend { display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:10px; line-height:1.3; gap:1px; }
+    .trend-arrow { font-size:13px; line-height:1; font-weight:700; }
+    .trend-up { color:#52B788; }
+    .trend-dn { color:#C4412F; }
+    .trend-eq { color:#aaa; }
 
 /* NO DATA */
 .no-data { display:flex; align-items:center; justify-content:center; height:200px; color:var(--muted); font-size:14px; flex-direction:column; gap:8px; }
@@ -334,65 +339,18 @@ function updatePeriodInfo() {
 
 // ─── GVIZ QUERY（透過 Google Apps Script Proxy，繞過 CORS）────
 function gvizQuery(tql) {
-  return new Promise((resolve, reject) => {
-    const cbName = '_gvcb' + Date.now() + '_' + Math.floor(Math.random() * 1e8);
-    let script, timer;
-
-    function cleanup() {
-      clearTimeout(timer);
-      delete window[cbName];
-      if (script && script.parentNode) script.parentNode.removeChild(script);
-    }
-
-    timer = setTimeout(() => { cleanup(); reject(new Error('TIMEOUT')); }, 30000);
-
-    window[cbName] = function(data) {
-      cleanup();
-      if (data && data.status === 'error') {
-        reject(new Error(data.message || (data.errors ? data.errors[0].message : 'GViz Error')));
-      } else {
-        resolve(data);
-      }
-    };
-
-    // 呼叫 Apps Script Proxy（伺服器端以帳號身份存取試算表，回傳 JSONP）
-    const url = PROXY_URL
-      + '?tql=' + encodeURIComponent(tql)
-      + '&callback=' + cbName;
-
-    script = document.createElement('script');
-    script.src = url;
-    script.onerror = () => { cleanup(); reject(new Error('SCRIPT_ERROR')); };
-    document.head.appendChild(script);
+  const url = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID
+    + '/gviz/tq?tqx=out:json&sheet=%E8%87%AA%E5%B7%B1%E4%BA%BA%E5%8E%9F%E5%A7%8B%E8%B3%87%E6%96%99&tq='
+    + encodeURIComponent(tql);
+  return fetch(url).then(r => r.text()).then(text => {
+    const json = text.replace(/^\/\*[\s\S]*?\*\/\s*google\.visualization\.Query\.setResponse\(/, '').replace(/\);?\s*$/, '');
+    return JSON.parse(json);
   });
 }
 
-function parseRows(res) { return (res && res.table && res.table.rows) ? res.table.rows : []; }
-
-// ─── 批次 JSONP（一次請求取回所有資料）─────────────────────────
+// ── 批次查詢（一次請求取回所有資料）──────────────────────
 function gvizBatch(tqls) {
-  return new Promise((resolve, reject) => {
-    const cbName = '_gvcb' + Date.now() + '_' + Math.floor(Math.random() * 1e8);
-    let script, timer;
-    function cleanup() {
-      clearTimeout(timer);
-      delete window[cbName];
-      if (script && script.parentNode) script.parentNode.removeChild(script);
-    }
-    timer = setTimeout(() => { cleanup(); reject(new Error('TIMEOUT')); }, 60000);
-    window[cbName] = function(data) {
-      cleanup();
-      if (!Array.isArray(data)) { reject(new Error('批次查詢回傳格式錯誤')); return; }
-      resolve(data);
-    };
-    const url = PROXY_URL
-      + '?queries=' + encodeURIComponent(JSON.stringify(tqls))
-      + '&callback=' + cbName;
-    script = document.createElement('script');
-    script.src = url;
-    script.onerror = () => { cleanup(); reject(new Error('SCRIPT_ERROR')); };
-    document.head.appendChild(script);
-  });
+  return Promise.all(tqls.map(tql => gvizQuery(tql)));
 }
 
 const TQL_QA = `SELECT B, year(A), month(A), COUNT(C) WHERE D = '加入群友' AND A IS NOT NULL GROUP BY B, year(A), month(A) ORDER BY year(A), month(A)`;
@@ -590,6 +548,26 @@ function renderTargetSection() {
     }
   });
 
+
+  // 計算各店上個月（2月）與前一個月（1月）招募數，供趨勢顯示
+  // ELAPSED_MONTHS_2026 = 3 表示 Q1 已結束（1~3月）
+  // 上個月 = month index 1 (二月), 前一個月 = month index 0 (一月)
+  const lastMo  = ELAPSED_MONTHS_2026 - 1; // 0-indexed gviz month (e.g. 2 = 三月)
+  const prevMo  = lastMo - 1;
+  const lastYr  = 2026;
+  const monthly = {}; // { store: { last, prev } }
+  STORE_NAMES.forEach(s => { monthly[s] = { last: 0, prev: 0 }; });
+  rows.forEach(r => {
+    const cols  = r.c || [];
+    const store = cols[0] && cols[0].v != null ? cols[0].v : null;
+    const yr    = cols[1] && cols[1].v != null ? cols[1].v : null;
+    const mo    = cols[2] && cols[2].v != null ? cols[2].v : null; // 0-indexed
+    const cnt   = cols[3] && cols[3].v != null ? cols[3].v : 0;
+    if (yr === lastYr && store && monthly[store]) {
+      if (mo === lastMo) monthly[store].last += cnt;
+      if (prevMo >= 0 && mo === prevMo) monthly[store].prev += cnt;
+    }
+  });
   const totalActual = Object.values(actual2026).reduce((s, v) => s + v, 0);
   const overallPct  = Math.round(totalActual / TOTAL_TARGET_2026 * 100);
   const elapsedPct  = Math.round(ELAPSED_MONTHS_2026 / 12 * 100); // 25%
@@ -616,12 +594,19 @@ function renderTargetSection() {
     target: TARGETS_2026[s] || 0,
     actual: actual2026[s] || 0,
     pct: TARGETS_2026[s] ? Math.round(actual2026[s] / TARGETS_2026[s] * 100) : 0
+    lastCnt: monthly[s] ? monthly[s].last : 0,
+    prevCnt: monthly[s] ? monthly[s].prev : 0,
   })).sort((a,b) => b.pct - a.pct);
 
   const rowsHtml = storeRows.map(r => {
     const barW = Math.min(r.pct, 100);
     const barColor = r.pct >= 25 ? '#52B788' : r.pct >= 20 ? '#F4A620' : '#C4412F';
     const shortName = r.store.replace(/店$/, '');
+    const diff = r.lastCnt - r.prevCnt;
+    const trendCls = diff > 0 ? 'trend-up' : diff < 0 ? 'trend-dn' : 'trend-eq';
+    const trendArrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '─';
+    const trendLabel = diff > 0 ? '+' + diff : String(diff);
+    const moName = ['1月','2月','3月'][lastMo] || (lastMo+1)+'月';
     return `<div class="store-target-row">
       <div class="store-target-name" title="${r.store}">${shortName}</div>
       <div class="progress-track">
@@ -630,6 +615,7 @@ function renderTargetSection() {
       </div>
       <div class="target-pct-text" style="color:${barColor}">${r.pct}%</div>
       <div class="target-abs-text">${r.actual.toLocaleString()} / ${r.target.toLocaleString()}</div>
+      <div class="store-trend"><span class="trend-arrow ${trendCls}">${trendArrow}</span><span style="color:var(--muted)">${r.lastCnt > 0 || r.prevCnt > 0 ? trendLabel : '—'}</span><span style="color:var(--muted);font-size:9px">${moName}</span></div>
     </div>`;
   }).join('');
 
