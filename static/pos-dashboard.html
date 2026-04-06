@@ -221,8 +221,6 @@ function App(){
   const [dateEnd, setDateEnd] = useState('');
   const [selRegion, setSelRegion] = useState('全部');
   const [selStores, setSelStores] = useState([]);
-  const [selMainCat, setSelMainCat] = useState('全部');
-  const [selSubCat, setSelSubCat] = useState('全部');
   const [quickDate, setQuickDate] = useState('');
 
   /* ---------- FETCH DATA (JSONP to avoid GAS CORS redirect issue) ---------- */
@@ -265,22 +263,26 @@ function App(){
   const applyQuickDate = useCallback((preset)=>{
     if(!rawData) return;
     setQuickDate(preset);
+    const yms=[...new Set(rawData.monthly.map(m=>m.yearMonth))].sort();
+    if(!yms.length) return;
+    const minYM=yms[0], maxYM=yms[yms.length-1];
+    const clamp=(v)=> v<minYM?minYM : v>maxYM?maxYM : v;
     const now = new Date();
     const cy = now.getFullYear();
     const cm = now.getMonth()+1;
     const cmStr = cy+'-'+(cm<10?'0':'')+cm;
+    let s,e;
     switch(preset){
-      case 'thisMonth': setDateStart(cmStr); setDateEnd(cmStr); break;
-      case 'lastMonth': {const lm=getLastMonthYM(); setDateStart(lm); setDateEnd(lm);} break;
-      case 'thisQ': {const [s,e]=getQuarterRange(0); setDateStart(s); setDateEnd(e);} break;
-      case 'lastQ': {const [s,e]=getQuarterRange(-1); setDateStart(s); setDateEnd(e);} break;
-      case 'ytd': setDateStart(cy+'-01'); setDateEnd(cmStr); break;
-      case 'lastYear': setDateStart((cy-1)+'-01'); setDateEnd((cy-1)+'-12'); break;
-      case 'all': {
-        const yms=[...new Set(rawData.monthly.map(m=>m.yearMonth))].sort();
-        if(yms.length){setDateStart(yms[0]);setDateEnd(yms[yms.length-1])}
-      } break;
+      case 'thisMonth': s=cmStr; e=cmStr; break;
+      case 'lastMonth': {const lm=getLastMonthYM(); s=lm; e=lm;} break;
+      case 'thisQ': {[s,e]=getQuarterRange(0);} break;
+      case 'lastQ': {[s,e]=getQuarterRange(-1);} break;
+      case 'ytd': s=cy+'-01'; e=cmStr; break;
+      case 'lastYear': s=(cy-1)+'-01'; e=(cy-1)+'-12'; break;
+      case 'all': s=minYM; e=maxYM; break;
+      default: return;
     }
+    setDateStart(clamp(s)); setDateEnd(clamp(e));
   },[rawData]);
 
   /* ---------- AVAILABLE MONTHS ---------- */
@@ -297,13 +299,6 @@ function App(){
     return stores;
   },[rawData, selRegion]);
 
-  /* ---------- SUBCATEGORY LIST (filtered by mainCat) ---------- */
-  const availableSubCats = useMemo(()=>{
-    if(!rawData) return [];
-    if(selMainCat==='全部') return rawData.filters.subCategories;
-    return [...new Set(rawData.monthly.filter(m=>m.mainCategory===selMainCat && m.subCategory && m.subCategory!=='無').map(m=>m.subCategory))].sort();
-  },[rawData, selMainCat]);
-
   /* ---------- FILTERED MONTHLY DATA ---------- */
   const filtered = useMemo(()=>{
     if(!rawData) return [];
@@ -312,11 +307,9 @@ function App(){
       if(dateEnd && m.yearMonth > dateEnd) return false;
       if(selRegion!=='全部' && m.region!==selRegion) return false;
       if(selStores.length>0 && !selStores.includes(m.store)) return false;
-      if(selMainCat!=='全部' && m.mainCategory!==selMainCat) return false;
-      if(selSubCat!=='全部' && m.subCategory!==selSubCat) return false;
       return true;
     });
-  },[rawData, dateStart, dateEnd, selRegion, selStores, selMainCat, selSubCat]);
+  },[rawData, dateStart, dateEnd, selRegion, selStores]);
 
   /* ---------- FILTERED DAILY DATA ---------- */
   const filteredDaily = useMemo(()=>{
@@ -338,7 +331,7 @@ function App(){
       desserts+=m.dessertCount;
       companions+=m.companionCount;
       txns+=m.txnCount;
-      if(m.subCategory && m.subCategory!=='無') limitedRev+=m.revenue;
+      if(m.mainCategory==='限定甜點') limitedRev+=m.revenue;
     });
     const hc = desserts + companions;
     return {
@@ -404,43 +397,41 @@ function App(){
     })).sort((a,b)=>b.revenue-a.revenue);
   },[filtered]);
 
-  // Category totals
+  // Category totals (exclude '找不到')
   const catTotals = useMemo(()=>{
     const map={};
     filtered.forEach(m=>{
+      if(m.mainCategory==='找不到') return;
       if(!map[m.mainCategory]) map[m.mainCategory]={cat:m.mainCategory,revenue:0};
       map[m.mainCategory].revenue+=m.revenue;
     });
     return Object.values(map).sort((a,b)=>b.revenue-a.revenue);
   },[filtered]);
 
-  // Filtered product rank
+  // Product rank (all products)
   const filteredProducts = useMemo(()=>{
     if(!rawData) return [];
-    // Product rank uses raw data but we filter by mainCat/subCat if set
-    let prods = rawData.productRank;
-    if(selMainCat!=='全部') prods=prods.filter(p=>p.mainCategory===selMainCat);
-    if(selSubCat!=='全部') prods=prods.filter(p=>p.subCategory===selSubCat);
-    return prods;
-  },[rawData, selMainCat, selSubCat]);
+    return rawData.productRank;
+  },[rawData]);
 
-  // Sub-category (limited edition) totals
+  // Sub-category (limited edition) totals — based on subCategory within 限定甜點
   const subCatTotals = useMemo(()=>{
     const map={};
     filtered.forEach(m=>{
-      const label = (!m.subCategory || m.subCategory==='無') ? '常態品' : m.subCategory;
+      if(m.mainCategory!=='限定甜點') return;
+      const label = (!m.subCategory || m.subCategory==='無' || m.subCategory==='找不到') ? '其他限定' : m.subCategory;
       if(!map[label]) map[label]={name:label,revenue:0};
       map[label].revenue+=m.revenue;
     });
     return Object.values(map).sort((a,b)=>b.revenue-a.revenue);
   },[filtered]);
 
-  // Monthly limited vs regular
+  // Monthly limited vs regular — based on mainCategory==='限定甜點'
   const monthlyLimitedVsRegular = useMemo(()=>{
     const map={};
     filtered.forEach(m=>{
       if(!map[m.yearMonth]) map[m.yearMonth]={ym:m.yearMonth,limited:0,regular:0};
-      if(m.subCategory && m.subCategory!=='無') map[m.yearMonth].limited+=m.revenue;
+      if(m.mainCategory==='限定甜點') map[m.yearMonth].limited+=m.revenue;
       else map[m.yearMonth].regular+=m.revenue;
     });
     return Object.values(map).sort((a,b)=>a.ym<b.ym?-1:1);
@@ -527,20 +518,6 @@ function App(){
               {availableStores.map(s=><option key={s.name} value={s.name}>{s.name}{s.closed?' (已歇業)':''}</option>)}
             </select>
           </div>
-          <div className="filter-group">
-            <label>主類別</label>
-            <select value={selMainCat} onChange={e=>{setSelMainCat(e.target.value);setSelSubCat('全部')}}>
-              <option value="全部">全部類別</option>
-              {rawData.filters.mainCategories.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="filter-group">
-            <label>次類別</label>
-            <select value={selSubCat} onChange={e=>setSelSubCat(e.target.value)}>
-              <option value="全部">全部</option>
-              {availableSubCats.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
         </div>
 
         {/* KPI CARDS */}
@@ -571,9 +548,9 @@ function App(){
             <div className="kpi-sub">甜點品項列數合計</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-label">限定品營收佔比</div>
+            <div className="kpi-label">限定甜點營收佔比</div>
             <div className="kpi-value" style={{color:'#d946ef'}}>{fmt.pct(kpis.limitedRevenueRatio)}</div>
-            <div className="kpi-sub">限定 {fmt.currency(kpis.limitedRevenue)}</div>
+            <div className="kpi-sub">限定甜點 {fmt.currency(kpis.limitedRevenue)}</div>
           </div>
         </div>
 
@@ -595,7 +572,7 @@ function App(){
       {/* FOOTER */}
       <footer className="app-footer">
         <div>最後更新時間：{rawData.lastUpdated ? new Date(rawData.lastUpdated).toLocaleString('zh-TW') : '—'}</div>
-        <div>資料缆數：{fmt.number(rawData.totalRows)} 筆 | 快取 TTL 1 小時</div>
+        <div>資料筆數：{fmt.number(rawData.totalRows)} 筆 | 快取 TTL 1 小時</div>
         <div style={{marginTop:4}}>© 自己做烘焙聚樂部 POS Dashboard</div>
       </footer>
     </div>
@@ -693,7 +670,7 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
       {/* 3. Revenue structure stacked area */}
       <div className="chart-card">
         <div className="chart-title">營收結構（按主類別）</div>
-        <div className="chart-subtitle">堆疊圖积圖</div>
+        <div className="chart-subtitle">堆疊面積圖</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={areaData.data}>
@@ -771,36 +748,45 @@ function TabStoreCompare({storeTotals, monthlyByStore, storesInData}){
         </div>
       </div>
 
-      {/* 2. Scatter: avgSpend vs headcount (bubble = revenue) */}
+      {/* 2. Store comparison: headcount + avgSpend + revenue (3 horizontal bars) */}
       <div className="chart-card">
-        <div className="chart-title">客單價 vs 來客數</div>
-        <div className="chart-subtitle">圓大小＝營收</div>
+        <div className="chart-title">各店來客數排名</div>
+        <div className="chart-subtitle">甜點客＋陪同客合計</div>
         <div className="chart-body">
-          <ResponsiveContainer width="100%" height={300}>
-            <ScatterChart>
+          <ResponsiveContainer width="100%" height={Math.max(280, storeTotals.length*32)}>
+            <BarChart data={[...storeTotals].sort((a,b)=>b.headcount-a.headcount)} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#2d3148"/>
-              <XAxis dataKey="headcount" name="來客數" stroke="#6b7280" tick={{fontSize:10}} tickFormatter={fmt.short}/>
-              <YAxis dataKey="avgSpend" name="客單價" stroke="#6b7280" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
-              <ZAxis dataKey="revenue" range={[50,600]} name="營收"/>
-              <Tooltip content={({active,payload})=>{
-                if(!active||!payload?.length) return null;
-                const d=payload[0].payload;
-                return <div className="custom-tooltip">
-                  <div className="label">{d.store}</div>
-                  <div className="item">來客數: {fmt.number(d.headcount)}</div>
-                  <div className="item">客單價: {fmt.currency(d.avgSpend)}</div>
-                  <div className="item">營收: {fmt.currency(d.revenue)}</div>
-                </div>;
-              }}/>
-              <Scatter data={storeTotals} name="門市">
-                {storeTotals.map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#6b7280'}/>)}
-              </Scatter>
-            </ScatterChart>
+              <XAxis type="number" stroke="#6b7280" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="store" width={160} stroke="#6b7280" tick={{fontSize:10}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.number}/>}/>
+              <Bar dataKey="headcount" name="來客數" radius={[0,4,4,0]}>
+                {[...storeTotals].sort((a,b)=>b.headcount-a.headcount).map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#6b7280'}/>)}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* 3. Heatmap: store x month revenue */}
+      {/* 3. Store avgSpend ranking */}
+      <div className="chart-card">
+        <div className="chart-title">各店客單價排名</div>
+        <div className="chart-subtitle">營收 ÷ 來客數</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={Math.max(280, storeTotals.length*32)}>
+            <BarChart data={[...storeTotals].sort((a,b)=>b.avgSpend-a.avgSpend)} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#2d3148"/>
+              <XAxis type="number" stroke="#6b7280" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
+              <YAxis type="category" dataKey="store" width={160} stroke="#6b7280" tick={{fontSize:10}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Bar dataKey="avgSpend" name="客單價" radius={[0,4,4,0]}>
+                {[...storeTotals].sort((a,b)=>b.avgSpend-a.avgSpend).map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#6b7280'}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 4. Heatmap: store x month revenue */}
       <div className="chart-card full-width">
         <div className="chart-title">各店 × 各月營收熱力圖</div>
         <div className="chart-body" style={{overflow:'auto'}}>
@@ -822,7 +808,7 @@ function TabStoreCompare({storeTotals, monthlyByStore, storesInData}){
         </div>
       </div>
 
-      {/* 4. Companion rate by store */}
+      {/* 5. Companion rate by store */}
       <div className="chart-card full-width">
         <div className="chart-title">各店陪同率</div>
         <div className="chart-body">
@@ -983,7 +969,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
       {/* 1. Price band histogram */}
       <div className="chart-card">
         <div className="chart-title">甜點單價分布</div>
-        <div className="chart-subtitle">5 個價格帶</div>
+        <div className="chart-subtitle">5 個價題帶</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={priceBands}>
@@ -1062,9 +1048,9 @@ function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
     return `rgba(99,102,241,${0.15+ratio*0.85})`;
   }
 
-  // top limited edition events (filter out 常態品)
+  // top limited edition events (filter out 其他限定 and 找不到)
   const limitedEvents = useMemo(()=>{
-    return subCatTotals.filter(s=>s.name!=='常態品').slice(0,15);
+    return subCatTotals.filter(s=>s.name!=='其他限定' && s.name!=='找不到').slice(0,15);
   },[subCatTotals]);
 
   return (
@@ -1088,8 +1074,8 @@ function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
 
       {/* 2. Limited vs regular area */}
       <div className="chart-card">
-        <div className="chart-title">限定品 vs 常態品營收</div>
-        <div className="chart-subtitle">面稭圖趨勢對比</div>
+        <div className="chart-title">限定甜點 vs 常態品營收</div>
+        <div className="chart-subtitle">面積圖趨勢對比</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={monthlyLimitedVsRegular}>
@@ -1098,7 +1084,7 @@ function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
               <YAxis stroke="#6b7280" tick={{fontSize:10}} tickFormatter={fmt.short}/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
               <Area type="monotone" dataKey="regular" stackId="1" fill="#6366f1" stroke="#6366f1" fillOpacity={0.7} name="常態品"/>
-              <Area type="monotone" dataKey="limited" stackId="1" fill="#d946ef" stroke="#d946ef" fillOpacity={0.7} name="限定品"/>
+              <Area type="monotone" dataKey="limited" stackId="1" fill="#d946ef" stroke="#d946ef" fillOpacity={0.7} name="限定甜點"/>
               <Legend wrapperStyle={{fontSize:11}}/>
             </AreaChart>
           </ResponsiveContainer>
@@ -1107,7 +1093,7 @@ function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
 
       {/* 3. Calendar heatmap */}
       <div className="chart-card full-width">
-        <div className="chart-title">每日營收日曆縱力圖</div>
+        <div className="chart-title">每日營收日曄熱力圖</div>
         <div className="chart-subtitle">顏色越深＝營收越高</div>
         <div className="chart-body" style={{overflow:'auto'}}>
           <div style={{display:'flex',flexWrap:'wrap',gap:16,padding:8}}>
