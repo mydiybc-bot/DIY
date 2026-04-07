@@ -229,7 +229,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 
   <!-- 排名表 -->
   <div class="section">
-    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">綜合分數 = 招募達成率×50% + 啟動率×50%｜點欄位標題可排序</span></div>
+    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">綜合分數 = 招募達成率×50% + 啟動率(9個月)×50%｜點欄位標題可排序</span></div>
     <div class="chart-card">
       <div class="table-wrapper">
         <table>
@@ -239,7 +239,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
               <th onclick="sortTable('store')">門市 ↕</th>
               <th onclick="sortTable('compositeScore')" title="招募達成率×50% + 啟動率×50%">綜合分數 ↕</th>
               <th onclick="sortTable('recruitRate')">招募達成率 ↕</th>
-              <th onclick="sortTable('activationRate')">啟動率 ↕</th>
+              <th onclick="sortTable('activationRate')">啟動率(9個月) ↕</th>
               <th onclick="sortTable('members')">2026招募人數 ↕</th>
             </tr>
           </thead>
@@ -446,24 +446,36 @@ function processFromCache(cache, fromIdx, toIdx) {
     }
   });
 
-  // ── 整體回購率：固定用全年資料，並扣除取消事件 ─────────────────
-  const allMemberTotalCounts = {};
+  // ── 整體回購率：固定用全年資料，同一門市口徑（避免跨店灌水） ──────
+  const memberStoreCounts = {};
   parseRows(cache.qc).forEach(r => {
-    if (!r.c || !r.c[0]) return;
-    const member = r.c[0].v;
+    if (!r.c || !r.c[0] || !r.c[1]) return;
+    const member = r.c[0].v, store = r.c[1].v;
     const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
-    allMemberTotalCounts[member] = (allMemberTotalCounts[member] || 0) + cnt;
+    const k = member + '\x00' + store;
+    memberStoreCounts[k] = (memberStoreCounts[k] || 0) + cnt;
   });
   parseRows(cache.qe).forEach(r => {
-    if (!r.c || !r.c[0]) return;
-    const member = r.c[0].v;
+    if (!r.c || !r.c[0] || !r.c[1]) return;
+    const member = r.c[0].v, store = r.c[1].v;
     const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
-    allMemberTotalCounts[member] = Math.max(0, (allMemberTotalCounts[member] || 0) - cnt);
+    const k = member + '\x00' + store;
+    memberStoreCounts[k] = Math.max(0, (memberStoreCounts[k] || 0) - cnt);
   });
-  const totalConsumersFullYear  = Object.values(allMemberTotalCounts).filter(c => c > 0).length;
-  const repeatConsumersFullYear = Object.values(allMemberTotalCounts).filter(c => c >= 2).length;
+  const memberBestStore = {};
+  Object.entries(memberStoreCounts).forEach(([k, cnt]) => {
+    const member = k.split('\x00')[0];
+    if (!memberBestStore[member] || cnt > memberBestStore[member]) memberBestStore[member] = cnt;
+  });
+  const totalConsumersFullYear  = Object.values(memberBestStore).filter(c => c > 0).length;
+  const repeatConsumersFullYear = Object.values(memberBestStore).filter(c => c >= 2).length;
   const fullYearRepeatRate = totalConsumersFullYear > 0
     ? Math.round(repeatConsumersFullYear / totalConsumersFullYear * 100) : 0;
+  const allMemberTotalCounts = {};
+  Object.entries(memberStoreCounts).forEach(([k, cnt]) => {
+    const member = k.split('\x00')[0];
+    allMemberTotalCounts[member] = (allMemberTotalCounts[member] || 0) + cnt;
+  });
 
   // QC: per-member visit frequency（先加入正常消費，限選定期間）
   const memberVisits = {};
@@ -510,7 +522,8 @@ function processFromCache(cache, fromIdx, toIdx) {
 
   // ── 會員啟動率：加入滿365天且有2次以上消費的會員比例 ─────────────────
   const TODAY = new Date();
-  const cutoffDate = new Date(TODAY.getTime() - 365 * 24 * 60 * 60 * 1000);
+  const ACTIVATION_DAYS = 270; // 9個月（數據起始2025/4，尚不足365天）
+  const cutoffDate = new Date(TODAY.getTime() - ACTIVATION_DAYS * 24 * 60 * 60 * 1000);
   const memberJoinStore = {};
   parseRows(cache.qf || {}).forEach(r => {
     if (!r.c || !r.c[0] || !r.c[1] || !r.c[2]) return;
@@ -727,7 +740,7 @@ function renderKPI(data) {
     <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">加入群友事件數</div></div>
     <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">得到點數事件數</div></div>
     <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">消費次數 ÷ 不重複消費會員數</div></div>
-    <div class="kpi-card b"><div class="kpi-label">整體回購率（全年）</div><div class="kpi-value">${repeatRate}%</div><div class="kpi-sub">全年消費 2 次以上比例</div></div>`;
+    <div class="kpi-card b"><div class="kpi-label">同門市回購率（全年）</div><div class="kpi-value">${repeatRate}%</div><div class="kpi-sub">同一門市消費 2 次以上比例</div></div>`;
 }
 
 // ─── MONTHLY TREND ────────────────────────────────────────────
