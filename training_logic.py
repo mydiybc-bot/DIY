@@ -110,6 +110,7 @@ def create_session(section_id: str, content: dict, progress: dict | None = None)
         "current_index": start_index,
         "attempts": 0,
         "scoreboard": scoreboard,
+        "last_result": None,
     }
 
 
@@ -120,6 +121,14 @@ def normalize_text(text: str) -> str:
 
 def build_question_text(question: dict, rules: dict) -> str:
     return f"Q{question['number']}：{question['prompt']} {rules['question_suffix']}"
+
+
+def _summarize_labels(labels: list[str], limit: int = 2) -> str:
+    if not labels:
+        return ""
+    if len(labels) <= limit:
+        return "、".join(labels)
+    return "、".join(labels[:limit]) + "等重點"
 
 
 def score_answer(question: dict, answer: str, rules: dict) -> dict:
@@ -183,23 +192,51 @@ def score_answer(question: dict, answer: str, rules: dict) -> dict:
         feedback = rules["retry_feedback"]
         coaching_parts = []
         if missing:
-            coaching_parts.append("應該補上：" + "、".join(missing) + "。")
+            coaching_parts.append("請補上：" + _summarize_labels(missing) + "。")
         if uses_profanity:
-            coaching_parts.append("回答內容不能帶髒話或攻擊字眼，請改成尊重客人的說法。")
+            coaching_parts.append("回答不能帶髒話或攻擊字眼，請改成尊重客人的說法。")
         if needs_better_expression:
-            coaching_parts.append("也請改成直接對客人說的完整句子，語氣自然一點，不要只列重點或照抄提示。")
+            coaching_parts.append("請改成直接對客人說的完整句子，語氣自然一點。")
+        if not missing and not uses_profanity and needs_better_expression:
+            coaching_parts.append("離 10 分只差說得更自然、完整。")
         coaching_parts.append(rules["retry_prompt"])
         coaching = "".join(coaching_parts)
 
     return {
         "score": score,
         "matched": matched,
+        "matched_count": len(matched),
         "missing": missing,
+        "missing_count": len(missing),
         "needs_better_expression": needs_better_expression,
         "uses_profanity": uses_profanity,
         "feedback": feedback,
         "coaching": coaching,
+        "score_protected": False,
     }
+
+
+def protect_improved_attempt(previous: dict | None, current: dict) -> dict:
+    if not previous:
+        return current
+
+    has_more_points = current["matched_count"] > previous["matched_count"]
+    has_fewer_missing = current["missing_count"] < previous["missing_count"]
+    expression_improved = previous["needs_better_expression"] and not current["needs_better_expression"]
+    profanity_removed = previous["uses_profanity"] and not current["uses_profanity"]
+
+    added_penalties = (
+        current["uses_profanity"]
+        or current["matched_count"] < previous["matched_count"]
+        or (current["needs_better_expression"] and not previous["needs_better_expression"])
+    )
+    looks_like_progress = has_more_points or has_fewer_missing or expression_improved or profanity_removed
+
+    if looks_like_progress and not added_penalties and current["score"] < previous["score"]:
+        current["score"] = previous["score"]
+        current["score_protected"] = True
+
+    return current
 
 
 def summarize_session(session: dict) -> str:
@@ -264,6 +301,15 @@ def respond(session: dict, answer: str) -> dict:
     question = session["questions"][session["current_index"]]
     session["attempts"] += 1
     result = score_answer(question, clean_answer, rules)
+    previous_result = session.get("last_result")
+    result = protect_improved_attempt(previous_result, result)
+    session["last_result"] = {
+        "score": result["score"],
+        "matched_count": result["matched_count"],
+        "missing_count": result["missing_count"],
+        "needs_better_expression": result["needs_better_expression"],
+        "uses_profanity": result["uses_profanity"],
+    }
 
     record = _ensure_scoreboard_item(session, question)
     record["attempts"] += 1
@@ -275,6 +321,8 @@ def respond(session: dict, answer: str) -> dict:
     ]
 
     if result["score"] < 10:
+        if result["score_protected"]:
+            parts.append("這次有依照建議補強，分數先不倒扣。")
         parts.append(result["coaching"])
         if session["attempts"] >= rules["max_attempts_before_answer"]:
             parts.append(rules["reference_answer_intro"] + question["answer"])
@@ -282,6 +330,7 @@ def respond(session: dict, answer: str) -> dict:
         return {"done": False, "message": "\n".join(parts)}
 
     session["attempts"] = 0
+    session["last_result"] = None
     session["current_index"] += 1
     parts.append(rules["pass_message"])
 
