@@ -14,8 +14,6 @@ const bubbleTemplate = document.getElementById("bubble-template");
 const voiceButton = document.getElementById("voice-button");
 const speakButton = document.getElementById("speak-button");
 const voiceStatus = document.getElementById("voice-status");
-const practiceExitWrap = document.getElementById("practice-exit-wrap");
-const practiceLogoutButton = document.getElementById("practice-logout-button");
 const practiceTab = document.getElementById("practice-tab");
 const adminTab = document.getElementById("admin-tab");
 const modeSwitch = document.querySelector(".mode-switch");
@@ -52,18 +50,35 @@ let mediaStream = null;
 let recordedChunks = [];
 let discardRecording = false;
 let responsePending = false;
+let analyserNode = null;
+let audioContext = null;
+let audioSourceNode = null;
+let silenceMonitorId = null;
+let autoListenTimeoutId = null;
+let microphoneRecoveryTimeoutId = null;
+let heardSpeech = false;
+let speechStartedAt = 0;
+let lastSpeechAt = 0;
+let recordingStartedAt = 0;
 let currentConfig = null;
 let currentSessionInfo = null;
 let currentRole = null;
 let currentAuth = null;
 let currentReports = [];
 let currentAdminSection = "accounts";
+let awaitingCoachReply = false;
+let waitingForUserReply = false;
 let reportFilters = {
   employee_id: "",
   section_id: "",
   date_from: "",
   date_to: "",
 };
+
+const AUTO_SUBMIT_SILENCE_MS = 2200;
+const AUTO_SUBMIT_MIN_SPEECH_MS = 1800;
+const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
+const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
 
 const RULE_FIELDS = [
   { key: "assistant_role", label: "AI 角色設定", type: "textarea" },
@@ -123,35 +138,198 @@ function updateRoleUi() {
   setMode("practice");
 }
 
-function speak(text) {
-  if (!("speechSynthesis" in window) || !text) return;
+function clearAutoListenTimer() {
+  if (autoListenTimeoutId) {
+    window.clearTimeout(autoListenTimeoutId);
+    autoListenTimeoutId = null;
+  }
+}
+
+function clearMicrophoneRecoveryTimer() {
+  if (microphoneRecoveryTimeoutId) {
+    window.clearTimeout(microphoneRecoveryTimeoutId);
+    microphoneRecoveryTimeoutId = null;
+  }
+}
+
+function speak(text, onDone = null) {
+  if (!("speechSynthesis" in window) || !text) {
+    if (typeof onDone === "function") onDone();
+    return;
+  }
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "zh-TW";
-  utterance.rate = 1;
+  utterance.rate = 1.25;
+  if (typeof onDone === "function") {
+    utterance.onend = () => onDone();
+    utterance.onerror = () => onDone();
+  }
   window.speechSynthesis.speak(utterance);
 }
 
+function summarizeSpeechLabels(rawText, limit = 2) {
+  const labels = rawText
+    .split("、")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!labels.length) return "";
+  if (labels.length <= limit) return labels.join("、");
+  return `${labels.slice(0, limit).join("、")}等重點`;
+}
+
+function buildCoachSpeechText(message, { autoListen = false } = {}) {
+  const lines = message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const questionLine = lines.find((line) => /^Q\d+：/.test(line));
+  const passLine = lines.find((line) => line.includes("這題通過"));
+  const missingLine = lines.find((line) => line.startsWith("請補上：") || line.startsWith("應該補上："));
+  const profanityLine = lines.find((line) => line.includes("不能帶髒話"));
+  const expressionLine = lines.find((line) => line.includes("完整句子") || line.includes("更自然"));
+  const revealLine = lines.find((line) => line.startsWith("參考答案："));
+
+  if (questionLine && passLine) {
+    return `這題通過。下一題。${questionLine}`;
+  }
+
+  if (autoListen) {
+    const spokenParts = [];
+    if (missingLine) {
+      const labels = summarizeSpeechLabels(missingLine.replace(/^請補上：|^應該補上：/, "").replace(/。$/, ""));
+      if (labels) spokenParts.push(`請補上${labels}。`);
+    }
+    if (profanityLine) {
+      spokenParts.push("回答不能帶髒話。");
+    }
+    if (expressionLine) {
+      spokenParts.push("請用完整句子，再回答一次。");
+    }
+    if (revealLine) {
+      spokenParts.push("參考答案已顯示在畫面上，請照這個方向回答。");
+    }
+    if (questionLine) {
+      spokenParts.push(`題目是，${questionLine}`);
+    } else {
+      spokenParts.push("請直接再回答一次。");
+    }
+    return spokenParts.join("");
+  }
+
+  if (questionLine) {
+    return questionLine;
+  }
+
+  return lines[0] || message;
+}
+
 function refreshActionState() {
-  voiceButton.disabled = responsePending || !trainingActive || !mediaReady;
+  voiceButton.disabled = responsePending || !trainingActive;
   startButton.disabled = responsePending || isListening;
-  speakButton.disabled = responsePending || isListening;
+  speakButton.disabled = responsePending;
 }
 
 function stopListeningUi() {
   isListening = false;
   voiceButton.classList.remove("listening");
-  voiceButton.textContent = "開始說話";
+  voiceButton.textContent = "停止練習";
   refreshActionState();
 }
 
-function releaseRecordingResources() {
-  if (mediaStream) {
+function stopSilenceMonitor() {
+  if (silenceMonitorId) {
+    window.clearInterval(silenceMonitorId);
+    silenceMonitorId = null;
+  }
+  if (audioSourceNode) {
+    audioSourceNode.disconnect();
+    audioSourceNode = null;
+  }
+  if (analyserNode) {
+    analyserNode.disconnect();
+    analyserNode = null;
+  }
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+  heardSpeech = false;
+  speechStartedAt = 0;
+  lastSpeechAt = 0;
+  recordingStartedAt = 0;
+}
+
+function releaseRecordingResources(stopStream = true) {
+  stopSilenceMonitor();
+  if (stopStream && mediaStream) {
     mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
   }
   mediaRecorder = null;
   recordedChunks = [];
+}
+
+function scheduleMicrophoneRecovery(reason = "麥克風剛剛被中斷，正在重新連線。") {
+  if (!trainingActive || responsePending || document.hidden || !waitingForUserReply) return;
+  if (microphoneRecoveryTimeoutId) return;
+
+  setVoiceStatus(reason);
+  microphoneRecoveryTimeoutId = window.setTimeout(async () => {
+    microphoneRecoveryTimeoutId = null;
+    if (!trainingActive || responsePending || isListening || document.hidden || !waitingForUserReply) return;
+    try {
+      await ensureMediaStream();
+      beginAutoListenAfterCoach();
+    } catch (error) {
+      mediaStream = null;
+      setVoiceStatus(`麥克風尚未恢復：${error.message || "請再等一下或重新整理頁面。"}`);
+    }
+  }, 800);
+}
+
+function handleMicrophoneInterrupted(reason = "麥克風被系統中斷，正在恢復。") {
+  const wasListening = isListening;
+  clearAutoListenTimer();
+  clearMicrophoneRecoveryTimer();
+  mediaStream = null;
+  if (wasListening) {
+    stopRecording(true);
+  } else {
+    releaseRecordingResources(false);
+    stopListeningUi();
+  }
+  if (trainingActive && waitingForUserReply) {
+    scheduleMicrophoneRecovery(reason);
+  }
+}
+
+function attachStreamWatchers(stream) {
+  stream.getAudioTracks().forEach((track) => {
+    track.onended = () => handleMicrophoneInterrupted("麥克風連線已中斷，正在重新連線。");
+    track.onmute = () => {
+      if (isListening) {
+        setVoiceStatus("麥克風暫時被系統接管，正在等待恢復。");
+      }
+    };
+    track.onunmute = () => {
+      if (trainingActive && waitingForUserReply && !responsePending && !isListening) {
+        scheduleMicrophoneRecovery("麥克風已恢復，正在重新開始收音。");
+      }
+    };
+  });
+}
+
+async function ensureMediaStream() {
+  const activeTrack = mediaStream?.getAudioTracks?.().find((track) => track.readyState === "live");
+  if (activeTrack) {
+    return mediaStream;
+  }
+
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  attachStreamWatchers(mediaStream);
+  return mediaStream;
 }
 
 function getRecordingMimeType() {
@@ -167,13 +345,68 @@ function getRecordingMimeType() {
   return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
 }
 
+function startSilenceMonitor(stream) {
+  stopSilenceMonitor();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  audioContext = new AudioContextClass();
+  analyserNode = audioContext.createAnalyser();
+  analyserNode.fftSize = 2048;
+  audioSourceNode = audioContext.createMediaStreamSource(stream);
+  audioSourceNode.connect(analyserNode);
+
+  const buffer = new Uint8Array(analyserNode.fftSize);
+  recordingStartedAt = Date.now();
+  heardSpeech = false;
+  speechStartedAt = 0;
+  lastSpeechAt = 0;
+
+  silenceMonitorId = window.setInterval(() => {
+    if (!isListening || !analyserNode) return;
+    analyserNode.getByteTimeDomainData(buffer);
+
+    let energy = 0;
+    for (const sample of buffer) {
+      const normalized = (sample - 128) / 128;
+      energy += normalized * normalized;
+    }
+    const rms = Math.sqrt(energy / buffer.length);
+    const now = Date.now();
+    const speakingNow = rms >= 0.032;
+
+    if (speakingNow) {
+      heardSpeech = true;
+      if (!speechStartedAt) speechStartedAt = now;
+      lastSpeechAt = now;
+      setVoiceStatus("教練正在聽你回答，停頓約 2 秒後才會自動送出。");
+      return;
+    }
+
+    if (heardSpeech && now - lastSpeechAt > AUTO_SUBMIT_SILENCE_MS && now - speechStartedAt > AUTO_SUBMIT_MIN_SPEECH_MS) {
+      stopRecording(false);
+      return;
+    }
+
+    if (!heardSpeech && now - recordingStartedAt > AUTO_SUBMIT_IDLE_HINT_MS) {
+      setVoiceStatus("教練正在等你回答，請直接開口。");
+    }
+
+    if (now - recordingStartedAt > AUTO_SUBMIT_MAX_RECORDING_MS) {
+      stopRecording(false);
+    }
+  }, 180);
+}
+
 async function startRecording() {
   if (!mediaReady || responsePending || isListening || !trainingActive) return;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    const stream = await ensureMediaStream();
     const mimeType = getRecordingMimeType();
     const options = mimeType ? { mimeType } : undefined;
-    mediaStream = stream;
     mediaRecorder = new MediaRecorder(stream, options);
     recordedChunks = [];
     discardRecording = false;
@@ -185,7 +418,7 @@ async function startRecording() {
     };
 
     mediaRecorder.onerror = (event) => {
-      releaseRecordingResources();
+      releaseRecordingResources(false);
       stopListeningUi();
       setVoiceStatus(`錄音失敗：${event.error?.message || "請再試一次。"}`);
     };
@@ -193,7 +426,8 @@ async function startRecording() {
     mediaRecorder.onstop = async () => {
       const blobType = mediaRecorder?.mimeType || mimeType || recordedChunks[0]?.type || "audio/webm";
       const audioBlob = new Blob(recordedChunks, { type: blobType });
-      releaseRecordingResources();
+      const shouldStopStream = discardRecording && !trainingActive;
+      releaseRecordingResources(shouldStopStream);
       stopListeningUi();
       if (discardRecording) {
         discardRecording = false;
@@ -208,13 +442,14 @@ async function startRecording() {
     };
 
     mediaRecorder.start();
+    startSilenceMonitor(stream);
     isListening = true;
     voiceButton.classList.add("listening");
-    voiceButton.textContent = "結束並送出";
-    setVoiceStatus("教練正在聽你回答，說完後再按一次送出。");
+    voiceButton.textContent = "停止練習";
+    setVoiceStatus("教練正在聽你回答，停頓約 2 秒後才會自動送出。");
     refreshActionState();
   } catch (error) {
-    releaseRecordingResources();
+    releaseRecordingResources(false);
     stopListeningUi();
     setVoiceStatus(`無法開始錄音：${error.message || "請確認麥克風權限後再試一次。"}`);
   }
@@ -223,18 +458,18 @@ async function startRecording() {
 function stopRecording(discard = false) {
   if (!mediaRecorder || mediaRecorder.state === "inactive") {
     if (discard) {
-      releaseRecordingResources();
+      releaseRecordingResources(true);
       stopListeningUi();
     }
     return;
   }
+  stopSilenceMonitor();
   discardRecording = discard;
   setVoiceStatus(discard ? "已取消這次錄音。" : "已收到你的回答，正在送給教練。");
   mediaRecorder.stop();
 }
 
-function toggleExitButtons(showPracticeExit = false, showAdminExit = false) {
-  practiceExitWrap.classList.toggle("hidden", !showPracticeExit);
+function toggleExitButtons(_showPracticeExit = false, showAdminExit = false) {
   adminLogoutButton.classList.toggle("hidden", !showAdminExit);
 }
 
@@ -255,6 +490,10 @@ async function goToLoginPage() {
   currentAuth = null;
   currentReports = [];
   trainingActive = false;
+  awaitingCoachReply = false;
+  waitingForUserReply = false;
+  clearAutoListenTimer();
+  clearMicrophoneRecoveryTimer();
   stopRecording(true);
   stopListeningUi();
   toggleExitButtons(false, false);
@@ -264,13 +503,13 @@ async function goToLoginPage() {
   messageInput.value = "";
   sectionSelect.innerHTML = "";
   reportsList.innerHTML = "";
-  reportsSummary.textContent = "尚未載入報表。";
+  reportsSummary.textContent = "尚未載入報告。";
   loginForm.reset();
   toggleLoginFields();
   appPanel.classList.add("hidden");
   loginPanel.classList.remove("hidden");
   updateSessionBanner("準備開始今天的口語訓練", "選好單元後就能直接開口。", "員工練習");
-  setVoiceStatus(mediaReady ? "按下開始說話，說完後再按一次送出。" : "這台裝置目前不支援站內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援开內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -279,14 +518,18 @@ function resetPracticeHome(summaryMessage = "") {
     return;
   }
   trainingActive = false;
+  awaitingCoachReply = false;
+  waitingForUserReply = false;
+  clearAutoListenTimer();
+  clearMicrophoneRecoveryTimer();
   stopRecording(true);
   stopListeningUi();
-  toggleExitButtons(Boolean(summaryMessage), false);
+  toggleExitButtons(false, false);
   activeSection.textContent = "請先選擇單元。";
   messageInput.value = "";
   chat.innerHTML = "";
   const homeMessage = summaryMessage
-    ? `本輪練習已結束，已返回首頁。\n\n${summaryMessage}\n\n請重新選擇練習單元並按下「開始本單元」。`
+    ? `本輾練習已結束，已返回首頁。\n\n${summaryMessage}\n\n請重新選擇練習單元並按下「開始本單元」。`
     : "請選擇一個訓練單元，然後按下「開始本單元」。";
   if (currentRole === "admin") {
     updateSessionBanner("管理與練習都已準備完成", "你可以切換後台管理，或回到練習模式開始測試。", "管理員");
@@ -300,7 +543,7 @@ function resetPracticeHome(summaryMessage = "") {
     );
   }
   addBubble("coach", homeMessage);
-  setVoiceStatus(mediaReady ? "按下開始說話，說完後再按一次送出。" : "這台裝置目前不支援站內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -331,13 +574,47 @@ function removePendingCoachBubble() {
 
 function setResponsePending(pending) {
   responsePending = pending;
+  awaitingCoachReply = pending;
   refreshActionState();
 }
 
 function showAdminFeedback(message, kind = "ok") {
   adminFeedback.textContent = message;
   adminFeedback.className = kind === "error" ? "status-text status-error" : "status-text status-ok";
-  toggleExitButtons(practiceExitWrap && !practiceExitWrap.classList.contains("hidden"), kind === "ok");
+  toggleExitButtons(false, kind === "ok");
+}
+
+function beginAutoListenAfterCoach() {
+  clearAutoListenTimer();
+  if (!trainingActive || !mediaReady || responsePending || awaitingCoachReply || !waitingForUserReply) return;
+  autoListenTimeoutId = window.setTimeout(() => {
+    autoListenTimeoutId = null;
+    if (!trainingActive || responsePending || awaitingCoachReply || !waitingForUserReply) return;
+    if ("speechSynthesis" in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
+      beginAutoListenAfterCoach();
+      return;
+    }
+    startRecording();
+  }, 1200);
+}
+
+function deliverCoachMessage(message, { autoListen = false } = {}) {
+  const spokenText = buildCoachSpeechText(message, { autoListen });
+  waitingForUserReply = autoListen;
+  if (speechReady) {
+    if (autoListen) {
+      setVoiceStatus("請先聽教練說明，接著會開始收音。");
+      speak(spokenText, () => beginAutoListenAfterCoach());
+      return;
+    }
+    speak(spokenText);
+    return;
+  }
+
+  if (autoListen) {
+    setVoiceStatus("教練已出題，請直接回答。");
+    beginAutoListenAfterCoach();
+  }
 }
 
 async function api(path, payload, method = "POST") {
@@ -747,11 +1024,11 @@ function setupVoice() {
   mediaReady = Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
   if (!mediaReady) {
     setVoiceStatus("這台裝置目前不支援站內錄音，請改用新版 Chrome 或 Safari。");
-    voiceButton.textContent = "不支援錄音";
+    voiceButton.textContent = "停止練習";
   } else if (!speechReady) {
     setVoiceStatus("可錄音作答，但這台裝置不支援自動朗讀教練回覆。");
   } else {
-    setVoiceStatus("按下開始說話，說完後再按一次送出。");
+    setVoiceStatus("教練出題後會自動開始聽你回答。");
   }
   refreshActionState();
 }
@@ -765,11 +1042,10 @@ function buildAudioFilename(blobType) {
 async function submitAudio(audioBlob, blobType) {
   if (!trainingActive) return;
 
+  waitingForUserReply = false;
   setResponsePending(true);
+  let restartListeningAfterError = false;
   removePendingCoachBubble();
-  const pendingBubble = addBubble("coach", "教練正在聽你的錄音，請稍候...");
-  pendingBubble.classList.add("pending");
-  setVoiceStatus("教練正在整理你的回答。");
 
   try {
     const formData = new FormData();
@@ -800,20 +1076,25 @@ async function submitAudio(audioBlob, blobType) {
     removePendingCoachBubble();
     addBubble("user", data.transcript || "已收到你的語音回答。");
     addBubble("coach", data.message);
-    if (speechReady) speak(data.message);
     if (data.done) {
       await loadConfig();
       resetPracticeHome(data.message);
       return;
     }
-    setVoiceStatus("可再次按下開始說話，繼續回答。");
+    awaitingCoachReply = false;
+    deliverCoachMessage(data.message, { autoListen: true });
   } catch (err) {
     removePendingCoachBubble();
     addBubble("coach", `這次沒有成功收到完整語音。\n原因：${err.message}\n請重新錄一次。`);
-    setVoiceStatus("這次錄音沒有成功送出，請再試一次。");
+    setVoiceStatus("這次錄音沒有成功送出，教練會繼續等待你的下一次回答。");
     showError(appPanel, err.message);
+    waitingForUserReply = true;
+    restartListeningAfterError = trainingActive && mediaReady;
   } finally {
     setResponsePending(false);
+    if (restartListeningAfterError) {
+      beginAutoListenAfterCoach();
+    }
   }
 }
 
@@ -831,30 +1112,36 @@ async function submitMessage(rawMessage) {
   const message = rawMessage.trim();
   if (!message) return;
 
+  waitingForUserReply = false;
   addBubble("user", message);
   messageInput.value = "";
   setResponsePending(true);
+  let restartListeningAfterError = false;
   removePendingCoachBubble();
-  const pendingBubble = addBubble("coach", "教練思考中，請稍候...");
-  pendingBubble.classList.add("pending");
-  setVoiceStatus("教練正在整理回應，請稍候。");
 
   try {
     const result = await api("/api/respond", { message });
     removePendingCoachBubble();
     addBubble("coach", result.message);
-    if (speechReady) speak(result.message);
     if (result.done) {
       await loadConfig();
       resetPracticeHome(result.message);
+      return;
     }
+    awaitingCoachReply = false;
+    deliverCoachMessage(result.message, { autoListen: true });
   } catch (err) {
     removePendingCoachBubble();
     addBubble("coach", `目前暫時沒有收到教練回應。\n原因：${err.message}\n請再說一次。`);
     setVoiceStatus("這次沒有成功取得教練回應，可再試一次。");
     showError(appPanel, err.message);
+    waitingForUserReply = true;
+    restartListeningAfterError = trainingActive && mediaReady;
   } finally {
     setResponsePending(false);
+    if (restartListeningAfterError) {
+      beginAutoListenAfterCoach();
+    }
   }
 }
 
@@ -904,36 +1191,46 @@ startButton.addEventListener("click", async () => {
   try {
     const result = await api("/api/start", { section_id: sectionSelect.value });
     trainingActive = true;
+    clearAutoListenTimer();
     chat.innerHTML = "";
     activeSection.textContent = result.title;
     updateSessionBanner(
       `目前練習：${result.title}`,
-      "按開始說話，說完後再按一次送出。",
+      "教練說完後會自動開始聽你回答。",
       currentRole === "admin" ? "管理員測試" : "員工練習",
     );
     addBubble("coach", result.message);
-    setVoiceStatus("按下開始說話，說完後再按一次送出。");
-    if (speechReady) speak(result.message);
+    deliverCoachMessage(result.message, { autoListen: true });
   } catch (err) {
     showError(appPanel, err.message);
   }
 });
 
-voiceButton.addEventListener("click", () => {
-  if (!trainingActive) {
-    showError(appPanel, "請先開始一個練習單元。");
-    return;
+async function stopPracticeSession() {
+  if (!trainingActive || responsePending) return;
+
+  clearAutoListenTimer();
+  stopRecording(true);
+  removePendingCoachBubble();
+  setResponsePending(true);
+
+  try {
+    const result = await api("/api/respond", { message: currentSessionInfo?.rules?.end_phrase || "練習結束" });
+    removePendingCoachBubble();
+    addBubble("coach", result.message);
+    await loadConfig();
+    resetPracticeHome(result.message);
+  } catch (err) {
+    removePendingCoachBubble();
+    addBubble("coach", `目前無法結束這輾練習。\n原因：${err.message}`);
+    setVoiceStatus("目前無法結束練習，請稍後再試一次。");
+    showError(appPanel, err.message);
+  } finally {
+    setResponsePending(false);
   }
-  if (!mediaReady) {
-    setVoiceStatus("這台裝置目前不支援站內錄音。");
-    return;
-  }
-  if (isListening) {
-    stopRecording(false);
-    return;
-  }
-  startRecording();
-});
+}
+
+voiceButton.addEventListener("click", stopPracticeSession);
 
 speakButton.addEventListener("click", async () => {
   await goToLoginPage();
@@ -954,10 +1251,6 @@ saveAuthButton.addEventListener("click", async () => {
   } catch (err) {
     showAdminFeedback(err.message, "error");
   }
-});
-
-practiceLogoutButton.addEventListener("click", async () => {
-  await goToLoginPage();
 });
 
 adminLogoutButton.addEventListener("click", async () => {
@@ -1028,6 +1321,24 @@ saveAdminButton.addEventListener("click", async () => {
     showAdminFeedback("後台全部設定已儲存，包含員工帳號、密碼、題庫與規則。");
   } catch (err) {
     showAdminFeedback(err.message, "error");
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && trainingActive && waitingForUserReply && !responsePending && !isListening) {
+    scheduleMicrophoneRecovery("已回到練習畫面，正在確認麥克風。");
+  }
+});
+
+window.addEventListener("focus", () => {
+  if (trainingActive && waitingForUserReply && !responsePending && !isListening) {
+    scheduleMicrophoneRecovery("已回到練習畫面，正在確認麥克風。");
+  }
+});
+
+window.addEventListener("pageshow", () => {
+  if (trainingActive && waitingForUserReply && !responsePending && !isListening) {
+    scheduleMicrophoneRecovery("已回到練習畫面，正在確認麥克風。");
   }
 });
 
