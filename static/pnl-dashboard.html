@@ -276,7 +276,7 @@ tbody tr:hover { background: var(--primary-light); }
     <h1>共好平台有限公司</h1>
     <p class="subtitle">烘焙DIY連鎖 P&L 分析系統</p>
     <div class="login-input-group">
-      <label for="login-password">密碼</label>
+      <label for="login-password">密碸</label>
       <input type="password" id="login-password" placeholder="請輸入系統密碼" autocomplete="current-password">
     </div>
     <button class="login-btn" id="login-btn" onclick="doLogin()">登入</button>
@@ -504,7 +504,7 @@ tbody tr:hover { background: var(--primary-light); }
    共好平台 P&L Dashboard v2
    ================================================================ */
 
-const API_BASE = 'https://script.google.com/macros/s/AKfycbw1FTIUr6ktBvK1uAKdljwnm0ErCJbJS-bVc79DiLl98_5YsIiPB7Bn7rdF0sXWyjfcHQ/exec';
+const API_BASE = 'https://script.google.com/macros/s/AKfycbxmQYsYKJ6-7I_szysDiq122cJtMt-WoAiwpugR0ti4Hb1pjsTGrPQEmOKx5lS4scLH7g/exec';
 
 // ========== Store metadata ==========
 const STORE_META = {
@@ -547,43 +547,42 @@ let G = {
 // Chart instances registry
 const charts = {};
 
-// ========== API Fetch (fetch with redirect follow) ==========
-async function jsonpFetch(action, params = {}) {
-  const url = new URL(API_BASE);
-  url.searchParams.set('action', action);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+// ========== API Fetch (JSONP script tag injection for CORS bypass) ==========
+let _jsonpCounter = 0;
+function jsonpFetch(action, params = {}) {
+  return new Promise((resolve, reject) => {
+    const cbName = '_jsonpCb_' + (++_jsonpCounter) + '_' + Date.now();
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('請求逾時，請稍後再試'));
+    }, 30000);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-
-  try {
-    const resp = await fetch(url.toString(), {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    if (!resp.ok) throw new Error('伺服器回應錯誤: ' + resp.status);
-    const text = await resp.text();
-    // Try parsing as JSON; if API still wraps in callback, strip it
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      // Maybe JSONP-wrapped: callbackName({...})
-      const match = text.match(/^[^(]*\((.+)\);?\s*$/s);
-      if (match) {
-        data = JSON.parse(match[1]);
-      } else {
-        throw new Error('無法解析回應資料');
-      }
+    function cleanup() {
+      clearTimeout(timeout);
+      delete window[cbName];
+      const s = document.getElementById(cbName);
+      if (s) s.remove();
     }
-    return data;
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === 'AbortError') throw new Error('請求逾時，請稍後再試');
-    throw new Error(err.message || '網路連線失敗');
-  }
+
+    window[cbName] = function(data) {
+      cleanup();
+      resolve(data);
+    };
+
+    const url = new URL(API_BASE);
+    url.searchParams.set('action', action);
+    url.searchParams.set('callback', cbName);
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+    const script = document.createElement('script');
+    script.id = cbName;
+    script.src = url.toString();
+    script.onerror = function() {
+      cleanup();
+      reject(new Error('網路連線失敗，無法連接伺服器'));
+    };
+    document.head.appendChild(script);
+  });
 }
 
 // ========== Data remapping ==========
@@ -779,7 +778,7 @@ async function doLogin() {
   const pw = document.getElementById('login-password').value.trim();
   const errEl = document.getElementById('login-error');
   const btn = document.getElementById('login-btn');
-  if (!pw) { errEl.textContent = '請輸入密碼'; return; }
+  if (!pw) { errEl.textContent = '請輸入密素'; return; }
   errEl.textContent = '';
   btn.disabled = true;
   btn.textContent = '驗證中...';
@@ -928,7 +927,7 @@ function renderOverview() {
   // KPI cards
   const kpiHtml = `
     <div class="kpi-card">
-      <div class="kpi-label">總營收</div>
+      <div class="kpi-label">總釧叮</div>
       <div class="kpi-value">${fmtNTD(pl.revenue)}</div>
       <div class="kpi-sub">Revenue</div>
     </div>
@@ -975,7 +974,7 @@ function renderOverviewTrend(data) {
     return data.filter(r => r.year_month === m && r.category_l1 === '營業收入')
       .reduce((s, r) => s + r.amount, 0);
   });
-  c/nst profitByMonth = months.map(m => {
+  const profitByMonth = months.map(m => {
     const md = data.filter(r => r.year_month === m);
     const p = calcPL(md);
     return p.netProfit;
@@ -1741,7 +1740,7 @@ function renderAccountsTable(data) {
   });
 
   html += `<tr class="subtotal-row"><td>毛利</td><td class="text-right">${fmt(pl.grossProfit)}</td><td class="text-right">${fmtPct(pl.grossMargin)}</td><td></td></tr>`;
-  html += `<tr class="total-row"><td>燗業淨利</td><td class="text-right">${fmt(pl.netProfit)}</td><td class="text-right">${fmtPct(pl.netMargin)}</td><td></td></tr>`;
+  html += `<tr class="total-row"><td>營業淨利</td><td class="text-right">${fmt(pl.netProfit)}</td><td class="text-right">${fmtPct(pl.netMargin)}</td><td></td></tr>`;
   html += '</tbody></table>';
   document.getElementById('acc-table-wrap').innerHTML = html;
 }
