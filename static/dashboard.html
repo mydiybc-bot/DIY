@@ -260,6 +260,7 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
     </div>
     <div class="topbar-right">
       <span class="company">共好平台有限公司</span>
+      <button class="admin-gear-btn" onclick="openAdminPanel()" title="管理員">⚙️</button>
       <button class="logout-btn" onclick="doLogout()">登出</button>
     </div>
   </div>
@@ -1098,6 +1099,447 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
     if(tab==='trend') renderTrend();
   });
 });
+
+/* ========================================================
+   M3 管理員面板 (2026-04-26 新增)
+   功能: 月度損益匯入 / 驗證報告 / 確認 / 還原
+   ======================================================== */
+
+/* ===== 管理員按鈕樣式 ===== */
+const adminCssEl = document.createElement('style');
+adminCssEl.textContent = `
+.admin-gear-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--text2);
+  width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
+  font-size: 16px; margin-right: 8px; transition: all .2s;
+}
+.admin-gear-btn:hover { background: var(--bg); border-color: var(--primary); }
+
+.admin-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  z-index: 9999; align-items: center; justify-content: center;
+}
+.admin-overlay.show { display: flex; }
+.admin-modal {
+  background: var(--card); border-radius: var(--radius); padding: 28px;
+  width: 92%; max-width: 720px; max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+}
+.admin-modal h2 { font-size: 20px; color: var(--accent); margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+.admin-modal h2 .close-x { margin-left: auto; cursor: pointer; color: var(--text2); font-size: 18px; background: none; border: none; }
+.admin-section {
+  background: var(--bg); border-radius: 10px; padding: 16px; margin-bottom: 16px;
+}
+.admin-section-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.admin-input, .admin-input-pwd {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px; outline: none;
+}
+.admin-input:focus { border-color: var(--primary); }
+.admin-btn {
+  background: var(--accent); color: #fff; border: none; padding: 10px 20px;
+  border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; margin-right: 8px;
+  transition: background .2s;
+}
+.admin-btn:hover { background: #C0760F; }
+.admin-btn:disabled { opacity: .5; cursor: not-allowed; }
+.admin-btn-secondary { background: #6c757d; }
+.admin-btn-secondary:hover { background: #5a6268; }
+.admin-btn-danger { background: var(--red); }
+.admin-btn-danger:hover { background: #c82333; }
+.admin-btn-success { background: var(--green); }
+.admin-btn-success:hover { background: #218838; }
+.admin-status {
+  font-size: 13px; padding: 8px 12px; border-radius: 6px; margin-top: 10px;
+}
+.admin-status.info { background: #e7f3fe; color: #0c5494; }
+.admin-status.ok { background: #d4edda; color: #155724; }
+.admin-status.warn { background: #fff3cd; color: #856404; }
+.admin-status.err { background: #f8d7da; color: #721c24; }
+.admin-report-table {
+  width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px;
+}
+.admin-report-table th, .admin-report-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
+}
+.admin-report-table th { background: var(--bg); font-weight: 600; }
+.admin-report-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-recheck { font-size: 18px; }
+.admin-progress {
+  height: 6px; background: var(--border); border-radius: 3px; margin: 8px 0; overflow: hidden;
+}
+.admin-progress-bar { height: 100%; background: var(--primary); transition: width .3s; }
+
+.admin-confirm-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  z-index: 10000; align-items: center; justify-content: center;
+}
+.admin-confirm-overlay.show { display: flex; }
+.admin-confirm-modal {
+  background: var(--card); border-radius: var(--radius); padding: 28px;
+  width: 92%; max-width: 480px; box-shadow: 0 8px 40px rgba(0,0,0,0.2);
+}
+.admin-confirm-modal h3 { color: var(--red); margin-bottom: 12px; }
+.admin-confirm-modal p { color: var(--text); line-height: 1.6; margin-bottom: 16px; }
+.admin-confirm-modal .actions { display: flex; gap: 10px; justify-content: flex-end; }
+`;
+document.head.appendChild(adminCssEl);
+
+/* ===== 管理員面板 HTML ===== */
+const adminHtmlEl = document.createElement('div');
+adminHtmlEl.innerHTML = `
+<div class="admin-overlay" id="admin-overlay">
+  <div class="admin-modal">
+    <h2>⚙️ 管理員面板 — 月度損益匯入
+      <button class="close-x" onclick="closeAdminPanel()">✕</button>
+    </h2>
+
+    <!-- 密碼驗證階段 -->
+    <div id="admin-stage-pwd">
+      <div class="admin-section">
+        <div class="admin-section-title">🔒 管理員驗證</div>
+        <input type="password" class="admin-input-pwd admin-input" id="admin-pwd"
+               placeholder="請輸入管理員密碼" onkeydown="if(event.key==='Enter')adminVerify()">
+        <div style="margin-top:10px;">
+          <button class="admin-btn" onclick="adminVerify()">驗證</button>
+        </div>
+        <div class="admin-status info" id="admin-pwd-msg" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- 主功能階段(密碼通過後顯示) -->
+    <div id="admin-stage-main" style="display:none;">
+
+      <!-- 區塊 1: 設定 -->
+      <div class="admin-section">
+        <div class="admin-section-title">📁 1. Drive 資料夾設定</div>
+        <input type="text" class="admin-input" id="admin-folder-id"
+               placeholder="貼上 Drive 資料夾 ID(例: 1ABC...XYZ)">
+        <div style="margin-top:10px;">
+          <button class="admin-btn" onclick="adminScanFolder()">🔍 掃描本月檔案</button>
+        </div>
+        <div class="admin-status info" id="admin-scan-msg" style="display:none;"></div>
+      </div>
+
+      <!-- 區塊 2: 解析 -->
+      <div class="admin-section" id="admin-parse-section" style="display:none;">
+        <div class="admin-section-title">⚙️ 2. 開始解析</div>
+        <div id="admin-parse-status">準備就緒</div>
+        <div class="admin-progress" id="admin-parse-progress" style="display:none;">
+          <div class="admin-progress-bar" id="admin-parse-bar" style="width:0%"></div>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="admin-btn" onclick="adminStartParse()" id="admin-parse-btn">▶ 開始解析</button>
+        </div>
+        <div class="admin-status info" id="admin-parse-msg" style="display:none;"></div>
+      </div>
+
+      <!-- 區塊 3: 驗證報告 -->
+      <div class="admin-section" id="admin-report-section" style="display:none;">
+        <div class="admin-section-title">📊 3. 驗證報告</div>
+        <div id="admin-report-content"></div>
+      </div>
+
+      <!-- 區塊 4: 決策按鈕 -->
+      <div class="admin-section" id="admin-decision-section" style="display:none;">
+        <div class="admin-section-title">✅ 4. 經營者決策</div>
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="admin-btn admin-btn-success" onclick="adminAskCommit()" id="admin-commit-btn">✓ 確認匯入</button>
+          <button class="admin-btn admin-btn-secondary" onclick="adminCancel()">✗ 取消</button>
+          <button class="admin-btn admin-btn-danger" onclick="adminAskRollback()">↶ 還原備份</button>
+        </div>
+        <div class="admin-status info" id="admin-decision-msg" style="display:none;"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- 二次確認 modal -->
+<div class="admin-confirm-overlay" id="admin-confirm-overlay">
+  <div class="admin-confirm-modal">
+    <h3 id="admin-confirm-title">⚠️ 最終確認</h3>
+    <p id="admin-confirm-body"></p>
+    <div class="actions">
+      <button class="admin-btn admin-btn-secondary" onclick="adminConfirmCancel()">取消</button>
+      <button class="admin-btn admin-btn-success" onclick="adminConfirmDo()" id="admin-confirm-do-btn">確認執行</button>
+    </div>
+  </div>
+</div>
+`;
+document.body.appendChild(adminHtmlEl);
+
+/* ===== 管理員邏輯 ===== */
+let _adminToken = '';
+let _adminScanResult = null;
+let _adminParseResult = null;
+let _adminConfirmCallback = null;
+
+function openAdminPanel() {
+  document.getElementById('admin-overlay').classList.add('show');
+  document.getElementById('admin-stage-pwd').style.display = 'block';
+  document.getElementById('admin-stage-main').style.display = 'none';
+  document.getElementById('admin-pwd').value = '';
+  document.getElementById('admin-pwd-msg').style.display = 'none';
+  setTimeout(() => document.getElementById('admin-pwd').focus(), 100);
+}
+
+function closeAdminPanel() {
+  document.getElementById('admin-overlay').classList.remove('show');
+}
+
+async function adminVerify() {
+  const pwd = document.getElementById('admin-pwd').value.trim();
+  const msg = document.getElementById('admin-pwd-msg');
+  if (!pwd) { showAdminMsg(msg, 'err', '請輸入密碼'); return; }
+  showAdminMsg(msg, 'info', '驗證中...');
+  try {
+    const r = await callApi('admin_verify', { password: pwd });
+    if (r && r.ok) {
+      _adminToken = r.token || pwd;
+      document.getElementById('admin-stage-pwd').style.display = 'none';
+      document.getElementById('admin-stage-main').style.display = 'block';
+    } else {
+      showAdminMsg(msg, 'err', '密碼錯誤');
+    }
+  } catch(e) {
+    showAdminMsg(msg, 'err', '驗證失敗: ' + e.message);
+  }
+}
+
+async function adminScanFolder() {
+  const folderId = document.getElementById('admin-folder-id').value.trim();
+  const msg = document.getElementById('admin-scan-msg');
+  if (!folderId) { showAdminMsg(msg, 'err', '請輸入資料夾 ID'); return; }
+  showAdminMsg(msg, 'info', '掃描中...');
+  try {
+    const r = await callApi('admin_scan_folder', { folderId: folderId, adminToken: _adminToken });
+    if (!r || !r.ok) {
+      showAdminMsg(msg, 'err', '掃描失敗: ' + ((r && r.error) || '未知'));
+      return;
+    }
+    _adminScanResult = r;
+    showAdminMsg(msg, 'ok', '✅ 找到 ' + (r.files ? r.files.length : 0) + ' 個檔案');
+    document.getElementById('admin-parse-section').style.display = 'block';
+  } catch(e) {
+    showAdminMsg(msg, 'err', '掃描異常: ' + e.message);
+  }
+}
+
+async function adminStartParse() {
+  const folderId = document.getElementById('admin-folder-id').value.trim();
+  const msg = document.getElementById('admin-parse-msg');
+  const btn = document.getElementById('admin-parse-btn');
+  const bar = document.getElementById('admin-parse-bar');
+  const progressEl = document.getElementById('admin-parse-progress');
+  btn.disabled = true;
+  progressEl.style.display = 'block';
+  bar.style.width = '10%';
+  showAdminMsg(msg, 'info', '解析中,可能需要 30-90 秒...');
+  try {
+    const r = await callApiLong('admin_parse_batch', { folderId: folderId, adminToken: _adminToken });
+    bar.style.width = '100%';
+    if (!r || !r.ok) {
+      showAdminMsg(msg, 'err', '解析失敗: ' + ((r && r.error) || '未知'));
+      btn.disabled = false;
+      return;
+    }
+    _adminParseResult = r;
+    showAdminMsg(msg, 'ok', '✅ 解析完成');
+    renderAdminReport(r);
+    document.getElementById('admin-report-section').style.display = 'block';
+    document.getElementById('admin-decision-section').style.display = 'block';
+  } catch(e) {
+    showAdminMsg(msg, 'err', '解析異常: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function renderAdminReport(r) {
+  const el = document.getElementById('admin-report-content');
+  let html = '';
+  if (r.summary) {
+    html += '<div style="margin-bottom:10px;">';
+    html += '總筆數: <strong>' + (r.summary.total_records || 0) + '</strong> | ';
+    html += '成功: <strong style="color:var(--green)">' + (r.summary.success_files || 0) + '</strong> | ';
+    html += '失敗: <strong style="color:var(--red)">' + (r.summary.failed_files || 0) + '</strong>';
+    html += '</div>';
+  }
+  if (r.stores && r.stores.length) {
+    html += '<table class="admin-report-table"><thead><tr>';
+    html += '<th>店</th><th class="num">營收</th><th class="num">毛利</th><th class="num">淨利</th><th>對帳</th>';
+    html += '</tr></thead><tbody>';
+    r.stores.forEach(s => {
+      const okIcon = s.reconcile_ok ? '<span style="color:var(--green)">✅</span>' : '<span style="color:var(--red)">❌</span>';
+      html += '<tr>';
+      html += '<td>' + (s.store_name || ('店' + s.store_id)) + '</td>';
+      html += '<td class="num">' + fmtNum(s.revenue) + '</td>';
+      html += '<td class="num">' + fmtNum(s.gross_profit) + '</td>';
+      html += '<td class="num">' + fmtNum(s.net_profit) + '</td>';
+      html += '<td>' + okIcon + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+  }
+  if (r.warnings && r.warnings.length) {
+    html += '<div class="admin-status warn" style="margin-top:10px;"><strong>⚠️ 警示:</strong><br>';
+    html += r.warnings.map(w => '• ' + w).join('<br>');
+    html += '</div>';
+  }
+  if (r.errors && r.errors.length) {
+    html += '<div class="admin-status err" style="margin-top:10px;"><strong>❌ 錯誤:</strong><br>';
+    html += r.errors.map(e => '• ' + e).join('<br>');
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function fmtNum(n) {
+  if (n === null || n === undefined) return '-';
+  return Number(n).toLocaleString('zh-TW', {maximumFractionDigits: 0});
+}
+
+function adminAskCommit() {
+  if (!_adminParseResult) return;
+  const summary = _adminParseResult.summary || {};
+  const total = summary.total_records || 0;
+  const failed = summary.failed_files || 0;
+  if (failed > 0) {
+    if (!confirm('有 ' + failed + ' 個檔案解析失敗,確定要繼續匯入剩餘成功的部分嗎?')) return;
+  }
+  showAdminConfirm(
+    '⚠️ 最終確認: 寫入 fact_pnl',
+    '即將把暫存區的 ' + total + ' 筆資料寫入 fact_pnl(歷史財務資料)。\n\n' +
+    '此動作將觸發 commitStagingToFact 函式。\n' +
+    '系統會先自動備份 fact_pnl,匯入失敗時可還原。\n\n' +
+    '您確認執行匯入嗎?',
+    adminCommitDo
+  );
+}
+
+async function adminCommitDo() {
+  const msg = document.getElementById('admin-decision-msg');
+  showAdminMsg(msg, 'info', '匯入中...');
+  try {
+    const r = await callApiLong('admin_commit', { adminToken: _adminToken });
+    if (!r || !r.ok) {
+      showAdminMsg(msg, 'err', '匯入失敗: ' + ((r && r.error) || '未知'));
+      return;
+    }
+    showAdminMsg(msg, 'ok', '✅ 匯入完成! fact_pnl: ' + (r.before_rows || '?') + ' → ' + (r.after_rows || '?') + ' 筆');
+    document.getElementById('admin-commit-btn').disabled = true;
+  } catch(e) {
+    showAdminMsg(msg, 'err', '匯入異常: ' + e.message);
+  }
+}
+
+function adminCancel() {
+  if (!confirm('取消本次匯入? staging 暫存區會被清空。')) return;
+  closeAdminPanel();
+  _adminScanResult = null;
+  _adminParseResult = null;
+}
+
+async function adminAskRollback() {
+  showAdminMsg(document.getElementById('admin-decision-msg'), 'info', '載入備份清單...');
+  try {
+    const r = await callApi('admin_list_backups', { adminToken: _adminToken });
+    if (!r || !r.ok || !r.backups || !r.backups.length) {
+      showAdminMsg(document.getElementById('admin-decision-msg'), 'warn', '沒有可用備份');
+      return;
+    }
+    const list = r.backups.map((b,i) => (i+1) + '. ' + b.name + ' (' + (b.rows || '?') + ' 筆)').join('\n');
+    const choice = prompt('選擇要還原的備份編號:\n\n' + list + '\n\n輸入編號 1-' + r.backups.length + ':');
+    const idx = parseInt(choice, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= r.backups.length) return;
+    const target = r.backups[idx].name;
+    showAdminConfirm(
+      '⚠️ 還原確認',
+      '即將從備份「' + target + '」還原 fact_pnl。\n\n' +
+      '當前 fact_pnl 內容會被覆蓋。\n\n' +
+      '您確認還原嗎?',
+      function() { adminRollbackDo(target); }
+    );
+  } catch(e) {
+    showAdminMsg(document.getElementById('admin-decision-msg'), 'err', '異常: ' + e.message);
+  }
+}
+
+async function adminRollbackDo(backupName) {
+  const msg = document.getElementById('admin-decision-msg');
+  showAdminMsg(msg, 'info', '還原中...');
+  try {
+    const r = await callApi('admin_rollback', { backupName: backupName, adminToken: _adminToken });
+    if (!r || !r.ok) {
+      showAdminMsg(msg, 'err', '還原失敗: ' + ((r && r.error) || '未知'));
+      return;
+    }
+    showAdminMsg(msg, 'ok', '✅ 還原完成: ' + (r.restored_rows || '?') + ' 筆');
+  } catch(e) {
+    showAdminMsg(msg, 'err', '還原異常: ' + e.message);
+  }
+}
+
+function showAdminConfirm(title, body, callback) {
+  document.getElementById('admin-confirm-title').textContent = title;
+  document.getElementById('admin-confirm-body').textContent = body;
+  _adminConfirmCallback = callback;
+  document.getElementById('admin-confirm-overlay').classList.add('show');
+}
+
+function adminConfirmCancel() {
+  document.getElementById('admin-confirm-overlay').classList.remove('show');
+  _adminConfirmCallback = null;
+}
+
+function adminConfirmDo() {
+  document.getElementById('admin-confirm-overlay').classList.remove('show');
+  if (_adminConfirmCallback) {
+    const cb = _adminConfirmCallback;
+    _adminConfirmCallback = null;
+    cb();
+  }
+}
+
+function showAdminMsg(el, type, text) {
+  el.className = 'admin-status ' + type;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+/* 長 timeout 版本的 callApi (給解析、commit 用,90 秒) */
+function callApiLong(action, params={}) {
+  return new Promise((resolve, reject) => {
+    const cbName = '_jsonpCb' + (++_jsonpId) + '_' + Date.now();
+    const timeout = setTimeout(() => {
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+      reject(new Error('API 逾時(90s)'));
+    }, 90000);
+    window[cbName] = function(data) {
+      clearTimeout(timeout);
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+      resolve(data);
+    };
+    const u = new URL(API);
+    u.searchParams.set('action', action);
+    u.searchParams.set('callback', cbName);
+    if (TOKEN) u.searchParams.set('token', TOKEN);
+    for (const k in params) u.searchParams.set(k, params[k]);
+    const script = document.createElement('script');
+    script.src = u.toString();
+    script.onerror = function() {
+      clearTimeout(timeout);
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+      reject(new Error('載入失敗'));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+/* ===== M3 管理員面板 END ===== */
 </script>
 </body>
 </html>
