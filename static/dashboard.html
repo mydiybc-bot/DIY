@@ -1520,7 +1520,8 @@ function fmtNum(n) {
   return Number(n).toLocaleString('zh-TW', {maximumFractionDigits: 0});
 }
 
-function adminAskCommit() {
+/* M4.1: 確認匯入入口 — 先 dry-run 偵測重複 */
+async function adminAskCommit() {
   if (!_adminParseResult) return;
   const summary = _adminParseResult.summary || {};
   const total = summary.total_records || 0;
@@ -1528,26 +1529,118 @@ function adminAskCommit() {
   if (failed > 0) {
     if (!confirm('有 ' + failed + ' 個檔案解析失敗,確定要繼續匯入剩餘成功的部分嗎?')) return;
   }
-  showAdminConfirm(
-    '⚠️ 最終確認: 寫入 fact_pnl',
-    '即將把暫存區的 ' + total + ' 筆資料寫入 fact_pnl(歷史財務資料)。\n\n' +
-    '此動作將觸發 commitStagingToFact 函式。\n' +
-    '系統會先自動備份 fact_pnl,匯入失敗時可還原。\n\n' +
-    '您確認執行匯入嗎?',
-    adminCommitDo
-  );
-}
 
-async function adminCommitDo() {
+  /* M4.1 新增: 先 dry-run 偵測重複 */
   const msg = document.getElementById('admin-decision-msg');
-  showAdminMsg(msg, 'info', '匯入中...');
+  showAdminMsg(msg, 'info', '檢查 fact_pnl 是否已存在重複資料...');
   try {
-    const r = await callApiLong('admin_commit', { adminToken: _adminToken });
-    if (!r || !r.ok) {
-      showAdminMsg(msg, 'err', '匯入失敗: ' + ((r && r.error) || '未知'));
+    const dr = await callApi('admin_check_duplicates', { adminToken: _adminToken });
+    if (!dr || !dr.ok) {
+      showAdminMsg(msg, 'err', '偵測失敗: ' + ((dr && dr.error) || '未知'));
       return;
     }
-    showAdminMsg(msg, 'ok', '✅ 匯入完成! fact_pnl: ' + (r.before_rows || '?') + ' → ' + (r.after_rows || '?') + ' 筆');
+    if (dr.duplicates && dr.duplicates.length > 0) {
+      /* 有重複 → 跳 3 選 1 modal */
+      adminShowDuplicateModal(dr.duplicates, total);
+    } else {
+      /* 沒重複 → 跳二次確認 modal */
+      showAdminConfirm(
+        '⚠️ 最終確認: 寫入 fact_pnl',
+        '暫存區 ' + total + ' 筆資料,fact_pnl 沒有重複的(年月,店)組合。\n\n' +
+        '即將寫入歷史資料,系統會先自動備份。\n\n' +
+        '您確認執行匯入嗎?',
+        function() { adminCommitDo('cancel'); }
+      );
+    }
+  } catch(e) {
+    showAdminMsg(msg, 'err', '偵測異常: ' + e.message);
+  }
+}
+
+/* M4.1: 重複偵測 modal — 3 選 1 */
+function adminShowDuplicateModal(duplicates, totalRecords) {
+  let dupListHtml = '<div style="max-height:200px; overflow-y:auto; background:var(--bg); padding:8px; border-radius:6px; font-size:13px; margin:10px 0;">';
+  duplicates.forEach(function(d) {
+    const parts = d.key.split('_');
+    dupListHtml += '<div>• ' + parts[0] + ' × 店 ' + parts[1] +
+                   ': fact_pnl 已有 ' + d.factRows + ' 筆,本次 staging ' + d.stagingRows + ' 筆</div>';
+  });
+  dupListHtml += '</div>';
+
+  document.getElementById('admin-confirm-title').innerHTML = '⚠️ 偵測到 ' + duplicates.length + ' 組重複';
+  document.getElementById('admin-confirm-body').innerHTML =
+    '<p style="margin-bottom:10px;">fact_pnl 中已存在以下年月+店的組合:</p>' +
+    dupListHtml +
+    '<p style="font-weight:600; margin-top:12px;">請選擇處理方式:</p>';
+
+  /* 改造既有的二次確認 modal:把按鈕變 3 個 */
+  const actionsEl = document.querySelector('#admin-confirm-overlay .actions');
+  actionsEl.innerHTML =
+    '<button class="admin-btn admin-btn-secondary" onclick="adminDupCancel()">✗ 取消本次</button>' +
+    '<button class="admin-btn" onclick="adminDupSkip()" style="background:#0d6efd;">⏭ 跳過重複,僅匯入新組合</button>' +
+    '<button class="admin-btn admin-btn-success" onclick="adminDupOverwrite()">⚠️ 覆蓋並匯入</button>';
+  document.getElementById('admin-confirm-overlay').classList.add('show');
+}
+
+/* M4.1: 3 選 1 — 取消 */
+function adminDupCancel() {
+  document.getElementById('admin-confirm-overlay').classList.remove('show');
+  adminRestoreConfirmModal();
+  showAdminMsg(document.getElementById('admin-decision-msg'), 'info', '已取消本次匯入,fact_pnl 未變動');
+}
+
+/* M4.1: 3 選 1 — 跳過 */
+function adminDupSkip() {
+  document.getElementById('admin-confirm-overlay').classList.remove('show');
+  adminRestoreConfirmModal();
+  if (!confirm('確定跳過重複組合,僅匯入新的(年月+店)組合嗎?')) return;
+  adminCommitDo('skip');
+}
+
+/* M4.1: 3 選 1 — 覆蓋(需要再二次確認) */
+function adminDupOverwrite() {
+  document.getElementById('admin-confirm-overlay').classList.remove('show');
+  adminRestoreConfirmModal();
+  setTimeout(function() {
+    showAdminConfirm(
+      '🚨 最終確認: 覆蓋寫入',
+      '此動作將先把 fact_pnl 中的舊資料備份到專屬分頁,\n' +
+      '然後覆蓋成新版本。\n\n' +
+      '系統會自動產生 audit_log 紀錄,並做寫入前後筆數核對。\n\n' +
+      '您確認執行覆蓋嗎?',
+      function() { adminCommitDo('overwrite'); }
+    );
+  }, 100);
+}
+
+/* M4.1: 還原二次確認 modal 為原本兩個按鈕 */
+function adminRestoreConfirmModal() {
+  const actionsEl = document.querySelector('#admin-confirm-overlay .actions');
+  actionsEl.innerHTML =
+    '<button class="admin-btn admin-btn-secondary" onclick="adminConfirmCancel()">取消</button>' +
+    '<button class="admin-btn admin-btn-success" onclick="adminConfirmDo()" id="admin-confirm-do-btn">確認執行</button>';
+}
+
+/* M4.1: 真正執行 commit */
+async function adminCommitDo(duplicateMode) {
+  const msg = document.getElementById('admin-decision-msg');
+  showAdminMsg(msg, 'info', '匯入中... (mode: ' + duplicateMode + ')');
+  try {
+    const r = await callApiLong('admin_commit', { duplicateMode: duplicateMode, adminToken: _adminToken });
+    if (!r || !r.ok) {
+      const errStr = (r && r.errors && r.errors.length) ? r.errors.join(' / ') : ((r && r.error) || '未知');
+      showAdminMsg(msg, 'err', '匯入失敗: ' + errStr);
+      return;
+    }
+    /* M4.1: 顯示完整摘要 */
+    let summary = '✅ 匯入完成!';
+    summary += ' fact_pnl: ' + (r.factPnlBefore !== undefined ? r.factPnlBefore : '?') +
+               ' → ' + (r.factPnlAfter !== undefined ? r.factPnlAfter : '?') + ' 筆';
+    if (r.rowsCommitted) summary += ' | 寫入 ' + r.rowsCommitted + ' 筆';
+    if (r.rowsOverwritten) summary += ' | 覆蓋 ' + r.rowsOverwritten + ' 筆';
+    if (r.rowsSkipped) summary += ' | 跳過 ' + r.rowsSkipped + ' 筆';
+    if (r.replacedBackupSheet) summary += ' | 備份分頁: ' + r.replacedBackupSheet;
+    showAdminMsg(msg, 'ok', summary);
     document.getElementById('admin-commit-btn').disabled = true;
   } catch(e) {
     showAdminMsg(msg, 'err', '匯入異常: ' + e.message);
