@@ -242,8 +242,10 @@ def protect_improved_attempt(previous: dict | None, current: dict) -> dict:
 def summarize_session(session: dict) -> str:
     attempted = session["scoreboard"]
     rules = session["rules"]
+    title = session.get("section_title", "未知單元")
     if not attempted:
         return (
+            f"本次練習主題：{title}\n"
             "本次練習題目總數：0\n"
             "每一題得分：尚未作答\n"
             "平均得分：0.0\n"
@@ -254,6 +256,7 @@ def summarize_session(session: dict) -> str:
     score_lines = [f"Q{item['number']}：{item['best_score']} 分" for item in attempted]
     average = sum(scores) / len(scores)
     return (
+        f"本次練習主題：{title}\n"
         f"本次練習題目總數：{len(attempted)}\n"
         f"每一題得分：{'；'.join(score_lines)}\n"
         f"平均得分：{average:.1f}\n"
