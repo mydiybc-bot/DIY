@@ -44,6 +44,10 @@ class TrainingHandler(BaseHTTPRequestHandler):
         if parsed.path == "/dashboard":
             self.serve_file("dashboard.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/pnl":
+            self.serve_file("dashboard-pnl.html", "text/html; charset=utf-8")
+            return
+            
         if parsed.path == "/self-dashboard":
             self.serve_file("self-dashboard.html", "text/html; charset=utf-8")
             return
