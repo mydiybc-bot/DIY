@@ -1,234 +1,343 @@
-<!doctype html>
-<html lang="zh-Hant">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Google 評論動態儀表板</title>
-    <link rel="stylesheet" href="/static/google-reviews.css">
-  </head>
-  <body>
-    <main class="reviews-shell">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Google Review Signal</p>
-          <h1>各店 Google 評論動態儀表板</h1>
-          <p class="hero-text">整合 12 家門市評論資料，追蹤店別口碑、低星風險、服務亮點與資料品質。</p>
-        </div>
-        <div class="hero-actions">
-          <button id="refresh-button" type="button">重新整理資料</button>
-          <a class="ghost-link" href="/dashboard">看請款儀表板</a>
-          <a class="ghost-link" href="/">回到原系統</a>
-        </div>
-      </section>
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自己做烘焙聚樂部 | Google 評論儀表板</title>
+<script>
+if (localStorage.getItem('hub_unlocked') !== 'true') { window.location.href = 'hub.html'; }
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --primary: #C4412F; --primary-light: #E87060; --primary-dark: #8B2D1F;
+  --accent: #F4A620; --accent-light: #FDD99B;
+  --green: #52B788; --blue: #4A9BB8;
+  --bg: #FFF8F6; --card: #FFFFFF; --text: #2D1A14; --muted: #8B6A63;
+  --border: #F0D9D5; --hover: #FFF0ED;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); }
+.header { background: linear-gradient(135deg, var(--primary-dark), var(--primary), var(--primary-light)); color: white; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 20px rgba(196,65,47,.3); flex-wrap: wrap; gap: 10px; }
+.header-left h1 { font-size: 20px; font-weight: 800; }
+.header-left p  { font-size: 12px; opacity: .85; margin-top: 3px; }
+.header-right   { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.back-btn { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 600; color: white; text-decoration: none; white-space: nowrap; transition: background .15s; }
+.back-btn:hover { background: rgba(255,255,255,.32); }
+.update-badge { background: rgba(255,255,255,.2); border-radius: 20px; padding: 6px 14px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.3); white-space: nowrap; }
+.filter-bar { background: white; border-bottom: 2px solid var(--border); padding: 14px 40px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+.filter-label { font-size: 13px; font-weight: 700; color: var(--primary-dark); white-space: nowrap; }
+.filter-group { display: flex; align-items: center; gap: 5px; }
+.filter-group label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.filter-group select, .filter-group input { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); background: white; cursor: pointer; font-family: inherit; outline: none; min-width: 100px; }
+.filter-group select:focus, .filter-group input:focus { border-color: var(--primary); }
+.clear-btn { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); line-height: 1; transition: all .12s; }
+.clear-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
+.reset-all-btn { margin-left: auto; padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .15s; }
+.reset-all-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
+.loading-overlay { display: none; position: fixed; inset: 0; background: rgba(255,248,246,.85); z-index: 999; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+.loading-overlay.show { display: flex; }
+.spinner { width: 44px; height: 44px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 14px; color: var(--muted); font-weight: 600; }
+.container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+.section { margin-bottom: 28px; }
+.section-title { font-size: 15px; font-weight: 700; color: var(--primary-dark); margin-bottom: 14px; padding-left: 12px; border-left: 4px solid var(--primary); }
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+@media (max-width: 900px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+.kpi-card { background: var(--card); border-radius: 14px; padding: 18px 22px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(196,65,47,.06); position: relative; overflow: hidden; }
+.kpi-card::before { content:''; position:absolute; top:0; left:0; width:4px; height:100%; border-radius:4px 0 0 4px; }
+.kpi-card.k1::before { background: var(--primary); }
+.kpi-card.k2::before { background: var(--accent); }
+.kpi-card.k3::before { background: #E55; }
+.kpi-card.k4::before { background: var(--green); }
+.kpi-label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
+.kpi-value { font-size: 32px; font-weight: 800; line-height: 1; margin: 5px 0 3px; }
+.kpi-card.k1 .kpi-value { color: var(--primary); }
+.kpi-card.k2 .kpi-value { color: #B87A00; }
+.kpi-card.k3 .kpi-value { color: #C43030; }
+.kpi-card.k4 .kpi-value { color: #2D7A55; }
+.kpi-sub { font-size: 11px; color: var(--muted); }
+.grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .grid-3 { grid-template-columns: 1fr; } }
+.chart-card { background: var(--card); border-radius: 14px; padding: 20px 22px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(196,65,47,.05); }
+.chart-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 14px; }
+canvas { max-height: 280px; }
+.table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+thead { background: linear-gradient(90deg, var(--primary), var(--primary-light)); color: white; }
+thead th { padding: 10px 12px; text-align: left; font-weight: 600; font-size: 11px; white-space: nowrap; }
+tbody tr:nth-child(even) { background: #FFFBFA; }
+tbody tr:hover { background: var(--hover); }
+tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.star-badge { display: inline-block; background: var(--accent-light); color: #B87A00; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+.neg-badge  { display: inline-block; background: #FFEDED; color: #C43030; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+.pos-badge  { display: inline-block; background: #EDFFF5; color: #2D7A55; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
 
-      <section class="status-strip">
-        <p id="refresh-status">正在同步 Google 評論資料...</p>
-        <p id="source-path"></p>
-      </section>
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text">正在查詢 Google 評論資料…首次約需 5-10 秒</div>
+</div>
 
-      <section class="panel filters-panel">
-        <div class="filter-grid">
-          <label class="field">
-            <span>門市</span>
-            <select id="store-filter">
-              <option value="">全部門市</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>月份</span>
-            <select id="month-filter">
-              <option value="">全部月份</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>星等</span>
-            <select id="rating-filter">
-              <option value="">全部星等</option>
-              <option value="low">1-3 星</option>
-              <option value="4">4 星</option>
-              <option value="5">5 星</option>
-            </select>
-          </label>
-          <label class="field search-field">
-            <span>關鍵字</span>
-            <input id="keyword-filter" type="search" placeholder="搜尋評論內容、評論者、問題主題">
-          </label>
-        </div>
-      </section>
+<div class="header">
+  <div class="header-left">
+    <h1>⭐ 各店 Google 評論儀表板</h1>
+    <p>資料來源：Google Sheets 即時查詢 ｜ 12 間門市口碑分析</p>
+  </div>
+  <div class="header-right">
+    <a href="hub.html" class="back-btn">⬅ 回首頁</a>
+    <div class="update-badge">即時 (gviz)</div>
+  </div>
+</div>
 
-      <section id="metric-grid" class="metric-grid"></section>
+<div class="filter-bar">
+  <div class="filter-label">🔍 篩選</div>
+  <div class="filter-group">
+    <label>門市</label>
+    <select id="f-store" onchange="applyFilters()"><option value="">全部門市</option></select>
+    <button class="clear-btn" onclick="clearFilter('f-store')" title="清除">✕</button>
+  </div>
+  <div class="filter-group">
+    <label>月份</label>
+    <select id="f-month" onchange="applyFilters()"><option value="">全部月份</option></select>
+    <button class="clear-btn" onclick="clearFilter('f-month')" title="清除">✕</button>
+  </div>
+  <div class="filter-group">
+    <label>星等</label>
+    <select id="f-star" onchange="applyFilters()">
+      <option value="">全部星等</option>
+      <option value="neg">1–3 星（負評）</option>
+      <option value="pos">4–5 星（正評）</option>
+      <option value="5">★★★★★ 5星</option>
+      <option value="4">★★★★ 4星</option>
+      <option value="3">★★★ 3星</option>
+      <option value="2">★★ 2星</option>
+      <option value="1">★ 1星</option>
+    </select>
+    <button class="clear-btn" onclick="clearFilter('f-star')" title="清除">✕</button>
+  </div>
+  <div class="filter-group">
+    <label>關鍵字</label>
+    <input type="text" id="f-keyword" placeholder="搜尋評論內容…" oninput="applyFilters()">
+    <button class="clear-btn" onclick="clearFilter('f-keyword')" title="清除">✕</button>
+  </div>
+  <button class="reset-all-btn" onclick="resetAllFilters()">↺ 重設全部</button>
+</div>
 
-      <section class="visual-grid">
-        <article class="panel chart-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Trend</p>
-              <h2>每月評論趨勢</h2>
-            </div>
-            <p id="month-caption" class="section-note"></p>
-          </div>
-          <div id="month-chart" class="chart-stack"></div>
-        </article>
+<div class="container">
+  <div class="kpi-grid">
+    <div class="kpi-card k1"><div class="kpi-label">總評論數</div><div class="kpi-value" id="kpi1">—</div><div class="kpi-sub" id="kpi1s">載入中</div></div>
+    <div class="kpi-card k2"><div class="kpi-label">平均星等</div><div class="kpi-value" id="kpi2">—</div><div class="kpi-sub">H欄數字平均</div></div>
+    <div class="kpi-card k3"><div class="kpi-label">負評數</div><div class="kpi-value" id="kpi3">—</div><div class="kpi-sub">1–3 星</div></div>
+    <div class="kpi-card k4"><div class="kpi-label">負評率</div><div class="kpi-value" id="kpi4">—</div><div class="kpi-sub">負評 / 總評論</div></div>
+  </div>
 
-        <article class="panel chart-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Stores</p>
-              <h2>門市健康排行</h2>
-            </div>
-            <p id="store-caption" class="section-note"></p>
-          </div>
-          <div id="store-chart" class="chart-stack"></div>
-        </article>
+  <div class="section grid-3">
+    <div class="chart-card">
+      <div class="chart-title">📅 每月評論數趨勢</div>
+      <canvas id="trendChart"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">⭐ 星等分布</div>
+      <canvas id="starChart"></canvas>
+    </div>
+  </div>
 
-        <article class="panel chart-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Ratings</p>
-              <h2>星等分布</h2>
-            </div>
-            <p id="star-caption" class="section-note"></p>
-          </div>
-          <div id="star-chart" class="chart-stack"></div>
-        </article>
+  <div class="section">
+    <div class="section-title">🏪 各店評論比較</div>
+    <div class="chart-card">
+      <canvas id="storeChart" style="max-height:320px;"></canvas>
+    </div>
+  </div>
 
-        <article class="panel chart-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Praise</p>
-              <h2>正向主題</h2>
-            </div>
-            <p id="positive-caption" class="section-note"></p>
-          </div>
-          <div id="positive-chart" class="chart-stack"></div>
-        </article>
+  <div class="section">
+    <div class="section-title">📋 門市摘要</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>門市</th><th>品牌</th><th>區域</th><th>評論數</th><th>平均星等</th><th>負評數</th><th>負評率</th></tr></thead>
+        <tbody id="storeTbody"></tbody>
+      </table>
+    </div>
+  </div>
 
-        <article class="panel chart-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Risk</p>
-              <h2>低星問題主題</h2>
-            </div>
-            <p id="issue-caption" class="section-note"></p>
-          </div>
-          <div id="issue-chart" class="chart-stack"></div>
-        </article>
+  <div class="section">
+    <div class="section-title">🚨 近期負評（1–3 星，最多 50 筆）</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>年月</th><th>門市</th><th>星等</th><th>評論內容</th></tr></thead>
+        <tbody id="negTbody"></tbody>
+      </table>
+    </div>
+  </div>
 
-        <article class="panel chart-panel data-quality-panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Quality</p>
-              <h2>資料品質</h2>
-            </div>
-            <p id="quality-caption" class="section-note"></p>
-          </div>
-          <div id="quality-grid" class="quality-grid"></div>
-        </article>
-      </section>
+  <div class="section">
+    <div class="section-title">📄 評論明細 <span id="detailCount" style="font-weight:400;font-size:12px;color:var(--muted);margin-left:8px;"></span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>年月</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>標記</th><th>評論者</th><th>評論內容</th></tr></thead>
+        <tbody id="detailTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
-      <section class="panel">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Stores</p>
-            <h2>門市摘要</h2>
-          </div>
-          <p id="stores-table-caption" class="section-note"></p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>門市</th>
-                <th>評論數</th>
-                <th>平均星等</th>
-                <th>低星率</th>
-                <th>文字率</th>
-                <th>健康分數</th>
-                <th>最新評論</th>
-              </tr>
-            </thead>
-            <tbody id="stores-body"></tbody>
-          </table>
-        </div>
-      </section>
+<script>
+const SHEET_ID = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
+let _allRows = [], _trendChart = null, _starChart = null, _storeChart = null;
 
-      <section class="table-grid">
-        <section class="panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Alerts</p>
-              <h2>近期低星評論</h2>
-            </div>
-            <p id="low-review-caption" class="section-note"></p>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>時間</th>
-                  <th>門市</th>
-                  <th>星等</th>
-                  <th>問題主題</th>
-                  <th>內容</th>
-                </tr>
-              </thead>
-              <tbody id="low-reviews-body"></tbody>
-            </table>
-          </div>
-        </section>
+function gvizQuery(tql) {
+  const url = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID
+    + '/gviz/tq?tqx=out:json&sheet=%E5%B7%A5%E4%BD%9C%E8%A1%A81&tq=' + encodeURIComponent(tql);
+  return fetch(url).then(r => r.text()).then(text => {
+    const json = text.replace(/^\/\*[\s\S]*?\*\/\s*google\.visualization\.Query\.setResponse\(/, '').replace(/\);?\s*$/, '');
+    return JSON.parse(json);
+  });
+}
 
-        <section class="panel">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Files</p>
-              <h2>來源檔案摘要</h2>
-            </div>
-            <p id="files-caption" class="section-note"></p>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>檔案</th>
-                  <th>原始列數</th>
-                  <th>去重後</th>
-                  <th>重複列</th>
-                  <th>修改時間</th>
-                </tr>
-              </thead>
-              <tbody id="files-body"></tbody>
-            </table>
-          </div>
-        </section>
-      </section>
+function parseRows(res) { return res?.table?.rows || []; }
+function v(cell) { return (cell && cell.v !== null && cell.v !== undefined) ? cell.v : ''; }
 
-      <section class="panel">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Records</p>
-            <h2>評論明細</h2>
-          </div>
-          <p id="records-caption" class="section-note"></p>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>時間</th>
-                <th>門市</th>
-                <th>星等</th>
-                <th>評論者</th>
-                <th>主題標籤</th>
-                <th>內容</th>
-                <th>來源檔案</th>
-              </tr>
-            </thead>
-            <tbody id="records-body"></tbody>
-          </table>
-        </div>
-      </section>
-    </main>
+async function initLoad() {
+  showLoading(true);
+  try {
+    // A=門市 B=評論者 C=時間 D=星等★ E=評論內容 F=reviewId G=年月 H=星等數字 I=品牌 J=區域 K=負評標記
+    const res = await gvizQuery('SELECT A, G, H, I, J, K, E, B WHERE A IS NOT NULL ORDER BY G DESC');
+    const rows = parseRows(res);
+    _allRows = rows.map(r => ({
+      store:  v(r.c[0]),
+      ym:     v(r.c[1]),
+      stars:  (r.c[2] && r.c[2].v !== null) ? Number(r.c[2].v) : null,
+      brand:  v(r.c[3]),
+      region: v(r.c[4]),
+      tag:    v(r.c[5]),
+      text:   v(r.c[6]),
+      author: v(r.c[7]),
+    })).filter(r => r.store);
 
-    <script src="/static/google-reviews.js" defer></script>
-  </body>
-  </html>
+    populateFilters();
+    applyFilters();
+  } catch(e) {
+    document.getElementById('kpi1').textContent = '錯誤';
+    document.getElementById('kpi1s').textContent = e.message || '無法載入';
+  } finally {
+    showLoading(false);
+  }
+}
+
+function populateFilters() {
+  const stores = [...new Set(_allRows.map(r => r.store))].sort();
+  const months = [...new Set(_allRows.map(r => r.ym).filter(Boolean))].sort().reverse();
+  document.getElementById('f-store').innerHTML = '<option value="">全部門市</option>' + stores.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  document.getElementById('f-month').innerHTML = '<option value="">全部月份</option>' + months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+}
+
+function applyFilters() {
+  const fStore   = document.getElementById('f-store').value;
+  const fMonth   = document.getElementById('f-month').value;
+  const fStar    = document.getElementById('f-star').value;
+  const fKeyword = document.getElementById('f-keyword').value.trim().toLowerCase();
+  let rows = _allRows;
+  if (fStore)   rows = rows.filter(r => r.store === fStore);
+  if (fMonth)   rows = rows.filter(r => r.ym === fMonth);
+  if (fStar === 'neg') rows = rows.filter(r => r.stars !== null && r.stars <= 3);
+  else if (fStar === 'pos') rows = rows.filter(r => r.stars !== null && r.stars >= 4);
+  else if (fStar) rows = rows.filter(r => r.stars === Number(fStar));
+  if (fKeyword) rows = rows.filter(r => (r.text + r.author + r.store).toLowerCase().includes(fKeyword));
+  renderAll(rows);
+}
+
+function renderAll(rows) {
+  renderKPI(rows); renderTrendChart(rows); renderStarChart(rows);
+  renderStoreChart(rows); renderStoreTable(rows); renderNegTable(rows); renderDetailTable(rows);
+}
+
+function renderKPI(rows) {
+  const total = rows.length;
+  const ws = rows.filter(r => r.stars !== null);
+  const avg = ws.length ? ws.reduce((s,r) => s + r.stars, 0) / ws.length : null;
+  const neg = rows.filter(r => r.stars !== null && r.stars <= 3).length;
+  const negRate = total ? neg / total * 100 : null;
+  document.getElementById('kpi1').textContent = total.toLocaleString();
+  document.getElementById('kpi1s').textContent = '筆評論';
+  document.getElementById('kpi2').textContent = avg !== null ? avg.toFixed(2) + ' ★' : '—';
+  document.getElementById('kpi3').textContent = neg.toLocaleString();
+  document.getElementById('kpi4').textContent = negRate !== null ? negRate.toFixed(1) + '%' : '—';
+}
+
+function renderTrendChart(rows) {
+  const bm = {};
+  rows.forEach(r => { if (r.ym) bm[r.ym] = (bm[r.ym]||0) + 1; });
+  const months = Object.keys(bm).sort();
+  const ctx = document.getElementById('trendChart').getContext('2d');
+  if (_trendChart) _trendChart.destroy();
+  _trendChart = new Chart(ctx, { type:'bar', data:{ labels:months, datasets:[{ label:'評論數', data:months.map(m=>bm[m]), backgroundColor:'rgba(196,65,47,.7)', borderRadius:5 }] }, options:{ responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} } });
+}
+
+function renderStarChart(rows) {
+  const d = {1:0,2:0,3:0,4:0,5:0};
+  rows.forEach(r => { if (r.stars) d[r.stars] = (d[r.stars]||0)+1; });
+  const ctx = document.getElementById('starChart').getContext('2d');
+  if (_starChart) _starChart.destroy();
+  _starChart = new Chart(ctx, { type:'doughnut', data:{ labels:['★1','★2','★3','★4','★5'], datasets:[{ data:[d[1],d[2],d[3],d[4],d[5]], backgroundColor:['#C43030','#E87060','#F4A620','#52B788','#4A9BB8'], borderWidth:2 }] }, options:{ responsive:true, plugins:{legend:{position:'bottom', labels:{font:{size:11}}}} } });
+}
+
+function renderStoreChart(rows) {
+  const bs = {};
+  rows.forEach(r => {
+    if (!bs[r.store]) bs[r.store] = {total:0, neg:0};
+    bs[r.store].total++;
+    if (r.stars !== null && r.stars <= 3) bs[r.store].neg++;
+  });
+  const stores = Object.keys(bs).sort();
+  const ctx = document.getElementById('storeChart').getContext('2d');
+  if (_storeChart) _storeChart.destroy();
+  _storeChart = new Chart(ctx, { type:'bar', data:{ labels:stores, datasets:[{ label:'評論總數', data:stores.map(s=>bs[s].total), backgroundColor:'rgba(196,65,47,.65)', borderRadius:4 }, { label:'負評數', data:stores.map(s=>bs[s].neg), backgroundColor:'rgba(229,85,85,.8)', borderRadius:4 }] }, options:{ responsive:true, plugins:{legend:{position:'top'}}, scales:{y:{beginAtZero:true}} } });
+}
+
+function renderStoreTable(rows) {
+  const bs = {};
+  rows.forEach(r => {
+    if (!bs[r.store]) bs[r.store] = {brand:r.brand, region:r.region, total:0, neg:0, sum:0, cnt:0};
+    bs[r.store].total++;
+    if (r.stars !== null) { bs[r.store].sum += r.stars; bs[r.store].cnt++; }
+    if (r.stars !== null && r.stars <= 3) bs[r.store].neg++;
+  });
+  const stores = Object.keys(bs).sort();
+  const tb = document.getElementById('storeTbody');
+  if (!stores.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">暫無資料</td></tr>'; return; }
+  tb.innerHTML = stores.map(s => {
+    const d = bs[s];
+    const avg = d.cnt ? (d.sum/d.cnt).toFixed(2) : '—';
+    const nr = d.total ? (d.neg/d.total*100).toFixed(1)+'%' : '—';
+    return `<tr><td><b>${esc(s)}</b></td><td>${esc(d.brand||'—')}</td><td>${esc(d.region||'—')}</td><td>${d.total}</td><td><span class="star-badge">${avg !== '—' ? avg+' ★' : '—'}</span></td><td>${d.neg}</td><td><span class="${d.neg>0?'neg-badge':'pos-badge'}">${nr}</span></td></tr>`;
+  }).join('');
+}
+
+function renderNegTable(rows) {
+  const negs = rows.filter(r => r.stars !== null && r.stars <= 3).sort((a,b) => (b.ym||'').localeCompare(a.ym||'')).slice(0,50);
+  const tb = document.getElementById('negTbody');
+  if (!negs.length) { tb.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted)">目前無負評</td></tr>'; return; }
+  tb.innerHTML = negs.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td><span class="neg-badge">${r.stars} ★</span></td><td style="max-width:360px;word-break:break-all;">${esc((r.text||'').slice(0,120))}${(r.text||'').length>120?'…':''}</td></tr>`).join('');
+}
+
+function renderDetailTable(rows) {
+  const show = rows.slice(0,200);
+  document.getElementById('detailCount').textContent = `共 ${rows.length} 筆${rows.length>200?' （顯示前 200）':''}`;
+  const tb = document.getElementById('detailTbody');
+  if (!show.length) { tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">無符合條件的資料</td></tr>'; return; }
+  tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=3?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td><span class="${r.tag==='負評'?'neg-badge':'pos-badge'}">${esc(r.tag||'—')}</span></td><td>${esc(r.author||'—')}</td><td style="max-width:280px;word-break:break-all;">${esc((r.text||'').slice(0,80))}${(r.text||'').length>80?'…':''}</td></tr>`).join('');
+}
+
+function clearFilter(id) { document.getElementById(id).value = ''; applyFilters(); }
+function resetAllFilters() { ['f-store','f-month','f-star'].forEach(id => document.getElementById(id).value = ''); document.getElementById('f-keyword').value = ''; applyFilters(); }
+function showLoading(on) { document.getElementById('loadingOverlay').classList.toggle('show', on); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+window.addEventListener('DOMContentLoaded', initLoad);
+</script>
+</body>
+</html>
