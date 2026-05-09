@@ -32,8 +32,8 @@ a{color:var(--accent-light);text-decoration:none}
 .app-header{background:linear-gradient(135deg,#A3342A,#C4412F,#D4654F);padding:20px 24px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
 .header-inner{max-width:1600px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
 .brand{display:flex;align-items:center;gap:12px}
-.brand h1{font-size:1.4rem;font-weight:700;background:linear-gradient(135deg,#FFFFFF,#FFD4CC);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.brand .subtitle{font-size:.8rem;color:var(--text-secondary)}
+.brand h1{font-size:1.4rem;font-weight:700;background:linear-gradient(135deg,#FFFFFF 0%,#FFD4CC 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 2px 4px rgba(58,12,8,.45));letter-spacing:.5px}
+.brand .subtitle{font-size:.8rem;color:rgba(255,255,255,.88);text-shadow:0 1px 2px rgba(58,12,8,.4)}
 .header-badge{background:var(--accent);color:#fff;font-size:.7rem;padding:2px 8px;border-radius:99px;font-weight:600}
 .header-data-range{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .data-range-label{font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
@@ -476,7 +476,7 @@ function App(){
           <div className="brand">
             <div>
               <h1>🧁 自己做烘焙聚樂部</h1>
-              <div className="subtitle">POS 銷售動態儀表板 — {rawData.filters.stores.length} 間門市</div>
+              <div className="subtitle">POS 銷售動態儀表板 — {rawData.filters.stores.filter(s=>!s.closed).length} 家門市</div>
             </div>
             <span className="header-badge">LIVE</span>
             <a href="hub.html" style={{display:'inline-flex',alignItems:'center',gap:'6px',background:'rgba(255,255,255,.2)',border:'1px solid rgba(255,255,255,.35)',borderRadius:'20px',padding:'6px 16px',fontSize:'13px',fontWeight:600,color:'white',textDecoration:'none',whiteSpace:'nowrap',marginLeft:'12px'}}>⬅ 回首頁</a>
@@ -592,7 +592,7 @@ function App(){
         {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData}/>}
         {activeTab===2 && <TabProductAnalysis catTotals={catTotals} filteredProducts={filteredProducts}/>}
         {activeTab===3 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
-        {activeTab===4 && <TabSeasonal subCatTotals={subCatTotals} monthlyLimitedVsRegular={monthlyLimitedVsRegular} filteredDaily={filteredDaily}/>}
+        {activeTab===4 && <TabSeasonal subCatTotals={subCatTotals} monthlyLimitedVsRegular={monthlyLimitedVsRegular}/>}
       </div>
 
       {/* FOOTER */}
@@ -1054,26 +1054,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
 /* ================================================================
    TAB 5: 季節 & 活動
    ================================================================ */
-function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
-  // Calendar heatmap
-  const calendarData = useMemo(()=>{
-    if(!filteredDaily.length) return {months:[],map:{},maxRev:1};
-    const map={};
-    let maxRev=0;
-    filteredDaily.forEach(d=>{map[d.date]=d.revenue; if(d.revenue>maxRev) maxRev=d.revenue});
-    // Group by month
-    const monthSet={};
-    filteredDaily.forEach(d=>{const m=d.date.substring(0,7); if(!monthSet[m]) monthSet[m]=true});
-    const months=Object.keys(monthSet).sort();
-    return {months,map,maxRev};
-  },[filteredDaily]);
-
-  function calColor(val,max){
-    if(!val) return 'rgba(99,102,241,0.08)';
-    const ratio=Math.min(val/max,1);
-    return `rgba(99,102,241,${0.15+ratio*0.85})`;
-  }
-
+function TabSeasonal({subCatTotals, monthlyLimitedVsRegular}){
   // top limited edition events (filter out 其他限定 and 找不到)
   const limitedEvents = useMemo(()=>{
     return subCatTotals.filter(s=>s.name!=='其他限定' && s.name!=='找不到').slice(0,15);
@@ -1114,41 +1095,6 @@ function TabSeasonal({subCatTotals, monthlyLimitedVsRegular, filteredDaily}){
               <Legend wrapperStyle={{fontSize:11}}/>
             </AreaChart>
           </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 3. Calendar heatmap */}
-      <div className="chart-card full-width">
-        <div className="chart-title">每日營收日曆熱力圖</div>
-        <div className="chart-subtitle">顏色越深＝營收越高</div>
-        <div className="chart-body" style={{overflow:'auto'}}>
-          <div style={{display:'flex',flexWrap:'wrap',gap:16,padding:8}}>
-            {calendarData.months.map(month=>{
-              const [y,m]=month.split('-').map(Number);
-              const firstDay=new Date(y,m-1,1).getDay(); // 0=Sun
-              const daysInMonth=new Date(y,m,0).getDate();
-              const cells=[];
-              for(let i=0;i<firstDay;i++) cells.push(<div key={'e'+i} style={{width:14,height:14}}/>);
-              for(let d=1;d<=daysInMonth;d++){
-                const dateStr=month+'-'+(d<10?'0':'')+d;
-                const val=calendarData.map[dateStr]||0;
-                cells.push(
-                  <div key={d} className="cal-cell"
-                    style={{background:calColor(val,calendarData.maxRev)}}
-                    title={dateStr+': '+fmt.currency(val)}/>
-                );
-              }
-              return (
-                <div key={month} style={{minWidth:112}}>
-                  <div className="cal-month-label">{month}</div>
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(7,14px)',gap:2}}>
-                    {['日','一','二','三','四','五','六'].map(d=><div key={d} style={{fontSize:'.55rem',color:'var(--text-muted)',textAlign:'center',height:14,lineHeight:'14px'}}>{d}</div>)}
-                    {cells}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
       </div>
     </div>
