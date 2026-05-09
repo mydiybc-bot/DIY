@@ -431,7 +431,7 @@ function renderLowReviews(records) {
           <td>${escapeHtml(record.store_label)}</td>
           <td>${escapeHtml(`${record.stars} 星`)}</td>
           <td>${escapeHtml((record.issue_themes || []).join("、") || "未分類")}</td>
-          <td>${escapeHtml(truncate(record.text || "無文字內容", 140))}</td>
+          <td class="review-text">${escapeHtml(record.text || "無文字內容")}</td>
         </tr>
       `
     )
@@ -475,7 +475,7 @@ function renderRecords(records) {
           <td>${escapeHtml(`${record.stars} 星`)}</td>
           <td>${escapeHtml(record.name || "未署名")}</td>
           <td>${escapeHtml([...(record.positive_themes || []), ...(record.issue_themes || [])].join("、") || "未分類")}</td>
-          <td>${escapeHtml(truncate(record.text || "無文字內容", 180))}</td>
+          <td class="review-text">${escapeHtml(record.text || "無文字內容")}</td>
           <td>${escapeHtml(record.file_name)}</td>
         </tr>
       `
