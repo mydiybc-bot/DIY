@@ -62,6 +62,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC
 .topbar-left .brand-icon { font-size: 24px; }
 .topbar-right { display: flex; align-items: center; gap: 16px; }
 .topbar-right .company { font-size: 13px; color: var(--text2); }
+.topbar-right .update-label {
+  font-size: 12px; color: #6B4F2A; background: #f5ece0;
+  border: 1px solid #e8d5b8; padding: 4px 10px; border-radius: 12px;
+  font-weight: 500; white-space: nowrap;
+}
 .logout-btn {
   padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px;
   background: transparent; color: var(--text2); font-size: 13px; cursor: pointer;
@@ -259,6 +264,7 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
       <span class="brand">烘焙DIY損益分析系統</span>
     </div>
     <div class="topbar-right">
+      <span class="update-label" id="update-label">資料載入中…</span>
       <span class="company">共好平台有限公司</span>
       <button class="admin-gear-btn" onclick="openAdminPanel()" title="管理員">⚙️</button>
       <button class="logout-btn" onclick="doLogout()">登出</button>
@@ -417,6 +423,10 @@ const COLORS = ['#F5A623','#D4841C','#4A90D9','#28a745','#dc3545','#8E44AD','#1A
 const YM_START = 11301;
 const YM_END = 11512;
 
+/* D1a/D1b: 由後端 get_yms 動態載入 */
+let AVAILABLE_YMS = [];
+let LATEST_YM = null;
+
 /* ===== API (JSONP to bypass CORS) ===== */
 let _jsonpId = 0;
 function callApi(action, params={}) {
@@ -523,9 +533,16 @@ function doLogout() {
 async function initApp() {
   showLoad(true);
   try {
-    const [sr,ar] = await Promise.all([callApi('get_stores'), callApi('get_accounts')]);
+    const [sr,ar,yr] = await Promise.all([
+      callApi('get_stores'),
+      callApi('get_accounts'),
+      callApi('get_yms')
+    ]);
     STORES = sr.stores||[];
     ACCOUNTS = ar.accounts||[];
+    AVAILABLE_YMS = yr.yms||[];
+    LATEST_YM = yr.latest_ym;
+    renderUpdateLabel();
     buildFilters();
     fillAccountOptgroup();
     /* 預設選中「營業收入」大類 */
@@ -536,20 +553,34 @@ async function initApp() {
   showLoad(false);
 }
 
+/* D1a: 渲染「資料更新到 YYYY/MM」標籤 */
+function renderUpdateLabel() {
+  const el = document.getElementById('update-label');
+  if (!el) return;
+  if (LATEST_YM == null) { el.textContent = '尚無資料'; return; }
+  el.textContent = '📅 資料更新到 ' + ymLbl(LATEST_YM);
+}
+
 function buildFilters() {
-  /* 期間:113/01 ~ 115/12,共 36 個選項 */
-  const yms=[];
-  for(let roc=113; roc<=115; roc++) {
-    for(let m=1; m<=12; m++) yms.push(roc*100 + m);
-  }
+  /* D1b: 期間下拉用 fact_pnl 中真實存在的月份(由 get_yms 取得) */
+  const yms = AVAILABLE_YMS.length ? AVAILABLE_YMS.slice() : (() => {
+    /* fallback: 若 API 未回傳,沿用舊的 113~115 全範圍 */
+    const a=[]; for(let r=113;r<=115;r++) for(let m=1;m<=12;m++) a.push(r*100+m); return a;
+  })();
   ['f-ym-start','f-ym-end'].forEach(id => {
     const sel=document.getElementById(id);
     sel.innerHTML = '';
     yms.forEach(ym => sel.add(new Option(ymLbl(ym), ym)));
   });
-  /* 預設:最近 12 個月(114/01 ~ 114/12) */
-  document.getElementById('f-ym-start').value=11401;
-  document.getElementById('f-ym-end').value=11412;
+  /* 預設:最近 12 個月(以 latest_ym 為終點往前推 11 個月);資料不足 12 月時取全部 */
+  if (LATEST_YM != null && yms.length) {
+    const startIdx = Math.max(0, yms.length - 12);
+    document.getElementById('f-ym-start').value = yms[startIdx];
+    document.getElementById('f-ym-end').value = LATEST_YM;
+  } else {
+    document.getElementById('f-ym-start').value=11401;
+    document.getElementById('f-ym-end').value=11412;
+  }
 
   /* 店別 */
   const ss=document.getElementById('f-store');
