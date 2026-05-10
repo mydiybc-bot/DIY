@@ -57,11 +57,13 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .kpi-card.a::before { background: var(--accent); }
 .kpi-card.g::before { background: var(--green); }
 .kpi-card.b::before { background: var(--blue); }
+.kpi-card.p::before { background: #6B3F8A; }
 .kpi-label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
 .kpi-value { font-size: 32px; font-weight: 800; color: var(--primary); margin: 5px 0 3px; line-height: 1; }
 .kpi-card.a .kpi-value { color: #B87A00; }
 .kpi-card.g .kpi-value { color: #2D7A55; }
 .kpi-card.b .kpi-value { color: #1E6A88; }
+.kpi-card.p .kpi-value { color: #6B3F8A; }
 .kpi-sub { font-size: 11px; color: var(--muted); }
 
 /* CHARTS */
@@ -209,9 +211,9 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
         <div class="legend" id="freqLegend"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">回購率 & 平均消費次數</div>
+        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店有消費的會員</span></div>
         <div class="tabs">
-          <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回購率 (%)</button>
+          <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回頭客比例 (%)</button>
           <button class="tab" id="tab-avg" onclick="switchLoyalty('avg',this)">平均消費次數</button>
         </div>
         <canvas id="loyaltyChart"></canvas>
@@ -234,9 +236,17 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
     </div>
   </div>
 
+  <!-- 各店回頭客比例排名(W4 新增) -->
+  <div class="section">
+    <div class="section-title">🎯 各店回頭客比例排名 <span style="font-weight:400;font-size:12px;color:var(--muted)">招進來的人,1 年內有多少變回頭客 (來 ≥2 次)｜分母 = 全部會員</span></div>
+    <div class="chart-card">
+      <canvas id="returnRateRankChart" style="max-height:480px"></canvas>
+    </div>
+  </div>
+
   <!-- 排名表 -->
   <div class="section">
-    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">綜合分數 = 招募達成率×50% + 啟動率(365天)×50%｜點欄位標題可排序</span></div>
+    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">綜合分數 = 招募達成率×50% + 回頭客比例(365天)×50%｜分母 = 加入滿 365 天的全部會員｜點欄位標題可排序</span></div>
     <div class="chart-card">
       <div class="table-wrapper">
         <table>
@@ -244,9 +254,9 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
             <tr>
               <th onclick="sortTable('compositeScore')">排名 ↕</th>
               <th onclick="sortTable('store')">門市 ↕</th>
-              <th onclick="sortTable('compositeScore')" title="招募達成率×50% + 啟動率×50%">綜合分數 ↕</th>
+              <th onclick="sortTable('compositeScore')" title="招募達成率×50% + 回頭客比例×50%">綜合分數 ↕</th>
               <th onclick="sortTable('recruitRate')">招募達成率 ↕</th>
-              <th onclick="sortTable('activationRate')">啟動率(365天) ↕</th>
+              <th onclick="sortTable('activationRate')">回頭客比例(365天) ↕</th>
               <th onclick="sortTable('members')">2026招募人數 ↕</th>
             </tr>
           </thead>
@@ -539,7 +549,7 @@ function processFromCache(cache, fromIdx, toIdx) {
   });
 
 
-  // ── 會員啟動率：加入滿365天且有2次以上消費的會員比例 ─────────────────
+  // ── 會員回頭客比例：加入滿365天且有2次以上消費的會員比例 ─────────────────
   const TODAY = new Date();
   const cutoffDate = new Date(TODAY.getTime() - 365 * 24 * 60 * 60 * 1000);
   const memberJoinStore = {};
@@ -606,6 +616,7 @@ function processFromCache(cache, fromIdx, toIdx) {
     monthlySeries,
     stores,
     fullYearRepeatRate,
+    activationRateMap,
     totalUniqueConsumers: allUniqueConsumers.size
   };
 }
@@ -741,6 +752,7 @@ function renderAll(data) {
   renderLoyaltyChart(data);
   renderCrossChart(data);
   renderVisitsChart(data);
+  renderReturnRateRank(data);
   renderTable(data);
 }
 
@@ -754,11 +766,19 @@ function renderKPI(data) {
   // 整體回購率 = 全年資料中，消費 2 次以上的會員 ÷ 有任何消費紀錄的會員
   const repeatRate    = data.fullYearRepeatRate;
 
+  // ── 全店回頭客比例(365天):加總所有店的 eligible / activated ──
+  let allEligible = 0, allActivated = 0;
+  Object.values(data.activationRateMap || {}).forEach(v => {
+    allEligible += v.eligible || 0;
+    allActivated += v.activated || 0;
+  });
+  const overallReturnRate = allEligible > 0 ? Math.round(allActivated / allEligible * 100) : 0;
+
   document.getElementById('kpiGrid').innerHTML = `
-    <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">加入群友事件數</div></div>
-    <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">得到點數事件數</div></div>
-    <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">消費次數 ÷ 不重複消費會員數</div></div>
-    <div class="kpi-card b"><div class="kpi-label">整體回購率（全年）</div><div class="kpi-value">${repeatRate}%</div><div class="kpi-sub">全年消費 2 次以上比例</div></div>`;
+    <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">這段期間招了幾人</div></div>
+    <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">會員實際來消費的次數</div></div>
+    <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">一位有消費的會員平均來幾次</div></div>
+    <div class="kpi-card p"><div class="kpi-label">回頭客比例（365 天）</div><div class="kpi-value">${overallReturnRate}%</div><div class="kpi-sub">招進來的人,1 年內來 ≥2 次的比例</div></div>`;
 }
 
 // ─── MONTHLY TREND ────────────────────────────────────────────
@@ -844,7 +864,7 @@ function renderLoyaltyChart(data) {
   const sorted = [...data.stores].sort((a,b) => loyaltyMode==='repeat' ? b.repeatRate-a.repeatRate : b.avg-a.avg);
   const values = sorted.map(s => loyaltyMode==='repeat' ? s.repeatRate : s.avg);
   const color  = loyaltyMode==='repeat' ? '#C4412F' : '#F4A620';
-  const label  = loyaltyMode==='repeat' ? '回購率 (%)' : '平均消費次數';
+  const label  = loyaltyMode==='repeat' ? '回頭客比例 (%)' : '平均消費次數';
   if (charts.loyalty) charts.loyalty.destroy();
   charts.loyalty = new Chart(document.getElementById('loyaltyChart'), {
     type: 'bar',
@@ -871,6 +891,51 @@ function renderCrossChart(data) {
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw}%`}}},
       scales:{x:{grid:{display:false},ticks:{font:{size:9}}},y:{grid:{color:'#F0D9D5'},beginAtZero:true,ticks:{font:{size:10},callback:v=>v+'%'}}} }
+  });
+}
+
+// ─── RETURN RATE RANK (W4 新增) ───────────────────────────────
+function renderReturnRateRank(data) {
+  const arr = (data.stores || []).map(s => {
+    const a = s.activInfo || { eligible: 0, activated: 0 };
+    const rate = a.eligible > 0 ? Math.round(a.activated / a.eligible * 100) : 0;
+    return { store: s.store, rate, eligible: a.eligible, activated: a.activated };
+  }).filter(x => x.eligible > 0).sort((a,b) => b.rate - a.rate);
+
+  if (charts.returnRank) charts.returnRank.destroy();
+  if (!arr.length) return;
+  const total = arr.reduce((s,x)=>({elig:s.elig+x.eligible, act:s.act+x.activated}),{elig:0,act:0});
+  const overall = total.elig > 0 ? Math.round(total.act / total.elig * 100) : 0;
+
+  charts.returnRank = new Chart(document.getElementById('returnRateRankChart'), {
+    type: 'bar',
+    data: {
+      labels: arr.map(x => x.store.replace(/店$/,'')),
+      datasets: [{
+        label: '回頭客比例',
+        data: arr.map(x => x.rate),
+        backgroundColor: arr.map(x => x.rate >= 60 ? '#2D7A55' : x.rate >= 40 ? '#B87A00' : '#C4412F'),
+        borderRadius: 5, borderSkipped: false
+      }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => {
+          const x = arr[c.dataIndex];
+          return ` ${x.rate}%(${x.activated} / ${x.eligible} 人）`;
+        } } }
+      },
+      scales: {
+        x: {
+          grid: { color:'#F0D9D5' }, beginAtZero: true, max: 100,
+          ticks: { callback: v => v + '%', font: { size: 10 } },
+          title: { display: true, text: `全店平均回頭客比例: ${overall}%`, color: '#6B3F8A', font: { size: 12, weight: '600' } }
+        },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } }
+      }
+    }
   });
 }
 
