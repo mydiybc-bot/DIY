@@ -16,7 +16,6 @@ from urllib.parse import parse_qs, urlparse
 from auth_store import AuthStore
 from data_store import TrainingContentStore
 from excel_tools import export_content_to_excel, export_reports_to_excel, import_content_from_excel
-from google_reviews_dashboard import load_google_reviews_dashboard
 from progress_store import ProgressStore
 from reimbursement_dashboard import load_reimbursement_dashboard
 from report_store import ReportStore
@@ -87,9 +86,6 @@ class TrainingHandler(BaseHTTPRequestHandler):
                     }
                 )
             )
-            return
-        if parsed.path == "/api/google-reviews":
-            self.send_json(load_google_reviews_dashboard())
             return
         if parsed.path == "/api/admin/content":
             session = self._require_auth(role="admin")
