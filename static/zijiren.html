@@ -211,7 +211,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
         <div class="legend" id="freqLegend"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店全部會員(不限 365 天)</span></div>
+        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店全部會員</span></div>
         <div class="tabs">
           <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回頭客比例 (%)</button>
           <button class="tab" id="tab-avg" onclick="switchLoyalty('avg',this)">平均消費次數</button>
@@ -238,9 +238,11 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 
   <!-- 各店回頭客比例排名(W4 新增) -->
   <div class="section">
-    <div class="section-title">🎯 各店回頭客比例排名 <span style="font-weight:400;font-size:12px;color:var(--muted)">招進來的人,1 年內有多少變回頭客 (來 ≥2 次)｜分母 = 全部會員</span></div>
+    <div class="section-title">🎯 各店回頭客比例排名 <span style="font-weight:400;font-size:12px;color:var(--muted)">該店全部會員中,有多少人消費 ≥2 次｜分母 = 該店全部會員(不限期)</span></div>
     <div class="chart-card">
-      <canvas id="returnRateRankChart" style="max-height:720px"></canvas>
+      <div style="height: 600px; position: relative;">
+        <canvas id="returnRateRankChart"></canvas>
+      </div>
     </div>
   </div>
 
@@ -256,7 +258,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
               <th onclick="sortTable('store')">門市 ↕</th>
               <th onclick="sortTable('recruitRate')">招募達成率 ↕</th>
               <th onclick="sortTable('members')">2026招募人數 ↕</th>
-              <th onclick="sortTable('activationRate')">回頭客比例(365天) ↕</th>
+              <th onclick="sortTable('repeatRate')">回頭客比例 ↕</th>
             </tr>
           </thead>
           <tbody id="rankTableBody"><tr><td colspan="5" class="no-data">載入中…</td></tr></tbody>
@@ -614,8 +616,8 @@ function processFromCache(cache, fromIdx, toIdx) {
     const cross          = crossJoin[s] || { total: 0, cross: 0 };
     const freq           = freqMap[s]   || { once:0, twice:0, thrice5:0, six10:0, eleven:0, total:0 };
     // 回頭客比例(各店):分母 = 該店全部會員(不限 365 天)
-    const rs = storeRepeatStats[s] || { all: 0, repeated: 0 };
-    const repeatRate = rs.all > 0 ? Math.round(rs.repeated / rs.all * 100) : 0;
+    const repeatInfo = storeRepeatStats[s] || { all: 0, repeated: 0 };
+    const repeatRate = repeatInfo.all > 0 ? Math.round(repeatInfo.repeated / repeatInfo.all * 100) : 0;
     const crossRate  = cross.total > 0 ? Math.round(cross.cross / cross.total * 100) : 0;
     // 平均消費次數 = 期間消費次數 ÷ 期間不重複消費會員數
     const avg = uniqueConsumers > 0 ? (visits / uniqueConsumers).toFixed(2) : '0.00';
@@ -623,7 +625,7 @@ function processFromCache(cache, fromIdx, toIdx) {
     const activationRate = activInfo.eligible > 0 ? Math.round(activInfo.activated / activInfo.eligible * 100) : 0;
     const recruitRate = TARGETS_2026[s] ? Math.round(ytdActual2026[s] / TARGETS_2026[s] * 100) : 0;
     const compositeScore = Math.round(recruitRate * 0.5 + activationRate * 0.5);
-    return { store: s, members, visits, uniqueConsumers, avg: parseFloat(avg), repeatRate, crossRate,
+    return { store: s, members, visits, uniqueConsumers, avg: parseFloat(avg), repeatRate, repeatInfo, crossRate,
              once: freq.once, twice: freq.twice, thrice5: freq.thrice5, six10: freq.six10,
              eleven: freq.eleven, freqTotal: freq.total,
              recruitRate, activationRate, activInfo, compositeScore };
@@ -635,6 +637,7 @@ function processFromCache(cache, fromIdx, toIdx) {
     stores,
     fullYearRepeatRate,
     activationRateMap,
+    storeRepeatStats,
     totalUniqueConsumers: allUniqueConsumers.size
   };
 }
@@ -784,19 +787,19 @@ function renderKPI(data) {
   // 整體回購率 = 全年資料中，消費 2 次以上的會員 ÷ 有任何消費紀錄的會員
   const repeatRate    = data.fullYearRepeatRate;
 
-  // ── 全店回頭客比例(365天):加總所有店的 eligible / activated ──
-  let allEligible = 0, allActivated = 0;
-  Object.values(data.activationRateMap || {}).forEach(v => {
-    allEligible += v.eligible || 0;
-    allActivated += v.activated || 0;
+  // ── 全店回頭客比例:全部會員裡消費 ≥2 次的比例(全店加總) ──
+  let allMembers = 0, allRepeated = 0;
+  Object.values(data.storeRepeatStats || {}).forEach(v => {
+    allMembers += v.all || 0;
+    allRepeated += v.repeated || 0;
   });
-  const overallReturnRate = allEligible > 0 ? Math.round(allActivated / allEligible * 100) : 0;
+  const overallReturnRate = allMembers > 0 ? Math.round(allRepeated / allMembers * 100) : 0;
 
   document.getElementById('kpiGrid').innerHTML = `
     <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">這段期間招了幾人</div></div>
     <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">會員實際來消費的次數</div></div>
     <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">一位有消費的會員平均來幾次</div></div>
-    <div class="kpi-card p"><div class="kpi-label">回頭客比例（365 天）</div><div class="kpi-value">${overallReturnRate}%</div><div class="kpi-sub">招進來的人,1 年內來 ≥2 次的比例</div></div>`;
+    <div class="kpi-card p"><div class="kpi-label">回頭客比例</div><div class="kpi-value">${overallReturnRate}%</div><div class="kpi-sub">全部會員中消費 ≥2 次的比例 (${allRepeated.toLocaleString()} / ${allMembers.toLocaleString()})</div></div>`;
 }
 
 // ─── MONTHLY TREND ────────────────────────────────────────────
@@ -915,15 +918,14 @@ function renderCrossChart(data) {
 // ─── RETURN RATE RANK (W4 新增) ───────────────────────────────
 function renderReturnRateRank(data) {
   const arr = (data.stores || []).map(s => {
-    const a = s.activInfo || { eligible: 0, activated: 0 };
-    const rate = a.eligible > 0 ? Math.round(a.activated / a.eligible * 100) : 0;
-    return { store: s.store, rate, eligible: a.eligible, activated: a.activated };
-  }).filter(x => x.eligible > 0).sort((a,b) => b.rate - a.rate);
+    const ri = s.repeatInfo || { all: 0, repeated: 0 };
+    return { store: s.store, rate: s.repeatRate, all: ri.all, repeated: ri.repeated };
+  }).filter(x => x.all > 0).sort((a,b) => b.rate - a.rate);
 
   if (charts.returnRank) charts.returnRank.destroy();
   if (!arr.length) return;
-  const total = arr.reduce((s,x)=>({elig:s.elig+x.eligible, act:s.act+x.activated}),{elig:0,act:0});
-  const overall = total.elig > 0 ? Math.round(total.act / total.elig * 100) : 0;
+  const total = arr.reduce((s,x)=>({all:s.all+x.all, rep:s.rep+x.repeated}),{all:0,rep:0});
+  const overall = total.all > 0 ? Math.round(total.rep / total.all * 100) : 0;
 
   charts.returnRank = new Chart(document.getElementById('returnRateRankChart'), {
     type: 'bar',
@@ -942,7 +944,7 @@ function renderReturnRateRank(data) {
         legend: { display: false },
         tooltip: { callbacks: { label: c => {
           const x = arr[c.dataIndex];
-          return ` ${x.rate}%(${x.activated} / ${x.eligible} 人）`;
+          return ` ${x.rate}%（該店全部會員 ${x.all.toLocaleString()} 人,其中 ${x.repeated.toLocaleString()} 人來 ≥2 次）`;
         } } }
       },
       scales: {
@@ -993,15 +995,15 @@ function renderTable(data) {
     const rk = rankMap[s.store];
     const rc = rk===1?'r1':rk===2?'r2':rk===3?'r3':'r0';
     const recruitColor = s.recruitRate>=25?'#2D7A55':s.recruitRate>=20?'#B87A00':'#C4412F';
-    const activColor = s.activationRate>=60?'#2D7A55':s.activationRate>=40?'#B87A00':'#C4412F';
-    const eligStr = s.activInfo ? `(${s.activInfo.activated}/${s.activInfo.eligible}人)` : '';
+    const repeatColor = s.repeatRate>=60?'#2D7A55':s.repeatRate>=40?'#B87A00':'#C4412F';
+    const repeatStr = s.repeatInfo ? `(${s.repeatInfo.repeated.toLocaleString()}/${s.repeatInfo.all.toLocaleString()}人)` : '';
     const ytdMembers = s.recruitRate > 0 ? Math.round(TARGETS_2026[s.store] * s.recruitRate / 100) : s.members;
     return `<tr>
       <td><span class="rank-badge ${rc}">${rk}</span></td>
       <td><strong>${s.store}</strong></td>
       <td><div style="display:flex;align-items:center;gap:6px"><div style="width:${Math.round(s.recruitRate/maxR*70)}px;height:8px;background:${recruitColor};border-radius:4px"></div><span style="color:${recruitColor};font-weight:600">${s.recruitRate}%</span></div></td>
       <td style="color:var(--text-secondary)">${ytdMembers.toLocaleString()} 人</td>
-      <td><span style="color:${activColor};font-weight:600">${s.activationRate}%</span> <span style="font-size:11px;color:var(--muted)">${eligStr}</span></td>
+      <td><span style="color:${repeatColor};font-weight:600">${s.repeatRate}%</span> <span style="font-size:11px;color:var(--muted)">${repeatStr}</span></td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--muted)">本期間無資料</td></tr>';
 }
