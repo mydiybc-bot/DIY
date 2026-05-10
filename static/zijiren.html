@@ -211,7 +211,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
         <div class="legend" id="freqLegend"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店有消費的會員</span></div>
+        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店全部會員(不限 365 天)</span></div>
         <div class="tabs">
           <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回頭客比例 (%)</button>
           <button class="tab" id="tab-avg" onclick="switchLoyalty('avg',this)">平均消費次數</button>
@@ -240,27 +240,26 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
   <div class="section">
     <div class="section-title">🎯 各店回頭客比例排名 <span style="font-weight:400;font-size:12px;color:var(--muted)">招進來的人,1 年內有多少變回頭客 (來 ≥2 次)｜分母 = 全部會員</span></div>
     <div class="chart-card">
-      <canvas id="returnRateRankChart" style="max-height:480px"></canvas>
+      <canvas id="returnRateRankChart" style="max-height:720px"></canvas>
     </div>
   </div>
 
   <!-- 排名表 -->
   <div class="section">
-    <div class="section-title">📊 各店綜合排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">綜合分數 = 招募達成率×50% + 回頭客比例(365天)×50%｜分母 = 加入滿 365 天的全部會員｜點欄位標題可排序</span></div>
+    <div class="section-title">📊 各店招募達成排名表 <span style="font-weight:400;font-size:12px;color:var(--muted)">依 2026 招募達成率排序｜點欄位標題可改排序</span></div>
     <div class="chart-card">
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th onclick="sortTable('compositeScore')">排名 ↕</th>
+              <th onclick="sortTable('recruitRate')">排名 ↕</th>
               <th onclick="sortTable('store')">門市 ↕</th>
-              <th onclick="sortTable('compositeScore')" title="招募達成率×50% + 回頭客比例×50%">綜合分數 ↕</th>
               <th onclick="sortTable('recruitRate')">招募達成率 ↕</th>
-              <th onclick="sortTable('activationRate')">回頭客比例(365天) ↕</th>
               <th onclick="sortTable('members')">2026招募人數 ↕</th>
+              <th onclick="sortTable('activationRate')">回頭客比例(365天) ↕</th>
             </tr>
           </thead>
-          <tbody id="rankTableBody"><tr><td colspan="6" class="no-data">載入中…</td></tr></tbody>
+          <tbody id="rankTableBody"><tr><td colspan="5" class="no-data">載入中…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -285,30 +284,36 @@ const TARGETS_2026 = {
   "桃園藝文店":3971,"台北遠百信義A13店":6693,"高雄SKM Park店":4584
 };
 const TOTAL_TARGET_2026 = 72528;
-const ELAPSED_MONTHS_2026 = 3; // Q1 已結束（1~3月）
+const ELAPSED_MONTHS_2026 = (() => {
+  const t = new Date();
+  if (t.getFullYear() < 2026) return 0;
+  if (t.getFullYear() > 2026) return 12;
+  return t.getMonth(); // 5/10 → 4 (代表 1-4 月已結束)
+})();
 
-// Available months (gviz month is 0-indexed → April=month3 in gviz)
-// Format: { label, fromDate, toDate, gvizYear, gvizMonth }
-const MONTHS = [
-  {label:'2025年4月',  fromDate:'2025-04-01', toDate:'2025-04-30'},
-  {label:'2025年5月',  fromDate:'2025-05-01', toDate:'2025-05-31'},
-  {label:'2025年6月',  fromDate:'2025-06-01', toDate:'2025-06-30'},
-  {label:'2025年7月',  fromDate:'2025-07-01', toDate:'2025-07-31'},
-  {label:'2025年8月',  fromDate:'2025-08-01', toDate:'2025-08-31'},
-  {label:'2025年9月',  fromDate:'2025-09-01', toDate:'2025-09-30'},
-  {label:'2025年10月', fromDate:'2025-10-01', toDate:'2025-10-31'},
-  {label:'2025年11月', fromDate:'2025-11-01', toDate:'2025-11-30'},
-  {label:'2025年12月', fromDate:'2025-12-01', toDate:'2025-12-31'},
-  {label:'2026年1月',  fromDate:'2026-01-01', toDate:'2026-01-31'},
-  {label:'2026年2月',  fromDate:'2026-02-01', toDate:'2026-02-28'},
-  {label:'2026年3月',  fromDate:'2026-03-01', toDate:'2026-03-31'},
-];
+// Available months 動態生成:從 2025-04 到當月
+const MONTHS = (() => {
+  const arr = [];
+  const today = new Date();
+  let y = 2025, m = 4;
+  while (y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth() + 1)) {
+    const lastDay = new Date(y, m, 0).getDate();
+    arr.push({
+      label: `${y}年${m}月`,
+      fromDate: `${y}-${String(m).padStart(2,'0')}-01`,
+      toDate:   `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`
+    });
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return arr;
+})();
 
 // ─── STATE ────────────────────────────────────────────────────
 let charts = {};
 let activeStores = new Set(['台北南京店','台北士林店','高雄SKM Park店','新北板橋店']);
 let loyaltyMode = 'repeat';
-let sortKey = 'compositeScore'; let sortAsc = false;
+let sortKey = 'recruitRate'; let sortAsc = false;
 let currentData = null;
 let _rawCache = null; // 全年資料快取，載入一次後切換日期不再重新查詢
 
@@ -591,13 +596,26 @@ function processFromCache(cache, fromIdx, toIdx) {
     if (yr === 2026 && ytdActual2026.hasOwnProperty(store)) ytdActual2026[store] += cnt;
   });
 
+  // ── 各店全部會員(自己人)中消費 ≥2 次的比例(不限 365 天) ──
+  const storeRepeatStats = {};
+  STORE_NAMES.forEach(s => storeRepeatStats[s] = { all: 0, repeated: 0 });
+  Object.entries(memberJoinStore).forEach(([member, info]) => {
+    if (!storeRepeatStats[info.store]) return;
+    storeRepeatStats[info.store].all++;
+    if ((allMemberTotalCounts[member] || 0) >= 2) {
+      storeRepeatStats[info.store].repeated++;
+    }
+  });
+
   const stores = STORE_NAMES.map(s => {
     const members        = membersMap[s] || 0;
     const visits         = visitsMap[s] || 0;
     const uniqueConsumers = uniqueMembersPerStore[s] ? uniqueMembersPerStore[s].size : 0;
     const cross          = crossJoin[s] || { total: 0, cross: 0 };
     const freq           = freqMap[s]   || { once:0, twice:0, thrice5:0, six10:0, eleven:0, total:0 };
-    const repeatRate = freq.total > 0 ? Math.round((freq.total - freq.once) / freq.total * 100) : 0;
+    // 回頭客比例(各店):分母 = 該店全部會員(不限 365 天)
+    const rs = storeRepeatStats[s] || { all: 0, repeated: 0 };
+    const repeatRate = rs.all > 0 ? Math.round(rs.repeated / rs.all * 100) : 0;
     const crossRate  = cross.total > 0 ? Math.round(cross.cross / cross.total * 100) : 0;
     // 平均消費次數 = 期間消費次數 ÷ 期間不重複消費會員數
     const avg = uniqueConsumers > 0 ? (visits / uniqueConsumers).toFixed(2) : '0.00';
@@ -963,18 +981,17 @@ function sortTable(key) {
 }
 function renderTable(data) {
   const sorted = [...data.stores].sort((a,b) => {
-    let av = sortKey==='store' ? a.store : (a[sortKey] !== undefined ? a[sortKey] : a.compositeScore);
-    let bv = sortKey==='store' ? b.store : (b[sortKey] !== undefined ? b[sortKey] : b.compositeScore);
+    let av = sortKey==='store' ? a.store : (a[sortKey] !== undefined ? a[sortKey] : a.recruitRate);
+    let bv = sortKey==='store' ? b.store : (b[sortKey] !== undefined ? b[sortKey] : b.recruitRate);
     const r = typeof av==='string' ? av.localeCompare(bv) : bv - av;
     return sortAsc ? -r : r;
   });
-  const byScore = [...data.stores].sort((a,b) => b.compositeScore - a.compositeScore);
-  const rankMap = {}; byScore.forEach((s,i) => rankMap[s.store] = i+1);
+  const byRecruit = [...data.stores].sort((a,b) => b.recruitRate - a.recruitRate);
+  const rankMap = {}; byRecruit.forEach((s,i) => rankMap[s.store] = i+1);
   const maxR = Math.max(...data.stores.map(s=>s.recruitRate), 1);
   document.getElementById('rankTableBody').innerHTML = sorted.map(s=>{
     const rk = rankMap[s.store];
     const rc = rk===1?'r1':rk===2?'r2':rk===3?'r3':'r0';
-    const scoreColor = s.compositeScore>=50?'#2D7A55':s.compositeScore>=35?'#B87A00':'#C4412F';
     const recruitColor = s.recruitRate>=25?'#2D7A55':s.recruitRate>=20?'#B87A00':'#C4412F';
     const activColor = s.activationRate>=60?'#2D7A55':s.activationRate>=40?'#B87A00':'#C4412F';
     const eligStr = s.activInfo ? `(${s.activInfo.activated}/${s.activInfo.eligible}人)` : '';
@@ -982,12 +999,11 @@ function renderTable(data) {
     return `<tr>
       <td><span class="rank-badge ${rc}">${rk}</span></td>
       <td><strong>${s.store}</strong></td>
-      <td style="font-weight:700;font-size:16px;color:${scoreColor}">${s.compositeScore}</td>
       <td><div style="display:flex;align-items:center;gap:6px"><div style="width:${Math.round(s.recruitRate/maxR*70)}px;height:8px;background:${recruitColor};border-radius:4px"></div><span style="color:${recruitColor};font-weight:600">${s.recruitRate}%</span></div></td>
-      <td><span style="color:${activColor};font-weight:600">${s.activationRate}%</span> <span style="font-size:11px;color:var(--muted)">${eligStr}</span></td>
       <td style="color:var(--text-secondary)">${ytdMembers.toLocaleString()} 人</td>
+      <td><span style="color:${activColor};font-weight:600">${s.activationRate}%</span> <span style="font-size:11px;color:var(--muted)">${eligStr}</span></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted)">本期間無資料</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--muted)">本期間無資料</td></tr>';
 }
 
 // ─── ERROR DISPLAY ────────────────────────────────────────────
