@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+import os
 import re
+import urllib.error
+import urllib.request
 
 POLITE_TERMS = (
     "您好",
@@ -131,7 +135,8 @@ def _summarize_labels(labels: list[str], limit: int = 2) -> str:
     return "、".join(labels[:limit]) + "等重點"
 
 
-def score_answer(question: dict, answer: str, rules: dict) -> dict:
+def _score_with_rules(question: dict, answer: str, rules: dict) -> dict:
+    """規則式評分(舊邏輯,當 AI 不可用時的 fallback)"""
     normalized_answer = normalize_text(answer)
     matched = []
     missing = []
@@ -214,6 +219,142 @@ def score_answer(question: dict, answer: str, rules: dict) -> dict:
         "coaching": coaching,
         "score_protected": False,
     }
+
+
+
+# ============================================================
+# AI 評分模組 (主要評分邏輯,使用 OpenAI GPT-4o-mini)
+# ============================================================
+
+_OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+_OPENAI_MODEL = "gpt-4o-mini"
+_OPENAI_TIMEOUT_SECONDS = 15
+
+
+def _build_scoring_prompt(question: dict, answer: str, rules: dict) -> str:
+    """組合給 AI 的評分 prompt"""
+    scoring_instruction = rules.get(
+        "scoring_instruction",
+        "你是專業的內訓教練,請依照員工抓到的重點數,給 0-10 分。",
+    )
+
+    points_text = []
+    for idx, point in enumerate(question["required_points"], 1):
+        keywords_str = "、".join(point["keywords"]) if point["keywords"] else "(無)"
+        points_text.append(f"  重點 {idx}: {point['label']}  (參考關鍵詞: {keywords_str})")
+    points_block = "\n".join(points_text)
+
+    return f"""{scoring_instruction}
+
+【本題資訊】
+題目: {question['prompt']}
+標準答案: {question['answer']}
+應涵蓋的重點 (共 {len(question['required_points'])} 個):
+{points_block}
+
+【員工回答】
+{answer}
+
+【請回覆 JSON,格式如下,不要加任何其他文字】
+{{
+  "score": <0-10 的整數>,
+  "matched_labels": [<員工有抓到的重點 label 文字陣列>],
+  "missing_labels": [<員工沒抓到的重點 label 文字陣列>],
+  "needs_better_expression": <true 或 false,如果回答像條列式或口語不自然就 true>,
+  "uses_profanity": <true 或 false,如果有髒話或攻擊字眼就 true>,
+  "coaching": "<給員工的回饋,2-3 句,先肯定再建議,溫暖鼓勵>"
+}}"""
+
+
+def _call_openai(prompt: str) -> dict:
+    """呼叫 OpenAI API,回傳解析後的 JSON dict"""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set in environment")
+
+    payload = {
+        "model": _OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是專業的內訓教練,請嚴格依照指示用 JSON 格式回覆,不要有任何 markdown 或其他文字。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+
+    req = urllib.request.Request(
+        _OPENAI_API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=_OPENAI_TIMEOUT_SECONDS) as resp:
+        body = resp.read().decode("utf-8")
+
+    data = json.loads(body)
+    content = data["choices"][0]["message"]["content"]
+    return json.loads(content)
+
+
+def _score_with_ai(question: dict, answer: str, rules: dict) -> dict:
+    """AI 評分(主要路徑)"""
+    prompt = _build_scoring_prompt(question, answer, rules)
+    ai_result = _call_openai(prompt)
+
+    # 解析並對齊舊回傳格式
+    score = int(ai_result.get("score", 0))
+    score = max(0, min(10, score))  # 夾在 0-10
+
+    matched = ai_result.get("matched_labels", []) or []
+    missing = ai_result.get("missing_labels", []) or []
+    needs_better_expression = bool(ai_result.get("needs_better_expression", False))
+    uses_profanity = bool(ai_result.get("uses_profanity", False))
+    coaching_text = ai_result.get("coaching", "") or rules.get("retry_prompt", "請再回答一次。")
+
+    # 髒話強制扣分(後端保險,不完全信任 AI)
+    if uses_profanity:
+        score = min(score, 2)
+
+    if score == 10:
+        feedback = rules["pass_feedback"]
+        coaching = coaching_text or "很好,這題已經達標。"
+    else:
+        feedback = rules["retry_feedback"]
+        # 接上重答提示
+        coaching = coaching_text
+        if rules.get("retry_prompt") and rules["retry_prompt"] not in coaching:
+            coaching = coaching + rules["retry_prompt"]
+
+    return {
+        "score": score,
+        "matched": matched,
+        "matched_count": len(matched),
+        "missing": missing,
+        "missing_count": len(missing),
+        "needs_better_expression": needs_better_expression,
+        "uses_profanity": uses_profanity,
+        "feedback": feedback,
+        "coaching": coaching,
+        "score_protected": False,
+        "_scored_by": "ai",
+    }
+
+
+def score_answer(question: dict, answer: str, rules: dict) -> dict:
+    """評分主入口:優先用 AI,失敗自動降級為規則式評分"""
+    try:
+        return _score_with_ai(question, answer, rules)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError,
+            KeyError, ValueError, TimeoutError, RuntimeError, OSError) as exc:
+        # 記錄錯誤到 stderr,讓 Render Logs 看得到
+        import sys
+        print(f"[AI scoring failed, fallback to rules] {type(exc).__name__}: {exc}", file=sys.stderr)
+        result = _score_with_rules(question, answer, rules)
+        result["_scored_by"] = "rules_fallback"
+        return result
 
 
 def protect_improved_attempt(previous: dict | None, current: dict) -> dict:
