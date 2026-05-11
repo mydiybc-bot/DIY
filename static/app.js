@@ -81,6 +81,7 @@ const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
 const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
 
 const RULE_FIELDS = [
+  { key: "scoring_instruction", label: "AI 評分指令(改這裡就能調整評分風格)", type: "textarea" },
   { key: "assistant_role", label: "AI 角色設定", type: "textarea" },
   { key: "question_suffix", label: "每題結尾句" },
   { key: "retry_prompt", label: "未滿分重答提示" },
@@ -160,7 +161,7 @@ function speak(text, onDone = null) {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "zh-TW";
-  utterance.rate = 1.25;
+  utterance.rate = 1.0;
   if (typeof onDone === "function") {
     utterance.onend = () => onDone();
     utterance.onerror = () => onDone();
@@ -673,7 +674,8 @@ function renderRulesForm() {
   RULE_FIELDS.forEach((field) => {
     let input;
     if (field.type === "textarea") {
-      input = createInput(currentConfig.rules[field.key] || "", 3);
+      const rows = field.key === "scoring_instruction" ? 14 : 3;
+      input = createInput(currentConfig.rules[field.key] || "", rows);
     } else {
       input = document.createElement("input");
       input.type = field.type || "text";
