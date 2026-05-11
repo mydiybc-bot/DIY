@@ -1054,49 +1054,63 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
 /* ================================================================
    TAB 5: 季節 & 活動
    ================================================================ */
+// ===========================================================
+// W5 限定甜點檔期分析 — React 前端元件 v4
+// ===========================================================
+//
+// v4 變更（2026-05-11）：
+// - tab 內容大改：標題改為「限定甜點檔期分析」
+// - 拿掉所有「整檔期」、「平均日銷」、「占比」相關欄位
+// - 只剩三件套：限定甜點營收 + YoY + 天數
+// - 各店排行改用限定甜點營收（不是倍率）
+// - 資料來源改 data.seasonal.campaigns（不是 festivals）
+//
+// 安裝（給 Cowork）：
+// 1. pos-dashboard.html 找 `function TabSeasonal({ data })` v3 版起點
+// 2. 從這行到該函式結束 `}`（含）整段刪除
+// 3. 把本檔案從 function TabSeasonal 開始整段貼到原位置
+// 4. L595 不需動（props 仍是 <TabSeasonal data={rawData}/>）
+// ===========================================================
+
 function TabSeasonal({ data }) {
-  if (!data || !data.seasonal || !data.seasonal.festivals) {
-    return <div style={{ padding: 24, color: '#9ca3af' }}>季節活動資料載入中…</div>;
+  if (!data || !data.seasonal || !data.seasonal.campaigns) {
+    return <div style={{ padding: 24, color: '#9ca3af' }}>限定甜點檔期資料載入中…</div>;
   }
 
-  const { festivals, annualTotal } = data.seasonal;
+  const { campaigns } = data.seasonal;
   const today = new Date().toISOString().slice(0, 10);
 
-  // 找精選檔期：進行中的優先，否則最近結束的，否則第一個
   const featured = React.useMemo(() => {
-    const ongoing = festivals.find(f =>
-      f.dateRange.start <= today && today <= f.dateRange.end);
+    const ongoing = campaigns.find(c => c.ongoing);
     if (ongoing) return ongoing;
-    const past = festivals
-      .filter(f => f.dateRange.end < today)
+    const past = campaigns
+      .filter(c => c.dateRange.end < today)
       .sort((a, b) => b.dateRange.end.localeCompare(a.dateRange.end));
-    return past[0] || festivals[0] || null;
-  }, [festivals, today]);
+    return past[0] || campaigns[0] || null;
+  }, [campaigns, today]);
 
   const fmtMoney = (n) => 'NT$ ' + Math.round(n).toLocaleString();
-  const multColor = (m) => m >= 2.5 ? '#c2410c' : m >= 1.5 ? '#0891b2' : '#6b7280';
+  const yoyColor = (y) => y === null ? '#9ca3af' : y > 0 ? '#16a34a' : '#dc2626';
+  const yoyText = (y) => y === null ? '—' : (y > 0 ? '+' : '') + (y * 100).toFixed(1) + '%';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, padding: '8px 0' }}>
 
-      {/* ============ 區塊標題 ============ */}
+      {/* 標題 */}
       <div>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#1f2937' }}>
-          🎉 季節 & 活動分析
+          🎂 限定甜點檔期分析
         </h2>
         <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
-          自動辨識「YYYY 節日名」次類別，分析 {festivals.length} 個檔期
+          自動辨識所有「YYYY 活動名」次類別（節日 + 主題活動），共 {campaigns.length} 個檔期 · 與去年同檔期比較
         </p>
       </div>
 
-      {/* ============ 模組 A — 倍率卡（整檔期拉動效應） ============ */}
+      {/* 最近活動 spotlight */}
       <div>
-        <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>
-          📊 模組 A — 節日 vs 平日 倍率
+        <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 12 }}>
+          📊 最近活動
         </h3>
-        <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 12px 0' }}>
-          看「檔期把整體業績拉動了多少」。倍率 = 整檔期日均（含一般商品）÷ 同月平日日均
-        </p>
 
         {featured && (
           <div style={{
@@ -1107,7 +1121,7 @@ function TabSeasonal({ data }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
               <div>
                 <div style={{ fontSize: 12, color: '#92400e', fontWeight: 600, letterSpacing: 1 }}>
-                  {featured.dateRange.start <= today && today <= featured.dateRange.end ? '🔴 進行中' : '🕐 最近檔期'}
+                  {featured.ongoing ? '🔴 進行中' : '🕐 最近檔期'}
                 </div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#7c2d12', marginTop: 4 }}>
                   {featured.year} {featured.name}
@@ -1115,26 +1129,26 @@ function TabSeasonal({ data }) {
                 <div style={{ color: '#78716c', fontSize: 13, marginTop: 4 }}>
                   {featured.dateRange.start} ~ {featured.dateRange.end}（{featured.dateRange.days} 天）
                 </div>
-                <div style={{ color: '#78716c', fontSize: 12, marginTop: 8 }}>
-                  限定品營收：<strong style={{ color: '#7c2d12' }}>{fmtMoney(featured.limitedRevenue)}</strong>
-                </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 12, color: '#92400e' }}>整集團倍率</div>
-                <div style={{ fontSize: 42, fontWeight: 700, color: multColor(featured.multiplier), lineHeight: 1 }}>
-                  {featured.multiplier}x
+                <div style={{ fontSize: 12, color: '#92400e' }}>限定甜點營收</div>
+                <div style={{ fontSize: 42, fontWeight: 700, color: '#7c2d12', lineHeight: 1 }}>
+                  {fmtMoney(featured.revenue)}
                 </div>
-                <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>
-                  檔期日均 {fmtMoney(featured.avgDaily)}<br />
-                  同月平日 {fmtMoney(featured.monthlyWeekdayDaily)}
+                <div style={{ marginTop: 8, fontSize: 14, color: '#78716c' }}>
+                  YoY <span style={{
+                    fontWeight: 700, fontSize: 18,
+                    color: yoyColor(featured.yoy)
+                  }}>{yoyText(featured.yoy)}</span>
                 </div>
               </div>
             </div>
 
+            {/* 各店限定甜點營收排行 */}
             {featured.byStore && featured.byStore.length > 0 && (
               <div style={{ marginTop: 20 }}>
                 <div style={{ fontSize: 13, color: '#92400e', marginBottom: 8, fontWeight: 600 }}>
-                  各店倍率排名（從高到低）
+                  各店限定甜點營收排行
                 </div>
                 <div style={{
                   display: 'grid',
@@ -1149,10 +1163,7 @@ function TabSeasonal({ data }) {
                       <div style={{ fontSize: 11, color: '#78716c' }}>
                         {idx + 1}. {s.store}
                       </div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: multColor(s.multiplier) }}>
-                        {s.multiplier}x
-                      </div>
-                      <div style={{ fontSize: 10, color: '#a8a29e' }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: '#7c2d12', marginTop: 2 }}>
                         {fmtMoney(s.revenue)}
                       </div>
                     </div>
@@ -1164,29 +1175,31 @@ function TabSeasonal({ data }) {
         )}
 
         {/* 其他檔期小卡 */}
-        {festivals.length > 1 && (
+        {campaigns.length > 1 && (
           <div>
             <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>其他檔期</div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
               gap: 10
             }}>
-              {festivals.filter(f => !featured || f.key !== featured.key).slice(0, 11).map(f => (
-                <div key={f.key} style={{
+              {campaigns.filter(c => !featured || c.key !== featured.key).slice(0, 11).map(c => (
+                <div key={c.key} style={{
                   padding: 12, borderRadius: 8,
                   border: '1px solid #e5e7eb', background: 'white'
                 }}>
-                  <div style={{ fontSize: 11, color: '#9ca3af' }}>{f.year}</div>
-                  <div style={{ fontWeight: 600, color: '#1f2937' }}>{f.name}</div>
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>{c.year}</div>
+                  <div style={{ fontWeight: 600, color: '#1f2937' }}>{c.name}</div>
                   <div style={{
-                    fontSize: 24, fontWeight: 700,
-                    color: multColor(f.multiplier), marginTop: 4
+                    fontSize: 22, fontWeight: 700,
+                    color: '#1f2937', marginTop: 4
                   }}>
-                    {f.multiplier}x
+                    {fmtMoney(c.revenue)}
                   </div>
                   <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                    {f.dateRange.days} 天 · 限定品 {fmtMoney(f.limitedRevenue)}
+                    {c.dateRange.days} 天 · YoY <span style={{
+                      color: yoyColor(c.yoy), fontWeight: 600
+                    }}>{yoyText(c.yoy)}</span>
                   </div>
                 </div>
               ))}
@@ -1195,91 +1208,66 @@ function TabSeasonal({ data }) {
         )}
       </div>
 
-      {/* ============ 模組 C — 年度排行榜（限定品歸因） ============ */}
+      {/* 全活動排行榜 */}
       <div>
-        <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>
-          🏆 模組 C — 檔期限定品年度貢獻排行
+        <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 12 }}>
+          🏆 全活動年度排行榜
+          <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8, fontWeight: 400 }}>
+            依限定甜點營收降序
+          </span>
         </h3>
-        <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 12px 0' }}>
-          看「節日限定品本身賺了多少」。總營收 = 次類別含節日標記的品項銷售總和（不含一般商品）；倍率 = 整檔期效應參考（同模組 A）
-        </p>
 
         <div style={{ overflowX: 'auto', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
                 <th style={{ padding: 10, textAlign: 'left', fontWeight: 600 }}>排名</th>
-                <th style={{ padding: 10, textAlign: 'left', fontWeight: 600 }}>檔期</th>
+                <th style={{ padding: 10, textAlign: 'left', fontWeight: 600 }}>活動</th>
+                <th style={{ padding: 10, textAlign: 'left', fontWeight: 600 }}>期間</th>
                 <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>天數</th>
-                <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>限定品營收</th>
-                <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>占年比</th>
+                <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>限定甜點營收</th>
                 <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>YoY</th>
-                <th style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>整檔期倍率</th>
               </tr>
             </thead>
             <tbody>
-              {[...festivals]
-                .sort((a, b) => b.limitedRevenue - a.limitedRevenue)
-                .slice(0, 10)
-                .map((f, idx) => (
-                <tr key={f.key} style={{ borderBottom: '1px solid #f3f4f6' }}>
+              {[...campaigns]
+                .sort((a, b) => b.revenue - a.revenue)
+                .map((c, idx) => (
+                <tr key={c.key} style={{ borderBottom: '1px solid #f3f4f6' }}>
                   <td style={{ padding: 10, fontWeight: 600, color: idx < 3 ? '#c2410c' : '#6b7280' }}>
                     {idx + 1}
                   </td>
                   <td style={{ padding: 10 }}>
                     <div style={{ fontWeight: 600, color: '#1f2937' }}>
-                      {f.year} {f.name}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                      {f.dateRange.start} ~ {f.dateRange.end}
+                      {c.year} {c.name}
                     </div>
                   </td>
+                  <td style={{ padding: 10, fontSize: 11, color: '#9ca3af' }}>
+                    {c.dateRange.start} ~ {c.dateRange.end}
+                  </td>
                   <td style={{ padding: 10, textAlign: 'right', color: '#6b7280' }}>
-                    {f.dateRange.days}
+                    {c.dateRange.days}
                   </td>
                   <td style={{ padding: 10, textAlign: 'right', fontWeight: 600 }}>
-                    {fmtMoney(f.limitedRevenue)}
-                  </td>
-                  <td style={{ padding: 10, textAlign: 'right', color: '#6b7280' }}>
-                    {(f.annualShare * 100).toFixed(1)}%
+                    {fmtMoney(c.revenue)}
                   </td>
                   <td style={{
                     padding: 10, textAlign: 'right', fontWeight: 600,
-                    color: f.yoy === null ? '#9ca3af' : f.yoy > 0 ? '#16a34a' : '#dc2626'
+                    color: yoyColor(c.yoy)
                   }}>
-                    {f.yoy === null ? '—' : (f.yoy > 0 ? '+' : '') + (f.yoy * 100).toFixed(1) + '%'}
-                  </td>
-                  <td style={{
-                    padding: 10, textAlign: 'right',
-                    fontWeight: 700, color: multColor(f.multiplier)
-                  }}>
-                    {f.multiplier}x
+                    {yoyText(c.yoy)}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-
-        {annualTotal && (
-          <div style={{
-            marginTop: 12, padding: 10,
-            background: '#f9fafb', borderRadius: 6,
-            fontSize: 12, color: '#6b7280'
-          }}>
-            年度總營收參考：
-            {Object.keys(annualTotal).sort().map(y => (
-              <span key={y} style={{ marginLeft: 12 }}>
-                <strong>{y}</strong>：{fmtMoney(annualTotal[y])}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
     </div>
   );
 }
+
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
