@@ -31,6 +31,11 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .filter-group label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .filter-group select, .filter-group input { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); background: white; cursor: pointer; font-family: inherit; outline: none; min-width: 100px; }
 .filter-group select:focus, .filter-group input:focus { border-color: var(--primary); }
+.store-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.store-chip { font-size: 11px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--border); background: white; color: var(--muted); cursor: pointer; white-space: nowrap; transition: all .12s; font-family: inherit; line-height: 1.4; }
+.store-chip:hover { border-color: var(--primary-light); color: var(--primary); }
+.store-chip.active { background: var(--primary); color: white; border-color: var(--primary); font-weight: 600; }
+.period-sep { font-size: 12px; color: var(--muted); }
 .clear-btn { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); line-height: 1; transition: all .12s; }
 .clear-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
 .reset-all-btn { margin-left: auto; padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .15s; }
@@ -98,13 +103,15 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
   <div class="filter-label">🔍 篩選</div>
   <div class="filter-group">
     <label>門市</label>
-    <select id="f-store" onchange="applyFilters()"><option value="">全部門市</option></select>
-    <button class="clear-btn" onclick="clearFilter('f-store')" title="清除">✕</button>
+    <div class="store-chips" id="f-store-chips"></div>
+    <button class="clear-btn" onclick="clearStoreChips()" title="清除門市">✕</button>
   </div>
   <div class="filter-group">
-    <label>月份</label>
-    <select id="f-month" onchange="applyFilters()"><option value="">全部月份</option></select>
-    <button class="clear-btn" onclick="clearFilter('f-month')" title="清除">✕</button>
+    <label>期間</label>
+    <select id="f-month-from" onchange="applyFilters()"><option value="">起始月</option></select>
+    <span class="period-sep">~</span>
+    <select id="f-month-to" onchange="applyFilters()"><option value="">結束月</option></select>
+    <button class="clear-btn" onclick="clearPeriod()" title="清除期間">✕</button>
   </div>
   <div class="filter-group">
     <label>星等</label>
@@ -239,21 +246,49 @@ async function initLoad() {
   }
 }
 
+let _selectedStores = new Set();
+
 function populateFilters() {
   const stores = [...new Set(_allRows.map(r => r.store))].sort();
-  const months = [...new Set(_allRows.map(r => r.ym).filter(Boolean))].sort().reverse();
-  document.getElementById('f-store').innerHTML = '<option value="">全部門市</option>' + stores.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
-  document.getElementById('f-month').innerHTML = '<option value="">全部月份</option>' + months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  const months = [...new Set(_allRows.map(r => r.ym).filter(Boolean))].sort();
+  document.getElementById('f-store-chips').innerHTML = stores.map(s =>
+    `<button class="store-chip" data-store="${esc(s)}" onclick="toggleStoreChip('${esc(s)}')">${esc(s)}</button>`
+  ).join('');
+  const monthOpts = months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  document.getElementById('f-month-from').innerHTML = '<option value="">起始月</option>' + monthOpts;
+  document.getElementById('f-month-to').innerHTML = '<option value="">結束月</option>' + monthOpts;
+}
+
+function toggleStoreChip(store) {
+  if (_selectedStores.has(store)) _selectedStores.delete(store);
+  else _selectedStores.add(store);
+  document.querySelectorAll('.store-chip').forEach(c => {
+    c.classList.toggle('active', _selectedStores.has(c.dataset.store));
+  });
+  applyFilters();
+}
+
+function clearStoreChips() {
+  _selectedStores.clear();
+  document.querySelectorAll('.store-chip').forEach(c => c.classList.remove('active'));
+  applyFilters();
+}
+
+function clearPeriod() {
+  document.getElementById('f-month-from').value = '';
+  document.getElementById('f-month-to').value = '';
+  applyFilters();
 }
 
 function applyFilters() {
-  const fStore   = document.getElementById('f-store').value;
-  const fMonth   = document.getElementById('f-month').value;
+  const fMonthFrom = document.getElementById('f-month-from').value;
+  const fMonthTo   = document.getElementById('f-month-to').value;
   const fStar    = document.getElementById('f-star').value;
   const fKeyword = document.getElementById('f-keyword').value.trim().toLowerCase();
   let rows = _allRows;
-  if (fStore)   rows = rows.filter(r => r.store === fStore);
-  if (fMonth)   rows = rows.filter(r => r.ym === fMonth);
+  if (_selectedStores.size) rows = rows.filter(r => _selectedStores.has(r.store));
+  if (fMonthFrom) rows = rows.filter(r => r.ym && r.ym >= fMonthFrom);
+  if (fMonthTo)   rows = rows.filter(r => r.ym && r.ym <= fMonthTo);
   if (fStar === 'neg') rows = rows.filter(r => r.stars !== null && r.stars <= 3);
   else if (fStar === 'pos') rows = rows.filter(r => r.stars !== null && r.stars >= 4);
   else if (fStar) rows = rows.filter(r => r.stars === Number(fStar));
@@ -344,7 +379,13 @@ function renderDetailTable(rows) {
 }
 
 function clearFilter(id) { document.getElementById(id).value = ''; applyFilters(); }
-function resetAllFilters() { ['f-store','f-month','f-star'].forEach(id => document.getElementById(id).value = ''); document.getElementById('f-keyword').value = ''; applyFilters(); }
+function resetAllFilters() {
+  _selectedStores.clear();
+  document.querySelectorAll('.store-chip').forEach(c => c.classList.remove('active'));
+  ['f-month-from','f-month-to','f-star'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-keyword').value = '';
+  applyFilters();
+}
 function showLoading(on) { document.getElementById('loadingOverlay').classList.toggle('show', on); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
