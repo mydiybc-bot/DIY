@@ -415,8 +415,22 @@ const API = 'https://script.google.com/macros/s/AKfycbxmQYsYKJ6-7I_szysDiq122cJt
 let TOKEN='', STORES=[], ACCOUNTS=[], DATA=[], CX={};
 let SELECTED_AREAS = new Set();
 let TREND_STORE_ON = new Set();
-const L1_ORDER = ['營業收入','直接成本','人事成本','場地成本','營運費用','管理費用','營業外'];
-const COST_L1 = ['直接成本','人事成本','場地成本','營運費用','管理費用'];
+const L1_ORDER = ['營業收入','直接成本','人事成本','場地成本','營運費用','行銷費用','管理費用','營業外'];
+const COST_L1 = ['直接成本','人事成本','場地成本','營運費用','行銷費用','管理費用'];
+/* 營業外是唯一「同 L1 內同時有收入與支出」的大類,需按 dim_account 正負號分方向。
+   key = account_code,value = '收入' / '支出' */
+let SIGN_MAP = {};
+function buildSignMap() {
+  SIGN_MAP = {};
+  ACCOUNTS.forEach(a => { SIGN_MAP[a['account_code']] = a['正負號']; });
+}
+/* 營業外淨額:收入科目為正、支出科目為負 */
+function sumOutsideNet(d) {
+  return d.filter(r => r.category_l1 === '營業外').reduce((s, r) => {
+    const sign = SIGN_MAP[r.account_code] === '支出' ? -1 : 1;
+    return s + sign * r.amount;
+  }, 0);
+}
 const COLORS = ['#F5A623','#D4841C','#4A90D9','#28a745','#dc3545','#8E44AD','#1ABC9C','#E67E22','#3498DB','#E74C3C','#2ECC71','#9B59B6','#F39C12'];
 
 /* 資料範圍:從 113/01 到 115/12(涵蓋現有所有資料) */
@@ -463,7 +477,7 @@ function callApi(action, params={}) {
 /* ===== HELPERS ===== */
 function sumL1(d, l1) { return d.filter(r=>r.category_l1===l1).reduce((s,r)=>s+r.amount,0); }
 function calcNP(d) {
-  return sumL1(d,'營業收入') - sumL1(d,'直接成本') - sumL1(d,'人事成本') - sumL1(d,'場地成本') - sumL1(d,'營運費用') - sumL1(d,'管理費用') + sumL1(d,'營業外');
+  return sumL1(d,'營業收入') - sumL1(d,'直接成本') - sumL1(d,'人事成本') - sumL1(d,'場地成本') - sumL1(d,'營運費用') - sumL1(d,'行銷費用') - sumL1(d,'管理費用') + sumOutsideNet(d);
 }
 function fmt(n) {
   if (n===0) return '0';
@@ -540,6 +554,7 @@ async function initApp() {
     ]);
     STORES = sr.stores||[];
     ACCOUNTS = ar.accounts||[];
+    buildSignMap();
     AVAILABLE_YMS = yr.yms||[];
     LATEST_YM = yr.latest_ym;
     renderUpdateLabel();
@@ -693,9 +708,9 @@ function renderAll() {
 /* ===== KPIs ===== */
 function renderKPIs() {
   const rev=sumL1(DATA,'營業收入'), dc=sumL1(DATA,'直接成本'), hr=sumL1(DATA,'人事成本');
-  const site=sumL1(DATA,'場地成本'), ops=sumL1(DATA,'營運費用'), mgmt=sumL1(DATA,'管理費用');
+  const site=sumL1(DATA,'場地成本'), ops=sumL1(DATA,'營運費用'), mkt=sumL1(DATA,'行銷費用'), mgmt=sumL1(DATA,'管理費用');
   const gp=rev-dc, np=calcNP(DATA);
-  const totalCost = dc+hr+site+ops+mgmt;
+  const totalCost = dc+hr+site+ops+mkt+mgmt;
   const cards = [
     {l:'營業收入',v:fmt(rev),s:'合計',c:''},
     {l:'毛利',v:fmt(gp),s:'毛利率 '+pct(gp,rev),c:gp>=0?'green':'red'},
@@ -801,19 +816,19 @@ function renderStoreComp() {
   const rows=sids.map(id=>{
     const sd=DATA.filter(d=>d.store_id===id);
     const rev=sumL1(sd,'營業收入'),dc=sumL1(sd,'直接成本'),hr=sumL1(sd,'人事成本');
-    const site=sumL1(sd,'場地成本'),ops=sumL1(sd,'營運費用'),mgmt=sumL1(sd,'管理費用');
+    const site=sumL1(sd,'場地成本'),ops=sumL1(sd,'營運費用'),mkt=sumL1(sd,'行銷費用'),mgmt=sumL1(sd,'管理費用');
     const gp=rev-dc, np=calcNP(sd);
-    return {name:sName(id),rev,dc,hr,site,ops,mgmt,gp,np,gpR:rev?gp/rev:0,npR:rev?np/rev:0};
+    return {name:sName(id),rev,dc,hr,site,ops,mkt,mgmt,gp,np,gpR:rev?gp/rev:0,npR:rev?np/rev:0};
   }).sort((a,b)=>b.rev-a.rev);
 
-  let h=`<table><thead><tr><th>店別</th><th class="num">營業收入</th><th class="num">直接成本</th><th class="num">人事成本</th><th class="num">場地成本</th><th class="num">營運費用</th><th class="num">管理費用</th><th class="num">毛利</th><th class="num">毛利率</th><th class="num">淨利</th><th class="num">淨利率</th></tr></thead><tbody>`;
-  let t={rev:0,dc:0,hr:0,site:0,ops:0,mgmt:0,gp:0,np:0};
+  let h=`<table><thead><tr><th>店別</th><th class="num">營業收入</th><th class="num">直接成本</th><th class="num">人事成本</th><th class="num">場地成本</th><th class="num">營運費用</th><th class="num">行銷費用</th><th class="num">管理費用</th><th class="num">毛利</th><th class="num">毛利率</th><th class="num">淨利</th><th class="num">淨利率</th></tr></thead><tbody>`;
+  let t={rev:0,dc:0,hr:0,site:0,ops:0,mkt:0,mgmt:0,gp:0,np:0};
   rows.forEach(r=>{
-    t.rev+=r.rev;t.dc+=r.dc;t.hr+=r.hr;t.site+=r.site;t.ops+=r.ops;t.mgmt+=r.mgmt;t.gp+=r.gp;t.np+=r.np;
-    h+=`<tr><td>${r.name}</td><td class="num">${fmtF(r.rev)}</td><td class="num">${fmtF(r.dc)}</td><td class="num">${fmtF(r.hr)}</td><td class="num">${fmtF(r.site)}</td><td class="num">${fmtF(r.ops)}</td><td class="num">${fmtF(r.mgmt)}</td><td class="num">${fmtF(r.gp)}</td><td class="num">${(r.gpR*100).toFixed(1)}%</td><td class="num ${r.np>=0?'positive':'negative'}">${fmtF(r.np)}</td><td class="num ${r.npR>=0?'positive':'negative'}">${(r.npR*100).toFixed(1)}%</td></tr>`;
+    t.rev+=r.rev;t.dc+=r.dc;t.hr+=r.hr;t.site+=r.site;t.ops+=r.ops;t.mkt+=r.mkt;t.mgmt+=r.mgmt;t.gp+=r.gp;t.np+=r.np;
+    h+=`<tr><td>${r.name}</td><td class="num">${fmtF(r.rev)}</td><td class="num">${fmtF(r.dc)}</td><td class="num">${fmtF(r.hr)}</td><td class="num">${fmtF(r.site)}</td><td class="num">${fmtF(r.ops)}</td><td class="num">${fmtF(r.mkt)}</td><td class="num">${fmtF(r.mgmt)}</td><td class="num">${fmtF(r.gp)}</td><td class="num">${(r.gpR*100).toFixed(1)}%</td><td class="num ${r.np>=0?'positive':'negative'}">${fmtF(r.np)}</td><td class="num ${r.npR>=0?'positive':'negative'}">${(r.npR*100).toFixed(1)}%</td></tr>`;
   });
   const tgR=t.rev?t.gp/t.rev:0, tnR=t.rev?t.np/t.rev:0;
-  h+=`<tr class="grandtotal"><td>合計</td><td class="num">${fmtF(t.rev)}</td><td class="num">${fmtF(t.dc)}</td><td class="num">${fmtF(t.hr)}</td><td class="num">${fmtF(t.site)}</td><td class="num">${fmtF(t.ops)}</td><td class="num">${fmtF(t.mgmt)}</td><td class="num">${fmtF(t.gp)}</td><td class="num">${(tgR*100).toFixed(1)}%</td><td class="num ${t.np>=0?'positive':'negative'}">${fmtF(t.np)}</td><td class="num ${tnR>=0?'positive':'negative'}">${(tnR*100).toFixed(1)}%</td></tr>`;
+  h+=`<tr class="grandtotal"><td>合計</td><td class="num">${fmtF(t.rev)}</td><td class="num">${fmtF(t.dc)}</td><td class="num">${fmtF(t.hr)}</td><td class="num">${fmtF(t.site)}</td><td class="num">${fmtF(t.ops)}</td><td class="num">${fmtF(t.mkt)}</td><td class="num">${fmtF(t.mgmt)}</td><td class="num">${fmtF(t.gp)}</td><td class="num">${(tgR*100).toFixed(1)}%</td><td class="num ${t.np>=0?'positive':'negative'}">${fmtF(t.np)}</td><td class="num ${tnR>=0?'positive':'negative'}">${(tnR*100).toFixed(1)}%</td></tr>`;
   h+='</tbody></table>';
   document.getElementById('store-comp-wrap').innerHTML=h;
 }
@@ -832,7 +847,10 @@ function renderPnL() {
       grp[k].amt+=d.amount;
     });
     const items=Object.values(grp).sort((a,b)=>a.code.localeCompare(b.code));
-    const l1t=items.reduce((s,i)=>s+i.amt,0);
+    /* 營業外:同大類內含收入與支出,合計需按正負號計淨額;其他大類維持直接加總 */
+    const l1t = (l1==='營業外')
+      ? items.reduce((s,i)=>{ const sign = SIGN_MAP[i.code]==='支出' ? -1 : 1; return s + sign*i.amt; }, 0)
+      : items.reduce((s,i)=>s+i.amt,0);
     items.forEach((it,i)=>{
       h+=`<tr><td>${i===0?l1:''}</td><td style="padding-left:20px">${it.name}</td><td class="num">${fmtF(it.amt)}</td><td class="num">${pct(it.amt,rev)}</td></tr>`;
     });
@@ -951,6 +969,8 @@ function updateQuickBtnActive(currentVal) {
 function getMetricValue(d, metric) {
   const [kind, key] = metric.split(':');
   if (kind === 'L1') {
+    /* 營業外大類:含收入與支出,須按正負號計淨額 */
+    if (key === '營業外') return sumOutsideNet(d);
     return d.filter(r => r.category_l1 === key).reduce((s,r) => s + r.amount, 0);
   }
   if (kind === 'ACC') {
