@@ -1161,8 +1161,28 @@ function TabSeasonal({ data }) {
   const yoyColor = (y) => y === null ? '#9ca3af' : y > 0 ? '#16a34a' : '#dc2626';
   const yoyText = (y) => y === null ? '—' : (y > 0 ? '+' : '') + (y * 100).toFixed(1) + '%';
 
-  // 全活動排行榜:點活動列展開品項明細
-  const [expandedKey, setExpandedKey] = React.useState(null);
+  // spotlight 可切換:點「其他檔期」小卡時,spotlight 換成該檔期
+  // selectedCampaignKey = null 時顯示 featured(預設最近活動)
+  const [selectedCampaignKey, setSelectedCampaignKey] = React.useState(null);
+  const displayCampaign = React.useMemo(() => {
+    if (selectedCampaignKey) {
+      const found = campaigns.find(c => c.key === selectedCampaignKey);
+      if (found) return found;
+    }
+    return featured;
+  }, [selectedCampaignKey, campaigns, featured]);
+  const isManualSelect = selectedCampaignKey && displayCampaign && displayCampaign.key !== (featured && featured.key);
+
+  // 全活動排行榜:點活動列展開品項明細,可同時展開多個比較
+  const [expandedKeys, setExpandedKeys] = React.useState(() => new Set());
+  const toggleExpanded = (key) => {
+    setExpandedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, padding: '8px 0' }}>
@@ -1183,7 +1203,7 @@ function TabSeasonal({ data }) {
           📊 最近活動
         </h3>
 
-        {featured && (
+        {displayCampaign && (
           <div style={{
             background: 'linear-gradient(135deg, #fef3e2 0%, #ffedd5 100%)',
             padding: 24, borderRadius: 12, marginBottom: 16,
@@ -1192,31 +1212,31 @@ function TabSeasonal({ data }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
               <div>
                 <div style={{ fontSize: 12, color: '#92400e', fontWeight: 600, letterSpacing: 1 }}>
-                  {featured.ongoing ? '🔴 進行中' : '🕐 最近檔期'}
+                  {isManualSelect ? '📋 檢視檔期' : (displayCampaign.ongoing ? '🔴 進行中' : '🕐 最近檔期')}
                 </div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#7c2d12', marginTop: 4 }}>
-                  {featured.year} {featured.name}
+                  {displayCampaign.year} {displayCampaign.name}
                 </div>
                 <div style={{ color: '#78716c', fontSize: 13, marginTop: 4 }}>
-                  {featured.dateRange.start} ~ {featured.dateRange.end}（{featured.dateRange.days} 天）
+                  {displayCampaign.dateRange.start} ~ {displayCampaign.dateRange.end}（{displayCampaign.dateRange.days} 天）
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 12, color: '#92400e' }}>限定甜點營收</div>
                 <div style={{ fontSize: 42, fontWeight: 700, color: '#7c2d12', lineHeight: 1 }}>
-                  {fmtMoney(featured.revenue)}
+                  {fmtMoney(displayCampaign.revenue)}
                 </div>
                 <div style={{ marginTop: 8, fontSize: 14, color: '#78716c' }}>
                   YoY <span style={{
                     fontWeight: 700, fontSize: 18,
-                    color: yoyColor(featured.yoy)
-                  }}>{yoyText(featured.yoy)}</span>
+                    color: yoyColor(displayCampaign.yoy)
+                  }}>{yoyText(displayCampaign.yoy)}</span>
                 </div>
               </div>
             </div>
 
             {/* 各店限定甜點營收排行 */}
-            {featured.byStore && featured.byStore.length > 0 && (
+            {displayCampaign.byStore && displayCampaign.byStore.length > 0 && (
               <div style={{ marginTop: 20 }}>
                 <div style={{ fontSize: 13, color: '#92400e', marginBottom: 8, fontWeight: 600 }}>
                   各店限定甜點營收排行
@@ -1226,7 +1246,7 @@ function TabSeasonal({ data }) {
                   gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
                   gap: 8
                 }}>
-                  {featured.byStore.map((s, idx) => (
+                  {displayCampaign.byStore.map((s, idx) => (
                     <div key={s.store} style={{
                       background: 'white', padding: 10, borderRadius: 8,
                       border: idx === 0 ? '2px solid #c2410c' : '1px solid #e7e5e4'
@@ -1250,8 +1270,7 @@ function TabSeasonal({ data }) {
 
         {/* 其他檔期小卡 */}
 {campaigns.length > 1 && (() => {
-  const otherCampaigns = campaigns
-    .filter(c => !featured || c.key !== featured.key)
+  const otherCampaigns = [...campaigns]
     .sort((a, b) => b.dateRange.end.localeCompare(a.dateRange.end));
   const SHOW_DEFAULT = 6;
   const [showAll, setShowAll] = React.useState(false);
@@ -1259,18 +1278,23 @@ function TabSeasonal({ data }) {
   const hasMore = otherCampaigns.length > SHOW_DEFAULT;
   return (
     <div>
-      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>其他檔期</div>
+      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>其他檔期（點卡片切換上方分析）</div>
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
         gap: 10
       }}>
-        {visible.map(c => (
-          <div key={c.key} style={{
-            padding: 12, borderRadius: 8,
-            border: '1px solid #e5e7eb', background: 'white'
-          }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>{c.year}</div>
+        {visible.map(c => {
+          const isShown = displayCampaign && c.key === displayCampaign.key;
+          return (
+          <div key={c.key}
+            onClick={() => setSelectedCampaignKey(c.key)}
+            style={{
+              padding: 12, borderRadius: 8, cursor: 'pointer',
+              border: isShown ? '2px solid #c2410c' : '1px solid #e5e7eb',
+              background: isShown ? '#fff7ed' : 'white'
+            }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>{c.year}{isShown ? ' · 顯示中' : ''}</div>
             <div style={{ fontWeight: 600, color: '#1f2937' }}>{c.name}</div>
             <div style={{
               fontSize: 22, fontWeight: 700,
@@ -1284,7 +1308,8 @@ function TabSeasonal({ data }) {
               }}>{yoyText(c.yoy)}</span>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       {hasMore && (
         <button
@@ -1328,13 +1353,13 @@ function TabSeasonal({ data }) {
               {[...campaigns]
                 .sort((a, b) => b.revenue - a.revenue)
                 .map((c, idx) => {
-                const isExpanded = expandedKey === c.key;
+                const isExpanded = expandedKeys.has(c.key);
                 const items = c.items || [];
                 return (
                 <React.Fragment key={c.key}>
                 <tr
                   style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer', background: isExpanded ? '#fff7ed' : 'transparent' }}
-                  onClick={() => setExpandedKey(isExpanded ? null : c.key)}
+                  onClick={() => toggleExpanded(c.key)}
                 >
                   <td style={{ padding: 10, fontWeight: 600, color: idx < 3 ? '#c2410c' : '#6b7280' }}>
                     {idx + 1}
