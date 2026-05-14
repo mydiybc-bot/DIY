@@ -208,6 +208,23 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
 .negative { color: var(--red); }
 .positive { color: var(--green); }
 
+/* 0514：比較表 + 明細表樣式 */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { background: #F0E6D8; color: var(--text); }
+.cell-pct { display: block; font-size: 11px; color: var(--text2); font-weight: 400; margin-top: 1px; }
+tr.comp-cur td { border-bottom: none; }
+tr.comp-cur td:first-child { font-weight: 600; }
+tr.comp-ly td {
+  color: var(--text2); font-size: 12px; background: #FCFAF7;
+  border-bottom: 1px solid var(--border);
+}
+tr.comp-ly td:first-child { padding-left: 24px; font-style: italic; }
+tr.comp-ly .cell-pct { color: #B0A99E; }
+tr.comp-cur:hover td, tr.comp-ly:hover td { background: #FFFBF5; }
+tr.grandtotal-ly td { background: #FBEFD8; color: var(--text2); font-size: 12px; font-weight: 600; }
+th.pnl-cmp, td.pnl-cmp { background: #FBFAF8; }
+table th.pnl-cmp { color: #A89B88; }
+
 /* Tabs */
 .tab-bar { display: flex; gap: 0; border-bottom: 2px solid var(--border); }
 .tab-btn {
@@ -334,17 +351,13 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
           <select id="trend-metric" onchange="renderTrend()">
             <optgroup label="━ 大類合計 ━">
               <option value="L1:營業收入">營業收入(大類)</option>
-              <option value="L1:直接成本">直接成本(大類)</option>
+              <option value="L1:食材成本">食材成本(大類)</option>
               <option value="L1:人事成本">人事成本(大類)</option>
-              <option value="L1:場地成本">場地成本(大類)</option>
-              <option value="L1:營運費用">營運費用(大類)</option>
-              <option value="L1:行銷費用">行銷費用(大類)</option>
-              <option value="L1:管理費用">管理費用(大類)</option>
+              <option value="L1:營運及管理費用">營運及管理費用(大類)</option>
               <option value="L1:營業外">營業外(大類)</option>
             </optgroup>
             <optgroup label="━ 經營指標 ━">
-              <option value="KPI:毛利">毛利(營收-直接成本)</option>
-              <option value="KPI:營業淨利">營業淨利</option>
+              <option value="KPI:本期淨利">本期淨利</option>
             </optgroup>
             <optgroup label="━ 細項科目 ━" id="optgroup-accounts">
               <!-- 由 JS 動態填入,依 dim_account 分群 -->
@@ -379,11 +392,11 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
         <div style="width:100%; display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:4px;">
           <span style="font-size:13px; color:var(--text2); font-weight:500;">常用指標:</span>
           <button class="trend-quick-btn" onclick="setMetric('L1:營業收入')">營業收入</button>
-          <button class="trend-quick-btn" onclick="setMetric('ACC:進貨食材')">進貨食材</button>
+          <button class="trend-quick-btn" onclick="setMetric('L1:食材成本')">食材成本</button>
           <button class="trend-quick-btn" onclick="setMetric('L1:人事成本')">人事成本</button>
-          <button class="trend-quick-btn" onclick="setMetric('ACC:租金費用')">租金費用</button>
-          <button class="trend-quick-btn" onclick="setMetric('ACC:雜費')">雜費</button>
-          <button class="trend-quick-btn" onclick="setMetric('KPI:營業淨利')">營業淨利</button>
+          <button class="trend-quick-btn" onclick="setMetric('ACC:水電費')">水電費</button>
+          <button class="trend-quick-btn" onclick="setMetric('L1:營運及管理費用')">營運及管理費用</button>
+          <button class="trend-quick-btn" onclick="setMetric('KPI:本期淨利')">本期淨利</button>
         </div>
 
         <!-- 第三列:店別 chips -->
@@ -413,10 +426,54 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
 /* ===== CONFIG ===== */
 const API = 'https://script.google.com/macros/s/AKfycbxmQYsYKJ6-7I_szysDiq122cJtMt-WoAiwpugR0ti4Hb1pjsTGrPQEmOKx5lS4scLH7g/exec';
 let TOKEN='', STORES=[], ACCOUNTS=[], DATA=[], CX={};
+/* 0514：比較期資料。COMP_LASTMONTH = 區間整體往前推一個月；COMP_LASTYEAR = 往前推 12 個月 */
+let COMP_LASTMONTH = [], COMP_LASTYEAR = [];
 let SELECTED_AREAS = new Set();
 let TREND_STORE_ON = new Set();
 const L1_ORDER = ['營業收入','直接成本','人事成本','場地成本','營運費用','行銷費用','管理費用','營業外'];
 const COST_L1 = ['直接成本','人事成本','場地成本','營運費用','行銷費用','管理費用'];
+
+/* ===== 統一科目分類體系（0514 大改：全儀表板共用，數字必對齊）=====
+   五大段：營業收入 / 食材成本 / 人事成本 / 營運及管理費用 / 營業外 → 本期淨利
+   - 食材成本 = 直接成本大類（B001 進貨食材 + B002 進貨耗材）
+   - 人事成本 = 人事成本大類，但「排除」C008 職工福利、C009 職業訓練/考照費
+   - 營運及管理費用 = 場地成本 + 營運費用 + 行銷費用 + 管理費用 ＋ C008 ＋ C009
+   - 水電費 = D002（單一科目，總覽 KPI 用）
+   - 折舊攤提 = F008 折舊及折耗 + F009 各項攤銷
+   說明：account_code 為穩定鍵，dim_account 不動，這裡只做前端顯示重分類。 */
+const HR_EXCLUDE_CODES = ['C008','C009'];   // 從人事成本排除、改歸營運及管理費用
+const UTILITY_CODES    = ['D002'];          // 水電費
+const DEPREC_CODES     = ['F008','F009'];   // 折舊攤提
+
+/* 一筆 fact row 屬於哪一個「新大類」 */
+function newL1(r) {
+  if (r.category_l1 === '營業收入') return '營業收入';
+  if (r.category_l1 === '直接成本') return '食材成本';
+  if (r.category_l1 === '營業外')   return '營業外';
+  if (r.category_l1 === '人事成本') {
+    return HR_EXCLUDE_CODES.includes(r.account_code) ? '營運及管理費用' : '人事成本';
+  }
+  /* 場地成本 / 營運費用 / 行銷費用 / 管理費用 全部併入 */
+  return '營運及管理費用';
+}
+const NEW_L1_ORDER = ['營業收入','食材成本','人事成本','營運及管理費用','營業外'];
+
+/* 新大類合計（營業外按正負號計淨額，其餘直接加總） */
+function sumNewL1(d, nl1) {
+  if (nl1 === '營業外') return sumOutsideNet(d);
+  return d.filter(r => newL1(r) === nl1).reduce((s,r) => s + r.amount, 0);
+}
+/* 指定 account_code 清單的合計 */
+function sumCodes(d, codes) {
+  return d.filter(r => codes.includes(r.account_code)).reduce((s,r) => s + r.amount, 0);
+}
+/* 本期淨利 = 營收 − 食材 − 人事 − 營運及管理 + 營業外淨額 */
+function calcNet(d) {
+  return sumNewL1(d,'營業收入') - sumNewL1(d,'食材成本')
+       - sumNewL1(d,'人事成本') - sumNewL1(d,'營運及管理費用')
+       + sumNewL1(d,'營業外');
+}
+
 /* 營業外是唯一「同 L1 內同時有收入與支出」的大類,需按 dim_account 正負號分方向。
    key = account_code,value = '收入' / '支出' */
 let SIGN_MAP = {};
@@ -476,9 +533,8 @@ function callApi(action, params={}) {
 
 /* ===== HELPERS ===== */
 function sumL1(d, l1) { return d.filter(r=>r.category_l1===l1).reduce((s,r)=>s+r.amount,0); }
-function calcNP(d) {
-  return sumL1(d,'營業收入') - sumL1(d,'直接成本') - sumL1(d,'人事成本') - sumL1(d,'場地成本') - sumL1(d,'營運費用') - sumL1(d,'行銷費用') - sumL1(d,'管理費用') + sumOutsideNet(d);
-}
+/* 0514：本期淨利統一走 calcNet（新五大類架構）。calcNP 保留為別名以相容舊引用 */
+function calcNP(d) { return calcNet(d); }
 function fmt(n) {
   if (n===0) return '0';
   const a=Math.abs(n);
@@ -489,6 +545,12 @@ function fmt(n) {
 function fmtF(n) { return n.toLocaleString('zh-TW'); }
 function pct(n,d) { return d===0?'—':(n/d*100).toFixed(1)+'%'; }
 function ymLbl(ym) { return Math.floor(ym/100)+'/'+ String(ym%100).padStart(2,'0'); }
+/* 0514：ym 月份加減。ym 格式 = 民國年*100+月 */
+function ymAddMonths(ym, delta) {
+  let y = Math.floor(ym/100), m = ym%100;
+  let total = y*12 + (m-1) + delta;
+  return Math.floor(total/12)*100 + (total%12 + 1);
+}
 function sName(id) { const s=STORES.find(s=>s['店號']===id); return s?s['店別簡稱']:'店'+id; }
 function dx(k) { if(CX[k]){CX[k].destroy();delete CX[k];} }
 function showLoad(b) { document.getElementById('loading').classList.toggle('show',b); }
@@ -687,6 +749,21 @@ async function loadData() {
 
     const r = await callApi('get_fact_data',{store_ids:ids, ym_min:ymS, ym_max:ymE});
     DATA = r.data||[];
+
+    /* 0514：抓比較期。區間整體平移 — 上月 -1、去年同期 -12 */
+    const ymSn = Number(ymS), ymEn = Number(ymE);
+    const lmS = ymAddMonths(ymSn,-1),  lmE = ymAddMonths(ymEn,-1);
+    const lyS = ymAddMonths(ymSn,-12), lyE = ymAddMonths(ymEn,-12);
+    try {
+      const [rm, ry] = await Promise.all([
+        callApi('get_fact_data',{store_ids:ids, ym_min:lmS, ym_max:lmE}),
+        callApi('get_fact_data',{store_ids:ids, ym_min:lyS, ym_max:lyE})
+      ]);
+      COMP_LASTMONTH = rm.data||[];
+      COMP_LASTYEAR  = ry.data||[];
+    } catch(e) {
+      COMP_LASTMONTH = []; COMP_LASTYEAR = [];  /* 比較期失敗不阻斷主畫面 */
+    }
     renderAll();
   } catch(e) { alert('載入失敗: '+e.message); }
   showLoad(false);
@@ -705,19 +782,21 @@ function renderAll() {
   renderTrend();
 }
 
-/* ===== KPIs ===== */
+/* ===== KPIs（0514：營收 / 食材成本 / 人事成本 / 水電費 / 折舊攤提 / 淨利）===== */
 function renderKPIs() {
-  const rev=sumL1(DATA,'營業收入'), dc=sumL1(DATA,'直接成本'), hr=sumL1(DATA,'人事成本');
-  const site=sumL1(DATA,'場地成本'), ops=sumL1(DATA,'營運費用'), mkt=sumL1(DATA,'行銷費用'), mgmt=sumL1(DATA,'管理費用');
-  const gp=rev-dc, np=calcNP(DATA);
-  const totalCost = dc+hr+site+ops+mkt+mgmt;
+  const rev   = sumNewL1(DATA,'營業收入');
+  const food  = sumNewL1(DATA,'食材成本');
+  const hr    = sumNewL1(DATA,'人事成本');
+  const util  = sumCodes(DATA, UTILITY_CODES);
+  const dep   = sumCodes(DATA, DEPREC_CODES);
+  const net   = calcNet(DATA);
   const cards = [
     {l:'營業收入',v:fmt(rev),s:'合計',c:''},
-    {l:'毛利',v:fmt(gp),s:'毛利率 '+pct(gp,rev),c:gp>=0?'green':'red'},
+    {l:'食材成本',v:fmt(food),s:'佔營收 '+pct(food,rev),c:'blue'},
     {l:'人事成本',v:fmt(hr),s:'佔營收 '+pct(hr,rev),c:'blue'},
-    {l:'場地成本',v:fmt(site),s:'佔營收 '+pct(site,rev),c:'blue'},
-    {l:'總費用',v:fmt(totalCost),s:'佔營收 '+pct(totalCost,rev),c:''},
-    {l:'淨利',v:fmt(np),s:'淨利率 '+pct(np,rev),c:np>=0?'green':'red'},
+    {l:'水電費',v:fmt(util),s:'佔營收 '+pct(util,rev),c:'blue'},
+    {l:'折舊攤提',v:fmt(dep),s:'佔營收 '+pct(dep,rev),c:'blue'},
+    {l:'本期淨利',v:fmt(net),s:'淨利率 '+pct(net,rev),c:net>=0?'green':'red'},
   ];
   document.getElementById('kpi-row').innerHTML = cards.map(c=>
     `<div class="kpi-card ${c.c}"><div class="kpi-label">${c.l}</div><div class="kpi-value">${c.v}</div><div class="kpi-sub">${c.s}</div></div>`
@@ -727,10 +806,15 @@ function renderKPIs() {
 /* ===== CHARTS ===== */
 function renderCostChart() {
   dx('cost');
-  const labels = ['直接成本','人事成本','場地成本','營運費用','管理費用'];
-  const values = labels.map(l=>Math.abs(sumL1(DATA,l)));
+  /* 0514：對齊新架構。營運及管理費用再拆出折舊攤提單獨顯示 */
+  const food = sumNewL1(DATA,'食材成本');
+  const hr   = sumNewL1(DATA,'人事成本');
+  const dep  = sumCodes(DATA, DEPREC_CODES);
+  const opsMgmt = sumNewL1(DATA,'營運及管理費用') - dep;
+  const labels = ['食材成本','人事成本','營運及管理費用','折舊攤提'];
+  const values = [food, hr, opsMgmt, dep].map(Math.abs);
   const total = values.reduce((s,v)=>s+v, 0);
-  const colors = ['#D4841C','#4A90D9','#F5A623','#1ABC9C','#8E44AD'];
+  const colors = ['#D4841C','#4A90D9','#1ABC9C','#8E44AD'];
   CX.cost = new Chart(document.getElementById('chart-cost'),{
     type:'doughnut',
     data:{labels, datasets:[{data:values, backgroundColor:colors, borderWidth:2}]},
@@ -810,65 +894,215 @@ function renderMonthProfitChart() {
   });
 }
 
-/* ===== STORE COMPARISON ===== */
-function renderStoreComp() {
-  const sids=[...new Set(DATA.map(d=>d.store_id))].sort((a,b)=>a-b);
-  const rows=sids.map(id=>{
-    const sd=DATA.filter(d=>d.store_id===id);
-    const rev=sumL1(sd,'營業收入'),dc=sumL1(sd,'直接成本'),hr=sumL1(sd,'人事成本');
-    const site=sumL1(sd,'場地成本'),ops=sumL1(sd,'營運費用'),mkt=sumL1(sd,'行銷費用'),mgmt=sumL1(sd,'管理費用');
-    const gp=rev-dc, np=calcNP(sd);
-    return {name:sName(id),rev,dc,hr,site,ops,mkt,mgmt,gp,np,gpR:rev?gp/rev:0,npR:rev?np/rev:0};
-  }).sort((a,b)=>b.rev-a.rev);
+/* ===== STORE COMPARISON（0514 大改）=====
+   欄位：店別 / 營業收入 / 食材成本 / 人事成本 / 本期淨利 / 淨利率
+   每家店下方加一列「去年同期」；金額旁帶佔營收比 %；可點欄位標題排序。 */
+let STORE_COMP_SORT = { key: 'rev', dir: 'desc' };  // 預設營收高→低
 
-  let h=`<table><thead><tr><th>店別</th><th class="num">營業收入</th><th class="num">直接成本</th><th class="num">人事成本</th><th class="num">場地成本</th><th class="num">營運費用</th><th class="num">行銷費用</th><th class="num">管理費用</th><th class="num">毛利</th><th class="num">毛利率</th><th class="num">淨利</th><th class="num">淨利率</th></tr></thead><tbody>`;
-  let t={rev:0,dc:0,hr:0,site:0,ops:0,mkt:0,mgmt:0,gp:0,np:0};
-  rows.forEach(r=>{
-    t.rev+=r.rev;t.dc+=r.dc;t.hr+=r.hr;t.site+=r.site;t.ops+=r.ops;t.mkt+=r.mkt;t.mgmt+=r.mgmt;t.gp+=r.gp;t.np+=r.np;
-    h+=`<tr><td>${r.name}</td><td class="num">${fmtF(r.rev)}</td><td class="num">${fmtF(r.dc)}</td><td class="num">${fmtF(r.hr)}</td><td class="num">${fmtF(r.site)}</td><td class="num">${fmtF(r.ops)}</td><td class="num">${fmtF(r.mkt)}</td><td class="num">${fmtF(r.mgmt)}</td><td class="num">${fmtF(r.gp)}</td><td class="num">${(r.gpR*100).toFixed(1)}%</td><td class="num ${r.np>=0?'positive':'negative'}">${fmtF(r.np)}</td><td class="num ${r.npR>=0?'positive':'negative'}">${(r.npR*100).toFixed(1)}%</td></tr>`;
-  });
-  const tgR=t.rev?t.gp/t.rev:0, tnR=t.rev?t.np/t.rev:0;
-  h+=`<tr class="grandtotal"><td>合計</td><td class="num">${fmtF(t.rev)}</td><td class="num">${fmtF(t.dc)}</td><td class="num">${fmtF(t.hr)}</td><td class="num">${fmtF(t.site)}</td><td class="num">${fmtF(t.ops)}</td><td class="num">${fmtF(t.mkt)}</td><td class="num">${fmtF(t.mgmt)}</td><td class="num">${fmtF(t.gp)}</td><td class="num">${(tgR*100).toFixed(1)}%</td><td class="num ${t.np>=0?'positive':'negative'}">${fmtF(t.np)}</td><td class="num ${tnR>=0?'positive':'negative'}">${(tnR*100).toFixed(1)}%</td></tr>`;
-  h+='</tbody></table>';
-  document.getElementById('store-comp-wrap').innerHTML=h;
+function storeRow(sd) {
+  const rev  = sumNewL1(sd,'營業收入');
+  const food = sumNewL1(sd,'食材成本');
+  const hr   = sumNewL1(sd,'人事成本');
+  const net  = calcNet(sd);
+  return { rev, food, hr, net, npR: rev ? net/rev : 0 };
 }
 
-/* ===== P&L DETAIL ===== */
-function renderPnL() {
-  const rev=sumL1(DATA,'營業收入');
-  let h=`<table><thead><tr><th>科目分類</th><th>科目名稱</th><th class="num">金額</th><th class="num">佔營收比</th></tr></thead><tbody>`;
-  let running=0;
-  L1_ORDER.forEach(l1=>{
-    const l1d=DATA.filter(d=>d.category_l1===l1);
-    const grp={};
-    l1d.forEach(d=>{
-      const k=d.account_code+'_'+d.account_name;
-      if(!grp[k])grp[k]={code:d.account_code,name:d.account_name,l2:d.category_l2,amt:0};
-      grp[k].amt+=d.amount;
-    });
-    const items=Object.values(grp).sort((a,b)=>a.code.localeCompare(b.code));
-    /* 營業外:同大類內含收入與支出,合計需按正負號計淨額;其他大類維持直接加總 */
-    const l1t = (l1==='營業外')
-      ? items.reduce((s,i)=>{ const sign = SIGN_MAP[i.code]==='支出' ? -1 : 1; return s + sign*i.amt; }, 0)
-      : items.reduce((s,i)=>s+i.amt,0);
-    items.forEach((it,i)=>{
-      h+=`<tr><td>${i===0?l1:''}</td><td style="padding-left:20px">${it.name}</td><td class="num">${fmtF(it.amt)}</td><td class="num">${pct(it.amt,rev)}</td></tr>`;
-    });
-    if(l1==='營業收入'){
-      running=l1t;
-      h+=`<tr class="subtotal"><td colspan="2">營業收入合計</td><td class="num">${fmtF(l1t)}</td><td class="num">100.0%</td></tr>`;
-    } else if(l1==='直接成本'){
-      const gp=running-l1t;
-      h+=`<tr class="subtotal"><td colspan="2">直接成本合計</td><td class="num">${fmtF(l1t)}</td><td class="num">${pct(l1t,rev)}</td></tr>`;
-      h+=`<tr class="subtotal"><td colspan="2">➤ 毛利</td><td class="num ${gp>=0?'positive':'negative'}">${fmtF(gp)}</td><td class="num">${pct(gp,rev)}</td></tr>`;
-    } else {
-      h+=`<tr class="subtotal"><td colspan="2">${l1}合計</td><td class="num">${fmtF(l1t)}</td><td class="num">${pct(l1t,rev)}</td></tr>`;
-    }
+function renderStoreComp() {
+  const sids = [...new Set(DATA.map(d=>d.store_id))].sort((a,b)=>a-b);
+  const rows = sids.map(id => {
+    const cur = storeRow(DATA.filter(d=>d.store_id===id));
+    const ly  = storeRow(COMP_LASTYEAR.filter(d=>d.store_id===id));
+    return { id, name:sName(id), cur, ly };
   });
-  const np=calcNP(DATA);
-  h+=`<tr class="grandtotal"><td colspan="2">★ 本期淨利</td><td class="num ${np>=0?'positive':'negative'}">${fmtF(np)}</td><td class="num ${np>=0?'positive':'negative'}">${pct(np,rev)}</td></tr>`;
-  h+='</tbody></table>';
-  document.getElementById('pnl-wrap').innerHTML=h;
+
+  /* 排序：依目前選定欄位，對「本期」數值排序 */
+  const k = STORE_COMP_SORT.key, dir = STORE_COMP_SORT.dir === 'asc' ? 1 : -1;
+  rows.sort((a,b) => (a.cur[k] - b.cur[k]) * dir);
+
+  const arrow = key => STORE_COMP_SORT.key === key
+    ? (STORE_COMP_SORT.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const th = (key,label) =>
+    `<th class="num sortable" onclick="sortStoreComp('${key}')">${label}${arrow(key)}</th>`;
+
+  /* 一格：金額 +（佔營收比） */
+  const cell = (v, base, cls='') =>
+    `<td class="num ${cls}">${fmtF(v)}<span class="cell-pct">${pct(v,base)}</span></td>`;
+
+  let h = `<table class="comp-table"><thead><tr>`
+    + `<th class="sortable" onclick="sortStoreComp('rev')">店別${STORE_COMP_SORT.key==='rev'?(STORE_COMP_SORT.dir==='asc'?' ▲':' ▼'):''}</th>`
+    + th('rev','營業收入') + th('food','食材成本') + th('hr','人事成本')
+    + th('net','本期淨利') + th('npR','淨利率')
+    + `</tr></thead><tbody>`;
+
+  const tot = { rev:0, food:0, hr:0, net:0 };
+  const totLy = { rev:0, food:0, hr:0, net:0 };
+
+  rows.forEach(r => {
+    const c = r.cur, l = r.ly;
+    tot.rev+=c.rev; tot.food+=c.food; tot.hr+=c.hr; tot.net+=c.net;
+    totLy.rev+=l.rev; totLy.food+=l.food; totLy.hr+=l.hr; totLy.net+=l.net;
+    /* 本期列 */
+    h += `<tr class="comp-cur"><td>${r.name}</td>`
+      + cell(c.rev, c.rev) + cell(c.food, c.rev) + cell(c.hr, c.rev)
+      + `<td class="num ${c.net>=0?'positive':'negative'}">${fmtF(c.net)}<span class="cell-pct">${pct(c.net,c.rev)}</span></td>`
+      + `<td class="num ${c.npR>=0?'positive':'negative'}">${(c.npR*100).toFixed(1)}%</td>`
+      + `</tr>`;
+    /* 去年同期列 */
+    const hasLy = l.rev!==0 || l.food!==0 || l.hr!==0 || l.net!==0;
+    h += `<tr class="comp-ly"><td>去年同期</td>`;
+    if (hasLy) {
+      h += `<td class="num">${fmtF(l.rev)}<span class="cell-pct">${pct(l.rev,l.rev)}</span></td>`
+        + `<td class="num">${fmtF(l.food)}<span class="cell-pct">${pct(l.food,l.rev)}</span></td>`
+        + `<td class="num">${fmtF(l.hr)}<span class="cell-pct">${pct(l.hr,l.rev)}</span></td>`
+        + `<td class="num">${fmtF(l.net)}<span class="cell-pct">${pct(l.net,l.rev)}</span></td>`
+        + `<td class="num">${l.rev?(l.net/l.rev*100).toFixed(1):'—'}%</td>`;
+    } else {
+      h += `<td class="num" colspan="5" style="color:var(--text2);">無去年同期資料</td>`;
+    }
+    h += `</tr>`;
+  });
+
+  /* 合計（本期 + 去年同期） */
+  const tnR = tot.rev ? tot.net/tot.rev : 0;
+  const tnRly = totLy.rev ? totLy.net/totLy.rev : 0;
+  h += `<tr class="grandtotal"><td>合計</td>`
+    + `<td class="num">${fmtF(tot.rev)}<span class="cell-pct">100.0%</span></td>`
+    + `<td class="num">${fmtF(tot.food)}<span class="cell-pct">${pct(tot.food,tot.rev)}</span></td>`
+    + `<td class="num">${fmtF(tot.hr)}<span class="cell-pct">${pct(tot.hr,tot.rev)}</span></td>`
+    + `<td class="num ${tot.net>=0?'positive':'negative'}">${fmtF(tot.net)}<span class="cell-pct">${pct(tot.net,tot.rev)}</span></td>`
+    + `<td class="num ${tnR>=0?'positive':'negative'}">${(tnR*100).toFixed(1)}%</td></tr>`;
+  h += `<tr class="comp-ly grandtotal-ly"><td>去年同期</td>`;
+  if (totLy.rev!==0 || totLy.net!==0) {
+    h += `<td class="num">${fmtF(totLy.rev)}<span class="cell-pct">100.0%</span></td>`
+      + `<td class="num">${fmtF(totLy.food)}<span class="cell-pct">${pct(totLy.food,totLy.rev)}</span></td>`
+      + `<td class="num">${fmtF(totLy.hr)}<span class="cell-pct">${pct(totLy.hr,totLy.rev)}</span></td>`
+      + `<td class="num">${fmtF(totLy.net)}<span class="cell-pct">${pct(totLy.net,totLy.rev)}</span></td>`
+      + `<td class="num">${totLy.rev?(tnRly*100).toFixed(1):'—'}%</td>`;
+  } else {
+    h += `<td class="num" colspan="5" style="color:var(--text2);">無去年同期資料</td>`;
+  }
+  h += `</tr>`;
+  h += '</tbody></table>';
+  document.getElementById('store-comp-wrap').innerHTML = h;
+}
+
+function sortStoreComp(key) {
+  if (STORE_COMP_SORT.key === key) {
+    STORE_COMP_SORT.dir = STORE_COMP_SORT.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    STORE_COMP_SORT.key = key;
+    STORE_COMP_SORT.dir = 'desc';
+  }
+  renderStoreComp();
+}
+
+/* ===== P&L DETAIL（0514 大改）=====
+   大類重組為 5 段：營業收入 / 食材成本 / 人事成本 / 營運及管理費用 / 營業外 → 本期淨利
+   每列加「上月」「去年同期」兩組比較欄（金額＋佔當期營收比）。 */
+function renderPnL() {
+  const rev   = sumNewL1(DATA,'營業收入');
+  const revLM = sumNewL1(COMP_LASTMONTH,'營業收入');
+  const revLY = sumNewL1(COMP_LASTYEAR,'營業收入');
+  const hasLM = COMP_LASTMONTH.length > 0;
+  const hasLY = COMP_LASTYEAR.length > 0;
+
+  /* 把一組 fact data 依新大類 → account_code 聚合 */
+  function aggregate(d) {
+    const map = {};  // nl1 -> { code -> {code,name,amt} }
+    d.forEach(r => {
+      const nl1 = newL1(r);
+      if (!map[nl1]) map[nl1] = {};
+      const k = r.account_code;
+      if (!map[nl1][k]) map[nl1][k] = { code:r.account_code, name:r.account_name, amt:0 };
+      map[nl1][k].amt += r.amount;
+    });
+    return map;
+  }
+  const aggCur = aggregate(DATA);
+  const aggLM  = aggregate(COMP_LASTMONTH);
+  const aggLY  = aggregate(COMP_LASTYEAR);
+
+  const lookCode = (agg, nl1, code) => (agg[nl1] && agg[nl1][code]) ? agg[nl1][code].amt : 0;
+
+  let h = `<table class="pnl-detail"><thead><tr>`
+    + `<th>科目分類</th><th>科目名稱</th>`
+    + `<th class="num">本期金額</th><th class="num">佔營收比</th>`
+    + (hasLM ? `<th class="num pnl-cmp">上月金額</th><th class="num pnl-cmp">上月佔比</th>` : '')
+    + (hasLY ? `<th class="num pnl-cmp">去年同期</th><th class="num pnl-cmp">去年佔比</th>` : '')
+    + `</tr></thead><tbody>`;
+
+  /* 一般明細列 */
+  function detailRow(l1label, name, cur, lm, ly) {
+    return `<tr><td>${l1label}</td><td style="padding-left:20px">${name}</td>`
+      + `<td class="num">${fmtF(cur)}</td><td class="num">${pct(cur,rev)}</td>`
+      + (hasLM ? `<td class="num pnl-cmp">${fmtF(lm)}</td><td class="num pnl-cmp">${pct(lm,revLM)}</td>` : '')
+      + (hasLY ? `<td class="num pnl-cmp">${fmtF(ly)}</td><td class="num pnl-cmp">${pct(ly,revLY)}</td>` : '')
+      + `</tr>`;
+  }
+  /* 小計列 */
+  function subtotalRow(label, cur, lm, ly, cls='subtotal', signed=false) {
+    const sc = signed ? (cur>=0?'positive':'negative') : '';
+    return `<tr class="${cls}"><td colspan="2">${label}</td>`
+      + `<td class="num ${sc}">${fmtF(cur)}</td><td class="num">${rev?pct(cur,rev):'—'}</td>`
+      + (hasLM ? `<td class="num pnl-cmp">${fmtF(lm)}</td><td class="num pnl-cmp">${revLM?pct(lm,revLM):'—'}</td>` : '')
+      + (hasLY ? `<td class="num pnl-cmp">${fmtF(ly)}</td><td class="num pnl-cmp">${revLY?pct(ly,revLY):'—'}</td>` : '')
+      + `</tr>`;
+  }
+
+  /* 依新大類順序輸出（營業外另外處理） */
+  ['營業收入','食材成本','人事成本','營運及管理費用'].forEach(nl1 => {
+    /* 取本期該大類所有科目，補上比較期同科目（即使本期為 0 也顯示有比較期的科目） */
+    const codeSet = new Set([
+      ...Object.keys(aggCur[nl1]||{}),
+      ...Object.keys(aggLM[nl1]||{}),
+      ...Object.keys(aggLY[nl1]||{})
+    ]);
+    const items = [...codeSet].map(code => {
+      const ref = (aggCur[nl1]&&aggCur[nl1][code]) || (aggLM[nl1]&&aggLM[nl1][code]) || (aggLY[nl1]&&aggLY[nl1][code]);
+      return {
+        code, name: ref.name,
+        cur: lookCode(aggCur,nl1,code),
+        lm:  lookCode(aggLM,nl1,code),
+        ly:  lookCode(aggLY,nl1,code)
+      };
+    }).sort((a,b)=>a.code.localeCompare(b.code));
+
+    items.forEach((it,i) => {
+      h += detailRow(i===0?nl1:'', it.name, it.cur, it.lm, it.ly);
+    });
+    h += subtotalRow(nl1+'合計',
+      sumNewL1(DATA,nl1), sumNewL1(COMP_LASTMONTH,nl1), sumNewL1(COMP_LASTYEAR,nl1));
+  });
+
+  /* 營業外：明細按科目，合計按正負號淨額 */
+  {
+    const nl1 = '營業外';
+    const codeSet = new Set([
+      ...Object.keys(aggCur[nl1]||{}),
+      ...Object.keys(aggLM[nl1]||{}),
+      ...Object.keys(aggLY[nl1]||{})
+    ]);
+    const items = [...codeSet].map(code => {
+      const ref = (aggCur[nl1]&&aggCur[nl1][code]) || (aggLM[nl1]&&aggLM[nl1][code]) || (aggLY[nl1]&&aggLY[nl1][code]);
+      return {
+        code, name: ref.name,
+        cur: lookCode(aggCur,nl1,code),
+        lm:  lookCode(aggLM,nl1,code),
+        ly:  lookCode(aggLY,nl1,code)
+      };
+    }).sort((a,b)=>a.code.localeCompare(b.code));
+    items.forEach((it,i) => {
+      h += detailRow(i===0?'營業外':'', it.name, it.cur, it.lm, it.ly);
+    });
+    h += subtotalRow('營業外合計',
+      sumOutsideNet(DATA), sumOutsideNet(COMP_LASTMONTH), sumOutsideNet(COMP_LASTYEAR));
+  }
+
+  /* 本期淨利 */
+  h += subtotalRow('★ 本期淨利',
+    calcNet(DATA), calcNet(COMP_LASTMONTH), calcNet(COMP_LASTYEAR), 'grandtotal', true);
+  h += '</tbody></table>';
+  document.getElementById('pnl-wrap').innerHTML = h;
 }
 
 /* ===== TREND ===== */
@@ -969,20 +1203,15 @@ function updateQuickBtnActive(currentVal) {
 function getMetricValue(d, metric) {
   const [kind, key] = metric.split(':');
   if (kind === 'L1') {
-    /* 營業外大類:含收入與支出,須按正負號計淨額 */
-    if (key === '營業外') return sumOutsideNet(d);
-    return d.filter(r => r.category_l1 === key).reduce((s,r) => s + r.amount, 0);
+    /* 0514：L1 走新五大類（含營業外淨額處理） */
+    return sumNewL1(d, key);
   }
   if (kind === 'ACC') {
     return d.filter(r => r.account_name === key).reduce((s,r) => s + r.amount, 0);
   }
   if (kind === 'KPI') {
-    if (key === '毛利') {
-      return sumL1(d, '營業收入') - sumL1(d, '直接成本');
-    }
-    if (key === '營業淨利') {
-      return calcNP(d);
-    }
+    if (key === '本期淨利' || key === '營業淨利') return calcNet(d);
+    if (key === '毛利') return sumNewL1(d,'營業收入') - sumNewL1(d,'食材成本'); /* 舊相容 */
   }
   return 0;
 }
@@ -1002,9 +1231,8 @@ function renderTrend() {
   let metric = metricEl.value;
   /* 舊版 value 向後相容(只有科目名稱沒有前綴) */
   if (!metric.includes(':')) {
-    /* 嘗試判定 */
-    if (L1_ORDER.includes(metric) || metric === '行銷費用') metric = 'L1:' + metric;
-    else if (metric === '淨利') metric = 'KPI:營業淨利';
+    if (NEW_L1_ORDER.includes(metric)) metric = 'L1:' + metric;
+    else if (metric === '淨利' || metric === '營業淨利') metric = 'KPI:本期淨利';
     else metric = 'ACC:' + metric;
     metricEl.value = metric;
   }
