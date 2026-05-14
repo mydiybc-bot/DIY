@@ -36,9 +36,9 @@ a{color:var(--accent-light);text-decoration:none}
 .brand .subtitle{font-size:.8rem;color:rgba(255,255,255,.88);text-shadow:0 1px 2px rgba(58,12,8,.4)}
 .header-badge{background:var(--accent);color:#fff;font-size:.7rem;padding:2px 8px;border-radius:99px;font-weight:600}
 .header-data-range{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-.data-range-label{font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.data-range-label{font-size:.65rem;color:#FFFFFF;text-transform:uppercase;letter-spacing:.05em}
 .data-range-value{font-size:.85rem;font-weight:700;color:#FFFFFF;letter-spacing:.02em}
-.data-range-sub{font-size:.65rem;color:var(--text-secondary)}
+.data-range-sub{font-size:.65rem;color:rgba(255,255,255,.85)}
 
 .main-content{max-width:1600px;margin:0 auto;padding:16px}
 .filters-bar{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
@@ -315,6 +315,29 @@ function App(){
     });
   },[rawData, dateStart, dateEnd, selRegion, selStores]);
 
+  /* ---------- 不吃月份篩選的資料(只套區域/分店)---------- */
+  /* 給 Tab2 圖4「各店陪同率趨勢」用:月份範圍固定為「去年同期再往前 2 個月」至今 */
+  const monthlyByStoreNoDate = useMemo(()=>{
+    if(!rawData) return [];
+    // 計算月份下限:今天往回推 14 個月(去年同期 = 12 個月前,再往前 2 個月)
+    const now = new Date();
+    const lb = new Date(now.getFullYear(), now.getMonth()-14, 1);
+    const lowerBound = lb.getFullYear()+'-'+String(lb.getMonth()+1).padStart(2,'0');
+    const src = rawData.monthly.filter(m=>{
+      if(m.yearMonth < lowerBound) return false;
+      if(selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const map={};
+    src.forEach(m=>{
+      const k=m.yearMonth+'|'+m.store;
+      if(!map[k]) map[k]={ym:m.yearMonth,store:m.store,region:m.region,revenue:0,headcount:0,companionCount:0};
+      const t=map[k]; t.revenue+=m.revenue; t.headcount+=m.headcount; t.companionCount+=m.companionCount;
+    });
+    return Object.values(map).map(t=>({...t,companionRate:t.headcount>0?(t.companionCount/t.headcount*100):0}));
+  },[rawData, selRegion, selStores]);
+
   /* ---------- FILTERED DAILY DATA ---------- */
   const filteredDaily = useMemo(()=>{
     if(!rawData) return [];
@@ -589,7 +612,7 @@ function App(){
 
         {/* TAB CONTENT */}
         {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals}/>}
-        {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData}/>}
+        {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} monthlyByStoreNoDate={monthlyByStoreNoDate} storesInData={storesInData}/>}
         {activeTab===2 && <TabProductAnalysis catTotals={catTotals} filteredProducts={filteredProducts}/>}
         {activeTab===3 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
           {activeTab===4 && <TabSeasonal data={rawData}/>}
@@ -727,6 +750,66 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* 5. 月趨勢:營收 vs 來客數 */}
+      <div className="chart-card">
+        <div className="chart-title">月趨勢：營收 vs 來客數</div>
+        <div className="chart-subtitle">柱狀=營收 / 折線=來客數（全店合計）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={monthlyTotals}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="ym" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis yAxisId="left" stroke="#C4412F" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#22c55e" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="headcount" stroke="#22c55e" strokeWidth={2.5} dot={{r:3}} name="來客數"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 6. 月趨勢:營收 vs 客單價 */}
+      <div className="chart-card">
+        <div className="chart-title">月趨勢：營收 vs 客單價</div>
+        <div className="chart-subtitle">柱狀=營收 / 折線=客單價（全店合計）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={monthlyTotals}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="ym" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis yAxisId="left" stroke="#C4412F" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 7. 月趨勢:來客數 vs 客單價 */}
+      <div className="chart-card">
+        <div className="chart-title">月趨勢：來客數 vs 客單價</div>
+        <div className="chart-subtitle">柱狀=來客數 / 折線=客單價（全店合計）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={monthlyTotals}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="ym" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis yAxisId="left" stroke="#22c55e" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="headcount" fill="#22c55e" opacity={0.75} name="來客數" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </div>
   );
 }
@@ -734,120 +817,104 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
 /* ================================================================
    TAB 2: 分店比較
    ================================================================ */
-function TabStoreCompare({storeTotals, monthlyByStore, storesInData}){
-  // Heatmap: store x month
-  const heatmapData = useMemo(()=>{
-    const yms=[...new Set(monthlyByStore.map(m=>m.ym))].sort();
-    const stores=[...new Set(monthlyByStore.map(m=>m.store))];
-    const map={};
-    monthlyByStore.forEach(m=>{map[m.store+'|'+m.ym]=m.revenue});
-    const maxRev = Math.max(...Object.values(map),1);
-    return {yms, stores, map, maxRev};
-  },[monthlyByStore]);
+function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, storesInData}){
+  // 圖1-3:各店比較,X 軸 = 12 家店,沿用 storeTotals(吃篩選器)
+  // 依營收排序,讓三張圖門市順序一致
+  const storeData = useMemo(()=>[...storeTotals].sort((a,b)=>b.revenue-a.revenue),[storeTotals]);
 
-  function heatColor(val, max){
-    const ratio = Math.min(val/max, 1);
-    const r = Math.round(99 + ratio*0);
-    const g = Math.round(102 - ratio*60);
-    const b = Math.round(241);
-    return `rgba(${r},${g},${b},${0.15+ratio*0.85})`;
-  }
+  // 圖4:各店陪同率趨勢,X 軸 = 月份,pivot monthlyByStoreNoDate(不吃月份篩選)
+  const companionTrend = useMemo(()=>{
+    const yms=[...new Set(monthlyByStoreNoDate.map(m=>m.ym))].sort();
+    const stores=[...new Set(monthlyByStoreNoDate.map(m=>m.store))];
+    const data = yms.map(ym=>{
+      const row={name:ym.substring(2)};
+      stores.forEach(s=>{
+        const f=monthlyByStoreNoDate.find(m=>m.ym===ym&&m.store===s);
+        row[s]=f?Number(f.companionRate.toFixed(1)):null;
+      });
+      return row;
+    });
+    return {data, stores};
+  },[monthlyByStoreNoDate]);
 
   return (
     <div className="charts-grid cols-2">
-      {/* 1. Store revenue ranking */}
+      {/* 1. 各店:營收 vs 來客數 */}
       <div className="chart-card">
-        <div className="chart-title">各店營收排名</div>
-        <div className="chart-subtitle">顏色區分區域</div>
+        <div className="chart-title">各店：營收 vs 來客數</div>
+        <div className="chart-subtitle">柱狀=營收 / 折線=來客數</div>
         <div className="chart-body">
-          <ResponsiveContainer width="100%" height={Math.max(280, storeTotals.length*32)}>
-            <BarChart data={storeTotals} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
-              <YAxis type="category" dataKey="store" width={160} stroke="#B89E97" tick={{fontSize:10}}/>
-              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
-              <Bar dataKey="revenue" name="營收" radius={[0,4,4,0]}>
-                {storeTotals.map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#B89E97'}/>)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 2. Store comparison: headcount + avgSpend + revenue (3 horizontal bars) */}
-      <div className="chart-card">
-        <div className="chart-title">各店來客數排名</div>
-        <div className="chart-subtitle">甜點客＋陪同客合計</div>
-        <div className="chart-body">
-          <ResponsiveContainer width="100%" height={Math.max(280, storeTotals.length*32)}>
-            <BarChart data={[...storeTotals].sort((a,b)=>b.headcount-a.headcount)} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
-              <YAxis type="category" dataKey="store" width={160} stroke="#B89E97" tick={{fontSize:10}}/>
-              <Tooltip content={<CustomTooltip formatter={fmt.number}/>}/>
-              <Bar dataKey="headcount" name="來客數" radius={[0,4,4,0]}>
-                {[...storeTotals].sort((a,b)=>b.headcount-a.headcount).map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#B89E97'}/>)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 3. Store avgSpend ranking */}
-      <div className="chart-card">
-        <div className="chart-title">各店客單價排名</div>
-        <div className="chart-subtitle">營收 ÷ 來客數</div>
-        <div className="chart-body">
-          <ResponsiveContainer width="100%" height={Math.max(280, storeTotals.length*32)}>
-            <BarChart data={[...storeTotals].sort((a,b)=>b.avgSpend-a.avgSpend)} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
-              <YAxis type="category" dataKey="store" width={160} stroke="#B89E97" tick={{fontSize:10}}/>
-              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
-              <Bar dataKey="avgSpend" name="客單價" radius={[0,4,4,0]}>
-                {[...storeTotals].sort((a,b)=>b.avgSpend-a.avgSpend).map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#B89E97'}/>)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 4. Heatmap: store x month revenue */}
-      <div className="chart-card full-width">
-        <div className="chart-title">各店 × 各月營收熱力圖</div>
-        <div className="chart-body" style={{overflow:'auto'}}>
-          <div className="heatmap-grid" style={{gridTemplateColumns:`120px repeat(${heatmapData.yms.length},1fr)`,minWidth:heatmapData.yms.length*60+120}}>
-            {/* Header row */}
-            <div className="heatmap-cell" style={{fontWeight:700,fontSize:'.7rem'}}>門市 \ 月份</div>
-            {heatmapData.yms.map(ym=><div key={ym} className="heatmap-cell" style={{fontWeight:600,fontSize:'.65rem'}}>{ym.substring(2)}</div>)}
-            {/* Data rows */}
-            {heatmapData.stores.map(store=>(
-              <React.Fragment key={store}>
-                <div className="heatmap-cell heatmap-label" title={store}>{store.length>8?store.substring(0,8)+'…':store}</div>
-                {heatmapData.yms.map(ym=>{
-                  const val = heatmapData.map[store+'|'+ym]||0;
-                  return <div key={ym} className="heatmap-cell" style={{background:heatColor(val,heatmapData.maxRev)}} title={store+' '+ym+': '+fmt.currency(val)}>{val>0?fmt.short(val):''}</div>;
-                })}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Companion rate by store */}
-      <div className="chart-card full-width">
-        <div className="chart-title">各店陪同率</div>
-        <div className="chart-body">
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={storeTotals}>
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={storeData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
               <XAxis dataKey="store" stroke="#B89E97" tick={{fontSize:9,angle:-30,textAnchor:'end'}} height={80}/>
+              <YAxis yAxisId="left" stroke="#C4412F" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#22c55e" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="headcount" stroke="#22c55e" strokeWidth={2.5} dot={{r:3}} name="來客數"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 2. 各店:營收 vs 客單價 */}
+      <div className="chart-card">
+        <div className="chart-title">各店：營收 vs 客單價</div>
+        <div className="chart-subtitle">柱狀=營收 / 折線=客單價</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={storeData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="store" stroke="#B89E97" tick={{fontSize:9,angle:-30,textAnchor:'end'}} height={80}/>
+              <YAxis yAxisId="left" stroke="#C4412F" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 3. 各店:來客數 vs 客單價 */}
+      <div className="chart-card">
+        <div className="chart-title">各店：來客數 vs 客單價</div>
+        <div className="chart-subtitle">柱狀=來客數 / 折線=客單價</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={storeData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="store" stroke="#B89E97" tick={{fontSize:9,angle:-30,textAnchor:'end'}} height={80}/>
+              <YAxis yAxisId="left" stroke="#22c55e" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar yAxisId="left" dataKey="headcount" fill="#22c55e" opacity={0.75} name="來客數" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 4. 各店陪同率趨勢(月份固定:去年同期再往前 2 個月至今)*/}
+      <div className="chart-card">
+        <div className="chart-title">各店陪同率趨勢</div>
+        <div className="chart-subtitle">月份範圍：去年同期再往前 2 個月～本月（不受上方月份篩選影響）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={companionTrend.data}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
               <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>v.toFixed(0)+'%'}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
-              <Bar dataKey="companionRate" name="陪同率" radius={[4,4,0,0]}>
-                {storeTotals.map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#B89E97'}/>)}
-              </Bar>
-            </BarChart>
+              <Legend wrapperStyle={{fontSize:10}}/>
+              {companionTrend.stores.map((s,i)=>(
+                <Line key={s} type="monotone" dataKey={s} stroke={STORE_COLORS[i%STORE_COLORS.length]} strokeWidth={1.5} dot={false} connectNulls name={s}/>
+              ))}
+            </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
