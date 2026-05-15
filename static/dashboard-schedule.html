@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>排班分析 | 自己做烘焙聚樂部</title>
+<style>
+:root {
+  --primary: #C4412F; --primary-light: #E87060; --primary-dark: #8B2D1F;
+  --accent: #F4A620; --accent-light: #FDD99B;
+  --green: #52B788; --blue: #4A9BB8;
+  /* schedule 專屬色:深橄欖棕 */
+  --olive: #6B5D3F; --olive-light: #8B7D5F; --olive-dark: #4A3F2A;
+  --bg: #FFF8F6; --card: #FFFFFF; --text: #2D1A14; --muted: #8B6A63;
+  --border: #F0D9D5; --hover: #FFF0ED;
+  /* flag 顏色 */
+  --flag-red: #D9594C; --flag-orange: #E8924D; --flag-yellow: #E8B84D;
+  --good-green: #52B788;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* HEADER */
+.header { background: linear-gradient(135deg, var(--olive-dark), var(--olive), var(--olive-light)); color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(74,63,42,.3); }
+.header-left h1 { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
+.header-left p { font-size: 12px; opacity: .85; margin-top: 3px; }
+.header-back { background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.3); border-radius: 20px; padding: 7px 16px; font-size: 13px; font-weight: 600; color: white; cursor: pointer; text-decoration: none; transition: background .15s; }
+.header-back:hover { background: rgba(255,255,255,.28); }
+
+/* CONTAINER */
+.container { max-width: 1280px; margin: 0 auto; padding: 24px 28px 60px; }
+
+/* KPI ROW */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 22px; }
+.kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; position: relative; overflow: hidden; }
+.kpi-card::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--olive); }
+.kpi-card .label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .3px; margin-bottom: 6px; }
+.kpi-card .val   { font-size: 22px; font-weight: 800; color: var(--olive-dark); line-height: 1.1; }
+.kpi-card .sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.kpi-card.alert::before { background: var(--flag-red); }
+.kpi-card.alert .val { color: var(--flag-red); }
+
+/* CONTROLS */
+.controls { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 18px 22px; margin-bottom: 22px; }
+.controls-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.controls-title { font-size: 13px; font-weight: 700; color: var(--olive-dark); }
+.controls-toggle { display: flex; gap: 8px; align-items: center; }
+.toggle-btn { background: var(--bg); border: 1px solid var(--border); color: var(--muted); border-radius: 18px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .15s; }
+.toggle-btn.active { background: var(--olive); border-color: var(--olive); color: white; }
+.toggle-btn:hover:not(.active) { background: var(--hover); }
+
+.sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.slider-block { display: flex; flex-direction: column; gap: 6px; }
+.slider-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); font-weight: 600; }
+.slider-value { color: var(--olive-dark); font-weight: 800; font-size: 14px; }
+.slider-input { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; background: var(--border); border-radius: 2px; outline: none; }
+.slider-input::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--olive); border-radius: 50%; cursor: pointer; box-shadow: 0 1px 4px rgba(74,63,42,.4); }
+.slider-input::-moz-range-thumb { width: 16px; height: 16px; background: var(--olive); border-radius: 50%; cursor: pointer; border: none; box-shadow: 0 1px 4px rgba(74,63,42,.4); }
+
+.filter-row { display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.filter-row select { font-family: inherit; font-size: 13px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; background: white; color: var(--text); cursor: pointer; outline: none; }
+.filter-row select:focus { border-color: var(--olive); }
+
+/* SECTION */
+.section { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; margin-bottom: 22px; }
+.section-title { font-size: 14px; font-weight: 800; color: var(--olive-dark); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.section-title .badge { background: var(--bg); border: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 12px; }
+
+/* HEATMAP */
+.heat-wrap { overflow-x: auto; }
+.heat-table { border-collapse: collapse; width: 100%; min-width: 700px; }
+.heat-table th, .heat-table td { padding: 8px 6px; text-align: center; font-size: 12px; }
+.heat-table th { background: var(--bg); color: var(--olive-dark); font-weight: 700; border-bottom: 2px solid var(--border); }
+.heat-table th.store-col, .heat-table td.store-col { text-align: left; font-weight: 700; padding-left: 14px; min-width: 110px; position: sticky; left: 0; background: white; z-index: 2; }
+.heat-table th.store-col { background: var(--bg); z-index: 3; }
+.heat-cell { border-radius: 6px; padding: 10px 4px; font-weight: 700; cursor: pointer; transition: transform .12s, box-shadow .12s; position: relative; }
+.heat-cell:hover { transform: scale(1.04); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+.heat-cell.flagged { box-shadow: inset 0 0 0 2px var(--flag-red); }
+.heat-cell .rev   { font-size: 13px; color: var(--text); line-height: 1; }
+.heat-cell .hrs   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.heat-cell .flag-dot { position: absolute; top: 2px; right: 4px; font-size: 9px; }
+
+/* ZONE COMPARE */
+.zone-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.zone-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.zone-card .name { font-size: 13px; font-weight: 700; color: var(--olive-dark); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+.zone-card .name .count { font-size: 11px; color: var(--muted); font-weight: 600; }
+.zone-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 11px; }
+.zone-bar-label { width: 60px; color: var(--muted); flex-shrink: 0; }
+.zone-bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.zone-bar-fill  { height: 100%; background: var(--olive); border-radius: 4px; transition: width .3s; }
+.zone-bar-val   { width: 56px; text-align: right; color: var(--olive-dark); font-weight: 700; flex-shrink: 0; }
+
+/* FLAG LIST */
+.flag-list { max-height: 380px; overflow-y: auto; }
+.flag-item { display: grid; grid-template-columns: 80px 110px 1fr auto; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+.flag-item:last-child { border-bottom: none; }
+.flag-item .wk     { color: var(--muted); font-weight: 600; }
+.flag-item .store  { color: var(--text); font-weight: 700; }
+.flag-item .flags  { display: flex; flex-wrap: wrap; gap: 4px; }
+.flag-chip { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 2px 8px; font-size: 10px; font-weight: 600; color: var(--olive-dark); }
+.flag-chip.red    { background: #FBE6E3; border-color: #F2BBB3; color: #B23A2C; }
+.flag-chip.orange { background: #FCEFE0; border-color: #F2D2A8; color: #B26A1C; }
+.flag-chip.yellow { background: #FAF4D8; border-color: #ECD98C; color: #8A6B0E; }
+.flag-item .rev    { color: var(--olive-dark); font-weight: 700; font-size: 12px; text-align: right; }
+.empty-state { text-align: center; padding: 36px 20px; color: var(--muted); font-size: 13px; }
+.empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+
+/* STORE DETAIL */
+.detail-select-row { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+.detail-select-row label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
+.detail-chart-box { background: var(--bg); border-radius: 10px; padding: 14px; }
+.detail-chart-title { font-size: 12px; color: var(--olive-dark); font-weight: 700; margin-bottom: 8px; }
+.bar-wk { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 11px; }
+.bar-wk-label { width: 55px; color: var(--muted); font-weight: 600; flex-shrink: 0; }
+.bar-wk-track { flex: 1; height: 14px; background: white; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; position: relative; }
+.bar-wk-fill { height: 100%; background: var(--olive); transition: width .3s; }
+.bar-wk-fill.alt { background: var(--accent); }
+.bar-wk-val { width: 72px; text-align: right; font-weight: 700; color: var(--olive-dark); flex-shrink: 0; }
+
+/* LOADING / ERROR */
+.loading { text-align: center; padding: 80px 20px; color: var(--muted); }
+.spin { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--olive); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.err-msg { background: #FBE6E3; border: 1px solid #F2BBB3; color: #B23A2C; padding: 14px 18px; border-radius: 12px; margin: 16px 0; font-size: 13px; }
+
+/* FOOTER */
+.footer { text-align: center; padding: 20px; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <h1>📋 排班分析儀表板</h1>
+    <p>工時 × 營收 × 紅旗監測 ｜ 12 間門市</p>
+  </div>
+  <a class="header-back" href="hub.html">← 返回 hub</a>
+</div>
+
+<div class="container">
+
+  <!-- 載入區 -->
+  <div id="loadingBox" class="loading">
+    <div class="spin"></div>
+    <div style="margin-top:14px;font-size:13px;">載入排班資料中…</div>
+  </div>
+
+  <!-- 主內容(隱藏直到資料載入) -->
+  <div id="mainContent" style="display:none;">
+
+    <!-- KPI -->
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <!-- 控制面板 -->
+    <div class="controls">
+      <div class="controls-head">
+        <div class="controls-title">⚙️ 閾值控制(調整滑桿即時更新)</div>
+        <div class="controls-toggle">
+          <button class="toggle-btn active" id="modeWarn"  onclick="setMode('warn')">警示模式</button>
+          <button class="toggle-btn"        id="modeFilter" onclick="setMode('filter')">只看紅旗</button>
+        </div>
+      </div>
+
+      <div class="sliders">
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>平日單日工時上限</span>
+            <span class="slider-value"><span id="vWdHours">16</span> 小時</span>
+          </div>
+          <input class="slider-input" type="range" id="sWdHours" min="8" max="24" step="1" value="16">
+        </div>
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>假日單日工時上限</span>
+            <span class="slider-value"><span id="vWeHours">24</span> 小時</span>
+          </div>
+          <input class="slider-input" type="range" id="sWeHours" min="12" max="36" step="1" value="24">
+        </div>
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>週均 rev/h 下限</span>
+            <span class="slider-value">$<span id="vRph">500</span></span>
+          </div>
+          <input class="slider-input" type="range" id="sRph" min="200" max="1200" step="50" value="500">
+        </div>
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>週總營收下限</span>
+            <span class="slider-value">$<span id="vRev">50000</span></span>
+          </div>
+          <input class="slider-input" type="range" id="sRev" min="0" max="200000" step="10000" value="50000">
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <select id="filterWeek"></select>
+        <select id="filterZone">
+          <option value="">所有分區</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 店週熱力矩陣 -->
+    <div class="section">
+      <div class="section-title">
+        🌡️ 店週熱力矩陣
+        <span class="badge">著色 = 每工時營收</span>
+      </div>
+      <div class="heat-wrap">
+        <table class="heat-table" id="heatTable"></table>
+      </div>
+    </div>
+
+    <!-- 分區比較 -->
+    <div class="section">
+      <div class="section-title">🗺️ 分區比較</div>
+      <div class="zone-row" id="zoneRow"></div>
+    </div>
+
+    <!-- 紅旗清單 -->
+    <div class="section">
+      <div class="section-title">
+        🚩 紅旗清單
+        <span class="badge" id="flagCountBadge">— 項</span>
+      </div>
+      <div class="flag-list" id="flagList"></div>
+    </div>
+
+    <!-- 店單獨檢視 -->
+    <div class="section">
+      <div class="section-title">🔍 單店趨勢檢視</div>
+      <div class="detail-select-row">
+        <label>選擇門市:</label>
+        <select id="detailStore"></select>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-chart-box">
+          <div class="detail-chart-title">📊 週工時(小時)</div>
+          <div id="detailHoursBars"></div>
+        </div>
+        <div class="detail-chart-box">
+          <div class="detail-chart-title">💰 週營收(元)</div>
+          <div id="detailRevBars"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="errorBox"></div>
+
+</div>
+
+<div class="footer">資料來源: Google Apps Script ｜ fact_week_kpi 即時聚合</div>
+
+<script>
+// ============ 設定 ============
+const API_BASE = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
+
+// ============ 全局狀態 ============
+let DATA = { week_kpi: [], daily_sales: [], stores: [] };
+let mode = 'warn';
+let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000 };
+let filterWeek = '';
+let filterZone = '';
+
+// ============ JSONP 載入 ============
+function loadData() {
+  const cbName = 'cb_' + Date.now();
+  window[cbName] = function(res) {
+    delete window[cbName];
+    document.head.removeChild(scriptEl);
+    if (!res.ok) {
+      showError('API 回傳錯誤: ' + res.error);
+      return;
+    }
+    DATA = res;
+    initUI();
+  };
+  const scriptEl = document.createElement('script');
+  scriptEl.src = API_BASE + '?action=getWeekKpiData&callback=' + cbName;
+  scriptEl.onerror = () => showError('無法連到 API,請檢查網路或 GAS 部署');
+  document.head.appendChild(scriptEl);
+}
+
+function showError(msg) {
+  document.getElementById('loadingBox').style.display = 'none';
+  document.getElementById('errorBox').innerHTML = '<div class="err-msg">⚠️ ' + msg + '</div>';
+}
+
+// ============ UI 初始化 ============
+function initUI() {
+  document.getElementById('loadingBox').style.display = 'none';
+  document.getElementById('mainContent').style.display = 'block';
+
+  // 週下拉
+  const weeks = [...new Set(DATA.week_kpi.map(r => r.year_week))].sort();
+  const weekSel = document.getElementById('filterWeek');
+  weekSel.innerHTML = '<option value="">所有週(共 ' + weeks.length + ' 週)</option>'
+    + weeks.map(w => '<option value="' + w + '">' + w + '</option>').join('');
+
+  // 分區下拉(從 stores)
+  const zones = [...new Set(DATA.stores.map(s => s.zone).filter(z => z))];
+  const zoneSel = document.getElementById('filterZone');
+  zones.forEach(z => {
+    const opt = document.createElement('option');
+    opt.value = z; opt.textContent = z;
+    zoneSel.appendChild(opt);
+  });
+
+  // 店下拉
+  const storeSel = document.getElementById('detailStore');
+  DATA.stores.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.store_id; opt.textContent = s.store_id + ' ' + s.store_name;
+    storeSel.appendChild(opt);
+  });
+
+  // 綁定事件
+  bindSliders();
+  document.getElementById('filterWeek').addEventListener('change', e => { filterWeek = e.target.value; renderAll(); });
+  document.getElementById('filterZone').addEventListener('change', e => { filterZone = e.target.value; renderAll(); });
+  document.getElementById('detailStore').addEventListener('change', renderDetail);
+
+  renderAll();
+  renderDetail();
+}
+
+function bindSliders() {
+  const map = [
+    ['sWdHours', 'vWdHours', 'wdHours'],
+    ['sWeHours', 'vWeHours', 'weHours'],
+    ['sRph',     'vRph',     'rph'],
+    ['sRev',     'vRev',     'rev']
+  ];
+  map.forEach(([sid, vid, key]) => {
+    const s = document.getElementById(sid);
+    s.addEventListener('input', () => {
+      thresholds[key] = parseInt(s.value, 10);
+      document.getElementById(vid).textContent = key === 'rev'
+        ? thresholds[key].toLocaleString()
+        : thresholds[key];
+      renderAll();
+    });
+  });
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeWarn').classList.toggle('active', m === 'warn');
+  document.getElementById('modeFilter').classList.toggle('active', m === 'filter');
+  renderAll();
+}
+
+// ============ 紅旗判定(以滑桿閾值即時計算) ============
+function computeFlags(row) {
+  // 注意:row.flags 是後端原始判定(weekday_over_16 / weekend_over_24 / morning_solo / evening_solo / low_rev_per_hour 用固定值)
+  // 這裡用滑桿值「重新」判定
+  const flags = [];
+
+  // 平日工時超標 = 後端 weekday_over_16,但 16 是固定的。
+  // 為了讓滑桿真的影響,這裡用 row 的 weekday_hours 平均(週內最高天無法從聚合資料還原,
+  // 只能用週平均當代理。這是已知限制)
+  // 改用「週內平日平均」: weekday_hours / 5 工作天估算
+  const wdAvg = row.weekday_hours / 5;
+  if (wdAvg > thresholds.wdHours) flags.push({ k: 'wd_over', label: '平日工時過高', sev: 'red' });
+
+  const weAvg = row.weekend_hours / 2;
+  if (weAvg > thresholds.weHours) flags.push({ k: 'we_over', label: '假日工時過高', sev: 'red' });
+
+  if (row.rev_per_hour < thresholds.rph && row.total_hours > 0) {
+    flags.push({ k: 'low_rph', label: '人效偏低', sev: 'orange' });
+  }
+  if (row.total_revenue < thresholds.rev) {
+    flags.push({ k: 'low_rev', label: '營收偏低', sev: 'yellow' });
+  }
+
+  // 獨守紅旗(後端判定,直接套用)
+  if (row.flags && row.flags.indexOf('morning_solo') >= 0) {
+    flags.push({ k: 'morning_solo', label: '早班獨守', sev: 'orange' });
+  }
+  if (row.flags && row.flags.indexOf('evening_solo') >= 0) {
+    flags.push({ k: 'evening_solo', label: '晚班獨守', sev: 'orange' });
+  }
+
+  return flags;
+}
+
+function filteredRows() {
+  return DATA.week_kpi.filter(r => {
+    if (filterWeek && r.year_week !== filterWeek) return false;
+    if (filterZone && r.zone !== filterZone) return false;
+    return true;
+  });
+}
+
+// ============ 渲染 ============
+function renderAll() {
+  renderKPI();
+  renderHeatmap();
+  renderZones();
+  renderFlagList();
+}
+
+// --- KPI 卡 ---
+function renderKPI() {
+  const rows = filteredRows();
+  const totalHours = rows.reduce((s, r) => s + r.total_hours, 0);
+  const totalRev   = rows.reduce((s, r) => s + r.total_revenue, 0);
+  const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
+  const flaggedWeeks = rows.filter(r => computeFlags(r).length > 0).length;
+
+  const kpis = [
+    { label: '總工時', val: totalHours.toLocaleString(), sub: rows.length + ' 個 店×週' },
+    { label: '總營收', val: '$' + totalRev.toLocaleString(), sub: '所選範圍合計' },
+    { label: '平均 rev/h', val: '$' + avgRph.toLocaleString(), sub: '集團人效平均' },
+    { label: '紅旗 店×週', val: flaggedWeeks, sub: '需關注', alert: flaggedWeeks > 0 }
+  ];
+
+  document.getElementById('kpiRow').innerHTML = kpis.map(k =>
+    '<div class="kpi-card' + (k.alert ? ' alert' : '') + '">'
+    + '<div class="label">' + k.label + '</div>'
+    + '<div class="val">' + k.val + '</div>'
+    + '<div class="sub">' + k.sub + '</div>'
+    + '</div>'
+  ).join('');
+}
+
+// --- rev/h → 顏色 ---
+function rphToColor(rph) {
+  if (rph <= 0) return '#F5F5F5';
+  // 紅→橘→黃→淺綠→深綠
+  if (rph < 300)  return '#FBE6E3';
+  if (rph < 500)  return '#FCEFE0';
+  if (rph < 700)  return '#FAF4D8';
+  if (rph < 1000) return '#E8F4E0';
+  return '#CDE8C3';
+}
+
+// --- 熱力矩陣 ---
+function renderHeatmap() {
+  const rows = filteredRows();
+  if (rows.length === 0) {
+    document.getElementById('heatTable').innerHTML = '<tr><td class="empty-state"><div class="icon">🌫️</div>無符合條件的資料</td></tr>';
+    return;
+  }
+
+  const weeks = [...new Set(rows.map(r => r.year_week))].sort();
+  const storeIds = [...new Set(rows.map(r => r.store_id))].sort((a,b) => a - b);
+  const storeMeta = {};
+  DATA.stores.forEach(s => storeMeta[s.store_id] = s);
+
+  // 索引
+  const idx = {};
+  rows.forEach(r => { idx[r.year_week + '|' + r.store_id] = r; });
+
+  let html = '<thead><tr><th class="store-col">門市</th>';
+  weeks.forEach(w => html += '<th>' + w.replace('2026-', '') + '</th>');
+  html += '</tr></thead><tbody>';
+
+  storeIds.forEach(sid => {
+    const meta = storeMeta[sid] || { store_name: '?' };
+    html += '<tr><td class="store-col">' + sid + ' ' + meta.store_name + '<br><span style="font-size:10px;color:var(--muted);font-weight:500;">' + (meta.zone||'') + '</span></td>';
+    weeks.forEach(w => {
+      const r = idx[w + '|' + sid];
+      if (!r) { html += '<td>—</td>'; return; }
+      const flags = computeFlags(r);
+      if (mode === 'filter' && flags.length === 0) { html += '<td>—</td>'; return; }
+      const color = rphToColor(r.rev_per_hour);
+      const flagged = flags.length > 0;
+      html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + r.year_week + ' ' + meta.store_name + '&#10;營收 $' + r.total_revenue.toLocaleString() + '&#10;工時 ' + r.total_hours + 'h&#10;rev/h $' + r.rev_per_hour + (flags.length ? '&#10;旗: ' + flags.map(f=>f.label).join(', ') : '') + '">'
+        + (flagged ? '<div class="flag-dot">🚩</div>' : '')
+        + '<div class="rev">$' + Math.round(r.rev_per_hour) + '</div>'
+        + '<div class="hrs">' + r.total_hours + 'h</div>'
+        + '</div></td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  document.getElementById('heatTable').innerHTML = html;
+}
+
+// --- 分區比較 ---
+function renderZones() {
+  const rows = filteredRows();
+  const zoneAgg = {};
+  rows.forEach(r => {
+    const z = r.zone || '未分區';
+    if (!zoneAgg[z]) zoneAgg[z] = { hours: 0, rev: 0, count: 0, stores: new Set() };
+    zoneAgg[z].hours += r.total_hours;
+    zoneAgg[z].rev   += r.total_revenue;
+    zoneAgg[z].count += 1;
+    zoneAgg[z].stores.add(r.store_id);
+  });
+
+  const zones = Object.keys(zoneAgg);
+  if (zones.length === 0) {
+    document.getElementById('zoneRow').innerHTML = '<div class="empty-state">無資料</div>';
+    return;
+  }
+
+  const maxHours = Math.max(...zones.map(z => zoneAgg[z].hours));
+  const maxRev   = Math.max(...zones.map(z => zoneAgg[z].rev));
+  const maxRph   = Math.max(...zones.map(z => zoneAgg[z].hours > 0 ? zoneAgg[z].rev / zoneAgg[z].hours : 0));
+
+  document.getElementById('zoneRow').innerHTML = zones.map(z => {
+    const a = zoneAgg[z];
+    const rph = a.hours > 0 ? Math.round(a.rev / a.hours) : 0;
+    return '<div class="zone-card">'
+      + '<div class="name">' + z + '<span class="count">' + a.stores.size + ' 店・' + a.count + ' 週</span></div>'
+      + barRow('工時', a.hours.toLocaleString() + 'h', a.hours / (maxHours||1) * 100)
+      + barRow('營收', '$' + (a.rev/1000).toFixed(0) + 'k', a.rev / (maxRev||1) * 100, true)
+      + barRow('rev/h', '$' + rph.toLocaleString(), rph / (maxRph||1) * 100)
+      + '</div>';
+  }).join('');
+}
+function barRow(label, val, pct, alt) {
+  return '<div class="zone-bar-row">'
+    + '<div class="zone-bar-label">' + label + '</div>'
+    + '<div class="zone-bar-track"><div class="zone-bar-fill' + (alt ? ' alt' : '') + '" style="width:' + Math.min(100, pct) + '%;background:' + (alt ? 'var(--accent)' : 'var(--olive)') + ';"></div></div>'
+    + '<div class="zone-bar-val">' + val + '</div>'
+    + '</div>';
+}
+
+// --- 紅旗清單 ---
+function renderFlagList() {
+  const rows = filteredRows();
+  const items = [];
+  rows.forEach(r => {
+    const flags = computeFlags(r);
+    if (flags.length > 0) items.push({ row: r, flags });
+  });
+  // 排序:嚴重(紅 > 橘 > 黃)優先,週新到舊
+  const sevRank = { red: 3, orange: 2, yellow: 1 };
+  items.sort((a,b) => {
+    const sa = Math.max(...a.flags.map(f => sevRank[f.sev]));
+    const sb = Math.max(...b.flags.map(f => sevRank[f.sev]));
+    if (sb !== sa) return sb - sa;
+    return b.row.week_start.localeCompare(a.row.week_start);
+  });
+
+  document.getElementById('flagCountBadge').textContent = items.length + ' 項';
+
+  if (items.length === 0) {
+    document.getElementById('flagList').innerHTML = '<div class="empty-state"><div class="icon">✅</div>當前閾值下無紅旗</div>';
+    return;
+  }
+  document.getElementById('flagList').innerHTML = items.map(it =>
+    '<div class="flag-item">'
+    + '<div class="wk">' + it.row.year_week + '</div>'
+    + '<div class="store">' + it.row.store_id + ' ' + it.row.store_name + '</div>'
+    + '<div class="flags">' + it.flags.map(f => '<span class="flag-chip ' + f.sev + '">' + f.label + '</span>').join('') + '</div>'
+    + '<div class="rev">$' + it.row.total_revenue.toLocaleString() + ' · ' + it.row.total_hours + 'h · rev/h $' + it.row.rev_per_hour + '</div>'
+    + '</div>'
+  ).join('');
+}
+
+// --- 單店趨勢 ---
+function renderDetail() {
+  const sid = parseInt(document.getElementById('detailStore').value, 10);
+  if (isNaN(sid)) return;
+  const rows = DATA.week_kpi.filter(r => r.store_id === sid)
+    .sort((a,b) => a.week_start.localeCompare(b.week_start));
+
+  if (rows.length === 0) {
+    document.getElementById('detailHoursBars').innerHTML = '<div class="empty-state">無資料</div>';
+    document.getElementById('detailRevBars').innerHTML = '';
+    return;
+  }
+
+  const maxH = Math.max(...rows.map(r => r.total_hours));
+  const maxR = Math.max(...rows.map(r => r.total_revenue));
+
+  document.getElementById('detailHoursBars').innerHTML = rows.map(r =>
+    '<div class="bar-wk">'
+    + '<div class="bar-wk-label">' + r.year_week.replace('2026-', '') + '</div>'
+    + '<div class="bar-wk-track"><div class="bar-wk-fill" style="width:' + (r.total_hours / maxH * 100) + '%"></div></div>'
+    + '<div class="bar-wk-val">' + r.total_hours + 'h</div>'
+    + '</div>'
+  ).join('');
+
+  document.getElementById('detailRevBars').innerHTML = rows.map(r =>
+    '<div class="bar-wk">'
+    + '<div class="bar-wk-label">' + r.year_week.replace('2026-', '') + '</div>'
+    + '<div class="bar-wk-track"><div class="bar-wk-fill alt" style="width:' + (r.total_revenue / maxR * 100) + '%"></div></div>'
+    + '<div class="bar-wk-val">$' + (r.total_revenue/1000).toFixed(0) + 'k</div>'
+    + '</div>'
+  ).join('');
+}
+
+// ============ 啟動 ============
+loadData();
+</script>
+</body>
+</html>
