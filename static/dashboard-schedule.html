@@ -240,6 +240,20 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
           </div>
           <input class="slider-input" type="range" id="sRev" min="0" max="200000" step="10000" value="50000">
         </div>
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>日 平日 rev/h 偏低</span>
+            <span class="slider-value">$<span id="vDayWd">500</span></span>
+          </div>
+          <input class="slider-input" type="range" id="sDayWd" min="200" max="1000" step="50" value="500">
+        </div>
+        <div class="slider-block">
+          <div class="slider-label">
+            <span>日 假日 rev/h 偏低</span>
+            <span class="slider-value">$<span id="vDayWe">1000</span></span>
+          </div>
+          <input class="slider-input" type="range" id="sDayWe" min="400" max="2000" step="100" value="1000">
+        </div>
       </div>
 
       <div class="filter-row">
@@ -265,15 +279,6 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
     <div class="section">
       <div class="section-title">🗺️ 分區比較</div>
       <div class="zone-row" id="zoneRow"></div>
-    </div>
-
-    <!-- 紅旗清單 -->
-    <div class="section">
-      <div class="section-title">
-        🚩 紅旗清單
-        <span class="badge" id="flagCountBadge">— 項</span>
-      </div>
-      <div class="flag-list" id="flagList"></div>
     </div>
 
     <!-- 店單獨檢視 -->
@@ -328,6 +333,15 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       </div>
     </div>
 
+    <!-- 紅旗清單（移到最下方） -->
+    <div class="section">
+      <div class="section-title">
+        🚩 紅旗清單
+        <span class="badge" id="flagCountBadge">— 項</span>
+      </div>
+      <div class="flag-list" id="flagList"></div>
+    </div>
+
   </div>
 
   <div id="errorBox"></div>
@@ -343,7 +357,7 @@ const API_BASE = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF
 // ============ 全局狀態 ============
 let DATA = { week_kpi: [], daily_sales: [], stores: [] };
 let mode = 'warn';
-let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000 };
+let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
 let filterWeek = '';
 let filterZone = '';
 
@@ -451,7 +465,9 @@ function bindSliders() {
     ['sWdHours', 'vWdHours', 'wdHours'],
     ['sWeHours', 'vWeHours', 'weHours'],
     ['sRph',     'vRph',     'rph'],
-    ['sRev',     'vRev',     'rev']
+    ['sRev',     'vRev',     'rev'],
+    ['sDayWd',   'vDayWd',   'dayWd'],
+    ['sDayWe',   'vDayWe',   'dayWe']
   ];
   map.forEach(([sid, vid, key]) => {
     const s = document.getElementById(sid);
@@ -775,17 +791,43 @@ function renderDailyTab() {
   if (dailyTab === 'table')    renderDailyTable();
 }
 
+// === 三階人效判定:平日/假日雙閾值 ===
+// 回傳 'good' / 'normal' / 'low' / 'none'
+function dailyPerfTier(d) {
+  if (d.hours === 0 || d.rev_per_hour === 0) return 'none';
+  const isOff = d.is_weekend || d.is_holiday;
+  const low  = isOff ? thresholds.dayWe : thresholds.dayWd;
+  const good = isOff ? 1500 : 750;  // 優秀線寫死(暫不開放滑桿)
+  if (d.rev_per_hour < low)  return 'low';
+  if (d.rev_per_hour > good) return 'good';
+  return 'normal';
+}
+function tierColor(tier) {
+  if (tier === 'good')   return '#CDE8C3';  // 深綠
+  if (tier === 'normal') return '#FAF4D8';  // 黃
+  if (tier === 'low')    return '#FBE6E3';  // 紅
+  return '#F5F5F5';                          // 灰(無資料)
+}
+function tierBadge(tier) {
+  if (tier === 'good')   return '🟢';
+  if (tier === 'normal') return '🟡';
+  if (tier === 'low')    return '🚩';
+  return '—';
+}
+
 // === 日級異常判定 ===
 function dailyFlags(d, baseline) {
   const flags = [];
   if (d.hours === 0 && d.revenue === 0) return flags; // 整天空白
 
-  // 紅:rev/h 過低(<閾值)
-  if (d.hours > 0 && d.rev_per_hour < thresholds.rph) {
-    flags.push({ sev: 'red', label: 'rev/h↓', reason: '每工時營收 $' + d.rev_per_hour + ' 低於閾值 $' + thresholds.rph });
+  // 紅:rev/h 三階(用平日/假日雙閾值)
+  const tier = dailyPerfTier(d);
+  const isOff = d.is_weekend || d.is_holiday;
+  const lowLine = isOff ? thresholds.dayWe : thresholds.dayWd;
+  if (tier === 'low') {
+    flags.push({ sev: 'red', label: 'rev/h↓', reason: (isOff ? '假日' : '平日') + 'rev/h $' + d.rev_per_hour + ' < 偏低線 $' + lowLine });
   }
   // 橘:工時過高
-  const isOff = d.is_weekend || d.is_holiday;
   if (!isOff && d.hours > thresholds.wdHours) {
     flags.push({ sev: 'orange', label: '工時↑', reason: '平日工時 ' + d.hours + 'h,超過閾值 ' + thresholds.wdHours + 'h' });
   }
@@ -912,9 +954,12 @@ function renderDailyCalendar() {
           cells += '<div class="cal-cell" style="background:#F5F5F5;"><div class="day-num">' + dayIdx + '</div></div>';
         } else {
           const flags = dailyFlags(r, dailyData.baseline);
-          const color = rphToColor(r.rev_per_hour);
+          const tier = dailyPerfTier(r);
+          const color = tierColor(tier);
           const flagged = flags.length > 0;
-          const tip = dStr + '\n工時 ' + r.hours + 'h\n營收 $' + Math.round(r.revenue).toLocaleString() + '\nrev/h $' + r.rev_per_hour + (flags.length ? '\n異常: ' + flags.map(f=>f.label+'='+f.reason).join('; ') : '');
+          const isOff = r.is_weekend || r.is_holiday;
+          const tierLabel = tier === 'good' ? '優秀' : (tier === 'normal' ? '正常' : (tier === 'low' ? '偏低' : '—'));
+          const tip = dStr + (isOff ? ' (假日)' : ' (平日)') + '\n等級 ' + tierLabel + '\n工時 ' + r.hours + 'h\n營收 $' + Math.round(r.revenue).toLocaleString() + '\nrev/h $' + r.rev_per_hour + (flags.length ? '\n異常: ' + flags.map(f=>f.label+'='+f.reason).join('; ') : '');
           cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + tip.replace(/"/g,'&quot;') + '">'
             + '<div class="day-num">' + dayIdx + '</div>'
             + '<div class="day-val">$' + (r.rev_per_hour > 0 ? Math.round(r.rev_per_hour) : '—') + '</div>'
@@ -928,7 +973,7 @@ function renderDailyCalendar() {
   }
 
   document.getElementById('dailyTabCalendar').innerHTML =
-    '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">顏色 = 每工時營收(深綠最佳, 紅最差) · 紅框 = 異常日 · hover 看詳情</div>'
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">🟢 優秀(平日>$750, 假日>$1500) ・ 🟡 正常 ・ 🚩 偏低(平日<$' + thresholds.dayWd + ', 假日<$' + thresholds.dayWe + ') ・ hover 看詳情</div>'
     + '<div class="cal-grid">' + cells + '</div>';
 }
 
@@ -943,13 +988,16 @@ function renderDailyTable() {
   const dayChar = ['日','一','二','三','四','五','六'];
 
   let html = '<table class="daily-table"><thead><tr>'
-    + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th>'
+    + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th>'
     + '</tr></thead><tbody>';
 
   rows.forEach(r => {
     const flags = dailyFlags(r, baseline);
     const flagged = flags.length > 0;
     const isOff = r.is_weekend || r.is_holiday;
+    const tier = dailyPerfTier(r);
+    const tierLabel = tier === 'good' ? '🟢 優秀' : (tier === 'normal' ? '🟡 正常' : (tier === 'low' ? '🚩 偏低' : '—'));
+    const rphBg = tier === 'none' ? '' : ('background:' + tierColor(tier) + ';');
 
     let dayCellClass = '';
     if (r.is_holiday) dayCellClass = 'ho';
@@ -968,7 +1016,8 @@ function renderDailyTable() {
       + '<td class="' + dayCellClass + '">' + wkday + '</td>'
       + '<td class="num">' + (r.hours > 0 ? r.hours : '—') + '</td>'
       + '<td class="num">' + (r.revenue > 0 ? '$' + Math.round(r.revenue).toLocaleString() : '—') + '</td>'
-      + '<td class="num">' + (r.rev_per_hour > 0 ? '$' + r.rev_per_hour : '—') + '</td>'
+      + '<td class="num" style="' + rphBg + '">' + (r.rev_per_hour > 0 ? '$' + r.rev_per_hour : '—') + '</td>'
+      + '<td>' + tierLabel + '</td>'
       + '<td class="num">' + (r.rev_per_head > 0 ? '$' + Math.round(r.rev_per_head) : '—') + '</td>'
       + '<td class="num ' + hCls + '">' + (r.hours > 0 ? (hDelta >= 0 ? '+' : '') + hDelta.toFixed(0) + '%' : '—') + '</td>'
       + '<td class="num ' + rCls + '">' + (r.revenue > 0 ? (rDelta >= 0 ? '+' : '') + rDelta.toFixed(0) + '%' : '—') + '</td>'
