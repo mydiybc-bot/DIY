@@ -10,6 +10,7 @@
   --accent: #F4A620; --accent-light: #FDD99B;
   --green: #52B788; --blue: #4A9BB8;
   --olive: #6B5D3F; --olive-light: #8B7D5F;
+  --gold: #B8860B; --gold-light: #DDB246;
   --bg: #FFF8F6; --card: #FFFFFF; --text: #2D1A14; --muted: #8B6A63;
   --border: #F0D9D5; --hover: #FFF0ED;
 }
@@ -62,6 +63,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .hub-card.member::before { background: linear-gradient(90deg, var(--green), #7ECFAB); }
 .hub-card.pnl::before    { background: linear-gradient(90deg, var(--blue), #6BB8D4); }
 .hub-card.schedule::before { background: linear-gradient(90deg, var(--olive), var(--olive-light)); }
+.hub-card.budget::before   { background: linear-gradient(90deg, var(--gold), var(--gold-light)); }
 
 .card-icon { font-size: 32px; margin-bottom: 12px; line-height: 1; }
 .card-title { font-size: 17px; font-weight: 800; color: var(--primary-dark); margin-bottom: 6px; }
@@ -71,6 +73,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .hub-card.member .card-stat { color: #2D7A55; }
 .hub-card.pnl .card-stat    { color: #1E6A88; }
 .hub-card.schedule .card-stat { color: #6B5D3F; }
+.hub-card.budget .card-stat   { color: #8B6508; }
 .card-stat-label { font-size: 11px; color: var(--muted); font-weight: 500; }
 .card-arrow { position: absolute; bottom: 18px; right: 20px; font-size: 16px; color: var(--border); transition: color .15s, transform .15s; }
 .hub-card:hover .card-arrow { color: var(--primary-light); transform: translateX(3px); }
@@ -149,7 +152,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 <div class="header">
   <div class="header-left">
     <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
-    <p>整合 4 個營運系統 ｜ 12 間門市</p>
+    <p>整合 6 個營運系統 ｜ 12 間門市</p>
   </div>
   <div class="header-badge" id="updateBadge">載入中…</div>
 </div>
@@ -212,6 +215,16 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <div class="card-arrow">→</div>
     </div>
 
+    <!-- 2026 預算達成 -->
+    <div class="hub-card budget" onclick="goTo('budget-2026.html')">
+      <div class="card-icon">📈</div>
+      <div class="card-title">2026 預算達成</div>
+      <div class="card-desc">銷貨達成・淨利率<br>12 店預算追蹤</div>
+      <div class="card-stat" id="statBudget"><span class="spin-sm"></span></div>
+      <div class="card-stat-label" id="statBudgetLabel">已過月銷貨達成</div>
+      <div class="card-arrow">→</div>
+    </div>
+
   </div>
 </div>
 
@@ -224,6 +237,7 @@ const PWD_B = 'diybc2026ss';
 const REVIEWS_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
 const MEMBER_SHEET  = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const SCHEDULE_API  = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
+const BUDGET_API    = 'https://script.google.com/macros/s/AKfycbyF6tShTC6O4dpdDTcBSurABM_g_EIE6jAuhq7a4l10fsvk2BqdthJ-u4CTp3Z4yw4T/exec';
 
 // ── 密碼邏輯 ───────────────────────────────────────────
 function checkPwdA() {
@@ -367,6 +381,9 @@ async function loadStats() {
 
   // ── 排班:本週總工時 vs 上週 ±% ──
   loadScheduleStat();
+
+  // ── 2026 預算:已過月銷貨達成率 ──
+  loadBudgetStat();
 }
 
 function loadScheduleStat() {
@@ -408,6 +425,43 @@ function loadScheduleStat() {
   scriptEl.onerror = () => {
     document.getElementById('statSchedule').textContent = '—';
     document.getElementById('statScheduleLabel').textContent = '無法取得';
+  };
+  document.head.appendChild(scriptEl);
+}
+
+function loadBudgetStat() {
+  const cbName = 'budget_cb_' + Date.now();
+  window[cbName] = function(res) {
+    delete window[cbName];
+    try { document.head.removeChild(scriptEl); } catch(e) {}
+    if (!res || res.error) {
+      document.getElementById('statBudget').textContent = '—';
+      document.getElementById('statBudgetLabel').textContent = '無法取得';
+      return;
+    }
+    const pct = (res.revenue && typeof res.revenue.achievement_pct === 'number') ? res.revenue.achievement_pct : null;
+    const months = res.active_months || [];
+    if (pct === null || !res.actual_data_available) {
+      // 預算 OK 但實際還沒匯入
+      document.getElementById('statBudget').textContent = '—';
+      document.getElementById('statBudgetLabel').textContent = '實際數待匯入';
+      return;
+    }
+    document.getElementById('statBudget').textContent = pct.toFixed(1) + '%';
+    if (months.length > 0) {
+      const range = months.length === 1
+        ? months[0]
+        : months[0].slice(5) + '~' + months[months.length - 1].slice(5);
+      document.getElementById('statBudgetLabel').textContent = range + ' 銷貨達成';
+    } else {
+      document.getElementById('statBudgetLabel').textContent = '已過月銷貨達成';
+    }
+  };
+  const scriptEl = document.createElement('script');
+  scriptEl.src = BUDGET_API + '?action=get_summary&callback=' + cbName + '&denominator=passed';
+  scriptEl.onerror = () => {
+    document.getElementById('statBudget').textContent = '—';
+    document.getElementById('statBudgetLabel').textContent = '無法取得';
   };
   document.head.appendChild(scriptEl);
 }
