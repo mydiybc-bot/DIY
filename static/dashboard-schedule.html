@@ -929,6 +929,20 @@ function renderDailyTrend() {
 
 // === Tab B: 日曆熱力圖 ===
 function renderDailyCalendar() {
+  try {
+    _renderDailyCalendarImpl();
+  } catch(err) {
+    console.error('renderDailyCalendar error:', err);
+    document.getElementById('dailyTabCalendar').innerHTML =
+      '<div class="empty-state"><div class="icon">⚠️</div>'
+      + '日曆渲染失敗:<br><code style="font-size:11px;color:#B23A2C;">' + (err && err.message ? err.message : String(err)) + '</code>'
+      + '<br><br>請開 F12 → Console 看完整錯誤,截圖回報</div>';
+  }
+}
+
+function _renderDailyCalendarImpl() {
+  // 重置 tooltip 資料表
+  window._calTipMap = {};
   const rows = dailyData.daily;
   if (rows.length === 0) {
     document.getElementById('dailyTabCalendar').innerHTML = '<div class="empty-state"><div class="icon">🌫️</div>該月無資料</div>';
@@ -981,18 +995,14 @@ function renderDailyCalendar() {
           const revShort = r.revenue > 0
             ? (r.revenue >= 10000 ? '$' + (r.revenue/10000).toFixed(1) + 'w' : '$' + Math.round(r.revenue).toLocaleString())
             : '—';
-          // tooltip 資料用 data-* 儲存,JSON 字串
-          const tipData = {
-            date: dStr,
-            isOff: isOff,
-            tier: tier,
-            hours: r.hours,
-            revenue: r.revenue,
-            rph: r.rev_per_hour,
+          // tooltip 資料存到全域 Map,卡片只放 key,避免引號/特殊字元爆 HTML
+          window._calTipMap[dStr] = {
+            date: dStr, isOff: isOff, tier: tier,
+            hours: r.hours, revenue: r.revenue, rph: r.rev_per_hour,
             employees: (r.employees || []).map(e => ({name: e.name, hours: e.hours, shift: e.shift})),
             flags: flags.map(f => ({label: f.label, reason: f.reason}))
           };
-          cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip=\'' + JSON.stringify(tipData).replace(/'/g, '&#39;') + '\'>'
+          cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip-key="' + dStr + '">'
             + '<div class="day-num">' + dayIdx + (flagged ? ' <span style="color:var(--flag-red);font-size:10px;">🚩</span>' : '') + '</div>'
             + '<div class="cell-hrs">⏱ ' + (r.hours > 0 ? r.hours + 'h' : '—') + '</div>'
             + '<div class="cell-rev">💰 ' + revShort + '</div>'
@@ -1018,13 +1028,12 @@ function renderDailyCalendar() {
 function bindCalendarTooltip() {
   const tt = document.getElementById('calTooltip');
   if (!tt) return;
-  const cells = document.querySelectorAll('#dailyTabCalendar .cal-cell[data-tip]');
+  const cells = document.querySelectorAll('#dailyTabCalendar .cal-cell[data-tip-key]');
   cells.forEach(cell => {
     cell.addEventListener('mouseenter', e => {
-      const raw = cell.getAttribute('data-tip');
-      if (!raw) return;
-      let data;
-      try { data = JSON.parse(raw.replace(/&#39;/g, "'")); } catch(err) { return; }
+      const key = cell.getAttribute('data-tip-key');
+      const data = window._calTipMap ? window._calTipMap[key] : null;
+      if (!data) return;
       tt.innerHTML = buildTooltipHtml(data);
       tt.classList.add('show');
       positionTooltip(tt, e);
