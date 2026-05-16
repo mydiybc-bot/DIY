@@ -142,16 +142,32 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .trend-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 
 /* Tab B: 日曆熱力圖 */
-.cal-wrap { background: var(--bg); border-radius: 10px; padding: 14px; }
+.cal-wrap { background: var(--bg); border-radius: 10px; padding: 14px; position: relative; }
 .cal-grid { display: grid; grid-template-columns: 30px repeat(7, 1fr); gap: 4px; }
-.cal-cell { aspect-ratio: 1.4 / 1; min-height: 40px; border-radius: 4px; padding: 4px 5px; font-size: 10px; cursor: pointer; position: relative; transition: transform .12s, box-shadow .12s; }
+.cal-cell { aspect-ratio: 1 / 1.05; min-height: 78px; border-radius: 6px; padding: 5px 6px; font-size: 10px; cursor: pointer; position: relative; transition: transform .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 2px; }
 .cal-cell:hover { transform: scale(1.06); box-shadow: 0 3px 10px rgba(0,0,0,.13); z-index: 2; }
 .cal-cell.empty { background: transparent; cursor: default; }
 .cal-cell.flagged { box-shadow: inset 0 0 0 2px var(--flag-red); }
-.cal-cell .day-num { font-weight: 800; color: var(--text); font-size: 12px; line-height: 1; }
-.cal-cell .day-val { font-size: 10px; color: var(--muted); margin-top: 1px; line-height: 1.1; }
+.cal-cell .day-num { font-weight: 800; color: var(--text); font-size: 13px; line-height: 1; }
+.cal-cell .cell-hrs { font-size: 10px; color: var(--text); line-height: 1.1; opacity: 0.85; }
+.cal-cell .cell-rev { font-size: 10px; color: var(--text); line-height: 1.1; opacity: 0.85; }
+.cal-cell .cell-rph { display: inline-block; align-self: flex-start; font-size: 11px; font-weight: 800; padding: 1px 6px; border-radius: 4px; line-height: 1.3; margin-top: auto; }
+.cal-cell .cell-rph.good   { background: #2E7D5B; color: #FFFFFF; }
+.cal-cell .cell-rph.normal { background: #B8861C; color: #FFFFFF; }
+.cal-cell .cell-rph.low    { background: #B23A2C; color: #FFFFFF; }
+.cal-cell .cell-rph.none   { background: rgba(255,255,255,.6); color: var(--muted); }
 .cal-week-hdr { font-size: 11px; color: var(--muted); font-weight: 700; text-align: center; padding: 4px 0; }
-.cal-week-num { font-size: 10px; color: var(--muted); font-weight: 600; text-align: right; padding-right: 4px; padding-top: 12px; }
+.cal-week-num { font-size: 10px; color: var(--muted); font-weight: 600; text-align: right; padding-right: 4px; padding-top: 32px; }
+
+/* Tab B 自訂 tooltip(取代醜的 native title) */
+.cal-tooltip { position: fixed; z-index: 9999; background: rgba(255,255,255,.98); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 12px 14px; font-size: 12px; line-height: 1.55; color: var(--text); max-width: 320px; min-width: 220px; pointer-events: none; display: none; }
+.cal-tooltip.show { display: block; }
+.cal-tooltip .tt-title { font-weight: 800; font-size: 13px; color: var(--olive-dark); margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+.cal-tooltip .tt-sect-title { font-weight: 700; color: var(--olive); font-size: 11px; margin-top: 8px; margin-bottom: 3px; }
+.cal-tooltip .tt-emp-row { padding: 2px 0; font-size: 11.5px; color: var(--text); font-variant-numeric: tabular-nums; }
+.cal-tooltip .tt-emp-row .tt-emp-shift { color: var(--muted); margin-left: 4px; font-size: 11px; }
+.cal-tooltip .tt-flag { padding: 4px 8px; background: #FBE6E3; border-left: 3px solid var(--flag-red); border-radius: 3px; font-size: 11px; color: #8B2D1F; margin-top: 4px; }
+.cal-tooltip .tt-empty { color: var(--muted); font-style: italic; font-size: 11px; }
 
 /* Tab C: 月份表格 */
 .daily-table-wrap { overflow-x: auto; }
@@ -396,7 +412,7 @@ function weekRangeStr(weekStart) {
 }
 // "2026-W14" + week_start → "W14 3/30-4/5"
 function weekLabel(yearWeek, weekStart) {
-  return yearWeek.replace('2026-', '') + ' ' + weekRangeStr(weekStart);
+  return yearWeek.replace(/^\d{4}-/, '') + ' ' + weekRangeStr(weekStart);
 }
 
 // ============ UI 初始化 ============
@@ -444,8 +460,9 @@ function initUI() {
     opt.value = m; opt.textContent = m;
     dailyMonthSel.appendChild(opt);
   });
-  // 預設選 4 月(因為班表只到 4 月)
-  if (months.indexOf('2026-04') >= 0) dailyMonthSel.value = '2026-04';
+  // 預設選最新月(自動跟隨資料,跨年也適用)
+  // months 已 sort().reverse(),所以 [0] 就是最新月
+  if (months.length > 0) dailyMonthSel.value = months[0];
 
   // 綁定事件
   bindSliders();
@@ -592,7 +609,7 @@ function renderHeatmap() {
   rows.forEach(r => { idx[r.year_week + '|' + r.store_id] = r; wkStart[r.year_week] = r.week_start; });
 
   let html = '<thead><tr><th class="store-col">門市</th>';
-  weeks.forEach(w => html += '<th><div>' + w.replace('2026-', '') + '</div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>');
+  weeks.forEach(w => html += '<th><div>' + w.replace(/^\d{4}-/, '') + '</div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>');
   html += '</tr></thead><tbody>';
 
   storeIds.forEach(sid => {
@@ -710,7 +727,7 @@ function renderDetail() {
 
   document.getElementById('detailHoursBars').innerHTML = rows.map(r =>
     '<div class="bar-wk">'
-    + '<div class="bar-wk-label">' + r.year_week.replace('2026-', '') + '</div>'
+    + '<div class="bar-wk-label">' + r.year_week.replace(/^\d{4}-/, '') + '</div>'
     + '<div class="bar-wk-track"><div class="bar-wk-fill" style="width:' + (r.total_hours / maxH * 100) + '%"></div></div>'
     + '<div class="bar-wk-val">' + r.total_hours + 'h</div>'
     + '</div>'
@@ -718,7 +735,7 @@ function renderDetail() {
 
   document.getElementById('detailRevBars').innerHTML = rows.map(r =>
     '<div class="bar-wk">'
-    + '<div class="bar-wk-label">' + r.year_week.replace('2026-', '') + '</div>'
+    + '<div class="bar-wk-label">' + r.year_week.replace(/^\d{4}-/, '') + '</div>'
     + '<div class="bar-wk-track"><div class="bar-wk-fill alt" style="width:' + (r.total_revenue / maxR * 100) + '%"></div></div>'
     + '<div class="bar-wk-val">$' + (r.total_revenue/1000).toFixed(0) + 'k</div>'
     + '</div>'
@@ -951,19 +968,35 @@ function renderDailyCalendar() {
         const dStr = ym + '-' + String(dayIdx).padStart(2,'0');
         const r = byDate[dStr];
         if (!r) {
-          cells += '<div class="cal-cell" style="background:#F5F5F5;"><div class="day-num">' + dayIdx + '</div></div>';
+          cells += '<div class="cal-cell" style="background:#F5F5F5;" data-empty="1"><div class="day-num">' + dayIdx + '</div></div>';
         } else {
           const flags = dailyFlags(r, dailyData.baseline);
           const tier = dailyPerfTier(r);
           const color = tierColor(tier);
           const flagged = flags.length > 0;
           const isOff = r.is_weekend || r.is_holiday;
-          const tierLabel = tier === 'good' ? '優秀' : (tier === 'normal' ? '正常' : (tier === 'low' ? '偏低' : '—'));
-          const tip = dStr + (isOff ? ' (假日)' : ' (平日)') + '\n等級 ' + tierLabel + '\n工時 ' + r.hours + 'h\n營收 $' + Math.round(r.revenue).toLocaleString() + '\nrev/h $' + r.rev_per_hour + (flags.length ? '\n異常: ' + flags.map(f=>f.label+'='+f.reason).join('; ') : '');
-          cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + tip.replace(/"/g,'&quot;') + '">'
-            + '<div class="day-num">' + dayIdx + '</div>'
-            + '<div class="day-val">$' + (r.rev_per_hour > 0 ? Math.round(r.rev_per_hour) : '—') + '</div>'
-            + (flagged ? '<div style="position:absolute;top:1px;right:3px;font-size:9px;">🚩</div>' : '')
+          // 4 行卡片內容:日期 / 工時 / 營收 / rev/h(顏色標)
+          const rphCls = (tier === 'good' || tier === 'normal' || tier === 'low') ? tier : 'none';
+          const rphTxt = r.rev_per_hour > 0 ? '$' + Math.round(r.rev_per_hour) : '—';
+          const revShort = r.revenue > 0
+            ? (r.revenue >= 10000 ? '$' + (r.revenue/10000).toFixed(1) + 'w' : '$' + Math.round(r.revenue).toLocaleString())
+            : '—';
+          // tooltip 資料用 data-* 儲存,JSON 字串
+          const tipData = {
+            date: dStr,
+            isOff: isOff,
+            tier: tier,
+            hours: r.hours,
+            revenue: r.revenue,
+            rph: r.rev_per_hour,
+            employees: (r.employees || []).map(e => ({name: e.name, hours: e.hours, shift: e.shift})),
+            flags: flags.map(f => ({label: f.label, reason: f.reason}))
+          };
+          cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip=\'' + JSON.stringify(tipData).replace(/'/g, '&#39;') + '\'>'
+            + '<div class="day-num">' + dayIdx + (flagged ? ' <span style="color:var(--flag-red);font-size:10px;">🚩</span>' : '') + '</div>'
+            + '<div class="cell-hrs">⏱ ' + (r.hours > 0 ? r.hours + 'h' : '—') + '</div>'
+            + '<div class="cell-rev">💰 ' + revShort + '</div>'
+            + '<div class="cell-rph ' + rphCls + '">' + rphTxt + '/h</div>'
             + '</div>';
         }
         dayIdx++;
@@ -973,8 +1006,71 @@ function renderDailyCalendar() {
   }
 
   document.getElementById('dailyTabCalendar').innerHTML =
-    '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">🟢 優秀(平日>$750, 假日>$1500) ・ 🟡 正常 ・ 🚩 偏低(平日<$' + thresholds.dayWd + ', 假日<$' + thresholds.dayWe + ') ・ hover 看詳情</div>'
-    + '<div class="cal-grid">' + cells + '</div>';
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:10px;">🟢 優秀(平日>$750, 假日>$1500) ・ 🟡 正常 ・ 🚩 偏低(平日<$' + thresholds.dayWd + ', 假日<$' + thresholds.dayWe + ') ・ hover 看員工班表</div>'
+    + '<div class="cal-grid">' + cells + '</div>'
+    + '<div id="calTooltip" class="cal-tooltip"></div>';
+
+  // 綁定 hover tooltip
+  bindCalendarTooltip();
+}
+
+// === Tab B: 自訂 tooltip 邏輯 ===
+function bindCalendarTooltip() {
+  const tt = document.getElementById('calTooltip');
+  if (!tt) return;
+  const cells = document.querySelectorAll('#dailyTabCalendar .cal-cell[data-tip]');
+  cells.forEach(cell => {
+    cell.addEventListener('mouseenter', e => {
+      const raw = cell.getAttribute('data-tip');
+      if (!raw) return;
+      let data;
+      try { data = JSON.parse(raw.replace(/&#39;/g, "'")); } catch(err) { return; }
+      tt.innerHTML = buildTooltipHtml(data);
+      tt.classList.add('show');
+      positionTooltip(tt, e);
+    });
+    cell.addEventListener('mousemove', e => positionTooltip(tt, e));
+    cell.addEventListener('mouseleave', () => tt.classList.remove('show'));
+  });
+}
+
+function buildTooltipHtml(d) {
+  const tierLabel = d.tier === 'good' ? '優秀' : (d.tier === 'normal' ? '正常' : (d.tier === 'low' ? '偏低' : '—'));
+  let html = '<div class="tt-title">' + d.date + (d.isOff ? ' (假日)' : ' (平日)') + ' ・ ' + tierLabel + '</div>';
+  html += '<div style="font-size:11.5px;color:var(--muted);">工時 ' + d.hours + 'h ・ 營收 $' + Math.round(d.revenue).toLocaleString() + ' ・ rev/h $' + d.rph + '</div>';
+
+  html += '<div class="tt-sect-title">當日班表 (' + d.employees.length + ' 人)</div>';
+  if (d.employees.length === 0) {
+    html += '<div class="tt-empty">無排班</div>';
+  } else {
+    d.employees.forEach(e => {
+      const shift = e.shift ? '<span class="tt-emp-shift">' + e.shift + '</span>' : '<span class="tt-emp-shift">(無時段)</span>';
+      html += '<div class="tt-emp-row">' + e.name + '(' + e.hours + 'h) ' + shift + '</div>';
+    });
+  }
+
+  if (d.flags && d.flags.length > 0) {
+    html += '<div class="tt-sect-title">⚠️ 異常</div>';
+    d.flags.forEach(f => {
+      html += '<div class="tt-flag"><strong>' + f.label + '</strong>: ' + f.reason + '</div>';
+    });
+  }
+  return html;
+}
+
+function positionTooltip(tt, e) {
+  // 跟著滑鼠走,但邊界 clamp
+  const pad = 14;
+  const w = tt.offsetWidth || 260;
+  const h = tt.offsetHeight || 120;
+  let x = e.clientX + pad;
+  let y = e.clientY + pad;
+  if (x + w > window.innerWidth - 6) x = e.clientX - w - pad;
+  if (y + h > window.innerHeight - 6) y = e.clientY - h - pad;
+  if (x < 6) x = 6;
+  if (y < 6) y = 6;
+  tt.style.left = x + 'px';
+  tt.style.top  = y + 'px';
 }
 
 // === Tab C: 月份表格 ===
