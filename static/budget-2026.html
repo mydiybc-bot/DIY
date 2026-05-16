@@ -113,6 +113,7 @@
   .store-meta { font-size: 11px; color: var(--gray); margin-top: 1px; }
   .store-pct { font-size: 16px; font-weight: 700; text-align: right; min-width: 70px; }
   .store-amount { font-size: 10px; color: var(--ink-soft); text-align: right; margin-top: 2px; }
+  .num-pct { font-size: 11px; color: var(--gray); margin-left: 6px; font-weight: 400; }
 
   .loading { color: var(--gray); padding: 40px; text-align: center; font-size: 14px; }
   .empty   { color: var(--gray); padding: 24px; text-align: center; font-size: 13px; }
@@ -156,7 +157,7 @@
   <h1 id="page-title">預算達成儀表板 <span class="sub" id="page-subtitle">共好平台 12 店 · Budget vs Actual</span></h1>
   <div class="topbar-right">
     <button class="btn-sync" id="btn-sync" title="從 P&L 系統拉最新實際數">🔄 同步實際數</button>
-    <a href="/static/hub.html" class="back-btn">← Hub</a>
+    <a href="/static/hub.html" class="back-btn">← 回首頁</a>
   </div>
 </div>
 
@@ -272,12 +273,8 @@ function jsonp(action, params = {}, timeoutMs = 30000) {
 }
 
 function fmtMoney(n) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  const v = Math.round(n);
-  if (Math.abs(v) >= 10000000) return (v / 1000000).toFixed(1) + 'M';
-  if (Math.abs(v) >= 1000000)  return (v / 1000000).toFixed(2) + 'M';
-  if (Math.abs(v) >= 10000)    return (v / 10000).toFixed(1) + '萬';
-  return v.toLocaleString();
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return Math.round(n).toLocaleString();
 }
 function fmtMoneyFull(n) {
   if (n === null || n === undefined || isNaN(n)) return '—';
@@ -410,7 +407,7 @@ function renderSummary(d) {
         <div class="kpi-label">${c.label}</div>
         <div class="kpi-actual">${fmtPct(c.actual)}</div>
         <div class="kpi-budget">預算 ${fmtPct(c.budget)}</div>
-        <div class="kpi-pct ${diffCls}">差 ${diff >= 0 ? '+' : ''}${diff.toFixed(1)} pp</div>
+        <div class="kpi-pct ${diffCls}">差 ${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%</div>
       </div>`;
     }
     return `<div class="kpi-card ${c.cls}">
@@ -454,6 +451,9 @@ function renderAccountBreakdown(d) {
   const rows = d.rows || [];
   const tbody = document.getElementById('acc-tbody');
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">無資料</td></tr>'; return; }
+  // 結構比分母:該欄所有科目加總(該科目佔該欄總額 %)
+  const denomB = rows.reduce((sum, r) => sum + (r.budget || 0), 0);
+  const denomA = rows.reduce((sum, r) => sum + (r.actual || 0), 0);
   tbody.innerHTML = rows.map(r => {
     const cls = r.L1 === '營業收入' ? 'l1-revenue' : (r.sign === '支出' ? 'l1-cost' : '');
     const noBudgetTag = (r.budget_status && r.budget_status.indexOf('未編') !== -1)
@@ -461,10 +461,12 @@ function renderAccountBreakdown(d) {
     const pctDisplay = r.achievement_pct !== null
       ? `<span class="kpi-pct ${pctClass(r.achievement_pct, { reverse: r.sign === '支出' })}">${fmtPct(r.achievement_pct)}</span>`
       : '<span class="kpi-pct pct-na">—</span>';
+    const pctB = denomB > 0 ? `<span class="num-pct">${(r.budget / denomB * 100).toFixed(1)}%</span>` : '';
+    const pctA = denomA > 0 ? `<span class="num-pct">${(r.actual / denomA * 100).toFixed(1)}%</span>` : '';
     return `<tr class="${cls}">
       <td><span class="l1-tag">${r.L1 || '-'}</span>${r.account_name}${noBudgetTag}</td>
-      <td class="num">${fmtMoney(r.budget)}</td>
-      <td class="num">${fmtMoney(r.actual)}</td>
+      <td class="num">${fmtMoney(r.budget)}${pctB}</td>
+      <td class="num">${fmtMoney(r.actual)}${pctA}</td>
       <td class="num" style="color: ${r.diff > 0 ? 'var(--red)' : (r.diff < 0 ? 'var(--green)' : 'var(--gray)')}">${r.diff > 0 ? '+' : ''}${fmtMoney(r.diff)}</td>
       <td class="num">${pctDisplay}</td>
     </tr>`;
