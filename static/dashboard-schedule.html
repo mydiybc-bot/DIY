@@ -95,6 +95,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .heat-table th { background: var(--bg); color: var(--olive-dark); font-weight: 700; border-bottom: 2px solid var(--border); }
 .heat-table th.store-col, .heat-table td.store-col { text-align: left; font-weight: 700; padding-left: 14px; min-width: 110px; position: sticky; left: 0; background: white; z-index: 2; }
 .heat-table th.store-col { background: var(--bg); z-index: 3; }
+.store-flag-badge { display: inline-block; background: var(--flag-red); color: white; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; margin-left: 4px; vertical-align: middle; }
 .heat-cell { border-radius: 6px; padding: 10px 4px; font-weight: 700; cursor: pointer; transition: transform .12s, box-shadow .12s; position: relative; }
 .heat-cell:hover { transform: scale(1.04); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
 .heat-cell.flagged { box-shadow: inset 0 0 0 2px var(--flag-red); }
@@ -897,6 +898,9 @@ function rphToColor(rph) {
 // 計算每店「近 4 週紅旗總數」(不受篩選器影響、用全 DATA.week_kpi)
 // 「近 4 週」= 排序後最後 4 個「已完整結束」的 year_week
 // (排除未完結週:total_revenue=0 但 total_hours>0,通常是班表已上傳但營收還沒進來的未來週)
+// 排序規則(B+D 組合):
+//   主排序:加權嚴重度降序 (red × 3, orange × 2, yellow × 1)
+//   tie-break:近 4 週平均 rev/h 升序 (人效差的優先)
 function computeTop3RedFlagStores() {
   // 只取「已有營收的週」做排序基準(寬鬆比較,處理字串 "0"/null)
   const allWeeks = [...new Set(
@@ -907,24 +911,50 @@ function computeTop3RedFlagStores() {
   const recent4 = allWeeks.slice(-4);
   const recentSet = new Set(recent4);
 
-  // 每店紅旗數累計
-  const flagCount = {};
+  // 每店:紅旗數、加權分數、rev/h 累計+次數(算平均用)
+  const stats = {};
   DATA.week_kpi.forEach(r => {
     if (!recentSet.has(r.year_week)) return;
     // 也尊重區/店多選；篩出來的店才參與排序
     if (selectedZones.size > 0 && !selectedZones.has(r.zone)) return;
     if (selectedStores.size > 0 && !selectedStores.has(Number(r.store_id))) return;
     const flags = computeFlags(r);
-    if (!flagCount[r.store_id]) flagCount[r.store_id] = 0;
-    flagCount[r.store_id] += flags.length;
+    if (!stats[r.store_id]) {
+      stats[r.store_id] = { count: 0, weighted: 0, rphSum: 0, rphCount: 0 };
+    }
+    stats[r.store_id].count += flags.length;
+    flags.forEach(f => {
+      const w = f.sev === 'red' ? 3 : (f.sev === 'orange' ? 2 : 1);
+      stats[r.store_id].weighted += w;
+    });
+    // 累計 rev/h(只算有效週,避免 0 拉低平均)
+    const rph = Number(r.rev_per_hour);
+    if (r.total_hours > 0 && rph > 0) {
+      stats[r.store_id].rphSum += rph;
+      stats[r.store_id].rphCount += 1;
+    }
   });
 
-  const sorted = Object.entries(flagCount)
-    .filter(([_, c]) => c > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([sid, c]) => ({ store_id: Number(sid), flag_count: c }));
+  const sorted = Object.entries(stats)
+    .filter(([_, s]) => s.count > 0)
+    .map(([sid, s]) => ({
+      store_id: Number(sid),
+      flag_count: s.count,
+      weighted_score: s.weighted,
+      avg_rph: s.rphCount > 0 ? s.rphSum / s.rphCount : Infinity
+    }))
+    .sort((a, b) => {
+      // B: 加權分數降序
+      if (b.weighted_score !== a.weighted_score) return b.weighted_score - a.weighted_score;
+      // D: tie-break,rev/h 升序(人效差的優先)
+      return a.avg_rph - b.avg_rph;
+    });
 
-  return { top3: sorted.slice(0, 3), weeksUsed: recent4.length, totalFlagged: sorted.length };
+  // 給店名旁的 ⚑N 標籤用
+  const flagCountMap = {};
+  sorted.forEach(s => flagCountMap[s.store_id] = s.flag_count);
+
+  return { top3: sorted.slice(0, 3), weeksUsed: recent4.length, totalFlagged: sorted.length, flagCountMap };
 }
 
 function renderHeatmap() {
@@ -940,7 +970,7 @@ function renderHeatmap() {
   }
 
   // 計算 Top 3
-  const { top3, weeksUsed, totalFlagged } = computeTop3RedFlagStores();
+  const { top3, weeksUsed, totalFlagged, flagCountMap } = computeTop3RedFlagStores();
   const top3StoreIds = new Set(top3.map(t => t.store_id));
 
   // 決定要顯示哪些店
@@ -962,8 +992,8 @@ function renderHeatmap() {
         + '</div>';
     }
   } else {
-    // 預設只顯示 Top 3
-    displayStoreIds = allStoreIdsInRows.filter(sid => top3StoreIds.has(sid));
+    // 預設只顯示 Top 3,按紅旗數降序(不再用 store_id 順序)
+    displayStoreIds = top3.map(t => t.store_id);
     bannerHtml = '<div class="heat-mode-banner">'
       + '<span>⚠️ <strong>本週需關注 Top ' + top3.length + '</strong>（近 ' + weeksUsed + ' 週紅旗最多）'
       + (totalFlagged > 3 ? '　・另有 ' + (totalFlagged - 3) + ' 家有紅旗' : '')
@@ -991,7 +1021,10 @@ function renderHeatmap() {
   displayStoreIds.forEach(sid => {
     const meta = storeMeta[sid] || { store_name: '?' };
     const zoneName = getZone(sid);
-    html += '<tr><td class="store-col">' + sid + ' ' + meta.store_name + '<br><span style="font-size:10px;color:var(--muted);font-weight:500;">' + zoneName + '</span></td>';
+    // 近 4 週紅旗數標籤(僅當該店有紅旗時顯示)
+    const fc = flagCountMap[sid] || 0;
+    const flagBadge = fc > 0 ? ' <span class="store-flag-badge">⚑ ' + fc + '</span>' : '';
+    html += '<tr><td class="store-col">' + sid + ' ' + meta.store_name + flagBadge + '<br><span style="font-size:10px;color:var(--muted);font-weight:500;">' + zoneName + '</span></td>';
     weeks.forEach(w => {
       const r = idx[w + '|' + sid];
       if (!r) { html += '<td>—</td>'; return; }
