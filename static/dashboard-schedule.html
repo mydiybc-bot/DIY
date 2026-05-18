@@ -818,6 +818,13 @@ function computeFlags(row) {
   // 這裡用滑桿值「重新」判定
   const flags = [];
 
+  // 未完結週(營收=0 或空 但工時>0):班表已上但營收還沒進來的未來週,不該被判定紅旗
+  // 直接返回空陣列,避免「人效偏低 / 營收偏低」誤判
+  // 注意:用寬鬆比較 < 1(而非 === 0),因 total_revenue 可能是字串 "0"、null 或 undefined
+  if ((!row.total_revenue || Number(row.total_revenue) < 1) && row.total_hours > 0) {
+    return flags;
+  }
+
   // 平日工時超標 = 後端 weekday_over_16,但 16 是固定的。
   // 為了讓滑桿真的影響,這裡用 row 的 weekday_hours 平均(週內最高天無法從聚合資料還原,
   // 只能用週平均當代理。這是已知限制)
@@ -896,9 +903,15 @@ function rphToColor(rph) {
 
 // --- 熱力矩陣 ---
 // 計算每店「近 4 週紅旗總數」(不受篩選器影響、用全 DATA.week_kpi)
+// 「近 4 週」= 排序後最後 4 個「已完整結束」的 year_week
+// (排除未完結週:total_revenue=0 但 total_hours>0,通常是班表已上傳但營收還沒進來的未來週)
 function computeTop3RedFlagStores() {
-  // 找出資料裡最近的 4 週 (year_week 排序後尾段)
-  const allWeeks = [...new Set(DATA.week_kpi.map(r => r.year_week))].sort();
+  // 只取「已有營收的週」做排序基準(寬鬆比較,處理字串 "0"/null)
+  const allWeeks = [...new Set(
+    DATA.week_kpi
+      .filter(r => r.total_revenue && Number(r.total_revenue) > 0)
+      .map(r => r.year_week)
+  )].sort();
   const recent4 = allWeeks.slice(-4);
   const recentSet = new Set(recent4);
 
