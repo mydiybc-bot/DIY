@@ -505,7 +505,7 @@ function getStoresByZone(zoneName) {
 }
 
 // ============ 全局狀態 ============
-let DATA = { week_kpi: [], daily_sales: [], stores: [] };
+let DATA = { week_kpi: [], daily_sales: [], daily_hours: [], stores: [] };
 let mode = 'warn';
 const THRESHOLD_DEFAULTS = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
 let thresholds = (() => {
@@ -953,17 +953,20 @@ function renderKPI() {
   const rows = filteredRows();
   const flaggedWeeks = rows.filter(r => computeFlags(r).length > 0).length;
 
-  // 工時/營收/人效:用 daily_sales 按日期區間精準加總
-  const daily = filteredDaily();
-  const totalHours = daily.reduce((s, d) => s + (d.hours || 0), 0);
-  const totalRev   = daily.reduce((s, d) => s + (d.revenue || 0), 0);
+  // 工時:用 daily_hours 按日期區間精準加總
+  // 營收:用 daily_sales 按日期區間精準加總
+  const dh = filteredDailyHours();
+  const ds = filteredDailySales();
+  const totalHours = dh.reduce((s, d) => s + (d.hours || 0), 0);
+  const totalRev   = ds.reduce((s, d) => s + (d.revenue || 0), 0);
   const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
 
-  // 日數標籤(共幾天 × 涵蓋幾家店)
+  // 日數 × 涵蓋店數
   const dayCount = (filterDateStart && filterDateEnd)
     ? (Math.round((new Date(filterDateEnd) - new Date(filterDateStart)) / 86400000) + 1)
     : 0;
-  const storeCount = new Set(daily.map(d => d.store_id)).size;
+  const storeCount = new Set(dh.map(d => d.store_id)).size
+                  || new Set(ds.map(d => d.store_id)).size;
 
   const kpis = [
     { label: '總工時', val: Math.round(totalHours).toLocaleString(), sub: dayCount + ' 天 × ' + storeCount + ' 店' },
@@ -981,8 +984,22 @@ function renderKPI() {
   ).join('');
 }
 
+// 按日期區間 + 區域 + 門市 篩選 daily_hours(v3.7 GAS 新增)
+function filteredDailyHours() {
+  if (!DATA.daily_hours) return [];
+  return DATA.daily_hours.filter(d => {
+    if (filterDateStart && d.date < filterDateStart) return false;
+    if (filterDateEnd && d.date > filterDateEnd) return false;
+    const zone = getZone(Number(d.store_id));
+    if (selectedZones.size > 0 && !selectedZones.has(zone)) return false;
+    if (selectedStores.size > 0 && !selectedStores.has(Number(d.store_id))) return false;
+    return true;
+  });
+}
+
 // 按日期區間 + 區域 + 門市 篩選 daily_sales
-function filteredDaily() {
+function filteredDailySales() {
+  if (!DATA.daily_sales) return [];
   return DATA.daily_sales.filter(d => {
     if (filterDateStart && d.date < filterDateStart) return false;
     if (filterDateEnd && d.date > filterDateEnd) return false;
