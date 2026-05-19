@@ -951,14 +951,23 @@ function renderAll() {
 // --- KPI 卡 ---
 function renderKPI() {
   const rows = filteredRows();
-  const totalHours = rows.reduce((s, r) => s + r.total_hours, 0);
-  const totalRev   = rows.reduce((s, r) => s + r.total_revenue, 0);
-  const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
   const flaggedWeeks = rows.filter(r => computeFlags(r).length > 0).length;
 
+  // 工時/營收/人效:用 daily_sales 按日期區間精準加總
+  const daily = filteredDaily();
+  const totalHours = daily.reduce((s, d) => s + (d.hours || 0), 0);
+  const totalRev   = daily.reduce((s, d) => s + (d.revenue || 0), 0);
+  const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
+
+  // 日數標籤(共幾天 × 涵蓋幾家店)
+  const dayCount = (filterDateStart && filterDateEnd)
+    ? (Math.round((new Date(filterDateEnd) - new Date(filterDateStart)) / 86400000) + 1)
+    : 0;
+  const storeCount = new Set(daily.map(d => d.store_id)).size;
+
   const kpis = [
-    { label: '總工時', val: totalHours.toLocaleString(), sub: rows.length + ' 個 店×週' },
-    { label: '總營收', val: '$' + totalRev.toLocaleString(), sub: '所選範圍合計' },
+    { label: '總工時', val: Math.round(totalHours).toLocaleString(), sub: dayCount + ' 天 × ' + storeCount + ' 店' },
+    { label: '總營收', val: '$' + Math.round(totalRev).toLocaleString(), sub: '所選範圍實際合計' },
     { label: '平均 rev/h', val: '$' + avgRph.toLocaleString(), sub: '集團人效平均' },
     { label: '紅旗 店×週', val: flaggedWeeks, sub: '需關注', alert: flaggedWeeks > 0 }
   ];
@@ -970,6 +979,18 @@ function renderKPI() {
     + '<div class="sub">' + k.sub + '</div>'
     + '</div>'
   ).join('');
+}
+
+// 按日期區間 + 區域 + 門市 篩選 daily_sales
+function filteredDaily() {
+  return DATA.daily_sales.filter(d => {
+    if (filterDateStart && d.date < filterDateStart) return false;
+    if (filterDateEnd && d.date > filterDateEnd) return false;
+    const zone = getZone(Number(d.store_id));
+    if (selectedZones.size > 0 && !selectedZones.has(zone)) return false;
+    if (selectedStores.size > 0 && !selectedStores.has(Number(d.store_id))) return false;
+    return true;
+  });
 }
 
 // --- rev/h → 顏色 ---
