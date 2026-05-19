@@ -641,11 +641,11 @@ function clearInput(key) {
   clearPhotos(key);
 }
 
-// 模型分配:結構化任務用 Sonnet(快+省),推理任務用 Opus
+// 模型分配:結構化任務用 Sonnet(快+省 5 倍),策略推理用 Opus
 const MODELS = {
-  convert: 'claude-opus-4-7',
-  feasibility: 'claude-opus-4-7',
-  optimize: 'claude-opus-4-7'
+  convert: 'claude-sonnet-4-5',      // 食譜轉化:從模組庫套範本,Sonnet 足夠
+  feasibility: 'claude-opus-4-7',    // 可行性檢討:5 維度策略推理,值得 Opus
+  optimize: 'claude-opus-4-7'        // 流程優化對話:多輪策略,值得 Opus
 };
 
 
@@ -1078,15 +1078,58 @@ function downloadJSON(jsonStr, filename) {
 function downloadDocx(jsonStr) {
   const d = JSON.parse(jsonStr);
   let txt = `${d.recipe_name || '食譜'}\n${'='.repeat(40)}\n\n`;
-  txt += `對應 Archetype: ${d.matched_archetype}\n`;
+  txt += `對應 Archetype: ${d.matched_archetype || ''}\n`;
   txt += `對應理由: ${d.matched_reason || ''}\n\n`;
-  txt += `商品名稱: ${d.product_name || ''}\n`;
-  txt += `葷素: ${d.diet || ''}\n`;
-  txt += `保存方式: ${d.preservation || ''}\n\n`;
-  txt += `--- Variable Schema ---\n${JSON.stringify(d.variable_schema_filled, null, 2)}\n\n`;
-  txt += `--- 標準步驟 ---\n${(d.step_template || []).map((s,i) => `${i+1}. ${s}`).join('\n')}\n\n`;
+  txt += `商品名稱: ${d.product_name || d.recipe_name || ''}\n`;
+  txt += `尺寸: ${d.size || ''}\n`;
+  txt += `葷素: ${d.diet || ''}\n\n`;
+  txt += `保存方式:\n${d.preservation || ''}\n\n`;
+
+  // 模組追溯
+  if (d.module_trace) {
+    txt += `--- 模組追溯 ---\n`;
+    if (d.module_trace.based_on_recipe) txt += `範本食譜: ${d.module_trace.based_on_recipe}\n`;
+    if (d.module_trace.modules_used?.length) txt += `使用模組: ${d.module_trace.modules_used.join(', ')}\n`;
+    if (d.module_trace.needs_chef_verification?.length) {
+      txt += `待主廚驗證: ${d.module_trace.needs_chef_verification.join('; ')}\n`;
+    }
+    txt += `\n`;
+  }
+
+  // 步驟(主要 bug 修正:用 steps 而非不存在的 step_template)
+  txt += `--- 標準步驟(共 ${(d.steps||[]).length} 步)---\n\n`;
+  (d.steps || []).forEach((s, i) => {
+    txt += `【步驟 ${i+1}】${s.title || ''}\n`;
+    if (s.content) txt += `${s.content}\n`;
+    if (s.study_tip) txt += `※自己做小教室: ${s.study_tip}\n`;
+    if (s.tools && typeof s.tools === 'object') {
+      txt += `\n食材工具:\n`;
+      Object.entries(s.tools).forEach(([zone, items]) => {
+        if (Array.isArray(items) && items.length) {
+          txt += `  [${zone}]\n`;
+          items.forEach(item => {
+            if (typeof item === 'string') {
+              txt += `    - ${item}\n`;
+            } else {
+              const parts = [item.name, item.qty, item.container].filter(Boolean);
+              txt += `    - ${parts.join(' / ')}\n`;
+            }
+          });
+        }
+      });
+    }
+    txt += `\n`;
+  });
+
   if (d.warnings?.length) txt += `--- 警示 ---\n${d.warnings.map(w => '⚠️ ' + w).join('\n')}\n\n`;
+  if (d.considered_alternatives?.length) {
+    txt += `--- 也考慮過的對應 ---\n${d.considered_alternatives.map(a => '・' + a).join('\n')}\n\n`;
+  }
+  if (d.professional_notes?.length) {
+    txt += `--- 專業補充 ---\n${d.professional_notes.map(n => '📌 ' + n).join('\n')}\n\n`;
+  }
   if (d.uncertainties?.length) txt += `--- 主廚需確認 ---\n${d.uncertainties.map(u => '❓ ' + u).join('\n')}\n`;
+
   const blob = new Blob([txt], {type: 'text/plain;charset=utf-8'});
   triggerDownload(blob, `${(d.recipe_name||'recipe').replace(/[^a-zA-Z0-9一-龥]/g,'_')}.txt`);
 }
