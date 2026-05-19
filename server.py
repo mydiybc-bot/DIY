@@ -22,6 +22,7 @@ from report_store import ReportStore
 from self_dashboard import load_self_dashboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
+from recipe_auth import recipe_auth, call_anthropic
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -297,6 +298,31 @@ class TrainingHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, status=400)
                 return
             self.send_json({"ok": True, "auth": saved})
+            return
+
+        if parsed.path == "/api/recipe/login":
+            body = self.read_json()
+            result = recipe_auth.login(body.get("password", ""))
+            if result is None:
+                self.send_json({"ok": False, "error": "密碼錯誤"}, status=401)
+                return
+            self.send_json({"ok": True, **result})
+            return
+
+        if parsed.path == "/api/recipe/logout":
+            token = self.headers.get("X-Recipe-Token", "")
+            recipe_auth.logout(token)
+            self.send_json({"ok": True})
+            return
+
+        if parsed.path == "/api/recipe/claude":
+            token = self.headers.get("X-Recipe-Token", "")
+            if not recipe_auth.verify(token):
+                self.send_json({"ok": False, "error": "請先登入食譜小幫手"}, status=401)
+                return
+            body = self.read_json()
+            status_code, resp_data = call_anthropic(body)
+            self.send_json(resp_data, status=status_code)
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
