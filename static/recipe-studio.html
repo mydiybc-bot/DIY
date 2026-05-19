@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>主廚工作站 · Recipe Studio v2.0</title>
+<title>烘焙小幫手 · Recipe Studio v2.0</title>
 <style>
   :root {
     --bg: #faf8f3;
@@ -237,8 +237,148 @@
 </head>
 <body>
 
+<!-- ============ 食譜小幫手獨立密碼登入浮層 ============ -->
+<div id="recipe-login-gate" style="
+  position:fixed; inset:0; z-index:9999;
+  background:linear-gradient(135deg,#fef3e7 0%,#fde6c8 100%);
+  display:flex; align-items:center; justify-content:center;
+  font-family:'Microsoft JhengHei','PingFang TC',sans-serif;
+">
+  <div style="
+    background:#fff; padding:48px 56px; border-radius:16px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.15);
+    width:90%; max-width:420px;
+  ">
+    <div style="text-align:center; margin-bottom:32px;">
+      <div style="font-size:48px; margin-bottom:8px;">🥖</div>
+      <h2 style="margin:0; font-size:22px; color:#5a3818;">烘焙小幫手</h2>
+      <div style="font-size:13px; color:#a07650; margin-top:6px;">v2.0 · 烘焙小幫手 · 內部使用</div>
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="display:block; font-size:13px; color:#5a3818; margin-bottom:6px;">密碼</label>
+      <input id="recipe-login-pwd" type="password" autocomplete="current-password"
+        style="width:100%; padding:12px 14px; border:2px solid #e8d4b8; border-radius:8px; font-size:15px; box-sizing:border-box; outline:none;"
+        onfocus="this.style.borderColor='#c89060'"
+        onblur="this.style.borderColor='#e8d4b8'"
+        onkeydown="if(event.key==='Enter')doRecipeLogin()" />
+    </div>
+
+    <button onclick="doRecipeLogin()" id="recipe-login-btn"
+      style="width:100%; padding:13px; background:#c89060; color:#fff; border:none; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer;">
+      登入
+    </button>
+
+    <div id="recipe-login-err" style="color:#c44; font-size:13px; margin-top:12px; min-height:18px; text-align:center;"></div>
+
+    <div style="margin-top:24px; padding-top:16px; border-top:1px solid #f0e0c8; font-size:11px; color:#a07650; text-align:center; line-height:1.7;">
+      ⏱ 登入後有效 4 小時(固定過期,非滑動)<br/>
+      🔒 僅限主廚 / 經營者使用
+    </div>
+  </div>
+</div>
+
+<!-- session 倒數提示(右上角) -->
+<div id="recipe-session-badge" style="
+  display:none; position:fixed; top:10px; right:10px; z-index:9998;
+  background:rgba(200,144,96,0.92); color:#fff; padding:6px 12px;
+  border-radius:14px; font-size:11px; font-family:'Microsoft JhengHei',sans-serif;
+  cursor:pointer;
+" title="點擊登出"></div>
+
+<script>
+// ============ 食譜小幫手登入邏輯 ============
+const _LOGIN_TOKEN_KEY = 'recipe_studio_token';
+const _LOGIN_EXP_KEY = 'recipe_studio_token_exp';
+const _LOGIN_ENDPOINT = '/api/recipe/login';
+
+function showLoginGate() {
+  document.getElementById('recipe-login-gate').style.display = 'flex';
+  document.getElementById('recipe-session-badge').style.display = 'none';
+  setTimeout(() => {
+    const pwd = document.getElementById('recipe-login-pwd');
+    if (pwd) { pwd.focus(); pwd.value = ''; }
+  }, 100);
+}
+
+function hideLoginGate() {
+  document.getElementById('recipe-login-gate').style.display = 'none';
+  updateSessionBadge();
+}
+
+function updateSessionBadge() {
+  const exp = parseInt(localStorage.getItem(_LOGIN_EXP_KEY) || '0');
+  const badge = document.getElementById('recipe-session-badge');
+  if (!exp || Date.now()/1000 > exp) {
+    badge.style.display = 'none';
+    return;
+  }
+  const remainSec = exp - Math.floor(Date.now()/1000);
+  const h = Math.floor(remainSec/3600);
+  const m = Math.floor((remainSec%3600)/60);
+  badge.textContent = `🔓 ${h}h${m}m`;
+  badge.style.display = 'block';
+  badge.onclick = () => {
+    if (confirm('確定要登出食譜小幫手?')) doRecipeLogout();
+  };
+}
+
+async function doRecipeLogin() {
+  const pwd = document.getElementById('recipe-login-pwd').value;
+  const errBox = document.getElementById('recipe-login-err');
+  const btn = document.getElementById('recipe-login-btn');
+  errBox.textContent = '';
+  if (!pwd) { errBox.textContent = '請輸入密碼'; return; }
+  btn.disabled = true; btn.textContent = '驗證中...';
+  try {
+    const resp = await fetch(_LOGIN_ENDPOINT, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pwd})
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      errBox.textContent = data.error || '密碼錯誤';
+      btn.disabled = false; btn.textContent = '登入';
+      return;
+    }
+    localStorage.setItem(_LOGIN_TOKEN_KEY, data.token);
+    localStorage.setItem(_LOGIN_EXP_KEY, String(data.expires_at));
+    hideLoginGate();
+    btn.disabled = false; btn.textContent = '登入';
+  } catch (e) {
+    errBox.textContent = '連線失敗:' + e.message;
+    btn.disabled = false; btn.textContent = '登入';
+  }
+}
+
+function doRecipeLogout() {
+  localStorage.removeItem(_LOGIN_TOKEN_KEY);
+  localStorage.removeItem(_LOGIN_EXP_KEY);
+  showLoginGate();
+}
+
+// 頁面載入時檢查 token 是否還有效
+(function checkRecipeAuth() {
+  const token = localStorage.getItem(_LOGIN_TOKEN_KEY);
+  const exp = parseInt(localStorage.getItem(_LOGIN_EXP_KEY) || '0');
+  if (!token || !exp || Date.now()/1000 > exp) {
+    localStorage.removeItem(_LOGIN_TOKEN_KEY);
+    localStorage.removeItem(_LOGIN_EXP_KEY);
+    // 浮層預設就是 display:flex,不用做事
+    return;
+  }
+  // 還有效,隱藏浮層
+  document.getElementById('recipe-login-gate').style.display = 'none';
+  updateSessionBadge();
+  // 每分鐘更新倒數
+  setInterval(updateSessionBadge, 60000);
+})();
+</script>
+<!-- ============ 登入浮層結束 ============ -->
+
 <header>
-  <h1>主廚工作站 <span class="v">v2.0 · 烘焙小幫手</span></h1>
+  <h1>烘焙小幫手 <span class="v">v2.0</span></h1>
   <div class="subtitle">自己做烘焙聚樂部 · 由烘焙小幫手提供建議 · 內建自己做標準格式 · 支援照片識別 · 澄清提問 + 三次反思</div>
 </header>
 
@@ -416,7 +556,7 @@
 </div>
 
 <footer>
-  Recipe Studio v1.5 · 烘焙小幫手 · 共好平台有限公司 · 主廚永遠是主廚,小幫手只是助手
+  Recipe Studio v2.0 · 烘焙小幫手 · 共好平台有限公司 · 主廚永遠是主廚,小幫手只是助手
 </footer>
 
 <script>
@@ -516,8 +656,11 @@ const RECIPE_TRACEABILITY = {"version":"v1.0","last_updated":"2026-05-19","note"
 
 
 // ============ API 設定 ============
-// 後端代理路徑 (Render 部署後填入,例如 /api/claude)
-const API_ENDPOINT = '/api/claude';
+// 後端代理路徑(食譜小幫手獨立認證,4 小時 session)
+const API_ENDPOINT = '/api/recipe/claude';
+const LOGIN_ENDPOINT = '/api/recipe/login';
+const TOKEN_KEY = 'recipe_studio_token';
+const TOKEN_EXP_KEY = 'recipe_studio_token_exp';
 
 // ============ Tab 切換 ============
 document.querySelectorAll('.tab').forEach(t => {
@@ -550,9 +693,13 @@ async function callClaude(systemPrompt, userMessage, conversationHistory = [], m
   const model = modelOverride || "claude-sonnet-4-5";
   
   try {
+    const token = localStorage.getItem(TOKEN_KEY) || '';
     const response = await fetch(API_ENDPOINT, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Recipe-Token': token
+      },
       body: JSON.stringify({
         model: model,
         max_tokens: 8192,
@@ -560,6 +707,13 @@ async function callClaude(systemPrompt, userMessage, conversationHistory = [], m
         messages: messages
       })
     });
+    
+    if (response.status === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_EXP_KEY);
+      showLoginGate();
+      throw new Error('Session 已過期,請重新登入');
+    }
     
     if (!response.ok) {
       const errText = await response.text();
