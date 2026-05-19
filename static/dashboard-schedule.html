@@ -335,6 +335,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
         <div class="controls-toggle">
           <button class="toggle-btn active" id="modeWarn"  onclick="setMode('warn')">警示模式</button>
           <button class="toggle-btn"        id="modeFilter" onclick="setMode('filter')">只看紅旗</button>
+          <button class="toggle-btn"        id="resetThresholds" onclick="resetThresholds()" style="background:#f3f4f6;color:#666;">🔄 重設閾值</button>
         </div>
       </div>
 
@@ -385,8 +386,19 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 
       <div class="filter-row">
         <div class="filter-block">
-          <label class="filter-block-label">📅 週數</label>
-          <select id="filterWeek" class="filter-select-large"></select>
+          <label class="filter-block-label">📅 日期區間 <span id="dateRangeSummary" class="filter-summary"></span></label>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="date" id="filterDateStart" class="filter-select-large" style="flex:1;min-width:130px;">
+            <span style="color:#999;">~</span>
+            <input type="date" id="filterDateEnd" class="filter-select-large" style="flex:1;min-width:130px;">
+          </div>
+          <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">
+            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('thisMonth')">本月</button>
+            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('lastMonth')">上月</button>
+            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('thisWeek')">本週</button>
+            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('lastWeek')">上週</button>
+            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('last4w')">最近 4 週</button>
+          </div>
         </div>
         <div class="filter-block">
           <label class="filter-block-label">🗺️ 區域 <span id="zoneSummary" class="filter-summary">所有區域</span></label>
@@ -495,8 +507,31 @@ function getStoresByZone(zoneName) {
 // ============ 全局狀態 ============
 let DATA = { week_kpi: [], daily_sales: [], stores: [] };
 let mode = 'warn';
-let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
-let filterWeek = '';
+const THRESHOLD_DEFAULTS = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
+let thresholds = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('schedule_thresholds_v1') || '{}');
+    return { ...THRESHOLD_DEFAULTS, ...saved };
+  } catch (e) { return { ...THRESHOLD_DEFAULTS }; }
+})();
+function saveThresholds() {
+  try { localStorage.setItem('schedule_thresholds_v1', JSON.stringify(thresholds)); } catch (e) {}
+}
+function resetThresholds() {
+  if (!confirm('確定要把所有閾值恢復預設值嗎?')) return;
+  thresholds = { ...THRESHOLD_DEFAULTS };
+  localStorage.removeItem('schedule_thresholds_v1');
+  [['sWdHours','vWdHours','wdHours'],['sWeHours','vWeHours','weHours'],
+   ['sRph','vRph','rph'],['sRev','vRev','rev'],
+   ['sDayWd','vDayWd','dayWd'],['sDayWe','vDayWe','dayWe']].forEach(([sid,vid,key]) => {
+    document.getElementById(sid).value = thresholds[key];
+    document.getElementById(vid).textContent = key === 'rev'
+      ? thresholds[key].toLocaleString() : thresholds[key];
+  });
+  renderAll();
+}
+let filterDateStart = '';
+let filterDateEnd = '';
 let selectedZones = new Set();  // 空 = 全選
 let selectedStores = new Set(); // 空 = 全選
 let heatShowAll = false;        // 熱力矩陣是否展開全部
@@ -555,14 +590,8 @@ function initUI() {
   document.getElementById('loadingBox').style.display = 'none';
   document.getElementById('mainContent').style.display = 'block';
 
-  // 週下拉(顯示週數+日期)
-  const wkPairs = {};
-  DATA.week_kpi.forEach(r => { wkPairs[r.year_week] = r.week_start; });
-  const weeks = Object.keys(wkPairs).sort();
-  const weekSel = document.getElementById('filterWeek');
-  weekSel.className = 'filter-select-large';
-  weekSel.innerHTML = '<option value="">所有週(共 ' + weeks.length + ' 週)</option>'
-    + weeks.map(w => '<option value="' + w + '">' + weekLabel(w, wkPairs[w]) + '</option>').join('');
+  // 日期區間預設值:本月 1 號到今天
+  setDateRange('thisMonth', /*skipRender=*/true);
 
   // 區域複選下拉（用 ZONE_ORDER 固定順序，只顯示實際有店的區）
   const allZonesInData = new Set(DATA.stores.map(s => s.zone));
@@ -593,7 +622,8 @@ function initUI() {
 
   // 綁定事件
   bindSliders();
-  document.getElementById('filterWeek').addEventListener('change', e => { filterWeek = e.target.value; renderAll(); });
+  document.getElementById('filterDateStart').addEventListener('change', e => { filterDateStart = e.target.value; updateDateRangeSummary(); renderAll(); });
+  document.getElementById('filterDateEnd').addEventListener('change', e => { filterDateEnd = e.target.value; updateDateRangeSummary(); renderAll(); });
   document.getElementById('dailyStore').addEventListener('change', loadDailyData);
   document.getElementById('dailyMonth').addEventListener('change', loadDailyData);
 
@@ -786,6 +816,13 @@ function bindSliders() {
     ['sDayWd',   'vDayWd',   'dayWd'],
     ['sDayWe',   'vDayWe',   'dayWe']
   ];
+  // 頁面載入時,把 localStorage 的值套用到滑桿與顯示
+  map.forEach(([sid, vid, key]) => {
+    document.getElementById(sid).value = thresholds[key];
+    document.getElementById(vid).textContent = key === 'rev'
+      ? thresholds[key].toLocaleString()
+      : thresholds[key];
+  });
   map.forEach(([sid, vid, key]) => {
     const s = document.getElementById(sid);
     s.addEventListener('input', () => {
@@ -793,6 +830,7 @@ function bindSliders() {
       document.getElementById(vid).textContent = key === 'rev'
         ? thresholds[key].toLocaleString()
         : thresholds[key];
+      saveThresholds();
       renderAll();
     });
   });
@@ -844,11 +882,62 @@ function computeFlags(row) {
 
 function filteredRows() {
   return DATA.week_kpi.filter(r => {
-    if (filterWeek && r.year_week !== filterWeek) return false;
+    if (filterDateStart && filterDateEnd) {
+      // 該週的起訖日:week_start ~ week_start+6
+      const ws = r.week_start;
+      const p = ws.split('-');
+      const d = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
+      d.setDate(d.getDate() + 6);
+      const we = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      // 該週與篩選區間有重疊 = ws <= filterEnd AND we >= filterStart
+      if (ws > filterDateEnd || we < filterDateStart) return false;
+    }
     if (selectedZones.size > 0 && !selectedZones.has(r.zone)) return false;
     if (selectedStores.size > 0 && !selectedStores.has(Number(r.store_id))) return false;
     return true;
   });
+}
+
+// 快捷鍵 + 日期區間工具函式
+function setDateRange(preset, skipRender) {
+  const today = new Date();
+  const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  let start, end;
+  if (preset === 'thisMonth') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = today;
+  } else if (preset === 'lastMonth') {
+    start = new Date(today.getFullYear(), today.getMonth()-1, 1);
+    end = new Date(today.getFullYear(), today.getMonth(), 0);
+  } else if (preset === 'thisWeek') {
+    const dow = today.getDay() === 0 ? 7 : today.getDay();
+    start = new Date(today); start.setDate(today.getDate() - dow + 1);
+    end = today;
+  } else if (preset === 'lastWeek') {
+    const dow = today.getDay() === 0 ? 7 : today.getDay();
+    end = new Date(today); end.setDate(today.getDate() - dow);
+    start = new Date(end); start.setDate(end.getDate() - 6);
+  } else if (preset === 'last4w') {
+    start = new Date(today); start.setDate(today.getDate() - 27);
+    end = today;
+  }
+  filterDateStart = fmt(start);
+  filterDateEnd = fmt(end);
+  document.getElementById('filterDateStart').value = filterDateStart;
+  document.getElementById('filterDateEnd').value = filterDateEnd;
+  updateDateRangeSummary();
+  if (!skipRender) renderAll();
+}
+
+function updateDateRangeSummary() {
+  const el = document.getElementById('dateRangeSummary');
+  if (!el) return;
+  if (filterDateStart && filterDateEnd) {
+    const days = Math.round((new Date(filterDateEnd) - new Date(filterDateStart)) / 86400000) + 1;
+    el.textContent = '共 ' + days + ' 天';
+  } else {
+    el.textContent = '';
+  }
 }
 
 // ============ 渲染 ============
