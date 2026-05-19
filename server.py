@@ -22,7 +22,7 @@ from report_store import ReportStore
 from self_dashboard import load_self_dashboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
-from recipe_auth import recipe_auth, call_anthropib
+from recipe_auth import recipe_auth, call_anthropic
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -367,7 +367,7 @@ class TrainingHandler(BaseHTTPRequestHandler):
                 "filename": part.get_filename() or "",
                 "content_type": part.get_content_type(),
                 "data": part.get_payload(decode=True) or b"",
-               }
+            }
         return parts
 
     def send_json(
