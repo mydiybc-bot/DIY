@@ -643,16 +643,18 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
   const menu    = document.getElementById(menuId);
   const dd      = document.getElementById(dropdownId);
 
+  // 防止重複綁定 click listener:用屬性標記,並用 clone 換掉舊 trigger 清除既有 listener
+  // 注意:這個函式可能被呼叫多次(例如區域變動會重建門市下拉),不能讓 listener 累加
   if (items.length === 0) {
-    trigger.textContent = (kind === 'zone' ? '無區域可選' : '請先選區域') + ' ▾';
+    trigger.textContent = (kind === 'zone' ? '無區域可選' : '無門市可選') + ' ▾';
     trigger.classList.add('disabled');
-    menu.innerHTML = '<div class="multi-dropdown-empty">' + (kind === 'zone' ? '尚無資料' : '請先選至少一個區域') + '</div>';
+    menu.innerHTML = '<div class="multi-dropdown-empty">尚無資料</div>';
     updateMultiSummary(kind, items, selectedSet);
     return;
   }
   trigger.classList.remove('disabled');
 
-  // 建選項：全選/全清 + 個別項
+  // 建選項:全選/全清 + 個別項
   let html = '<div class="multi-dropdown-item all-toggle" data-action="all">'
     + '<input type="checkbox" id="' + kind + '_all" />'
     + '<label for="' + kind + '_all" style="cursor:pointer;flex:1;">全選</label>'
@@ -684,16 +686,13 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
     row.addEventListener('click', e => {
       e.stopPropagation();
       const cb = row.querySelector('input');
-      // 如果點的是 row 但不是 checkbox 本身，手動 toggle
       if (e.target !== cb) cb.checked = !cb.checked;
       const val = parseValue(kind, cb.getAttribute('data-val'));
-      // 全選邏輯（空 set = 全選）→ 從空 set 改點某項時，要把所有「未選的」加進 selectedSet 再移除這項；最簡單做法：每次 sync 全部
       const cbs = menu.querySelectorAll('input[type=checkbox][data-val]');
       const checkedVals = [...cbs].filter(c => c.checked).map(c => parseValue(kind, c.getAttribute('data-val')));
       selectedSet.clear();
-      // 全選 → 用空 set 表示
       if (checkedVals.length === cbs.length) {
-        // 空 set
+        // 全選 → 用空 set 表示
       } else {
         checkedVals.forEach(v => selectedSet.add(v));
       }
@@ -711,25 +710,20 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
     allCb.indeterminate = false;
     menu.querySelectorAll('input[type=checkbox][data-val]').forEach(c => c.checked = willCheck);
     selectedSet.clear();
-    if (!willCheck) {
-      // 全清，selectedSet 保持空 — 但語意要區分：用一個特殊標記？
-      // 我們用「selectedSet 空 = 全選」的慣例，所以「全清」要逐項取消。
-      // 但這樣 filteredRows 又會回到全顯示。為避免歧義，改為「全清 = 全部不顯示」太怪。
-      // 折衷：把所有可選項裝進 selectedSet 但全 false → 改用以下：保持空 = 全選；點全清等同回到全選
-      // 因此全清按鈕在 UI 上其實是把所有 cb 取消 + selectedSet 清空（=全選）。
-      // 為清楚使用者，這裡顯示文字仍維持「全選」
-      // 結果：全清 = 全選（兩者等價）
-    }
-    // 由於上面邏輯，selectedSet 維持空 = 全選
     refreshAllCb();
     updateMultiSummary(kind, items, selectedSet);
     onChange();
   });
 
   // 觸發按鈕展開/收合
-  trigger.addEventListener('click', e => {
+  // 關鍵修正:用 clone 取代 trigger 來清除舊的 click listener,避免重複綁定
+  // 否則每次區域變動重建門市下拉時,門市 trigger 會累積多個 click listener
+  // 點一次按鈕觸發多次 toggle,造成「點不開」的詭異現象
+  const newTrigger = trigger.cloneNode(true);
+  trigger.parentNode.replaceChild(newTrigger, trigger);
+  newTrigger.addEventListener('click', e => {
     e.stopPropagation();
-    if (trigger.classList.contains('disabled')) return;
+    if (newTrigger.classList.contains('disabled')) return;
     document.querySelectorAll('.multi-dropdown').forEach(other => {
       if (other.id !== dropdownId) other.classList.remove('open');
     });
@@ -751,7 +745,7 @@ function updateMultiSummary(kind, items, selectedSet) {
   if (!trigger) return;
 
   if (items.length === 0) {
-    if (summary) summary.textContent = (kind === 'zone' ? '無區域' : '請先選區域');
+    if (summary) summary.textContent = (kind === 'zone' ? '無區域' : '無可選門市');
     return;
   }
   if (selectedSet.size === 0) {
