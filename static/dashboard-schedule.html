@@ -102,6 +102,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .heat-cell .rev   { font-size: 13px; color: var(--text); line-height: 1; }
 .heat-cell .hrs   { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .heat-cell .flag-dot { position: absolute; top: 2px; right: 4px; font-size: 9px; }
+.heat-cell .current-mark { position: absolute; top: 4px; left: 4px; font-size: 11px; line-height: 1; opacity: 0.85; pointer-events: none; }
 
 /* ZONE COMPARE */
 .zone-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
@@ -335,7 +336,6 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
         <div class="controls-toggle">
           <button class="toggle-btn active" id="modeWarn"  onclick="setMode('warn')">警示模式</button>
           <button class="toggle-btn"        id="modeFilter" onclick="setMode('filter')">只看紅旗</button>
-          <button class="toggle-btn"        id="resetThresholds" onclick="resetThresholds()" style="background:#f3f4f6;color:#666;">🔄 重設閾值</button>
         </div>
       </div>
 
@@ -386,19 +386,8 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 
       <div class="filter-row">
         <div class="filter-block">
-          <label class="filter-block-label">📅 日期區間 <span id="dateRangeSummary" class="filter-summary"></span></label>
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="date" id="filterDateStart" class="filter-select-large" style="flex:1;min-width:130px;">
-            <span style="color:#999;">~</span>
-            <input type="date" id="filterDateEnd" class="filter-select-large" style="flex:1;min-width:130px;">
-          </div>
-          <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">
-            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('thisMonth')">本月</button>
-            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('lastMonth')">上月</button>
-            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('thisWeek')">本週</button>
-            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('lastWeek')">上週</button>
-            <button type="button" class="toggle-btn" style="font-size:11px;padding:4px 8px;" onclick="setDateRange('last4w')">最近 4 週</button>
-          </div>
+          <label class="filter-block-label">📅 週數</label>
+          <select id="filterWeek" class="filter-select-large"></select>
         </div>
         <div class="filter-block">
           <label class="filter-block-label">🗺️ 區域 <span id="zoneSummary" class="filter-summary">所有區域</span></label>
@@ -505,33 +494,10 @@ function getStoresByZone(zoneName) {
 }
 
 // ============ 全局狀態 ============
-let DATA = { week_kpi: [], daily_sales: [], daily_hours: [], stores: [] };
+let DATA = { week_kpi: [], daily_sales: [], stores: [] };
 let mode = 'warn';
-const THRESHOLD_DEFAULTS = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
-let thresholds = (() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem('schedule_thresholds_v1') || '{}');
-    return { ...THRESHOLD_DEFAULTS, ...saved };
-  } catch (e) { return { ...THRESHOLD_DEFAULTS }; }
-})();
-function saveThresholds() {
-  try { localStorage.setItem('schedule_thresholds_v1', JSON.stringify(thresholds)); } catch (e) {}
-}
-function resetThresholds() {
-  if (!confirm('確定要把所有閾值恢復預設值嗎?')) return;
-  thresholds = { ...THRESHOLD_DEFAULTS };
-  localStorage.removeItem('schedule_thresholds_v1');
-  [['sWdHours','vWdHours','wdHours'],['sWeHours','vWeHours','weHours'],
-   ['sRph','vRph','rph'],['sRev','vRev','rev'],
-   ['sDayWd','vDayWd','dayWd'],['sDayWe','vDayWe','dayWe']].forEach(([sid,vid,key]) => {
-    document.getElementById(sid).value = thresholds[key];
-    document.getElementById(vid).textContent = key === 'rev'
-      ? thresholds[key].toLocaleString() : thresholds[key];
-  });
-  renderAll();
-}
-let filterDateStart = '';
-let filterDateEnd = '';
+let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
+let filterWeek = '';
 let selectedZones = new Set();  // 空 = 全選
 let selectedStores = new Set(); // 空 = 全選
 let heatShowAll = false;        // 熱力矩陣是否展開全部
@@ -590,8 +556,14 @@ function initUI() {
   document.getElementById('loadingBox').style.display = 'none';
   document.getElementById('mainContent').style.display = 'block';
 
-  // 日期區間預設值:本月 1 號到今天
-  setDateRange('thisMonth', /*skipRender=*/true);
+  // 週下拉(顯示週數+日期)
+  const wkPairs = {};
+  DATA.week_kpi.forEach(r => { wkPairs[r.year_week] = r.week_start; });
+  const weeks = Object.keys(wkPairs).sort();
+  const weekSel = document.getElementById('filterWeek');
+  weekSel.className = 'filter-select-large';
+  weekSel.innerHTML = '<option value="">所有週(共 ' + weeks.length + ' 週)</option>'
+    + weeks.map(w => '<option value="' + w + '">' + weekLabel(w, wkPairs[w]) + '</option>').join('');
 
   // 區域複選下拉（用 ZONE_ORDER 固定順序，只顯示實際有店的區）
   const allZonesInData = new Set(DATA.stores.map(s => s.zone));
@@ -622,8 +594,7 @@ function initUI() {
 
   // 綁定事件
   bindSliders();
-  document.getElementById('filterDateStart').addEventListener('change', e => { filterDateStart = e.target.value; updateDateRangeSummary(); renderAll(); });
-  document.getElementById('filterDateEnd').addEventListener('change', e => { filterDateEnd = e.target.value; updateDateRangeSummary(); renderAll(); });
+  document.getElementById('filterWeek').addEventListener('change', e => { filterWeek = e.target.value; renderAll(); });
   document.getElementById('dailyStore').addEventListener('change', loadDailyData);
   document.getElementById('dailyMonth').addEventListener('change', loadDailyData);
 
@@ -643,18 +614,16 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
   const menu    = document.getElementById(menuId);
   const dd      = document.getElementById(dropdownId);
 
-  // 防止重複綁定 click listener:用屬性標記,並用 clone 換掉舊 trigger 清除既有 listener
-  // 注意:這個函式可能被呼叫多次(例如區域變動會重建門市下拉),不能讓 listener 累加
   if (items.length === 0) {
-    trigger.textContent = (kind === 'zone' ? '無區域可選' : '無門市可選') + ' ▾';
+    trigger.textContent = (kind === 'zone' ? '無區域可選' : '請先選區域') + ' ▾';
     trigger.classList.add('disabled');
-    menu.innerHTML = '<div class="multi-dropdown-empty">尚無資料</div>';
+    menu.innerHTML = '<div class="multi-dropdown-empty">' + (kind === 'zone' ? '尚無資料' : '請先選至少一個區域') + '</div>';
     updateMultiSummary(kind, items, selectedSet);
     return;
   }
   trigger.classList.remove('disabled');
 
-  // 建選項:全選/全清 + 個別項
+  // 建選項：全選/全清 + 個別項
   let html = '<div class="multi-dropdown-item all-toggle" data-action="all">'
     + '<input type="checkbox" id="' + kind + '_all" />'
     + '<label for="' + kind + '_all" style="cursor:pointer;flex:1;">全選</label>'
@@ -686,13 +655,16 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
     row.addEventListener('click', e => {
       e.stopPropagation();
       const cb = row.querySelector('input');
+      // 如果點的是 row 但不是 checkbox 本身，手動 toggle
       if (e.target !== cb) cb.checked = !cb.checked;
       const val = parseValue(kind, cb.getAttribute('data-val'));
+      // 全選邏輯（空 set = 全選）→ 從空 set 改點某項時，要把所有「未選的」加進 selectedSet 再移除這項；最簡單做法：每次 sync 全部
       const cbs = menu.querySelectorAll('input[type=checkbox][data-val]');
       const checkedVals = [...cbs].filter(c => c.checked).map(c => parseValue(kind, c.getAttribute('data-val')));
       selectedSet.clear();
+      // 全選 → 用空 set 表示
       if (checkedVals.length === cbs.length) {
-        // 全選 → 用空 set 表示
+        // 空 set
       } else {
         checkedVals.forEach(v => selectedSet.add(v));
       }
@@ -710,20 +682,25 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
     allCb.indeterminate = false;
     menu.querySelectorAll('input[type=checkbox][data-val]').forEach(c => c.checked = willCheck);
     selectedSet.clear();
+    if (!willCheck) {
+      // 全清，selectedSet 保持空 — 但語意要區分：用一個特殊標記？
+      // 我們用「selectedSet 空 = 全選」的慣例，所以「全清」要逐項取消。
+      // 但這樣 filteredRows 又會回到全顯示。為避免歧義，改為「全清 = 全部不顯示」太怪。
+      // 折衷：把所有可選項裝進 selectedSet 但全 false → 改用以下：保持空 = 全選；點全清等同回到全選
+      // 因此全清按鈕在 UI 上其實是把所有 cb 取消 + selectedSet 清空（=全選）。
+      // 為清楚使用者，這裡顯示文字仍維持「全選」
+      // 結果：全清 = 全選（兩者等價）
+    }
+    // 由於上面邏輯，selectedSet 維持空 = 全選
     refreshAllCb();
     updateMultiSummary(kind, items, selectedSet);
     onChange();
   });
 
   // 觸發按鈕展開/收合
-  // 關鍵修正:用 clone 取代 trigger 來清除舊的 click listener,避免重複綁定
-  // 否則每次區域變動重建門市下拉時,門市 trigger 會累積多個 click listener
-  // 點一次按鈕觸發多次 toggle,造成「點不開」的詭異現象
-  const newTrigger = trigger.cloneNode(true);
-  trigger.parentNode.replaceChild(newTrigger, trigger);
-  newTrigger.addEventListener('click', e => {
+  trigger.addEventListener('click', e => {
     e.stopPropagation();
-    if (newTrigger.classList.contains('disabled')) return;
+    if (trigger.classList.contains('disabled')) return;
     document.querySelectorAll('.multi-dropdown').forEach(other => {
       if (other.id !== dropdownId) other.classList.remove('open');
     });
@@ -745,7 +722,7 @@ function updateMultiSummary(kind, items, selectedSet) {
   if (!trigger) return;
 
   if (items.length === 0) {
-    if (summary) summary.textContent = (kind === 'zone' ? '無區域' : '無可選門市');
+    if (summary) summary.textContent = (kind === 'zone' ? '無區域' : '請先選區域');
     return;
   }
   if (selectedSet.size === 0) {
@@ -810,13 +787,6 @@ function bindSliders() {
     ['sDayWd',   'vDayWd',   'dayWd'],
     ['sDayWe',   'vDayWe',   'dayWe']
   ];
-  // 頁面載入時,把 localStorage 的值套用到滑桿與顯示
-  map.forEach(([sid, vid, key]) => {
-    document.getElementById(sid).value = thresholds[key];
-    document.getElementById(vid).textContent = key === 'rev'
-      ? thresholds[key].toLocaleString()
-      : thresholds[key];
-  });
   map.forEach(([sid, vid, key]) => {
     const s = document.getElementById(sid);
     s.addEventListener('input', () => {
@@ -824,7 +794,6 @@ function bindSliders() {
       document.getElementById(vid).textContent = key === 'rev'
         ? thresholds[key].toLocaleString()
         : thresholds[key];
-      saveThresholds();
       renderAll();
     });
   });
@@ -876,62 +845,11 @@ function computeFlags(row) {
 
 function filteredRows() {
   return DATA.week_kpi.filter(r => {
-    if (filterDateStart && filterDateEnd) {
-      // 該週的起訖日:week_start ~ week_start+6
-      const ws = r.week_start;
-      const p = ws.split('-');
-      const d = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
-      d.setDate(d.getDate() + 6);
-      const we = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      // 該週與篩選區間有重疊 = ws <= filterEnd AND we >= filterStart
-      if (ws > filterDateEnd || we < filterDateStart) return false;
-    }
+    if (filterWeek && r.year_week !== filterWeek) return false;
     if (selectedZones.size > 0 && !selectedZones.has(r.zone)) return false;
     if (selectedStores.size > 0 && !selectedStores.has(Number(r.store_id))) return false;
     return true;
   });
-}
-
-// 快捷鍵 + 日期區間工具函式
-function setDateRange(preset, skipRender) {
-  const today = new Date();
-  const fmt = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-  let start, end;
-  if (preset === 'thisMonth') {
-    start = new Date(today.getFullYear(), today.getMonth(), 1);
-    end = today;
-  } else if (preset === 'lastMonth') {
-    start = new Date(today.getFullYear(), today.getMonth()-1, 1);
-    end = new Date(today.getFullYear(), today.getMonth(), 0);
-  } else if (preset === 'thisWeek') {
-    const dow = today.getDay() === 0 ? 7 : today.getDay();
-    start = new Date(today); start.setDate(today.getDate() - dow + 1);
-    end = today;
-  } else if (preset === 'lastWeek') {
-    const dow = today.getDay() === 0 ? 7 : today.getDay();
-    end = new Date(today); end.setDate(today.getDate() - dow);
-    start = new Date(end); start.setDate(end.getDate() - 6);
-  } else if (preset === 'last4w') {
-    start = new Date(today); start.setDate(today.getDate() - 27);
-    end = today;
-  }
-  filterDateStart = fmt(start);
-  filterDateEnd = fmt(end);
-  document.getElementById('filterDateStart').value = filterDateStart;
-  document.getElementById('filterDateEnd').value = filterDateEnd;
-  updateDateRangeSummary();
-  if (!skipRender) renderAll();
-}
-
-function updateDateRangeSummary() {
-  const el = document.getElementById('dateRangeSummary');
-  if (!el) return;
-  if (filterDateStart && filterDateEnd) {
-    const days = Math.round((new Date(filterDateEnd) - new Date(filterDateStart)) / 86400000) + 1;
-    el.textContent = '共 ' + days + ' 天';
-  } else {
-    el.textContent = '';
-  }
 }
 
 // ============ 渲染 ============
@@ -945,26 +863,14 @@ function renderAll() {
 // --- KPI 卡 ---
 function renderKPI() {
   const rows = filteredRows();
+  const totalHours = rows.reduce((s, r) => s + r.total_hours, 0);
+  const totalRev   = rows.reduce((s, r) => s + r.total_revenue, 0);
+  const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
   const flaggedWeeks = rows.filter(r => computeFlags(r).length > 0).length;
 
-  // 工時:用 daily_hours 按日期區間精準加總
-  // 營收:用 daily_sales 按日期區間精準加總
-  const dh = filteredDailyHours();
-  const ds = filteredDailySales();
-  const totalHours = dh.reduce((s, d) => s + (d.hours || 0), 0);
-  const totalRev   = ds.reduce((s, d) => s + (d.revenue || 0), 0);
-  const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
-
-  // 日數 × 涵蓋店數
-  const dayCount = (filterDateStart && filterDateEnd)
-    ? (Math.round((new Date(filterDateEnd) - new Date(filterDateStart)) / 86400000) + 1)
-    : 0;
-  const storeCount = new Set(dh.map(d => d.store_id)).size
-                  || new Set(ds.map(d => d.store_id)).size;
-
   const kpis = [
-    { label: '總工時', val: Math.round(totalHours).toLocaleString(), sub: dayCount + ' 天 × ' + storeCount + ' 店' },
-    { label: '總營收', val: '$' + Math.round(totalRev).toLocaleString(), sub: '所選範圍實際合計' },
+    { label: '總工時', val: totalHours.toLocaleString(), sub: rows.length + ' 個 店×週' },
+    { label: '總營收', val: '$' + totalRev.toLocaleString(), sub: '所選範圍合計' },
     { label: '平均 rev/h', val: '$' + avgRph.toLocaleString(), sub: '集團人效平均' },
     { label: '紅旗 店×週', val: flaggedWeeks, sub: '需關注', alert: flaggedWeeks > 0 }
   ];
@@ -976,32 +882,6 @@ function renderKPI() {
     + '<div class="sub">' + k.sub + '</div>'
     + '</div>'
   ).join('');
-}
-
-// 按日期區間 + 區域 + 門市 篩選 daily_hours(v3.7 GAS 新增)
-function filteredDailyHours() {
-  if (!DATA.daily_hours) return [];
-  return DATA.daily_hours.filter(d => {
-    if (filterDateStart && d.date < filterDateStart) return false;
-    if (filterDateEnd && d.date > filterDateEnd) return false;
-    const zone = getZone(Number(d.store_id));
-    if (selectedZones.size > 0 && !selectedZones.has(zone)) return false;
-    if (selectedStores.size > 0 && !selectedStores.has(Number(d.store_id))) return false;
-    return true;
-  });
-}
-
-// 按日期區間 + 區域 + 門市 篩選 daily_sales
-function filteredDailySales() {
-  if (!DATA.daily_sales) return [];
-  return DATA.daily_sales.filter(d => {
-    if (filterDateStart && d.date < filterDateStart) return false;
-    if (filterDateEnd && d.date > filterDateEnd) return false;
-    const zone = getZone(Number(d.store_id));
-    if (selectedZones.size > 0 && !selectedZones.has(zone)) return false;
-    if (selectedStores.size > 0 && !selectedStores.has(Number(d.store_id))) return false;
-    return true;
-  });
 }
 
 // --- rev/h → 顏色 ---
@@ -1078,8 +958,71 @@ function computeTop3RedFlagStores() {
   return { top3: sorted.slice(0, 3), weeksUsed: recent4.length, totalFlagged: sorted.length, flagCountMap };
 }
 
+// --- 本週迄今截斷工具(2026-05-21) ---
+// 回傳「今天所在週」的 year_week 字串(對齊 week_kpi 的 year_week 格式)
+function _currentYearWeek() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const ws = {};
+  DATA.week_kpi.forEach(r => { ws[r.year_week] = r.week_start; });
+  for (const [yw, start] of Object.entries(ws)) {
+    const s = new Date(start); s.setHours(0,0,0,0);
+    const e = new Date(s); e.setDate(s.getDate() + 6);
+    if (today >= s && today <= e) return yw;
+  }
+  return null;
+}
+
+// 算指定店「本週週一 ~ 截斷日」的截斷 rev/h
+// 截斷日 = min(昨天, 該店 daily_sales 實際最後一天)
+// 處理早上 7:05 之前昨天 POS 還沒進來、或單店 POS 延遲的情況
+function _currentWeekToYesterdayKPI(storeId, weekStart) {
+  const ws = new Date(weekStart); ws.setHours(0,0,0,0);
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1); yesterday.setHours(0,0,0,0);
+  if (yesterday < ws) return null;
+
+  // 找該店 daily_sales 實際最後一天
+  let lastSalesDate = null;
+  (DATA.daily_sales || []).forEach(d => {
+    if (Number(d.store_id) !== Number(storeId)) return;
+    if (!lastSalesDate || d.date > lastSalesDate) lastSalesDate = d.date;
+  });
+  if (!lastSalesDate) return null;
+
+  const yesterdayStr = _dateStr(yesterday);
+  const cutoffStr = lastSalesDate < yesterdayStr ? lastSalesDate : yesterdayStr;
+  const cutoff = new Date(cutoffStr); cutoff.setHours(0,0,0,0);
+  if (cutoff < ws) return null;
+
+  const startStr = _dateStr(ws);
+  let hours = 0, revenue = 0;
+  (DATA.daily_hours || []).forEach(d => {
+    if (Number(d.store_id) !== Number(storeId)) return;
+    if (d.date < startStr || d.date > cutoffStr) return;
+    hours += Number(d.hours) || 0;
+  });
+  (DATA.daily_sales || []).forEach(d => {
+    if (Number(d.store_id) !== Number(storeId)) return;
+    if (d.date < startStr || d.date > cutoffStr) return;
+    revenue += Number(d.revenue) || 0;
+  });
+  const days = Math.floor((cutoff - ws) / 86400000) + 1;
+  const rph = hours > 0 ? revenue / hours : 0;
+  return { hours, revenue, rph, days, startStr, endStr: cutoffStr };
+}
+
+function _dateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return y + '-' + m + '-' + dd;
+}
+
+function _mmddStr(s) {
+  const parts = s.split('-');
+  return parseInt(parts[1],10) + '/' + parseInt(parts[2],10);
+}
+
 function renderHeatmap() {
-  const rows = filteredRows();
   const container = document.querySelector('#heatTable').parentElement.parentElement;
   // 拿掉先前的 banner
   const oldBanner = container.querySelector('.heat-mode-banner');
@@ -1139,6 +1082,8 @@ function renderHeatmap() {
   weeks.forEach(w => html += '<th><div>' + w.replace(/^\d{4}-/, '') + '</div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>');
   html += '</tr></thead><tbody>';
 
+  const currentYW = _currentYearWeek();
+
   displayStoreIds.forEach(sid => {
     const meta = storeMeta[sid] || { store_name: '?' };
     const zoneName = getZone(sid);
@@ -1149,14 +1094,46 @@ function renderHeatmap() {
     weeks.forEach(w => {
       const r = idx[w + '|' + sid];
       if (!r) { html += '<td>—</td>'; return; }
+
+      // 本週截斷:用 daily_hours + daily_sales 重算 rev/h
+      let displayHours = r.total_hours;
+      let displayRev   = r.total_revenue;
+      let displayRph   = Number(r.rev_per_hour);
+      let isCurrent    = false;
+      let currentInfo  = null;
+      if (w === currentYW) {
+        const ck = _currentWeekToYesterdayKPI(sid, r.week_start);
+        if (ck && ck.hours > 0) {
+          displayHours = Math.round(ck.hours * 10) / 10;
+          displayRev   = Math.round(ck.revenue);
+          displayRph   = ck.rph;
+          isCurrent    = true;
+          currentInfo  = ck;
+        }
+      }
+
+      // flags 仍用 week_kpi 原值判定(紅旗是週累計概念,不截斷)
       const flags = computeFlags(r);
       if (mode === 'filter' && flags.length === 0) { html += '<td>—</td>'; return; }
-      const color = rphToColor(r.rev_per_hour);
+      const color = rphToColor(displayRph);
       const flagged = flags.length > 0;
-      html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + r.year_week + ' ' + meta.store_name + '&#10;營收 $' + r.total_revenue.toLocaleString() + '&#10;工時 ' + r.total_hours + 'h&#10;rev/h $' + r.rev_per_hour + (flags.length ? '&#10;旗: ' + flags.map(f=>f.label).join(', ') : '') + '">'
+
+      // tooltip 內容
+      let tip = w + ' ' + meta.store_name
+        + '&#10;營收 $' + displayRev.toLocaleString()
+        + '&#10;工時 ' + displayHours + 'h'
+        + '&#10;rev/h $' + Math.round(displayRph);
+      if (isCurrent) {
+        tip += '&#10;📡 迄今 ' + currentInfo.days + ' 天('
+            + _mmddStr(currentInfo.startStr) + '~' + _mmddStr(currentInfo.endStr) + ')';
+      }
+      if (flags.length) tip += '&#10;旗: ' + flags.map(f=>f.label).join(', ');
+
+      html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + tip + '">'
+        + (isCurrent ? '<div class="current-mark">📡</div>' : '')
         + (flagged ? '<div class="flag-dot">🚩</div>' : '')
-        + '<div class="rev">$' + Math.round(r.rev_per_hour) + '</div>'
-        + '<div class="hrs">' + r.total_hours + 'h</div>'
+        + '<div class="rev">$' + Math.round(displayRph) + '</div>'
+        + '<div class="hrs">' + displayHours + 'h</div>'
         + '</div></td>';
     });
     html += '</tr>';
