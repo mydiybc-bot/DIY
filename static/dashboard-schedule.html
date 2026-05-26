@@ -103,6 +103,12 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .heat-cell .hrs   { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .heat-cell .flag-dot { position: absolute; top: 2px; right: 4px; font-size: 9px; }
 .heat-cell .current-mark { position: absolute; top: 4px; left: 4px; font-size: 11px; line-height: 1; opacity: 0.85; pointer-events: none; }
+.heat-cell.focus-week { box-shadow: inset 0 0 0 3px var(--brand); }
+.heat-cell.focus-week.flagged { box-shadow: inset 0 0 0 3px var(--flag-red); }
+.heat-cell.context-week { opacity: 0.62; }
+.heat-cell.context-week:hover { opacity: 1; }
+th.week-current { background: var(--brand-soft, rgba(150, 110, 60, 0.08)); }
+th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
 
 /* ZONE COMPARE */
 .zone-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
@@ -1071,16 +1077,46 @@ function renderHeatmap() {
   const heatWrap = container.querySelector('.heat-wrap');
   heatWrap.insertAdjacentHTML('beforebegin', bannerHtml);
 
-  const weeks = [...new Set(rows.map(r => r.year_week))].sort();
+  // 選單週時:自動把前 2 週與後 1 週也納入 (4 欄)
+  // 選「所有週」時:照原邏輯顯示 rows 內所有週
+  let weeks;
+  const wkStart = {};
+  const idx = {};
+  if (filterWeek) {
+    // 單週模式:用全集找前後週
+    const allWeeksSorted = [...new Set(DATA.weekKpi.map(r => r.year_week))].sort();
+    const i = allWeeksSorted.indexOf(filterWeek);
+    weeks = [
+      i >= 2 ? allWeeksSorted[i-2] : null,
+      i >= 1 ? allWeeksSorted[i-1] : null,
+      filterWeek,
+      i >= 0 && i < allWeeksSorted.length - 1 ? allWeeksSorted[i+1] : null,
+    ];
+    // idx 也要用全集建,才能撈到前後週(那幾週不在 filteredRows 裡)
+    DATA.weekKpi.forEach(r => {
+      if (weeks.includes(r.year_week)) {
+        idx[r.year_week + '|' + r.store_id] = r;
+        wkStart[r.year_week] = r.week_start;
+      }
+    });
+  } else {
+    weeks = [...new Set(rows.map(r => r.year_week))].sort();
+    rows.forEach(r => { idx[r.year_week + '|' + r.store_id] = r; wkStart[r.year_week] = r.week_start; });
+  }
+
   const storeMeta = {};
   DATA.stores.forEach(s => storeMeta[s.store_id] = s);
 
-  const idx = {};
-  const wkStart = {};
-  rows.forEach(r => { idx[r.year_week + '|' + r.store_id] = r; wkStart[r.year_week] = r.week_start; });
-
   let html = '<thead><tr><th class="store-col">門市</th>';
-  weeks.forEach(w => html += '<th><div>' + w.replace(/^\d{4}-/, '') + '</div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>');
+  weeks.forEach(w => {
+    if (w === null) {
+      html += '<th class="week-empty"><div style="color:var(--muted);">—</div><div style="font-size:10px;color:var(--muted);font-weight:500;">無資料</div></th>';
+    } else if (filterWeek && w === filterWeek) {
+      html += '<th class="week-current"><div>' + w.replace(/^\d{4}-/, '') + ' <span style="font-size:10px;background:var(--brand);color:#fff;padding:1px 5px;border-radius:6px;vertical-align:middle;">本週</span></div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>';
+    } else {
+      html += '<th><div>' + w.replace(/^\d{4}-/, '') + '</div><div style="font-size:10px;color:var(--muted);font-weight:500;">' + weekRangeStr(wkStart[w]) + '</div></th>';
+    }
+  });
   html += '</tr></thead><tbody>';
 
   const currentYW = _currentYearWeek();
@@ -1093,8 +1129,11 @@ function renderHeatmap() {
     const flagBadge = fc > 0 ? ' <span class="store-flag-badge">⚑ ' + fc + '</span>' : '';
     html += '<tr><td class="store-col">' + sid + ' ' + meta.store_name + flagBadge + '<br><span style="font-size:10px;color:var(--muted);font-weight:500;">' + zoneName + '</span></td>';
     weeks.forEach(w => {
+      if (w === null) { html += '<td class="week-empty"><div style="color:var(--muted);text-align:center;padding:20px 0;">—</div></td>'; return; }
       const r = idx[w + '|' + sid];
       if (!r) { html += '<td>—</td>'; return; }
+
+      const isFocusWeek = (filterWeek && w === filterWeek);
 
       // 本週截斷:用 daily_hours + daily_sales 重算 rev/h
       let displayHours = r.total_hours;
@@ -1115,7 +1154,7 @@ function renderHeatmap() {
 
       // flags 仍用 week_kpi 原值判定(紅旗是週累計概念,不截斷)
       const flags = computeFlags(r);
-      if (mode === 'filter' && flags.length === 0) { html += '<td>—</td>'; return; }
+      if (mode === 'filter' && flags.length === 0 && !isFocusWeek) { html += '<td>—</td>'; return; }
       const color = rphToColor(displayRph);
       const flagged = flags.length > 0;
 
@@ -1130,7 +1169,8 @@ function renderHeatmap() {
       }
       if (flags.length) tip += '&#10;旗: ' + flags.map(f=>f.label).join(', ');
 
-      html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" title="' + tip + '">'
+      const cellExtraClass = isFocusWeek ? ' focus-week' : (filterWeek ? ' context-week' : '');
+      html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + cellExtraClass + '" style="background:' + color + ';" title="' + tip + '">'
         + (isCurrent ? '<div class="current-mark">📡</div>' : '')
         + (flagged ? '<div class="flag-dot">🚩</div>' : '')
         + '<div class="rev">$' + Math.round(displayRph) + '</div>'
