@@ -633,9 +633,6 @@ function App(){
         {activeTab===5 && <TabDiscount rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
       </div>
 
-      {/* DINGXIN RECONCILE */}
-      <DingxinReconcile rawData={rawData} />
-
       {/* FOOTER */}
       <footer className="app-footer">
         <div>最後更新時間：{rawData.lastUpdated ? new Date(rawData.lastUpdated).toLocaleString('zh-TW') : '—'}</div>
@@ -1249,7 +1246,7 @@ function TabSeasonal({ data }) {
         </p>
         {/* v2 fix-2: 補 3 折扣免責聲明（選項 A，不動 GAS） */}
         <div style={{marginTop:10,padding:'8px 12px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,fontSize:12,color:'#92400e'}}>
-          ※ 季節活動營收為含折扣金額（Gross）。實際淨營收請對照下方鼎新對帳區。
+          ※ 季節活動營收為含折扣金額（Gross）。
         </div>
       </div>
 
@@ -1283,7 +1280,7 @@ function TabSeasonal({ data }) {
                   {fmtMoney(displayCampaign.revenue)}
                 </div>
                 <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>
-                  ※ 此為含折扣金額（Gross），如需淨值請見鼎新對帳區
+                  ※ 此為含折扣金額（Gross）
                 </div>
                 <div style={{ marginTop: 8, fontSize: 14, color: '#78716c' }}>
                   YoY <span style={{
@@ -1648,135 +1645,6 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/* ================================================================
-   鼎新對帳區塊
-   ================================================================ */
-function DingxinReconcile({rawData}){
-  // v2 fix-3: hooks must come before any conditional return (Rules of Hooks)
-  // Build monthly summary from monthlyByStore
-  const monthlySummary = useMemo(()=>{
-    if(!rawData) return [];
-    const mbs = rawData.monthlyByStore || [];
-    const byYM={};
-    mbs.forEach(m=>{
-      if(!byYM[m.yearMonth]) byYM[m.yearMonth]={yearMonth:m.yearMonth,gross:0,discount:0,net:0};
-      byYM[m.yearMonth].gross+=(m.revenue_gross||0);
-      byYM[m.yearMonth].discount+=(m.discount||0);
-      byYM[m.yearMonth].net+=(m.revenue_net||0);
-    });
-    return Object.values(byYM).sort((a,b)=>b.yearMonth<a.yearMonth?-1:1);
-  },[rawData]);
-
-  // localStorage state for dingxin input values
-  const [dxValues, setDxValues] = useState(()=>{
-    const init={};
-    if(typeof localStorage !== 'undefined'){
-      monthlySummary.forEach(m=>{
-        const key='dingxin_revenue_'+m.yearMonth;
-        const v=localStorage.getItem(key);
-        if(v!==null) init[m.yearMonth]=v;
-      });
-    }
-    return init;
-  });
-
-  const handleDxChange = (yearMonth, value)=>{
-    setDxValues(prev=>{
-      const next={...prev,[yearMonth]:value};
-      if(typeof localStorage !== 'undefined'){
-        localStorage.setItem('dingxin_revenue_'+yearMonth, value);
-      }
-      return next;
-    });
-  };
-
-  const [isOpen, setIsOpen] = useState(false);
-
-  // guard after all hooks
-  if(!rawData) return null;
-
-  return (
-    <div style={{maxWidth:1600,margin:'24px auto',padding:'0 16px'}}>
-      <div style={{background:'white',border:'1px solid var(--border)',borderRadius:12,overflow:'hidden'}}>
-        <div
-          onClick={()=>setIsOpen(v=>!v)}
-          style={{
-            padding:'16px 20px',cursor:'pointer',
-            display:'flex',alignItems:'center',justifyContent:'space-between',
-            background:'var(--bg-secondary)',borderBottom:isOpen?'1px solid var(--border)':'none'
-          }}
-        >
-          <div style={{fontWeight:700,fontSize:15,color:'var(--text-primary)'}}>
-            🔍 鼎新對帳（POS vs 鼎新系統）
-          </div>
-          <div style={{color:'var(--text-muted)',fontSize:13}}>{isOpen?'▲ 收合':'▼ 展開'}</div>
-        </div>
-        {isOpen && (
-          <div style={{overflowX:'auto',padding:'0 0 8px'}}>
-            <div style={{fontSize:12,color:'var(--text-secondary)',padding:'8px 20px'}}>
-              請在「鼎新淨營收」欄位輸入鼎新系統對應月份的淨營收數字，系統將自動計算差異。差異超過 1% 或 500 元時標記為需查核。
-            </div>
-            <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-              <thead>
-                <tr style={{background:'var(--bg-secondary)',borderBottom:'2px solid var(--border)'}}>
-                  <th style={{padding:'8px 16px',textAlign:'left',fontWeight:600,color:'var(--text-secondary)'}}>月份</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--text-secondary)'}}>POS Gross</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--text-secondary)'}}>POS 折扣</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--text-secondary)'}}>POS Net</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--accent)'}}>鼎新淨營收</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--text-secondary)'}}>差異</th>
-                  <th style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:'var(--text-secondary)'}}>差異%</th>
-                  <th style={{padding:'8px 16px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)'}}>狀態</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monthlySummary.map(m=>{
-                  const dxRaw = dxValues[m.yearMonth] || '';
-                  const dxVal = dxRaw===''?null:Number(dxRaw.replace(/,/g,''));
-                  const diff = (dxVal!=null && !isNaN(dxVal)) ? (m.net - dxVal) : null;
-                  const diffPct = (diff!=null && dxVal && dxVal!==0) ? (Math.abs(diff)/Math.abs(dxVal)*100) : null;
-                  const needCheck = diff!=null && (Math.abs(diff)>500 || (diffPct!=null && diffPct>1));
-                  const rowBg = needCheck ? '#fff3f3' : 'transparent';
-                  return (
-                    <tr key={m.yearMonth} style={{borderBottom:'1px solid var(--border)',background:rowBg}}>
-                      <td style={{padding:'8px 16px',fontWeight:600,color:'var(--text-primary)'}}>{m.yearMonth}</td>
-                      <td style={{padding:'8px 16px',textAlign:'right',color:'var(--text-secondary)'}}>{fmt.currency(m.gross)}</td>
-                      <td style={{padding:'8px 16px',textAlign:'right',color:'#ef4444'}}>{fmt.currency(m.discount)}</td>
-                      <td style={{padding:'8px 16px',textAlign:'right',fontWeight:600}}>{fmt.currency(m.net)}</td>
-                      <td style={{padding:'8px 16px',textAlign:'right'}}>
-                        <input
-                          type="text"
-                          value={dxRaw}
-                          onChange={e=>handleDxChange(m.yearMonth, e.target.value)}
-                          placeholder="輸入鼎新數字"
-                          style={{
-                            width:120,padding:'4px 8px',border:'1px solid var(--border)',
-                            borderRadius:6,fontSize:13,textAlign:'right',
-                            outline:'none',background:'white',color:'var(--text-primary)'
-                          }}
-                        />
-                      </td>
-                      <td style={{padding:'8px 16px',textAlign:'right',fontWeight:600,color:diff==null?'var(--text-muted)':diff>0?'#16a34a':'#dc2626'}}>
-                        {diff==null?'—':(diff>0?'+':'')+fmt.currency(diff)}
-                      </td>
-                      <td style={{padding:'8px 16px',textAlign:'right',color:diffPct==null?'var(--text-muted)':needCheck?'#dc2626':'#16a34a'}}>
-                        {diffPct==null?'—':diffPct.toFixed(2)+'%'}
-                      </td>
-                      <td style={{padding:'8px 16px',textAlign:'center',fontSize:16}}>
-                        {diff==null?'':needCheck?'⚠️ 需查核':'✅'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
