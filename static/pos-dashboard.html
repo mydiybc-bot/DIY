@@ -315,6 +315,23 @@ function App(){
     });
   },[rawData, dateStart, dateEnd, selRegion, selStores]);
 
+  /* ---------- v2 fix: NET 營收查找表（從 monthlyByStore 取，因 monthly 細項無 net）---------- */
+  const netLookup = useMemo(()=>{
+    const mbs = (rawData?.monthlyByStore||[]).filter(m=>{
+      if(dateStart && m.yearMonth < dateStart) return false;
+      if(dateEnd && m.yearMonth > dateEnd) return false;
+      if(selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const byStore={}, byStoreMonth={};
+    mbs.forEach(m=>{
+      byStore[m.store]=(byStore[m.store]||0)+(m.revenue_net||0);
+      byStoreMonth[m.yearMonth+'|'+m.store]=(byStoreMonth[m.yearMonth+'|'+m.store]||0)+(m.revenue_net||0);
+    });
+    return { byStore, byStoreMonth };
+  },[rawData, dateStart, dateEnd, selRegion, selStores]);
+
   /* ---------- 不吃月份篩選的資料(只套區域/分店)---------- */
   /* 給 Tab2 圖4「各店陪同率趨勢」用:月份範圍固定為「去年同期再往前 2 個月」至今 */
   const monthlyByStoreNoDate = useMemo(()=>{
@@ -360,18 +377,32 @@ function App(){
       txns+=m.txnCount;
       if(m.mainCategory==='限定甜點') limitedRev+=m.revenue;
     });
+    // v2 fix-1: 用篩選後 monthlyByStore 算淨營收，而非全域 rawData.kpi（補 2 作用域修正）
+    const filteredMBSForKpi = (rawData?.monthlyByStore||[]).filter(m=>{
+      if(dateStart && m.yearMonth < dateStart) return false;
+      if(dateEnd && m.yearMonth > dateEnd) return false;
+      if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const totalRevenueNet = filteredMBSForKpi.length>0
+      ? filteredMBSForKpi.reduce((s,m)=>s+(m.revenue_net||0),0)
+      : totalRev;
+    const totalDiscount = filteredMBSForKpi.reduce((s,m)=>s+(m.discount||0),0);
     const hc = desserts + companions;
     return {
       totalRevenue: totalRev,
+      totalRevenueNet: totalRevenueNet,
+      totalDiscount: totalDiscount,
       headcount: hc,
       dessertCount: desserts,
       companionCount: companions,
-      avgSpendPerHead: hc>0 ? Math.round(totalRev/hc) : 0,
+      avgSpendPerHead: hc>0 ? Math.round(totalRevenueNet/hc) : 0,
       companionRate: hc>0 ? (companions/hc*100) : 0,
       limitedRevenue: limitedRev,
       limitedRevenueRatio: totalRev>0 ? (limitedRev/totalRev*100) : 0
     };
-  },[filtered]);
+  },[filtered, rawData, dateStart, dateEnd, selRegion, selStores]);
 
   /* ---------- AGGREGATIONS FOR CHARTS ---------- */
 
@@ -383,11 +414,22 @@ function App(){
       const t=map[m.yearMonth];
       t.revenue+=m.revenue; t.headcount+=m.headcount; t.dessertCount+=m.dessertCount; t.companionCount+=m.companionCount;
     });
-    return Object.values(map).sort((a,b)=>a.ym<b.ym?-1:1).map(t=>({
-      ...t, avgSpend: t.headcount>0?Math.round(t.revenue/t.headcount):0,
-      companionRate: t.headcount>0?(t.companionCount/t.headcount*100):0
-    }));
-  },[filtered]);
+    // net by month from netLookup.byStoreMonth
+    const netByYM={};
+    Object.keys(netLookup.byStoreMonth).forEach(k=>{
+      const ym=k.split('|')[0];
+      netByYM[ym]=(netByYM[ym]||0)+netLookup.byStoreMonth[k];
+    });
+    return Object.values(map).sort((a,b)=>a.ym<b.ym?-1:1).map(t=>{
+      const revenueNet = netByYM[t.ym]!=null ? netByYM[t.ym] : t.revenue;
+      return {
+        ...t, revenueNet,
+        avgSpend: t.headcount>0?Math.round(t.revenue/t.headcount):0,
+        avgSpendNet: t.headcount>0?Math.round(revenueNet/t.headcount):0,
+        companionRate: t.headcount>0?(t.companionCount/t.headcount*100):0
+      };
+    });
+  },[filtered, netLookup]);
 
   // Monthly by store
   const monthlyByStore = useMemo(()=>{
@@ -397,8 +439,16 @@ function App(){
       if(!map[k]) map[k]={ym:m.yearMonth,store:m.store,region:m.region,revenue:0,headcount:0,dessertCount:0,companionCount:0};
       const t=map[k]; t.revenue+=m.revenue; t.headcount+=m.headcount; t.dessertCount+=m.dessertCount; t.companionCount+=m.companionCount;
     });
-    return Object.values(map).map(t=>({...t,avgSpend:t.headcount>0?Math.round(t.revenue/t.headcount):0,companionRate:t.headcount>0?(t.companionCount/t.headcount*100):0}));
-  },[filtered]);
+    return Object.values(map).map(t=>{
+      const revenueNet = netLookup.byStoreMonth[t.ym+'|'+t.store] != null ? netLookup.byStoreMonth[t.ym+'|'+t.store] : t.revenue;
+      return {
+        ...t, revenueNet,
+        avgSpend:t.headcount>0?Math.round(t.revenue/t.headcount):0,
+        avgSpendNet:t.headcount>0?Math.round(revenueNet/t.headcount):0,
+        companionRate:t.headcount>0?(t.companionCount/t.headcount*100):0
+      };
+    });
+  },[filtered, netLookup]);
 
   // Monthly by main category
   const monthlyByCat = useMemo(()=>{
@@ -418,11 +468,16 @@ function App(){
       if(!map[m.store]) map[m.store]={store:m.store,region:m.region,revenue:0,headcount:0,dessertCount:0,companionCount:0};
       const t=map[m.store]; t.revenue+=m.revenue; t.headcount+=m.headcount; t.dessertCount+=m.dessertCount; t.companionCount+=m.companionCount;
     });
-    return Object.values(map).map(t=>({
-      ...t, avgSpend:t.headcount>0?Math.round(t.revenue/t.headcount):0,
-      companionRate:t.headcount>0?(t.companionCount/t.headcount*100):0
-    })).sort((a,b)=>b.revenue-a.revenue);
-  },[filtered]);
+    return Object.values(map).map(t=>{
+      const revenueNet = netLookup.byStore[t.store] != null ? netLookup.byStore[t.store] : t.revenue;
+      return {
+        ...t, revenueNet,
+        avgSpend:t.headcount>0?Math.round(t.revenue/t.headcount):0,
+        avgSpendNet:t.headcount>0?Math.round(revenueNet/t.headcount):0,
+        companionRate:t.headcount>0?(t.companionCount/t.headcount*100):0
+      };
+    }).sort((a,b)=>b.revenueNet-a.revenueNet);
+  },[filtered, netLookup]);
 
   // Category totals (exclude '找不到')
   const catTotals = useMemo(()=>{
@@ -489,7 +544,7 @@ function App(){
     </div>
   );
 
-  const tabs = ['營收趨勢','分店比較','品項分析','客單價分析','季節&活動'];
+  const tabs = ['營收趨勢','分店比較','品項分析','客單價分析','季節&活動','折扣分析'];
 
   return (
     <div>
@@ -572,8 +627,8 @@ function App(){
         {/* KPI CARDS */}
         <div className="kpi-grid">
           <div className="kpi-card">
-            <div className="kpi-label">期間總營收</div>
-            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(kpis.totalRevenue)}</div>
+            <div className="kpi-label">淨營收（已扣折扣）</div>
+            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(kpis.totalRevenueNet)}</div>
             <div className="kpi-sub">{monthlyTotals.length} 個月份</div>
           </div>
           <div className="kpi-card">
@@ -584,7 +639,7 @@ function App(){
           <div className="kpi-card">
             <div className="kpi-label">客單價</div>
             <div className="kpi-value" style={{color:'var(--warning)'}}>{fmt.currency(kpis.avgSpendPerHead)}</div>
-            <div className="kpi-sub">總營收 ÷ 來客數</div>
+            <div className="kpi-sub">淨營收 ÷ 來客數</div>
           </div>
           <div className="kpi-card">
             <div className="kpi-label">陪同率</div>
@@ -611,11 +666,12 @@ function App(){
         </div>
 
         {/* TAB CONTENT */}
-        {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals}/>}
-        {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} monthlyByStoreNoDate={monthlyByStoreNoDate} storesInData={storesInData}/>}
+        {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
+        {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} monthlyByStoreNoDate={monthlyByStoreNoDate} storesInData={storesInData} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
         {activeTab===2 && <TabProductAnalysis catTotals={catTotals} filteredProducts={filteredProducts}/>}
         {activeTab===3 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
           {activeTab===4 && <TabSeasonal data={rawData}/>}
+        {activeTab===5 && <TabDiscount rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
       </div>
 
       {/* FOOTER */}
@@ -631,24 +687,38 @@ function App(){
 /* ================================================================
    TAB 1: 營收趨勢
    ================================================================ */
-function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, catTotals}){
+function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, catTotals, rawData, dateStart, dateEnd, selRegion, selStores}){
   const [viewMode, setViewMode] = useState('total'); // total | byStore
 
-  // Revenue line chart data
+  // Revenue line chart data (v2: adds net revenue line from monthlyByStore API data)
   const revenueLineData = useMemo(()=>{
-    if(viewMode==='total') return monthlyTotals.map(t=>({name:t.ym,revenue:t.revenue}));
-    // By store: pivot
+    // Build net revenue totals by yearMonth from rawData.monthlyByStore
+    const mbs = rawData?.monthlyByStore || [];
+    const filteredMBS = mbs.filter(m=>{
+      if(dateStart && m.yearMonth < dateStart) return false;
+      if(dateEnd && m.yearMonth > dateEnd) return false;
+      if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const netByYM={};
+    filteredMBS.forEach(m=>{
+      netByYM[m.yearMonth]=(netByYM[m.yearMonth]||0)+(m.revenue_net||0);
+    });
+
+    if(viewMode==='total') return monthlyTotals.map(t=>({name:t.ym,revenue:t.revenue,revenueNet:netByYM[t.ym]||0}));
+    // By store: pivot（v2 改用 net 淨營收）
     const yms = [...new Set(monthlyByStore.map(m=>m.ym))].sort();
     const stores = [...new Set(monthlyByStore.map(m=>m.store))];
     return yms.map(ym=>{
       const row={name:ym};
       stores.forEach(s=>{
         const found = monthlyByStore.find(m=>m.ym===ym&&m.store===s);
-        row[s] = found?found.revenue:0;
+        row[s] = found?(found.revenueNet!=null?found.revenueNet:found.revenue):0;
       });
       return row;
     });
-  },[viewMode, monthlyTotals, monthlyByStore]);
+  },[viewMode, monthlyTotals, monthlyByStore, rawData, dateStart, dateEnd, selRegion, selStores]);
 
   const storeList = useMemo(()=>[...new Set(monthlyByStore.map(m=>m.store))],[monthlyByStore]);
 
@@ -685,7 +755,10 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
               <YAxis stroke="#B89E97" tick={{fontSize:11}} tickFormatter={fmt.short}/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
               {viewMode==='total' ? (
-                <Line type="monotone" dataKey="revenue" stroke="#C4412F" strokeWidth={2.5} dot={{r:3}} name="營收"/>
+                <React.Fragment>
+                  <Line type="monotone" dataKey="revenue" stroke="#C4412F" strokeWidth={2.5} dot={{r:3}} name="含折扣"/>
+                  <Line type="monotone" dataKey="revenueNet" stroke="#22c55e" strokeWidth={2.5} dot={{r:3}} strokeDasharray="5 3" name="淨營收"/>
+                </React.Fragment>
               ) : (
                 storeList.map((s,i)=>(
                   <Line key={s} type="monotone" dataKey={s} stroke={STORE_COLORS[i%STORE_COLORS.length]} strokeWidth={1.5} dot={false} name={s}/>
@@ -699,8 +772,8 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
 
       {/* 2. Headcount & avgSpend dual axis */}
       <div className="chart-card">
-        <div className="chart-title">來客數 & 客單價</div>
-        <div className="chart-subtitle">柱狀=來客數 / 折線=客單價</div>
+        <div className="chart-title">來客數 & 淨客單價</div>
+        <div className="chart-subtitle">柱狀=來客數 / 折線=淨客單價（已扣折扣）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={monthlyTotals}>
@@ -710,7 +783,7 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
               <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
               <Bar yAxisId="left" dataKey="headcount" fill="#22c55e" opacity={0.7} name="來客數" radius={[4,4,0,0]}/>
-              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpendNet" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="淨客單價"/>
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -817,10 +890,26 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
 /* ================================================================
    TAB 2: 分店比較
    ================================================================ */
-function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, storesInData}){
+function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, storesInData, rawData, dateStart, dateEnd, selRegion, selStores}){
   // 圖1-3:各店比較,X 軸 = 12 家店,沿用 storeTotals(吃篩選器)
   // 依營收排序,讓三張圖門市順序一致
-  const storeData = useMemo(()=>[...storeTotals].sort((a,b)=>b.revenue-a.revenue),[storeTotals]);
+  // v2: add revenueNet from rawData.monthlyByStore
+  const storeData = useMemo(()=>{
+    const mbs = rawData?.monthlyByStore || [];
+    const filteredMBS = mbs.filter(m=>{
+      if(dateStart && m.yearMonth < dateStart) return false;
+      if(dateEnd && m.yearMonth > dateEnd) return false;
+      if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const netByStore={};
+    filteredMBS.forEach(m=>{ netByStore[m.store]=(netByStore[m.store]||0)+(m.revenue_net||0); });
+    return [...storeTotals].sort((a,b)=>b.revenueNet-a.revenueNet).map(s=>{
+      const revenueNet = netByStore[s.store]!=null ? netByStore[s.store] : s.revenue;
+      return {...s, revenueNet, avgSpendNet: s.headcount>0?Math.round(revenueNet/s.headcount):0};
+    });
+  },[storeTotals, rawData, dateStart, dateEnd, selRegion, selStores]);
 
   // 圖4:各店陪同率趨勢,X 軸 = 月份,pivot monthlyByStoreNoDate(不吃月份篩選)
   const companionTrend = useMemo(()=>{
@@ -841,8 +930,8 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
     <div className="charts-grid cols-2">
       {/* 1. 各店:營收 vs 來客數 */}
       <div className="chart-card">
-        <div className="chart-title">各店：營收 vs 來客數</div>
-        <div className="chart-subtitle">柱狀=營收 / 折線=來客數</div>
+        <div className="chart-title">各店：淨營收 vs 來客數</div>
+        <div className="chart-subtitle">柱狀=淨營收（已扣折扣）/ 折線=來客數</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={storeData}>
@@ -852,7 +941,7 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
               <YAxis yAxisId="right" orientation="right" stroke="#22c55e" tick={{fontSize:10}} tickFormatter={fmt.short}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
               <Legend wrapperStyle={{fontSize:11}}/>
-              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
+              <Bar yAxisId="left" dataKey="revenueNet" fill="#C4412F" opacity={0.75} name="淨營收" radius={[4,4,0,0]}/>
               <Line yAxisId="right" type="monotone" dataKey="headcount" stroke="#22c55e" strokeWidth={2.5} dot={{r:3}} name="來客數"/>
             </ComposedChart>
           </ResponsiveContainer>
@@ -861,8 +950,8 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
 
       {/* 2. 各店:營收 vs 客單價 */}
       <div className="chart-card">
-        <div className="chart-title">各店：營收 vs 客單價</div>
-        <div className="chart-subtitle">柱狀=營收 / 折線=客單價</div>
+        <div className="chart-title">各店：淨營收 vs 淨客單價</div>
+        <div className="chart-subtitle">柱狀=淨營收 / 折線=淨客單價（皆已扣折扣）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={storeData}>
@@ -872,8 +961,8 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
               <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
               <Legend wrapperStyle={{fontSize:11}}/>
-              <Bar yAxisId="left" dataKey="revenue" fill="#C4412F" opacity={0.75} name="營收" radius={[4,4,0,0]}/>
-              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+              <Bar yAxisId="left" dataKey="revenueNet" fill="#C4412F" opacity={0.75} name="淨營收" radius={[4,4,0,0]}/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpendNet" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="淨客單價"/>
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -881,8 +970,8 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
 
       {/* 3. 各店:來客數 vs 客單價 */}
       <div className="chart-card">
-        <div className="chart-title">各店：來客數 vs 客單價</div>
-        <div className="chart-subtitle">柱狀=來客數 / 折線=客單價</div>
+        <div className="chart-title">各店：來客數 vs 淨客單價</div>
+        <div className="chart-subtitle">柱狀=來客數 / 折線=淨客單價（已扣折扣）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={storeData}>
@@ -893,7 +982,7 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
               <Tooltip content={<CustomTooltip formatter={v=>fmt.number(v)}/>}/>
               <Legend wrapperStyle={{fontSize:11}}/>
               <Bar yAxisId="left" dataKey="headcount" fill="#22c55e" opacity={0.75} name="來客數" radius={[4,4,0,0]}/>
-              <Line yAxisId="right" type="monotone" dataKey="avgSpend" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="客單價"/>
+              <Line yAxisId="right" type="monotone" dataKey="avgSpendNet" stroke="#f59e0b" strokeWidth={2.5} dot={{r:3}} name="淨客單價"/>
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -955,6 +1044,10 @@ function TabProductAnalysis({catTotals, filteredProducts}){
 
   return (
     <div className="charts-grid cols-2">
+      {/* Disclaimer */}
+      <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8}}>
+        <div style={{fontSize:12,color:'#92400e'}}>※ 品類層數字未扣折扣（折扣為訂單層事件，無法切到品類）</div>
+      </div>
       {/* 1. Category donut */}
       <div className="chart-card">
         <div className="chart-title">主類別營收佔比</div>
@@ -1042,7 +1135,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
     monthlyByStore.forEach(m=>{
       const k=m.ym+'|'+m.store;
       if(!map[k]) map[k]={ym:m.ym,store:m.store,revenue:0,headcount:0};
-      map[k].revenue+=m.revenue; map[k].headcount+=m.headcount;
+      map[k].revenue+=(m.revenueNet!=null?m.revenueNet:m.revenue); map[k].headcount+=m.headcount;
     });
     return {
       data: yms.map(ym=>{
@@ -1078,8 +1171,8 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
 
       {/* 2. Store avg spend bar + overall avg line */}
       <div className="chart-card">
-        <div className="chart-title">各店客單價</div>
-        <div className="chart-subtitle">虛線＝全店平均 {fmt.currency(overallAvg)}</div>
+        <div className="chart-title">各店淨客單價</div>
+        <div className="chart-subtitle">已扣折扣 ｜ 虛線＝全店平均 {fmt.currency(overallAvg)}</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={storeTotals}>
@@ -1087,7 +1180,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
               <XAxis dataKey="store" stroke="#B89E97" tick={{fontSize:9,angle:-30,textAnchor:'end'}} height={80}/>
               <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
-              <Bar dataKey="avgSpend" name="客單價" radius={[4,4,0,0]}>
+              <Bar dataKey="avgSpendNet" name="淨客單價" radius={[4,4,0,0]}>
                 {storeTotals.map((s,i)=><Cell key={i} fill={REGION_COLORS[s.region]||'#B89E97'}/>)}
               </Bar>
               <ReferenceLine y={overallAvg} stroke="#ef4444" strokeDasharray="5 5" label={{value:'全店平均',fill:'#ef4444',fontSize:11}}/>
@@ -1098,7 +1191,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
 
       {/* 3. Store avg spend monthly trend */}
       <div className="chart-card full-width">
-        <div className="chart-title">各店客單價月趨勢</div>
+        <div className="chart-title">各店淨客單價月趨勢</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={320}>
             <LineChart data={storeMonthlyAvg.data}>
@@ -1195,6 +1288,10 @@ function TabSeasonal({ data }) {
         <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
           自動辨識所有「YYYY 活動名」次類別（節日 + 主題活動），共 {campaigns.length} 個檔期 · 與去年同檔期比較
         </p>
+        {/* v2 fix-2: 補 3 折扣免責聲明（選項 A，不動 GAS） */}
+        <div style={{marginTop:10,padding:'8px 12px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,fontSize:12,color:'#92400e'}}>
+          ※ 季節活動營收為含折扣金額（Gross）。
+        </div>
       </div>
 
       {/* 最近活動 spotlight */}
@@ -1225,6 +1322,9 @@ function TabSeasonal({ data }) {
                 <div style={{ fontSize: 12, color: '#92400e' }}>限定甜點營收</div>
                 <div style={{ fontSize: 42, fontWeight: 700, color: '#7c2d12', lineHeight: 1 }}>
                   {fmtMoney(displayCampaign.revenue)}
+                </div>
+                <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>
+                  ※ 此為含折扣金額（Gross）
                 </div>
                 <div style={{ marginTop: 8, fontSize: 14, color: '#78716c' }}>
                   YoY <span style={{
@@ -1427,6 +1527,149 @@ function TabSeasonal({ data }) {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+
+/* ================================================================
+   TAB 6: 折扣分析 (v2)
+   ================================================================ */
+const DISCOUNT_LABELS = ['甜點券', '好客券', '500券', '買一送一', '貝登堡', '湯姆熊'];
+const DISCOUNT_COLORS = ['#C4412F','#D4654F','#06b6d4','#22c55e','#f59e0b','#ec4899'];
+
+function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
+  // v2 fix-3: hooks before conditional return (Rules of Hooks)
+  // Filter monthlyByStore
+  const mbs = rawData ? rawData.monthlyByStore || [] : [];
+  const filteredMBS = useMemo(()=>mbs.filter(m=>{
+    if(dateStart && m.yearMonth < dateStart) return false;
+    if(dateEnd && m.yearMonth > dateEnd) return false;
+    if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
+    if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
+    return true;
+  }),[mbs, dateStart, dateEnd, selRegion, selStores]);
+
+  // KPI calcs
+  const totalDiscount = useMemo(()=>filteredMBS.reduce((s,m)=>s+(m.discount||0),0),[filteredMBS]);
+  const totalGross = useMemo(()=>filteredMBS.reduce((s,m)=>s+(m.revenue_gross||0),0),[filteredMBS]);
+  const discountRate = totalGross>0 ? (totalDiscount/totalGross*100) : 0;
+
+  // Monthly stacked by discount type
+  const monthlyDiscountData = useMemo(()=>{
+    const byYM={};
+    filteredMBS.forEach(m=>{
+      if(!byYM[m.yearMonth]) { byYM[m.yearMonth]={name:m.yearMonth}; DISCOUNT_LABELS.forEach((_,i)=>byYM[m.yearMonth]['d'+i]=0); }
+      const db = m.discount_breakdown || [];
+      db.forEach((v,i)=>{ byYM[m.yearMonth]['d'+i]=(byYM[m.yearMonth]['d'+i]||0)+v; });
+    });
+    return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1);
+  },[filteredMBS]);
+
+  // Store discount ranking
+  const storeDiscountData = useMemo(()=>{
+    const byStore={};
+    filteredMBS.forEach(m=>{
+      if(!byStore[m.store]) byStore[m.store]={store:m.store,discount:0,revenue_gross:0};
+      byStore[m.store].discount+=(m.discount||0);
+      byStore[m.store].revenue_gross+=(m.revenue_gross||0);
+    });
+    return Object.values(byStore)
+      .map(s=>({...s, discountRate:s.revenue_gross>0?(s.discount/s.revenue_gross*100):0}))
+      .sort((a,b)=>b.discount-a.discount);
+  },[filteredMBS]);
+
+  // Monthly discount rate trend
+  const discountRateTrend = useMemo(()=>{
+    const byYM={};
+    filteredMBS.forEach(m=>{
+      if(!byYM[m.yearMonth]) byYM[m.yearMonth]={name:m.yearMonth,discount:0,gross:0};
+      byYM[m.yearMonth].discount+=(m.discount||0);
+      byYM[m.yearMonth].gross+=(m.revenue_gross||0);
+    });
+    return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1).map(t=>({
+      ...t, rate: t.gross>0?(t.discount/t.gross*100):0
+    }));
+  },[filteredMBS]);
+
+  // guard after all hooks
+  if(!rawData) return null;
+
+  return (
+    <div className="charts-grid cols-2">
+      {/* KPI row */}
+      <div className="kpi-grid" style={{gridColumn:'1/-1',marginBottom:8}}>
+        <div className="kpi-card">
+          <div className="kpi-label">篩選範圍折扣總額</div>
+          <div className="kpi-value" style={{color:'#ef4444'}}>{fmt.currency(totalDiscount)}</div>
+          <div className="kpi-sub">SUM monthlyByStore.discount</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">折扣率</div>
+          <div className="kpi-value" style={{color:'#f59e0b'}}>{fmt.pct(discountRate)}</div>
+          <div className="kpi-sub">折扣 ÷ 含折扣營收</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">含折扣營收 (Gross)</div>
+          <div className="kpi-value" style={{color:'var(--text-secondary)'}}>{fmt.currency(totalGross)}</div>
+          <div className="kpi-sub">SUM revenue_gross</div>
+        </div>
+      </div>
+
+      {/* Chart 1: Monthly stacked discount by type */}
+      <div className="chart-card full-width">
+        <div className="chart-title">各月折扣結構（券種堆疊）</div>
+        <div className="chart-subtitle">按券種分拆月折扣金額</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={monthlyDiscountData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              {DISCOUNT_LABELS.map((label,i)=>(
+                <Area key={i} type="monotone" dataKey={'d'+i} stackId="1" name={label}
+                  fill={DISCOUNT_COLORS[i]} stroke={DISCOUNT_COLORS[i]} fillOpacity={0.75}/>
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Chart 2: Store discount ranking */}
+      <div className="chart-card">
+        <div className="chart-title">各店折扣金額排名</div>
+        <div className="chart-subtitle">降冪排列</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={storeDiscountData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="store" width={90} stroke="#B89E97" tick={{fontSize:9}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Bar dataKey="discount" name="折扣金額" fill="#ef4444" radius={[0,4,4,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Chart 3: Monthly discount rate trend */}
+      <div className="chart-card">
+        <div className="chart-title">折扣率月趨勢</div>
+        <div className="chart-subtitle">折扣 ÷ 含折扣營收（%）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={discountRateTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>v.toFixed(1)+'%'}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
+              <Line type="monotone" dataKey="rate" stroke="#ef4444" strokeWidth={2.5} dot={{r:3}} name="折扣率(%)"/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
     </div>
   );
 }

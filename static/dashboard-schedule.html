@@ -276,6 +276,7 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
   <div class="header-left">
     <h1>📋 排班分析儀表板</h1>
     <p>工時 × 營收 × 紅旗監測 ｜ 12 間門市</p>
+    <div style="color:#666;font-size:13px;margin-top:4px;">rev/h 採淨營收（已扣折扣）計算</div>
   </div>
   <a class="header-back" href="hub.html">← 返回首頁</a>
 </div>
@@ -349,23 +350,23 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
         <div class="slider-block">
           <div class="slider-label">
             <span>平日單日工時上限</span>
-            <span class="slider-value"><span id="vWdHours">16</span> 小時</span>
+            <span class="slider-value"><span id="vWdHours">30</span> 小時</span>
           </div>
-          <input class="slider-input" type="range" id="sWdHours" min="8" max="40" step="1" value="16">
+          <input class="slider-input" type="range" id="sWdHours" min="8" max="40" step="1" value="30">
         </div>
         <div class="slider-block">
           <div class="slider-label">
             <span>假日單日工時上限</span>
-            <span class="slider-value"><span id="vWeHours">24</span> 小時</span>
+            <span class="slider-value"><span id="vWeHours">50</span> 小時</span>
           </div>
-          <input class="slider-input" type="range" id="sWeHours" min="12" max="60" step="1" value="24">
+          <input class="slider-input" type="range" id="sWeHours" min="12" max="60" step="1" value="50">
         </div>
         <div class="slider-block">
           <div class="slider-label">
             <span>週均 rev/h 下限</span>
-            <span class="slider-value">$<span id="vRph">500</span></span>
+            <span class="slider-value">$<span id="vRph">950</span></span>
           </div>
-          <input class="slider-input" type="range" id="sRph" min="0" max="3000" step="50" value="500">
+          <input class="slider-input" type="range" id="sRph" min="0" max="3000" step="50" value="950">
         </div>
         <div class="slider-block">
           <div class="slider-label">
@@ -502,7 +503,7 @@ function getStoresByZone(zoneName) {
 // ============ 全局狀態 ============
 let DATA = { week_kpi: [], daily_sales: [], stores: [] };
 let mode = 'warn';
-let thresholds = { wdHours: 16, weHours: 24, rph: 500, rev: 50000, dayWd: 500, dayWe: 1000 };
+let thresholds = { wdHours: 30, weHours: 50, rph: 950, rev: 50000, dayWd: 500, dayWe: 1000 };
 let filterWeek = '';
 let selectedZones = new Set();  // 空 = 全選
 let selectedStores = new Set(); // 空 = 全選
@@ -821,7 +822,7 @@ function computeFlags(row) {
   // 未完結週(營收=0 或空 但工時>0):班表已上但營收還沒進來的未來週,不該被判定紅旗
   // 直接返回空陣列,避免「人效偏低 / 營收偏低」誤判
   // 注意:用寬鬆比較 < 1(而非 === 0),因 total_revenue 可能是字串 "0"、null 或 undefined
-  if ((!row.total_revenue || Number(row.total_revenue) < 1) && row.total_hours > 0) {
+  if ((!row.total_net_revenue || Number(row.total_net_revenue) < 1) && row.total_hours > 0) {
     return flags;
   }
 
@@ -835,10 +836,10 @@ function computeFlags(row) {
   const weAvg = row.weekend_hours / 2;
   if (weAvg > thresholds.weHours) flags.push({ k: 'we_over', label: '假日工時過高', sev: 'red' });
 
-  if (row.rev_per_hour < thresholds.rph && row.total_hours > 0) {
+  if (row.rev_per_hour_net < thresholds.rph && row.total_hours > 0) {
     flags.push({ k: 'low_rph', label: '人效偏低', sev: 'orange' });
   }
-  if (row.total_revenue < thresholds.rev) {
+  if (row.total_net_revenue < thresholds.rev) {
     flags.push({ k: 'low_rev', label: '營收偏低', sev: 'yellow' });
   }
 
@@ -860,6 +861,7 @@ function filteredRows() {
 
 // ============ 渲染 ============
 function renderAll() {
+  _effKpiCurrentYW = null;  // 重置本週快取,確保資料重載後重算
   renderKPI();
   renderHeatmap();
   renderZones();
@@ -869,8 +871,12 @@ function renderAll() {
 // --- KPI 卡 ---
 function renderKPI() {
   const rows = filteredRows();
-  const totalHours = rows.reduce((s, r) => s + r.total_hours, 0);
-  const totalRev   = rows.reduce((s, r) => s + r.total_revenue, 0);
+  let totalHours = 0, totalRev = 0;
+  rows.forEach(r => {
+    const e = _effectiveKPI(r);
+    totalHours += e.hours;
+    totalRev   += e.rev;
+  });
   const avgRph     = totalHours > 0 ? Math.round(totalRev / totalHours) : 0;
   const flaggedWeeks = rows.filter(r => computeFlags(r).length > 0).length;
 
@@ -912,7 +918,7 @@ function computeTop3RedFlagStores() {
   // 只取「已有營收的週」做排序基準(寬鬆比較,處理字串 "0"/null)
   const allWeeks = [...new Set(
     DATA.week_kpi
-      .filter(r => r.total_revenue && Number(r.total_revenue) > 0)
+      .filter(r => r.total_net_revenue && Number(r.total_net_revenue) > 0)
       .map(r => r.year_week)
   )].sort();
   const recent4 = allWeeks.slice(-4);
@@ -935,7 +941,7 @@ function computeTop3RedFlagStores() {
       stats[r.store_id].weighted += w;
     });
     // 累計 rev/h(只算有效週,避免 0 拉低平均)
-    const rph = Number(r.rev_per_hour);
+    const rph = Number(r.rev_per_hour_net);
     if (r.total_hours > 0 && rph > 0) {
       stats[r.store_id].rphSum += rph;
       stats[r.store_id].rphCount += 1;
@@ -1009,7 +1015,7 @@ function _currentWeekToYesterdayKPI(storeId, weekStart) {
   (DATA.daily_sales || []).forEach(d => {
     if (Number(d.store_id) !== Number(storeId)) return;
     if (d.date < startStr || d.date > cutoffStr) return;
-    revenue += Number(d.revenue) || 0;
+    revenue += Number(d.net_revenue != null ? d.net_revenue : d.revenue) || 0;
   });
   const days = Math.floor((cutoff - ws) / 86400000) + 1;
   const rph = hours > 0 ? revenue / hours : 0;
@@ -1026,6 +1032,26 @@ function _dateStr(d) {
 function _mmddStr(s) {
   const parts = s.split('-');
   return parseInt(parts[1],10) + '/' + parseInt(parts[2],10);
+}
+
+// 共用:回傳該 store×週 的「有效 KPI」(本週截斷到昨天,其他週用 net 原值)
+// 供 KPI 卡 / 分區比較 / 紅旗清單統一使用,避免未完結本週失真
+// 回傳 { hours, rev, rph, truncated }
+let _effKpiCurrentYW = null;  // 快取本週 year_week,避免每列重算
+function _effectiveKPI(row) {
+  if (_effKpiCurrentYW === null) _effKpiCurrentYW = _currentYearWeek();
+  if (row.year_week === _effKpiCurrentYW) {
+    const ck = _currentWeekToYesterdayKPI(row.store_id, row.week_start);
+    if (ck && ck.hours > 0) {
+      return { hours: ck.hours, rev: ck.revenue, rph: ck.rph, truncated: true };
+    }
+  }
+  return {
+    hours: Number(row.total_hours) || 0,
+    rev:   Number(row.total_net_revenue) || 0,
+    rph:   Number(row.rev_per_hour_net) || 0,
+    truncated: false
+  };
 }
 
 function renderHeatmap() {
@@ -1137,8 +1163,8 @@ function renderHeatmap() {
 
       // 本週截斷:用 daily_hours + daily_sales 重算 rev/h
       let displayHours = r.total_hours;
-      let displayRev   = r.total_revenue;
-      let displayRph   = Number(r.rev_per_hour);
+      let displayRev   = r.total_net_revenue;
+      let displayRph   = Number(r.rev_per_hour_net);
       let isCurrent    = false;
       let currentInfo  = null;
       if (w === currentYW) {
@@ -1195,8 +1221,9 @@ function renderZones() {
   rows.forEach(r => {
     const z = r.zone || '未分區';
     if (!zoneAgg[z]) zoneAgg[z] = { hours: 0, rev: 0, count: 0, stores: new Set() };
-    zoneAgg[z].hours += r.total_hours;
-    zoneAgg[z].rev   += r.total_revenue;
+    const e = _effectiveKPI(r);
+    zoneAgg[z].hours += e.hours;
+    zoneAgg[z].rev   += e.rev;
     zoneAgg[z].count += 1;
     zoneAgg[z].stores.add(r.store_id);
   });
@@ -1253,14 +1280,16 @@ function renderFlagList() {
     document.getElementById('flagList').innerHTML = '<div class="empty-state"><div class="icon">✅</div>當前閾值下無紅旗</div>';
     return;
   }
-  document.getElementById('flagList').innerHTML = items.map(it =>
-    '<div class="flag-item">'
-    + '<div class="wk">' + weekLabel(it.row.year_week, it.row.week_start) + '</div>'
+  document.getElementById('flagList').innerHTML = items.map(it => {
+    const e = _effectiveKPI(it.row);
+    const truncMark = e.truncated ? ' <span style="font-size:10px;color:var(--accent);">📡迄今</span>' : '';
+    return '<div class="flag-item">'
+    + '<div class="wk">' + weekLabel(it.row.year_week, it.row.week_start) + truncMark + '</div>'
     + '<div class="store">' + it.row.store_id + ' ' + it.row.store_name + '<br><span style="font-size:10px;color:var(--muted);font-weight:500;">' + getZone(it.row.store_id) + '</span></div>'
     + '<div class="flags">' + it.flags.map(f => '<span class="flag-chip ' + f.sev + '">' + f.label + '</span>').join('') + '</div>'
-    + '<div class="rev">$' + it.row.total_revenue.toLocaleString() + ' · ' + it.row.total_hours + 'h · rev/h $' + it.row.rev_per_hour + '</div>'
-    + '</div>'
-  ).join('');
+    + '<div class="rev">$' + Math.round(e.rev).toLocaleString() + ' · ' + (Math.round(e.hours*10)/10) + 'h · rev/h $' + Math.round(e.rph) + '</div>'
+    + '</div>';
+  }).join('');
 }
 
 // ============ 日級分析 ============
