@@ -519,6 +519,50 @@ function applyZoneOverride() {
   }
 }
 
+// ============ fact_discount 覆蓋 net 營收 ============
+// 依 fact_discount（白名單口徑）重算 week_kpi 的 total_net_revenue / rev_per_hour_net
+// 以及 daily_sales 的 net_revenue（供本週截斷 rev/h 使用）
+function applyFactDiscount(factRows) {
+  if (!factRows || !factRows.length) return;
+
+  // 建 lookup：'YYYY-MM-DD|storeId' → 該扣折扣總額
+  const discMap = {};
+  factRows.forEach(function(r) {
+    const key = String(r.date).substring(0, 10) + '|' + Number(r.store_id);
+    discMap[key] = (discMap[key] || 0) + Number(r.discount || 0);
+  });
+
+  // 1. 覆蓋 daily_sales 的 net_revenue（供本週截斷 _currentWeekToYesterdayKPI 用）
+  if (Array.isArray(DATA.daily_sales)) {
+    DATA.daily_sales.forEach(function(d) {
+      const key = String(d.date).substring(0, 10) + '|' + Number(d.store_id);
+      const gross = Number(d.revenue) || 0;
+      const disc  = discMap[key] || 0;
+      d.net_revenue = gross - disc;
+    });
+  }
+
+  // 2. 覆蓋 week_kpi 的 total_net_revenue / rev_per_hour_net
+  if (Array.isArray(DATA.week_kpi)) {
+    DATA.week_kpi.forEach(function(r) {
+      // 取該店該週所有日期的 fact_discount 加總
+      const ws = new Date(r.week_start); ws.setHours(0, 0, 0, 0);
+      const we = new Date(ws); we.setDate(we.getDate() + 6);
+      let weekDisc = 0;
+      for (var dt = new Date(ws); dt <= we; dt.setDate(dt.getDate() + 1)) {
+        const dateStr = dt.getFullYear() + '-'
+          + String(dt.getMonth() + 1).padStart(2, '0') + '-'
+          + String(dt.getDate()).padStart(2, '0');
+        const key = dateStr + '|' + Number(r.store_id);
+        weekDisc += discMap[key] || 0;
+      }
+      const gross = Number(r.total_revenue) || Number(r.total_net_revenue) || 0;
+      r.total_net_revenue = gross - weekDisc;
+      r.rev_per_hour_net  = r.total_hours > 0 ? r.total_net_revenue / r.total_hours : 0;
+    });
+  }
+}
+
 // ============ JSONP 載入 ============
 function loadData() {
   const cbName = 'cb_' + Date.now();
@@ -531,7 +575,16 @@ function loadData() {
     }
     DATA = res;
     applyZoneOverride();
-    initUI();
+    // 載入 fact_discount，再覆蓋 net 值，最後才 initUI
+    callJsonp('getFactDiscount').then(function(fdRes) {
+      if (fdRes && fdRes.ok && Array.isArray(fdRes.data)) {
+        applyFactDiscount(fdRes.data);
+      }
+      initUI();
+    }).catch(function() {
+      // fact_discount 拉失敗也繼續（降級：維持後端 net 原值）
+      initUI();
+    });
   };
   const scriptEl = document.createElement('script');
   scriptEl.src = API_BASE + '?action=getWeekKpiData&callback=' + cbName;
