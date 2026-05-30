@@ -227,63 +227,9 @@ function App(){
   const [selStores, setSelStores] = useState([]);
   const [quickDate, setQuickDate] = useState('');
 
-  /* ---------- store_id → POS 全名對照表（用於 fact_discount 橋接）---------- */
-  const STORE_ID_TO_POS_NAME = {
-    1:'台中精明店', 2:'台中草悟道店', 3:'台北南京店', 4:'台北士林店',
-    5:'台南Focus店', 6:'新竹文化店', 7:'新北板橋店', 8:'新北新店店',
-    9:'桃園中壢店', 10:'桃園藝文店', 11:'吳寶春自己做台北信義A13店',
-    12:'台南西門店', 13:'吳寶春自己做高雄SKM Park店', 14:'13店'
-  };
-
-  /* ---------- 用 fact_discount 覆蓋 monthlyByStore 的 revenue_net ---------- */
-  function applyFactDiscountToPOS(rawDataObj, factRows) {
-    if (!factRows || !factRows.length) return rawDataObj;
-    // 建 lookup：'YYYY-MM|POS店名' → 月折扣加總
-    const discMap = {};
-    factRows.forEach(function(r) {
-      const storeName = STORE_ID_TO_POS_NAME[Number(r.store_id)];
-      if (!storeName) return;
-      const ym = String(r.date).substring(0, 7); // YYYY-MM-DD → YYYY-MM
-      const key = ym + '|' + storeName;
-      discMap[key] = (discMap[key] || 0) + Number(r.discount || 0);
-    });
-    // 覆蓋 monthlyByStore 每筆的 revenue_net
-    if (Array.isArray(rawDataObj.monthlyByStore)) {
-      rawDataObj.monthlyByStore.forEach(function(m) {
-        const key = m.yearMonth + '|' + m.store;
-        const disc = discMap[key] || 0;
-        m.revenue_net = (m.revenue_gross || 0) - disc;
-        m.discount = disc;
-      });
-    }
-    return rawDataObj;
-  }
-
-  /* ---------- JSONP helper for fact_discount ---------- */
-  function fetchFactDiscount() {
-    return new Promise(function(resolve) {
-      const cbName = '_fdCb_' + Date.now();
-      const scriptEl = document.createElement('script');
-      const timer = setTimeout(function() {
-        delete window[cbName];
-        try { document.body.removeChild(scriptEl); } catch(e) {}
-        resolve(null); // 逾時降級
-      }, 30000);
-      window[cbName] = function(res) {
-        clearTimeout(timer);
-        delete window[cbName];
-        try { document.body.removeChild(scriptEl); } catch(e) {}
-        resolve(res && res.ok ? res.data : null);
-      };
-      scriptEl.src = API_URL + '?action=getFactDiscount&callback=' + cbName;
-      scriptEl.onerror = function() {
-        clearTimeout(timer);
-        delete window[cbName];
-        resolve(null);
-      };
-      document.body.appendChild(scriptEl);
-    });
-  }
+  /* ---------- v3: net 由後端算好（daily_discount 白名單口徑，storeCode JOIN）
+     已移除前端 STORE_ID_TO_POS_NAME / applyFactDiscountToPOS / fetchFactDiscount
+     後端 monthlyByStore[] 直接帶 revenue_gross / revenue_net / discount / discount_breakdown ---------- */
 
   /* ---------- FETCH DATA (JSONP to avoid GAS CORS redirect issue) ---------- */
   useEffect(()=>{
@@ -298,20 +244,18 @@ function App(){
       clearTimeout(timeout);
       delete window[cbName];
       try{
-        // 先拉 fact_discount，覆蓋 revenue_net，再 setRawData
-        fetchFactDiscount().then(function(factRows) {
-          const finalData = factRows ? applyFactDiscountToPOS(d, factRows) : d;
-          setRawData(finalData);
-          const yms = [...new Set(finalData.monthly.map(m=>m.yearMonth))].sort();
-          if(yms.length){
-            const cy = new Date().getFullYear().toString();
-            const yearMonths = yms.filter(y=>y.startsWith(cy));
-            setDateStart(yearMonths.length?yearMonths[0]:yms[0]);
-            setDateEnd(yearMonths.length?yearMonths[yearMonths.length-1]:yms[yms.length-1]);
-            setQuickDate('ytd');
-          }
-          setLoading(false);
-        });
+        // v3: net 已由後端算好，直接使用 d，不再前端覆蓋
+        const finalData = d;
+        setRawData(finalData);
+        const yms = [...new Set(finalData.monthly.map(m=>m.yearMonth))].sort();
+        if(yms.length){
+          const cy = new Date().getFullYear().toString();
+          const yearMonths = yms.filter(y=>y.startsWith(cy));
+          setDateStart(yearMonths.length?yearMonths[0]:yms[0]);
+          setDateEnd(yearMonths.length?yearMonths[yearMonths.length-1]:yms[yms.length-1]);
+          setQuickDate('ytd');
+        }
+        setLoading(false);
       }catch(e){setError(e.message);setLoading(false);}
     };
     const script = document.createElement('script');
@@ -1597,10 +1541,14 @@ function TabSeasonal({ data }) {
 /* ================================================================
    TAB 6: 折扣分析 (v2)
    ================================================================ */
-const DISCOUNT_LABELS = ['甜點券', '好客券', '500券', '買一送一', '貝登堡', '湯姆熊'];
+// v3: 標籤改由後端 discountLabels 提供（daily_discount D~I 真實欄名）；此為離線 fallback
+const DISCOUNT_LABELS_FALLBACK = ['好客券','自己人$100甜點券','自己人4人同行每份$500','員工優惠7折','甜點券$100','自己人體驗7折'];
 const DISCOUNT_COLORS = ['#C4412F','#D4654F','#06b6d4','#22c55e','#f59e0b','#ec4899'];
 
 function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
+  // v3: 券種標籤以後端 discountLabels 為準（daily_discount D~I 真實欄名），離線時用 fallback
+  const DISCOUNT_LABELS = (rawData && rawData.discountLabels && rawData.discountLabels.length===6)
+    ? rawData.discountLabels : DISCOUNT_LABELS_FALLBACK;
   // v2 fix-3: hooks before conditional return (Rules of Hooks)
   // Filter monthlyByStore
   const mbs = rawData ? rawData.monthlyByStore || [] : [];
