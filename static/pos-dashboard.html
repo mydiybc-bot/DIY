@@ -229,7 +229,7 @@ function App(){
 
   /* ---------- v3: net 由後端算好（daily_discount 白名單口徑，storeCode JOIN）
      已移除前端 STORE_ID_TO_POS_NAME / applyFactDiscountToPOS / fetchFactDiscount
-     後端 monthlyByStore[] 直接帶 revenue_gross / revenue_net / discount / discount_breakdown ---------- */
+     後端 monthlyByStore[] 直接帶 revenue_gross(G×H) / revenue_actual(I欄) / revenue_net(gross−fact_discount) / discount ---------- */
 
   /* ---------- FETCH DATA (JSONP to avoid GAS CORS redirect issue) ---------- */
   useEffect(()=>{
@@ -1541,14 +1541,10 @@ function TabSeasonal({ data }) {
 /* ================================================================
    TAB 6: 折扣分析 (v2)
    ================================================================ */
-// v3: 標籤改由後端 discountLabels 提供（daily_discount D~I 真實欄名）；此為離線 fallback
-const DISCOUNT_LABELS_FALLBACK = ['好客券','自己人$100甜點券','自己人4人同行每份$500','員工優惠7折','甜點券$100','自己人體驗7折'];
+// v4: daily_discount 已封存，fact_discount 只有總額無券種分類，breakdown 堆疊圖已移除
 const DISCOUNT_COLORS = ['#C4412F','#D4654F','#06b6d4','#22c55e','#f59e0b','#ec4899'];
 
 function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
-  // v3: 券種標籤以後端 discountLabels 為準（daily_discount D~I 真實欄名），離線時用 fallback
-  const DISCOUNT_LABELS = (rawData && rawData.discountLabels && rawData.discountLabels.length===6)
-    ? rawData.discountLabels : DISCOUNT_LABELS_FALLBACK;
   // v2 fix-3: hooks before conditional return (Rules of Hooks)
   // Filter monthlyByStore
   const mbs = rawData ? rawData.monthlyByStore || [] : [];
@@ -1565,13 +1561,12 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
   const totalGross = useMemo(()=>filteredMBS.reduce((s,m)=>s+(m.revenue_gross||0),0),[filteredMBS]);
   const discountRate = totalGross>0 ? (totalDiscount/totalGross*100) : 0;
 
-  // Monthly stacked by discount type
+  // v4: 折扣總額月趨勢（fact_discount 無券種分類，改看總額）
   const monthlyDiscountData = useMemo(()=>{
     const byYM={};
     filteredMBS.forEach(m=>{
-      if(!byYM[m.yearMonth]) { byYM[m.yearMonth]={name:m.yearMonth}; DISCOUNT_LABELS.forEach((_,i)=>byYM[m.yearMonth]['d'+i]=0); }
-      const db = m.discount_breakdown || [];
-      db.forEach((v,i)=>{ byYM[m.yearMonth]['d'+i]=(byYM[m.yearMonth]['d'+i]||0)+v; });
+      if(!byYM[m.yearMonth]) byYM[m.yearMonth]={name:m.yearMonth,discount:0};
+      byYM[m.yearMonth].discount+=(m.discount||0);
     });
     return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1);
   },[filteredMBS]);
@@ -1626,10 +1621,10 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
         </div>
       </div>
 
-      {/* Chart 1: Monthly stacked discount by type */}
+      {/* Chart 1: 折扣總額月趨勢（v4：fact_discount 無券種分類） */}
       <div className="chart-card full-width">
-        <div className="chart-title">各月折扣結構（券種堆疊）</div>
-        <div className="chart-subtitle">按券種分拆月折扣金額</div>
+        <div className="chart-title">折扣總額月趨勢</div>
+        <div className="chart-subtitle">每月該扣折扣總額（去重 H−L 全折扣口徑）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={monthlyDiscountData}>
@@ -1637,11 +1632,8 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
               <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
               <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
-              <Legend wrapperStyle={{fontSize:11}}/>
-              {DISCOUNT_LABELS.map((label,i)=>(
-                <Area key={i} type="monotone" dataKey={'d'+i} stackId="1" name={label}
-                  fill={DISCOUNT_COLORS[i]} stroke={DISCOUNT_COLORS[i]} fillOpacity={0.75}/>
-              ))}
+              <Area type="monotone" dataKey="discount" name="折扣總額"
+                fill="#C4412F" stroke="#C4412F" fillOpacity={0.65}/>
             </AreaChart>
           </ResponsiveContainer>
         </div>
