@@ -613,16 +613,20 @@ async function doLogin() {
   btn.disabled=true; btn.textContent='驗證中...'; err.textContent='';
   try {
     const r = await callApi('verify_password',{password:pwd});
-    if(r.ok){ TOKEN=r.token; document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; await initApp(); }
+    if(r.ok){
+      TOKEN=r.token;
+      try { sessionStorage.setItem('hub_pwd_b_passed', '1'); } catch(_){}
+      document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; await initApp();
+    }
     else { err.textContent='密碼錯誤,請重試'; }
   } catch(e) { err.textContent='連線失敗: '+e.message; }
   btn.disabled=false; btn.textContent='登　入';
 }
 function doLogout() {
   TOKEN=''; DATA=[];
-  document.getElementById('app').style.display='none';
-  document.getElementById('login-screen').style.display='flex';
-  document.getElementById('pwd').value='';
+  try { sessionStorage.removeItem('hub_pwd_b_passed'); } catch(_){}
+  /* 2026-06-01: 廢除自有登入頁,登出回 hub.html */
+  window.location.href = 'hub.html';
 }
 
 /* ===== INIT ===== */
@@ -1521,6 +1525,48 @@ adminHtmlEl.innerHTML = `
     <!-- 主功能階段(密碼通過後顯示) -->
     <div id="admin-stage-main" style="display:none;">
 
+      <!-- 區塊 0: 檔名規範提示卡（2026-05-20 新增） -->
+      <div class="admin-section" id="admin-filename-guide" style="background:#fff8e1; border-left:4px solid #f5a623;">
+        <div class="admin-section-title" style="cursor:pointer; user-select:none;" onclick="toggleFilenameGuide()">
+          <span id="filename-guide-icon">▼</span> 📌 上傳檔案前必讀（點此收合）
+        </div>
+        <div id="filename-guide-body" style="font-size:13px; line-height:1.7; color:var(--text); padding:4px 0;">
+
+          <div style="margin-top:8px;"><strong>【建議檔名格式】</strong></div>
+          <div style="background:var(--card); padding:8px 12px; border-radius:6px; margin:4px 0; font-family:monospace; font-size:12px;">
+            YYYYMM_N店_損益表.xlsx<br>
+            例:202604_1店_損益表.xlsx<br>
+            　　202604_11店_損益表.xlsx（吳寶春共有品牌）
+          </div>
+          <div style="font-size:11px; color:var(--text2); margin-top:2px;">
+            💡 鼎新原始檔名也可以,系統靠檔案內容辨識年月與店號,檔名只是給人類辨識用。
+          </div>
+
+          <div style="margin-top:12px;"><strong>【每個檔案的內容規則】</strong></div>
+          <div style="padding-left:8px;">
+            ✓ <strong>單店單月格式</strong>(A欄科目、B欄金額)<br>
+            ✗ 不接受「年度彙整」(B~M欄=12個月)<br>
+            ✗ 不接受「多店合併」(B~D欄=各店)<br>
+            <span style="color:var(--text2); font-size:11px;">　 → 後兩種請先用 Excel 拆成單店單月再上傳</span>
+          </div>
+
+          <div style="margin-top:12px;"><strong>【上傳前 3 點檢查】</strong></div>
+          <div style="padding-left:8px;">
+            □ 12 個檔,每店各一檔(13店西門已結束,不用)<br>
+            □ 確認檔內「年月」對應正確<br>
+            　　<span style="color:var(--text2); font-size:11px;">民國年換算:113=2024、114=2025、115=2026</span><br>
+            □ Drive 自動轉檔設為「Google 試算表」(否則 parser 讀不到)
+          </div>
+
+          <div style="margin-top:12px; padding:8px 12px; background:#ffe0b2; border-radius:6px; font-size:12px;">
+            ⚠️ <strong>11/12 店特別注意</strong>:吳寶春共有品牌,
+            若鼎新部門代碼不是 11000 / 12000,parser 會解析失敗,
+            請先確認檔案內部門代碼正確。
+          </div>
+
+        </div>
+      </div>
+
       <!-- 區塊 1: 資料夾顯示(自動從 config 讀) -->
       <div class="admin-section" id="admin-folder-section">
         <div class="admin-section-title">📁 月度匯入資料夾</div>
@@ -1672,6 +1718,16 @@ function adminToggleFolderEdit() {
     document.getElementById('admin-folder-id').value = _currentFolderId;
     setTimeout(() => document.getElementById('admin-folder-id').focus(), 100);
   }
+}
+
+/* 2026-05-20: 檔名規範卡收合切換 */
+function toggleFilenameGuide() {
+  const body = document.getElementById('filename-guide-body');
+  const icon = document.getElementById('filename-guide-icon');
+  if (!body || !icon) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  icon.textContent = isOpen ? '▶' : '▼';
 }
 
 /* M3.5: 儲存新資料夾 ID 到 config */
@@ -2073,6 +2129,35 @@ function callApiLong(action, params={}) {
 }
 
 /* ===== M3 管理員面板 END ===== */
+
+/* ===== 2026-06-01: hub 單一登入整合 ===== */
+/* 偵測 sessionStorage flag — 從 hub.html 通過 PWD_B 後設定
+ * 有 flag → 直接跳過自有登入頁、進儀表板
+ * 沒 flag → 跳回 hub.html(強迫從正門進)
+ */
+(function autoLoginFromHub(){
+  try {
+    var passed = sessionStorage.getItem('hub_pwd_b_passed');
+    if (passed === '1') {
+      /* 偽 token,因為 verify_password 已被廢除為入口
+       * GAS 後端的 verify_password API 仍可運作(其他用途保留)
+       * 此處 TOKEN 沿用既有變數,initApp 不檢查 TOKEN 內容
+       */
+      TOKEN = 'hub-session';
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      initApp();
+    } else {
+      /* 直接訪問此網址 → 踢回 hub.html */
+      window.location.replace('hub.html');
+    }
+  } catch(e) {
+    /* sessionStorage 失效時保留原本登入流程作為 fallback */
+    console.warn('sessionStorage unavailable, falling back to login screen', e);
+  }
+})();
+/* ===== hub 單一登入整合 END ===== */
+
 </script>
 </body>
 </html>
