@@ -51,7 +51,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .section-title { font-size: 15px; font-weight: 700; color: var(--primary-dark); margin-bottom: 14px; padding-left: 12px; border-left: 4px solid var(--primary); display: flex; align-items: center; gap: 8px; }
 
 /* KPI CARDS */
-.kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 28px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
 .kpi-card { background: var(--card); border-radius: 14px; padding: 18px 22px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(196,65,47,.06); position: relative; overflow: hidden; }
 .kpi-card::before { content:''; position:absolute; top:0; left:0; width:4px; height:100%; background: var(--primary); border-radius:4px 0 0 4px; }
 .kpi-card.a::before { background: var(--accent); }
@@ -122,8 +122,10 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 .progress-marker { position:absolute; top:-3px; width:2px; height:14px; background:#8B6A63; border-radius:1px; }
 .target-pct-text { text-align:right; font-weight:700; }
 .target-abs-text { text-align:right; color:var(--muted); }
-    .store-trend { display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:10px; line-height:1.3; gap:1px; }
-    .trend-arrow { font-size:13px; line-height:1; font-weight:700; }
+    .store-trend { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; font-size:10px; line-height:1.3; gap:2px; }
+    .trend-row { display:flex; align-items:center; gap:3px; white-space:nowrap; }
+    .trend-arrow { font-size:11px; line-height:1; font-weight:700; }
+    .trend-mo { color:var(--muted); font-size:9px; }
     .trend-up { color:#52B788; }
     .trend-dn { color:#C4412F; }
     .trend-eq { color:#aaa; }
@@ -662,6 +664,16 @@ function processFromCache(cache, fromIdx, toIdx) {
     storeActiveStats[info.store].repeated++;
   });
 
+  // ★ NEW 2026-06-01: 統計「回頭客消費次數」與「全體會員消費次數」(過去 365 天)
+  // 用於 KPI 卡片「回頭客消費次數」與「佔比」(因為現有資料源沒有金額欄,以次數代替金額)
+  let allVisits365 = 0;
+  let repeatedVisits365 = 0;
+  Object.values(memberConsume365).forEach(cnt => {
+    if (cnt <= 0) return;
+    allVisits365 += cnt;
+    if (cnt >= 2) repeatedVisits365 += cnt;
+  });
+
   // ─── QC: 期間內每位會員消費頻率(用於頻率分布圖、平均消費次數) ───
   const memberVisitsInPeriod = {};
   const uniqueMembersPerStore = {};
@@ -726,7 +738,7 @@ function processFromCache(cache, fromIdx, toIdx) {
     return { store: s, members, visits, uniqueConsumers, avg: parseFloat(avg), repeatRate, repeatInfo, crossRate,
              once: freq.once, twice: freq.twice, thrice5: freq.thrice5, six10: freq.six10,
              eleven: freq.eleven, freqTotal: freq.total,
-             recruitRate };
+             recruitRate, ytdActual: ytdActual2026[s] || 0 };
   });
 
   return {
@@ -736,7 +748,9 @@ function processFromCache(cache, fromIdx, toIdx) {
     storeActiveStats,
     totalUniqueConsumers: allUniqueConsumers.size,
     cutoff365: cutoff365today,
-    newMemberMonths2026ByStore
+    newMemberMonths2026ByStore,
+    allVisits365,
+    repeatedVisits365
   };
 }
 
@@ -752,9 +766,10 @@ function renderTargetSection() {
     actual2026[s] = Object.values(sheet2026[s] || {}).reduce((sum, v) => sum + v, 0);
   });
 
-  // 月度趨勢 (最新月 vs 前一月)
+  // 月度趨勢 (最新月 vs 前一月,以及前一月 vs 前前月)
   // ★ FIX 2026-05-28: 原 Math.floor(ELAPSED)-1 有 off-by-one,導致動能慢一個月。
   // 改為掃描所有店實際有資料的最大 gvizMonth(0-indexed),避免依賴 ELAPSED 小數與月初跨月誤判。
+  // ★ ENHANCE 2026-06-01: 新增 prevPrev,讓動能欄同時顯示本月差與上月差 (連續兩月趨勢)
   let lastMoIdx = -1;
   STORE_NAMES.forEach(s => {
     Object.keys(sheet2026[s] || {}).forEach(k => {
@@ -763,11 +778,13 @@ function renderTargetSection() {
     });
   });
   const prevMoIdx = lastMoIdx - 1;
+  const prevPrevMoIdx = lastMoIdx - 2;
   const monthly = {};
   STORE_NAMES.forEach(s => {
     monthly[s] = {
-      last: (sheet2026[s] || {})[`2026/${lastMoIdx}`] || 0,
-      prev: prevMoIdx >= 0 ? ((sheet2026[s] || {})[`2026/${prevMoIdx}`] || 0) : 0
+      last:     (sheet2026[s] || {})[`2026/${lastMoIdx}`]     || 0,
+      prev:     prevMoIdx     >= 0 ? ((sheet2026[s] || {})[`2026/${prevMoIdx}`]     || 0) : 0,
+      prevPrev: prevPrevMoIdx >= 0 ? ((sheet2026[s] || {})[`2026/${prevPrevMoIdx}`] || 0) : null
     };
   });
 
@@ -796,6 +813,7 @@ function renderTargetSection() {
     pct: TARGETS_2026[s] ? Math.round(actual2026[s] / TARGETS_2026[s] * 100) : 0,
     lastCnt: monthly[s] ? monthly[s].last : 0,
     prevCnt: monthly[s] ? monthly[s].prev : 0,
+    prevPrevCnt: monthly[s] ? monthly[s].prevPrev : null,
   })).sort((a,b) => b.pct - a.pct);
 
   const rowsHtml = storeRows.map(r => {
@@ -803,12 +821,27 @@ function renderTargetSection() {
     // ★ BUGFIX: 顏色標準動態化
     const barColor = r.pct >= elapsedPct ? '#52B788' : r.pct >= elapsedPct * 0.8 ? '#F4A620' : '#C4412F';
     const shortName = r.store.replace(/店$/, '');
-    const diff = r.lastCnt - r.prevCnt;
-    const trendCls = diff > 0 ? 'trend-up' : diff < 0 ? 'trend-dn' : 'trend-eq';
-    const trendArrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '─';
-    const trendLabel = diff > 0 ? '+' + diff : String(diff);
     const monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-    const moName = lastMoIdx >= 0 && lastMoIdx <= 11 ? monthNames[lastMoIdx] : '—';
+
+    // ★ ENHANCE 2026-06-01: 動能欄顯示兩行 — 本月差(在上,主指標) + 上月差(在下,趨勢對照)
+    const buildTrendRow = (curr, base, moName) => {
+      if (curr === 0 && base === 0) {
+        return `<div class="trend-row"><span style="color:var(--muted)">—</span><span class="trend-mo">${moName}</span></div>`;
+      }
+      const diff = curr - base;
+      const cls = diff > 0 ? 'trend-up' : diff < 0 ? 'trend-dn' : 'trend-eq';
+      const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '─';
+      const label = diff > 0 ? '+' + diff : String(diff);
+      return `<div class="trend-row"><span class="trend-arrow ${cls}">${arrow}</span><span class="${cls}">${label}</span><span class="trend-mo">${moName}</span></div>`;
+    };
+
+    const moNameLast = lastMoIdx >= 0 && lastMoIdx <= 11 ? monthNames[lastMoIdx] : '—';
+    const moNamePrev = prevMoIdx >= 0 && prevMoIdx <= 11 ? monthNames[prevMoIdx] : '—';
+
+    const trendRowThis = buildTrendRow(r.lastCnt, r.prevCnt, moNameLast);
+    const trendRowPrev = (r.prevPrevCnt !== null)
+      ? buildTrendRow(r.prevCnt, r.prevPrevCnt, moNamePrev)
+      : '';
 
     return `<div class="store-target-row">
       <div class="store-target-name" title="${r.store}">${shortName}</div>
@@ -818,7 +851,7 @@ function renderTargetSection() {
       </div>
       <div class="target-pct-text" style="color:${barColor}">${r.pct}%</div>
       <div class="target-abs-text">${r.actual.toLocaleString()} / ${r.target.toLocaleString()}</div>
-      <div class="store-trend"><span class="trend-arrow ${trendCls}">${trendArrow}</span><span style="color:var(--muted)">${r.lastCnt > 0 || r.prevCnt > 0 ? trendLabel : '—'}</span><span style="color:var(--muted);font-size:9px">${moName}</span></div>
+      <div class="store-trend">${trendRowThis}${trendRowPrev}</div>
     </div>`;
   }).join('');
 
@@ -909,12 +942,19 @@ function renderKPI(data) {
     });
   }
 
+  // ★ NEW 2026-06-01: 回頭客消費次數與佔比 (過去 365 天,以次數代替金額——現有資料源無金額欄)
+  const repeatVisits = data.repeatedVisits365 || 0;
+  const allVisits365 = data.allVisits365 || 0;
+  const repeatVisitsPct = allVisits365 > 0 ? Math.round(repeatVisits / allVisits365 * 100) : 0;
+
   document.getElementById('kpiGrid').innerHTML = `
     <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">期間內升等成自己人/素人/達人/職人 (與會員系統對齊 99%)</div></div>
     <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">會員實際來消費的次數</div></div>
     <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">一位有消費的會員平均來幾次</div></div>
     <div class="kpi-card p"><div class="kpi-label">回頭客比例 (過去 365 天)</div><div class="kpi-value">${overallReturnRate}%</div><div class="kpi-sub">${cutoffStr} ~ ${baseStr} 消費 ≥2 次 (${allRepeated.toLocaleString()} / 現有會員 ${allActive.toLocaleString()})</div></div>
-    <div class="kpi-card b"><div class="kpi-label">現有會員人數</div><div class="kpi-value">${totalCurrentMembers.toLocaleString()}</div><div class="kpi-sub">自己人+素人+達人+職人（不含群友）｜後台快照</div></div>`;
+    <div class="kpi-card b"><div class="kpi-label">現有會員人數</div><div class="kpi-value">${totalCurrentMembers.toLocaleString()}</div><div class="kpi-sub">自己人+素人+達人+職人（不含群友）｜後台快照</div></div>
+    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數 (過去 365 天)</div><div class="kpi-value">${repeatVisits.toLocaleString()}</div><div class="kpi-sub">≥2 次客群貢獻的消費次數｜以次數代替金額(資料源無金額欄)</div></div>
+    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數佔比</div><div class="kpi-value">${repeatVisitsPct}%</div><div class="kpi-sub">${repeatVisits.toLocaleString()} / ${allVisits365.toLocaleString()} (全體會員 365 天消費次數)</div></div>`;
 }
 
 function formatDate(d) {
@@ -1233,7 +1273,7 @@ function renderTable(data) {
     const recruitColor = s.recruitRate>=elapsedPct?'#2D7A55':s.recruitRate>=elapsedPct*0.8?'#B87A00':'#C4412F';
     const repeatColor = s.repeatRate>=60?'#2D7A55':s.repeatRate>=40?'#B87A00':'#C4412F';
     const repeatStr = s.repeatInfo ? `(${s.repeatInfo.repeated.toLocaleString()}/${s.repeatInfo.all.toLocaleString()}人)` : '';
-    const ytdMembers = s.recruitRate > 0 ? Math.round(TARGETS_2026[s.store] * s.recruitRate / 100) : s.members;
+    const ytdMembers = s.ytdActual || 0; // ★ FIX 2026-06-01: 改讀 Sheet 累積值,與「2026目標達成追蹤」同源(原本用 recruitRate 反推會有四捨五入誤差)
     return `<tr>
       <td><span class="rank-badge ${rc}">${rk}</span></td>
       <td><strong>${s.store}</strong></td>
