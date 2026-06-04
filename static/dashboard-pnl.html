@@ -1795,16 +1795,101 @@ async function adminOneClickImport() {
     }
 
     _adminParseResult = r;
-    showAdminMsg(msg, 'ok', '✅ 完成! 點下方「✓ 確認匯入」寫入 fact_pnl');
+    showAdminMsg(msg, 'info', '✅ 解析完成,自動健康檢查中...');
     renderAdminSummary(r);
     renderAdminReport(r);
     document.getElementById('admin-summary-section').style.display = 'block';
-    document.getElementById('admin-decision-section').style.display = 'block';
+
+    /* M5: 解析完不再停下等人,自動往下跑健康檢查 + commit */
+    await adminAutoCommit();
 
   } catch(e) {
     showAdminMsg(msg, 'err', '異常: ' + e.message);
     btn.disabled = false;
   }
+}
+
+/* M5: 安全自動 commit — 後端跑四關健康檢查,全過自動寫入,異常退回人工 */
+async function adminAutoCommit() {
+  const msg = document.getElementById('admin-oneclick-msg');
+  const btn = document.getElementById('admin-oneclick-btn');
+  try {
+    const r = await callApiLong('admin_auto_commit', { adminToken: _adminToken });
+
+    /* 情況 A: 健康檢查擋下(重複/筆數異常/欄位缺值) → 紅卡,退回人工 */
+    if (r && r.status === 'BLOCKED') {
+      adminShowBlockedCard(r);
+      btn.disabled = false;
+      return;
+    }
+
+    /* 情況 B: 寫入後筆數核對失敗 → 紅卡,提示檢查/還原 */
+    if (r && r.status === 'NEED_MANUAL') {
+      adminShowBlockedCard(r);
+      btn.disabled = false;
+      return;
+    }
+
+    /* 情況 C: 失敗(後端錯誤) */
+    if (!r || !r.ok) {
+      const errStr = (r && r.errors && r.errors.length) ? r.errors.join(' / ') : ((r && r.error) || '未知');
+      showAdminMsg(msg, 'err', '自動匯入失敗: ' + errStr + '(staging 已保留,可展開進階選項手動處理)');
+      adminShowManualFallback();
+      btn.disabled = false;
+      return;
+    }
+
+    /* 情況 D: 全過,自動 commit 成功 → 綠卡 */
+    let summary = '✅ 已自動完成匯入!';
+    summary += ' fact_pnl: ' + (r.factPnlBefore !== undefined ? r.factPnlBefore : '?') +
+               ' → ' + (r.factPnlAfter !== undefined ? r.factPnlAfter : '?') + ' 筆';
+    if (r.rowsCommitted) summary += ' | 寫入 ' + r.rowsCommitted + ' 筆';
+    showAdminMsg(msg, 'ok', summary);
+    btn.disabled = true;
+
+  } catch(e) {
+    showAdminMsg(msg, 'err', '自動匯入異常: ' + e.message + '(staging 可能已保留,請展開進階選項確認)');
+    adminShowManualFallback();
+    btn.disabled = false;
+  }
+}
+
+/* M5: 紅色警告卡 — 健康檢查擋下時顯示,復用既有決策區塊讓老闆人工接管 */
+function adminShowBlockedCard(r) {
+  const sec = document.getElementById('admin-decision-section');
+  const titleEl = sec.querySelector('.admin-section-title');
+  const descEl = sec.querySelector('div[style*="font-size:13px"]');
+
+  let reason = '';
+  if (r.status === 'NEED_MANUAL') {
+    reason = '⚠️ 寫入後筆數核對不符,需要您檢查';
+  } else {
+    reason = '⚠️ 自動匯入已停止,需要您確認';
+  }
+
+  titleEl.innerHTML = reason;
+  titleEl.style.color = '#d9534f';
+  sec.style.borderLeft = '4px solid #d9534f';
+  sec.style.background = 'rgba(217,83,79,0.06)';
+
+  let detailHtml = '';
+  if (r.blockedBy) detailHtml += '<b>卡在:</b>' + r.blockedBy + '<br>';
+  if (r.detail) detailHtml += '<b>偵測到:</b>' + r.detail + '<br>';
+  if (r.stagingRows !== undefined) detailHtml += '<b>待處理:</b>staging 目前有 ' + r.stagingRows + ' 筆,尚未寫入 fact_pnl<br>';
+  if (r.status === 'NEED_MANUAL') {
+    detailHtml += '<br>資料可能已寫入但筆數不符。請按「↶ 還原備份」回到寫入前狀態,或自行核對後再決定。';
+  } else {
+    detailHtml += '<br>請按下方「✓ 確認匯入」進入人工流程(可選擇取消 / 覆蓋 / 跳過重複)。';
+  }
+  descEl.innerHTML = detailHtml;
+
+  sec.style.display = 'block';
+}
+
+/* M5: 後端錯誤/異常時,單純把既有決策區塊叫出來當手動退路 */
+function adminShowManualFallback() {
+  const sec = document.getElementById('admin-decision-section');
+  sec.style.display = 'block';
 }
 
 /* M3.5: 精簡摘要(1-2 行) */
