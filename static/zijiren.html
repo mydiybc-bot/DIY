@@ -340,6 +340,7 @@ let sortKey = 'recruitRate'; let sortAsc = false;
 let currentData = null;
 let _rawCache = null;
 let _lastDataDate = null; // ★ NEW: 資料最新日,作為「過去 365 天」基準
+let _snapshotBaseDate = null; // ★ NEW 2026-06-05: 快照表 A2 解析出的基準日,優先於 _lastDataDate 用於 365 天視窗
 
 // ─── DATE SELECTORS ───────────────────────────────────────────
 function initDateSelectors() {
@@ -443,6 +444,9 @@ async function initLoad() {
     _lastDataDate = computeLastDataDate(_rawCache.qf);
     updateElapsedMonths(_lastDataDate);
 
+    // ★ NEW 2026-06-05: 從快照表 A2 解析基準日(優先於 _lastDataDate 用於 365 天視窗)
+    _snapshotBaseDate = parseSnapshotBaseDate(_rawCache.qMemberSnapshot);
+
     showLoading(false);
     applyRange();
   } catch(e) {
@@ -461,6 +465,44 @@ function computeLastDataDate(qfResult) {
   const lastRow = rows[rows.length - 1];
   if (!lastRow.c || !lastRow.c[2]) return null;
   return parseGvizDate(lastRow.c[2].v);
+}
+
+// ★ NEW 2026-06-05: 從快照表標題列解析基準日(會員資格快照匯出當下時間)
+// 快照表 A2 格式: "2026/06/01 03:34 | 回自己人名單 | 匯出"
+// 回傳 Date 物件(設到當天 23:59:59,包含整天的消費)
+function parseSnapshotBaseDate(qMemberSnapshot) {
+  if (!qMemberSnapshot || !qMemberSnapshot.table || !qMemberSnapshot.table.cols) {
+    console.warn('[snapshot] qMemberSnapshot 結構異常,降級用 _lastDataDate');
+    return null;
+  }
+  const label = (qMemberSnapshot.table.cols[0] && qMemberSnapshot.table.cols[0].label) || '';
+  const match = label.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  if (!match) {
+    console.warn('[snapshot] A2 無法解析日期 regex,實際 label =', label);
+    return null;
+  }
+  const y = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10) - 1; // JS Date 月份 0-indexed
+  const d = parseInt(match[3], 10);
+  const date = new Date(y, m, d, 23, 59, 59);
+  if (isNaN(date)) {
+    console.warn('[snapshot] 日期建構失敗', y, m, d);
+    return null;
+  }
+  console.log('[snapshot] base date =', date.toISOString().slice(0,10), '(來源:快照表 A2)');
+  return date;
+}
+
+// ★ NEW 2026-06-05: 取得 365 天視窗基準日
+// 優先順序: 快照日 → QF 最後一筆 → 今天
+function getBaseDate() {
+  if (_snapshotBaseDate) return _snapshotBaseDate;
+  if (_lastDataDate) {
+    console.warn('[base-date] 降級使用 _lastDataDate =', _lastDataDate);
+    return _lastDataDate;
+  }
+  console.warn('[base-date] 二次降級使用 new Date() (今天)');
+  return new Date();
 }
 
 function parseGvizDate(rawDate) {
@@ -595,11 +637,12 @@ function processFromCache(cache, fromIdx, toIdx) {
   //   歸屬店 = QF 加入店（維持不變）
   // ─────────────────────────────────────────────────────────
 
-  // 基準日改為今天
-  const today = new Date();
+  // ★ 基準日改用快照日(會員資格判定當下),fallback _lastDataDate / 今天
+  const today = getBaseDate();
   const cutoff365today = new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000);
   const cutoffYear = cutoff365today.getFullYear();
   const cutoffGvizMonth = cutoff365today.getMonth(); // 0-indexed
+  console.log('[365-window] base =', today.toISOString().slice(0,10), '/ cutoff =', cutoff365today.toISOString().slice(0,10));
 
   function isMonthIn365(y, gm) {
     if (y > cutoffYear) return true;
@@ -608,35 +651,42 @@ function processFromCache(cache, fromIdx, toIdx) {
   }
 
   // 抓每位會員的加入店 (QF)，用於歸屬
-  const memberJoinInfo = {}; // { member: { store, joinDate } }
+  // ★ FIX 2026-06-05: key 改用「姓名+加入店」複合 key,避免同名不同人合併
+  const memberJoinInfo = {}; // { "member|store": { store, joinDate } }
   parseRows(cache.qf).forEach(r => {
     if (!r.c || !r.c[0] || !r.c[1] || !r.c[2]) return;
     const member = r.c[0].v;
     const store  = r.c[1].v;
     const joinDate = parseGvizDate(r.c[2].v);
     if (!member || !store || !joinDate) return;
-    if (!memberJoinInfo[member] || joinDate < memberJoinInfo[member].joinDate) {
-      memberJoinInfo[member] = { store, joinDate };
+    const ck = member + '\u0000' + store; // composite key
+    if (!memberJoinInfo[ck] || joinDate < memberJoinInfo[ck].joinDate) {
+      memberJoinInfo[ck] = { store, joinDate };
     }
   });
 
   // 算每位會員在「過去 365 天內」的消費次數 (QC 扣 QE)
-  const memberConsume365 = {}; // { member: count }
+  // ★ FIX 2026-06-05: key 改用「姓名+加入店」複合 key,避免同名不同人合併導致回頭客虛胖
+  const memberConsume365 = {}; // { "member|store": count }
   parseRows(cache.qc).forEach(r => {
-    if (!r.c || !r.c[0] || !r.c[2] || !r.c[3]) return;
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
     const member = r.c[0].v;
+    const store  = r.c[1].v; // QC 的 B 欄是「加入店別」(GROUP BY C, B)
     const y = r.c[2].v, gm = r.c[3].v;
     const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
     if (!isMonthIn365(y, gm)) return;
-    memberConsume365[member] = (memberConsume365[member] || 0) + cnt;
+    const ck = member + '\u0000' + store;
+    memberConsume365[ck] = (memberConsume365[ck] || 0) + cnt;
   });
   parseRows(cache.qe).forEach(r => {
-    if (!r.c || !r.c[0] || !r.c[2] || !r.c[3]) return;
+    if (!r.c || !r.c[0] || !r.c[1] || !r.c[2] || !r.c[3]) return;
     const member = r.c[0].v;
+    const store  = r.c[1].v;
     const y = r.c[2].v, gm = r.c[3].v;
     const cnt = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
     if (!isMonthIn365(y, gm)) return;
-    memberConsume365[member] = Math.max(0, (memberConsume365[member] || 0) - cnt);
+    const ck = member + '\u0000' + store;
+    memberConsume365[ck] = Math.max(0, (memberConsume365[ck] || 0) - cnt);
   });
 
   // 統計各店：分母 = 快照表現有會員數，分子 = 365天內消費 ≥2次
@@ -657,12 +707,23 @@ function processFromCache(cache, fromIdx, toIdx) {
   });
 
   // 分子：365天內消費 ≥2次，歸到加入店
-  Object.entries(memberConsume365).forEach(([member, cnt]) => {
+  // ★ FIX 2026-06-05 (2): 直接從複合 key 解析加入店,不再依賴 memberJoinInfo
+  //   memberJoinInfo 只含「加入群友」事件,一年前加入的會員不在資料內,
+  //   複合 key 下匹配率暴跌會誤殺回頭客(分子曾崩到 1,926)。複合 key 本身已帶店資訊。
+  let _diagActiveCount = 0, _diagRepeatedCount = 0, _diagUnattributed = 0;
+  Object.entries(memberConsume365).forEach(([ck, cnt]) => {
+    if (cnt <= 0) return;
+    _diagActiveCount++;
     if (cnt < 2) return;
-    const info = memberJoinInfo[member];
-    if (!info || !storeActiveStats[info.store]) return;
-    storeActiveStats[info.store].repeated++;
+    _diagRepeatedCount++;
+    const store = ck.split('\u0000')[1];
+    if (!storeActiveStats[store]) { _diagUnattributed++; return; }
+    storeActiveStats[store].repeated++;
   });
+  console.log('[member-key] memberConsume365 keys =', Object.keys(memberConsume365).length,
+              '/ 365天有消費的會員 =', _diagActiveCount,
+              '/ 消費≥2次的會員(回頭客) =', _diagRepeatedCount,
+              '/ 店名對不上而未歸店 =', _diagUnattributed);
 
   // ★ NEW 2026-06-01: 統計「回頭客消費次數」與「全體會員消費次數」(過去 365 天)
   // 用於 KPI 卡片「回頭客消費次數」與「佔比」(因為現有資料源沒有金額欄,以次數代替金額)
@@ -699,9 +760,9 @@ function processFromCache(cache, fromIdx, toIdx) {
     if (cnt <= 0) return;
     const parts = k.split('\u0000');
     const member = parts[0], store = parts[1];
-    allUniqueConsumers.add(member);
+    allUniqueConsumers.add(k); // ★ FIX 2026-06-05: 用複合 key,避免同名合併
     if (!uniqueMembersPerStore[store]) uniqueMembersPerStore[store] = new Set();
-    uniqueMembersPerStore[store].add(member);
+    uniqueMembersPerStore[store].add(k); // ★ FIX 2026-06-05: 同上
   });
 
   const freqMap = {};
@@ -920,8 +981,8 @@ function renderKPI(data) {
   });
   const overallReturnRate = allActive > 0 ? Math.round(allRepeated / allActive * 100) : 0;
 
-  // 顯示 365 天窗口（基準日 = 今天）
-  const today = new Date();
+  // 顯示 365 天窗口（基準日 = 快照日,與 compute() 一致）
+  const today = getBaseDate();
   const cutoffStr = formatDate(data.cutoff365 || new Date(today.getTime() - 365*24*60*60*1000));
   const baseStr   = formatDate(today);
 
