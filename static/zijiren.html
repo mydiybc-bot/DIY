@@ -822,11 +822,15 @@ function renderAll(data) {
 function renderKPI(data) {
   const totalMembers  = data.stores.reduce((s,r) => s + r.members, 0);
   const totalVisits   = data.stores.reduce((s,r) => s + r.visits, 0);
-  const avgVisits     = data.totalUniqueConsumers > 0
-    ? (totalVisits / data.totalUniqueConsumers).toFixed(2) : '0.00';
+
+  // ★ 全局數字（含西門）：活躍/回頭客/總消費/回頭客消費，皆 365 天固定窗口
+  const gkpi = data.globalKpi || { active: 0, repeated: 0, totalVisits: 0, repeatedVisits: 0 };
+
+  // 平均消費次數/人：用 _全局 365天固定（不隨期間選擇器變）= 總消費 / 活躍消費者（含西門）
+  const avgVisits = gkpi.active > 0
+    ? (gkpi.totalVisits / gkpi.active).toFixed(2) : '0.00';
 
   // ★ 全局回頭客：用 globalKpi（含西門）作分子，快照 87,443（含西門）作分母
-  const gkpi = data.globalKpi || { active: 0, repeated: 0 };
   const allRepeated = gkpi.repeated;                        // 12,366（含西門）
   // 分母：快照含西門 87,443（storeActiveStats 12家 + 西門快照 261）
   let allActive = 0;
@@ -835,8 +839,20 @@ function renderKPI(data) {
   allActive += 261; // ★ 西門快照固定261人（已關閉，不再變動）
   const overallReturnRate = allActive > 0 ? Math.round(allRepeated / allActive * 100) : 0;
 
-  // 365 天視窗由 GAS 決定，前端顯示 aggKpiDate
-  const windowStr = data.aggKpiDate ? '資料截至 ' + data.aggKpiDate : '由 GAS 每日更新';
+  // 「資料截至」：用快照基準日減一天 = 消費資料最後日（避免顯示今天的誤導日期）
+  let windowStr = '由 GAS 每日更新';
+  if (_rawCache && _rawCache.qMemberSnapshot && _rawCache.qMemberSnapshot.table
+      && _rawCache.qMemberSnapshot.table.cols && _rawCache.qMemberSnapshot.table.cols[0]) {
+    const _lbl = _rawCache.qMemberSnapshot.table.cols[0].label || '';
+    const _mm = _lbl.match(/(\d{4})\/(\d{2})\/(\d{2})/);
+    if (_mm) {
+      const _d = new Date(+_mm[1], +_mm[2]-1, +_mm[3]);
+      _d.setDate(_d.getDate() - 1);  // 快照前一天 = 消費資料最後日（如 06/01 快照 → 05/31）
+      windowStr = '資料截至 ' + _d.getFullYear() + '/' +
+                  String(_d.getMonth()+1).padStart(2,'0') + '/' +
+                  String(_d.getDate()).padStart(2,'0');
+    }
+  }
 
   // 現有會員總數（來自快照表，含西門261人 = 87,443；西門已關閉但會員仍活躍）
   let totalCurrentMembers = 0;
@@ -856,8 +872,8 @@ function renderKPI(data) {
     });
   }
 
-  const repeatVisits    = data.repeatedVisits365 || 0;
-  const allVisits365    = data.allVisits365 || 0;
+  const repeatVisits    = gkpi.repeatedVisits || 0;   // _全局 含西門 = 38,478
+  const allVisits365    = gkpi.totalVisits || 0;       // _全局 含西門 = 104,021
   const repeatVisitsPct = allVisits365 > 0 ? Math.round(repeatVisits / allVisits365 * 100) : 0;
 
   document.getElementById('kpiGrid').innerHTML = `
