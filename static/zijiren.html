@@ -545,9 +545,19 @@ function processFromCache(cache, fromIdx, toIdx) {
     totalVisits: 0,
     repeatedVisits: 0
   });
+  // globalKpi：從 _全局 列讀取（含西門計數，用於全局回頭客比例）
+  const globalKpi = { active: 0, repeated: 0, totalVisits: 0, repeatedVisits: 0 };
   parseRows(cache.aggKpi).forEach(r => {
     if (!r.c || !r.c[0] || !r.c[0].v) return;
     const store = String(r.c[0].v).trim();
+    if (store === '_全局') {
+      // 全局列（含西門）→ 供全局 KPI 卡使用
+      globalKpi.active         = (r.c[1] && r.c[1].v != null) ? r.c[1].v : 0;
+      globalKpi.repeated       = (r.c[2] && r.c[2].v != null) ? r.c[2].v : 0;
+      globalKpi.totalVisits    = (r.c[3] && r.c[3].v != null) ? r.c[3].v : 0;
+      globalKpi.repeatedVisits = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
+      return;
+    }
     if (store === '加入店' || !STORE_NAMES.includes(store)) return;
     storeActiveStats[store].activeConsumers365 = (r.c[1] && r.c[1].v != null) ? r.c[1].v : 0;
     storeActiveStats[store].repeated           = (r.c[2] && r.c[2].v != null) ? r.c[2].v : 0;
@@ -657,9 +667,10 @@ function processFromCache(cache, fromIdx, toIdx) {
     monthlySeries,
     stores,
     storeActiveStats,
+    globalKpi,                 // ★ 含西門全局數字（活躍/回頭客/消費次數）
     totalUniqueConsumers: stores.reduce((s, r) => s + r.uniqueConsumers, 0),
-    cutoff365: null,           // 365 天視窗由 GAS 決定，前端不重算
-    aggKpiDate,                // 供 renderKPI 顯示
+    cutoff365: null,
+    aggKpiDate,
     newMemberMonths2026ByStore,
     allVisits365,
     repeatedVisits365
@@ -814,23 +825,29 @@ function renderKPI(data) {
   const avgVisits     = data.totalUniqueConsumers > 0
     ? (totalVisits / data.totalUniqueConsumers).toFixed(2) : '0.00';
 
-  let allActive = 0, allRepeated = 0;
-  Object.values(data.storeActiveStats || {}).forEach(v => {
-    allActive   += v.active   || 0;
-    allRepeated += v.repeated || 0;
-  });
+  // ★ 全局回頭客：用 globalKpi（含西門）作分子，快照 87,443（含西門）作分母
+  const gkpi = data.globalKpi || { active: 0, repeated: 0 };
+  const allRepeated = gkpi.repeated;                        // 12,366（含西門）
+  // 分母：快照含西門 87,443（storeActiveStats 12家 + 西門快照 261）
+  let allActive = 0;
+  Object.values(data.storeActiveStats || {}).forEach(v => { allActive += v.active || 0; });
+  // storeActiveStats 的 active 來自快照12家(87,182)；加西門261 = 87,443
+  allActive += 261; // ★ 西門快照固定261人（已關閉，不再變動）
   const overallReturnRate = allActive > 0 ? Math.round(allRepeated / allActive * 100) : 0;
 
   // 365 天視窗由 GAS 決定，前端顯示 aggKpiDate
   const windowStr = data.aggKpiDate ? '資料截至 ' + data.aggKpiDate : '由 GAS 每日更新';
 
-  // 現有會員總數（來自快照表）
+  // 現有會員總數（來自快照表，含西門261人 = 87,443；西門已關閉但會員仍活躍）
   let totalCurrentMembers = 0;
   if (_rawCache && _rawCache.qMemberSnapshot) {
     parseRows(_rawCache.qMemberSnapshot).forEach(r => {
       if (!r.c || !r.c[0] || !r.c[0].v) return;
-      const storeName = r.c[0].v;
+      const storeName = String(r.c[0].v).trim();
       if (storeName === '合計' || storeName === '分店') return;
+      // 含西門（已關閉但會員仍在快照中）；排除其他未知店名
+      const knownStores = [...STORE_NAMES, '台南新光西門店'];
+      if (!knownStores.includes(storeName)) return;
       const zijiren  = (r.c[2] && r.c[2].v) ? r.c[2].v : 0;
       const suren    = (r.c[3] && r.c[3].v) ? r.c[3].v : 0;
       const daren    = (r.c[4] && r.c[4].v) ? r.c[4].v : 0;
@@ -878,6 +895,9 @@ function renderMemberSnapshot() {
     if (!r.c || !r.c[0] || !r.c[0].v) return;
     const name = String(r.c[0].v).trim();
     if (name === '分店') return;
+    // 展示12家 + 西門（已關閉但會員仍活躍，顯示於末尾）；排除其他未知店
+    const _knownSnap = [...STORE_NAMES, '台南新光西門店'];
+    if (name !== '合計' && !_knownSnap.includes(name)) return;
     const zijiren = (r.c[2] && r.c[2].v != null) ? r.c[2].v : 0;
     const suren   = (r.c[3] && r.c[3].v != null) ? r.c[3].v : 0;
     const daren   = (r.c[4] && r.c[4].v != null) ? r.c[4].v : 0;
