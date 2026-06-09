@@ -1617,6 +1617,27 @@ adminHtmlEl.innerHTML = `
         </details>
       </div>
 
+      <!-- 區塊 3.5: 新科目助手(2026-06-09 新增) -->
+      <!-- 偵測到 dim_account 找不到對應時自動顯示,協助老闆 3 秒加列 -->
+      <div class="admin-section" id="admin-new-account-section" style="display:none; background:#fff8e1; border-left:4px solid #f5a623;">
+        <div class="admin-section-title">🆕 偵測到新科目 — 需要先設定才能匯入</div>
+        <div style="font-size:13px; color:var(--text2); margin-bottom:12px;">
+          這些科目鼎新系統從沒出現過,parser 不認得。請逐一確認分類,複製建議列貼到 <code>dim_account</code> 後重新解析。
+        </div>
+        <div id="admin-new-account-list"></div>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid #f5a623;">
+          <div style="font-size:13px; margin-bottom:8px;"><strong>完成後的步驟:</strong></div>
+          <ol style="font-size:13px; line-height:1.8; margin:0 0 12px 20px; padding:0;">
+            <li>點上方各科目的「📋 複製這列」</li>
+            <li>點 <a href="#" id="admin-open-dimaccount" style="color:var(--accent);">開啟 dim_account 分頁 ↗</a></li>
+            <li>在最末列空白處貼上(Ctrl+End → Ctrl+V → Ctrl+S)</li>
+            <li>每個新科目重複貼上</li>
+            <li>回來這裡按下方「↻ 重新解析」</li>
+          </ol>
+          <button class="admin-btn admin-btn-primary" onclick="adminReparse()">↻ 重新解析</button>
+        </div>
+      </div>
+
       <!-- 區塊 4: 經營者最終確認(只剩 commit 一個主按鈕) -->
       <div class="admin-section" id="admin-decision-section" style="display:none;">
         <div class="admin-section-title">✅ 確認匯入到 fact_pnl</div>
@@ -1834,6 +1855,16 @@ async function adminOneClickImport() {
     bar.style.width = '100%';
 
     if (!r || !r.ok) {
+      /* 2026-06-09: 失敗時先檢查是否為「新科目未在 dim_account」案例,如是→啟動新科目助手 UI */
+      const newAccounts = _detectUnknownAccounts(r);
+      if (newAccounts.length > 0) {
+        showAdminMsg(msg, 'warn', '⚠️ 偵測到 ' + newAccounts.length +
+                     ' 個未知科目,請在下方助手區處理');
+        renderNewAccountHelper(newAccounts);
+        document.getElementById('admin-new-account-section').style.display = 'block';
+        btn.disabled = false;
+        return;
+      }
       showAdminMsg(msg, 'err', '解析失敗: ' + ((r && r.error) || '未知'));
       btn.disabled = false;
       return;
@@ -1917,6 +1948,289 @@ async function adminAutoCommit() {
     btn.disabled = false;
   }
 }
+
+/* ============================================================
+ * 新科目助手 (2026-06-09)
+ * 偵測解析失敗時的「dim_account 找不到對應」錯誤,
+ * 自動產生建議分類 + 複製到剪貼簿,協助老闆 3 秒加 dim_account 列
+ * ============================================================ */
+
+/* 從 r.fileResults / r.errors 解析出未知科目清單,去重 */
+function _detectUnknownAccounts(r) {
+  if (!r) return [];
+  const found = {};   // key=accountName, val={ accountName, sources: [fileName, ...] }
+  const pattern = /科目「(.+?)」在 dim_account 找不到對應/;
+
+  /* 從 fileResults 撈 */
+  if (r.fileResults && r.fileResults.length) {
+    r.fileResults.forEach(function(fr) {
+      if (!fr.errors || !fr.errors.length) return;
+      fr.errors.forEach(function(err) {
+        const m = String(err).match(pattern);
+        if (m) {
+          const name = m[1];
+          if (!found[name]) found[name] = { accountName: name, sources: [] };
+          if (found[name].sources.indexOf(fr.fileName) < 0) {
+            found[name].sources.push(fr.fileName || '(未知檔)');
+          }
+        }
+      });
+    });
+  }
+  /* 從頂層 errors 撈(備援) */
+  if (r.errors && r.errors.length) {
+    r.errors.forEach(function(err) {
+      const m = String(err).match(pattern);
+      if (m) {
+        const name = m[1];
+        if (!found[name]) found[name] = { accountName: name, sources: ['(來源未知)'] };
+      }
+    });
+  }
+  return Object.keys(found).map(function(k) { return found[k]; });
+}
+
+/* 啟發式推測 L1 / L2 / 正負號 */
+function _guessClassification(accountName) {
+  const s = String(accountName);
+  let l1 = '管理費用';  // 預設
+  let l2 = '';
+  let sign = '負';
+
+  /* 收入類 */
+  if (/收入|銷貨/.test(s)) {
+    l1 = (/利息|匯兌|其他收入|租賃|處分/.test(s)) ? '營業外' : '營業收入';
+    l2 = (l1 === '營業外') ? '營業外收入' : '銷貨收入';
+    sign = '正';
+  }
+  /* 直接成本 */
+  else if (/進貨|食材|原料|耗材.*成本/.test(s)) {
+    l1 = '直接成本';
+    l2 = (/食材|原料/.test(s)) ? '食材成本' : '耗材成本';
+    sign = '負';
+  }
+  /* 人事成本 */
+  else if (/薪資|獎金|勞健保|健保|勞保|勞退|職工|福利|加班|津貼|職業訓練|考照/.test(s)) {
+    l1 = '人事成本';
+    if (/勞健保|健保|勞保|勞退/.test(s)) l2 = '勞健退';
+    else if (/獎金/.test(s)) l2 = '薪資';
+    else if (/福利|職業訓練|考照/.test(s)) l2 = '職工相關';
+    else l2 = '薪資';
+    sign = '負';
+  }
+  /* 場地成本 */
+  else if (/租金|水電|修繕|清潔/.test(s)) {
+    l1 = '場地成本';
+    if (/租金/.test(s)) l2 = '租金';
+    else if (/水電/.test(s)) l2 = '水電';
+    else if (/清潔|修繕/.test(s)) l2 = '清潔修繕';
+    sign = '負';
+  }
+  /* 行銷費用 */
+  else if (/廣告|行銷|推廣|廣宣|FB|IG|Google|line@|LINE@/i.test(s)) {
+    l1 = '行銷費用';
+    l2 = '廣告推廣';
+    sign = '負';
+  }
+  /* 營運費用 */
+  else if (/運費|郵電|差旅|交通|手續|設備|文具|耗材費|電/.test(s)) {
+    l1 = '營運費用';
+    if (/運費|差旅|交通|郵電|電/.test(s)) l2 = '物流通訊';
+    else if (/文具|設備|耗材費/.test(s)) l2 = '營運耗材';
+    else l2 = '支付工具';
+    sign = '負';
+  }
+  /* 營業外 */
+  else if (/利息|匯兌|處分|呆帳|其他.*損失|其他.*支出/.test(s)) {
+    l1 = '營業外';
+    l2 = '營業外支出';
+    sign = '負';
+  }
+  /* 管理費用(預設) */
+  else {
+    l1 = '管理費用';
+    if (/折舊|攤銷/.test(s)) l2 = '折舊攤銷';
+    else if (/稅|保險/.test(s)) l2 = '保險稅負';
+    else if (/雜/.test(s)) l2 = '雜項';
+    else if (/管理/.test(s)) l2 = '管理費';
+    else l2 = '管理費';
+    sign = '負';
+  }
+
+  return { l1: l1, l2: l2, sign: sign };
+}
+
+/* 算下一個 account_code(依據 L1 對應的字母前綴) */
+function _nextAccountCode(l1) {
+  const prefixMap = {
+    '營業收入': 'A', '直接成本': 'B', '人事成本': 'C', '場地成本': 'D',
+    '營運費用': 'E', '管理費用': 'F', '營業外': 'G', '行銷費用': 'H'
+  };
+  const prefix = prefixMap[l1] || 'F';
+  let maxNum = 0;
+  ACCOUNTS.forEach(function(a) {
+    const code = String(a.account_code || '');
+    if (code.charAt(0) === prefix) {
+      const num = parseInt(code.substring(1), 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  return prefix + String(maxNum + 1).padStart(3, '0');
+}
+
+/* 渲染新科目助手 UI */
+function renderNewAccountHelper(newAccounts) {
+  const listEl = document.getElementById('admin-new-account-list');
+  if (!listEl) return;
+  const L1_OPTIONS = ['營業收入', '直接成本', '人事成本', '場地成本', '營運費用', '管理費用', '行銷費用', '營業外'];
+
+  let html = '';
+  newAccounts.forEach(function(item, idx) {
+    const guess = _guessClassification(item.accountName);
+    const code = _nextAccountCode(guess.l1);
+    const id = 'newacc-' + idx;
+    html += '<div style="background:#fff; border:1px solid #f5a623; border-radius:6px; padding:12px; margin-bottom:10px;">';
+    html += '<div style="font-weight:bold; font-size:14px; margin-bottom:6px;">「' + _escapeHtml(item.accountName) + '」</div>';
+    html += '<div style="font-size:12px; color:var(--text2); margin-bottom:10px;">出現在: ' +
+            item.sources.map(_escapeHtml).join(', ') + '</div>';
+
+    html += '<div style="display:grid; grid-template-columns:auto 1fr; gap:6px 10px; font-size:13px; align-items:center;">';
+
+    /* account_code (auto) */
+    html += '<label>account_code:</label>';
+    html += '<input id="' + id + '-code" value="' + code +
+            '" style="font-family:monospace; padding:4px 6px;" onchange="_updateCopyPreview(' + idx + ')">';
+
+    /* L1 下拉 */
+    html += '<label>大類 L1:</label>';
+    html += '<select id="' + id + '-l1" onchange="_onL1Change(' + idx + ')" style="padding:4px 6px;">';
+    L1_OPTIONS.forEach(function(opt) {
+      html += '<option value="' + opt + '"' + (opt === guess.l1 ? ' selected' : '') + '>' + opt + '</option>';
+    });
+    html += '</select>';
+
+    /* L2 文字輸入 */
+    html += '<label>子類 L2:</label>';
+    html += '<input id="' + id + '-l2" value="' + _escapeHtml(guess.l2) +
+            '" style="padding:4px 6px;" onchange="_updateCopyPreview(' + idx + ')">';
+
+    /* 正負號 */
+    html += '<label>正負號:</label>';
+    html += '<select id="' + id + '-sign" onchange="_updateCopyPreview(' + idx + ')" style="padding:4px 6px; width:fit-content;">';
+    html += '<option value="正"' + (guess.sign === '正' ? ' selected' : '') + '>正(收入類)</option>';
+    html += '<option value="負"' + (guess.sign === '負' ? ' selected' : '') + '>負(費用類)</option>';
+    html += '</select>';
+
+    html += '</div>';
+
+    /* 複製預覽 */
+    html += '<div style="background:#f4f4f4; padding:8px; margin-top:10px; font-family:monospace; font-size:12px; border-radius:4px;" id="' + id + '-preview"></div>';
+    html += '<button class="admin-btn admin-btn-primary" style="margin-top:8px;" onclick="_copyAccountRow(' + idx + ')">📋 複製這列</button>';
+    html += '<span id="' + id + '-copied" style="margin-left:10px; color:var(--green); font-size:13px;"></span>';
+
+    /* 隱藏的原始科目名(被 parser 用) */
+    html += '<input type="hidden" id="' + id + '-name" value="' + _escapeHtml(item.accountName) + '">';
+
+    html += '</div>';
+  });
+
+  listEl.innerHTML = html;
+  /* 初始化每個預覽 */
+  newAccounts.forEach(function(_, idx) { _updateCopyPreview(idx); });
+
+  /* 設定 dim_account 連結 */
+  const linkEl = document.getElementById('admin-open-dimaccount');
+  if (linkEl) {
+    linkEl.href = 'https://docs.google.com/spreadsheets/d/1khrFp_AYp3mEsL02cTRrYu1LNiRTP68aowM5_ClsE_c/edit#gid=0';
+    linkEl.target = '_blank';
+    linkEl.title = '開啟資料倉,點 dim_account 分頁,Ctrl+End 跳到最末列';
+  }
+}
+
+/* L1 改變 → 重新算 code 前綴 + 更新預覽 */
+function _onL1Change(idx) {
+  const l1 = document.getElementById('newacc-' + idx + '-l1').value;
+  document.getElementById('newacc-' + idx + '-code').value = _nextAccountCode(l1);
+  _updateCopyPreview(idx);
+}
+
+/* 更新「Tab 分隔的可複製列」預覽 */
+function _updateCopyPreview(idx) {
+  const code = (document.getElementById('newacc-' + idx + '-code') || {}).value || '';
+  const name = (document.getElementById('newacc-' + idx + '-name') || {}).value || '';
+  const l1 = (document.getElementById('newacc-' + idx + '-l1') || {}).value || '';
+  const l2 = (document.getElementById('newacc-' + idx + '-l2') || {}).value || '';
+  const sign = (document.getElementById('newacc-' + idx + '-sign') || {}).value || '';
+  const previewEl = document.getElementById('newacc-' + idx + '-preview');
+  if (!previewEl) return;
+  const row = [code, name, l1, l2, sign].join('\t');
+  previewEl.textContent = row;
+  previewEl.title = '欄位順序: account_code | 鼎新原始科目名 | 大類 L1 | 子類 L2 | 正負號';
+}
+
+/* 複製到剪貼簿 */
+function _copyAccountRow(idx) {
+  const previewEl = document.getElementById('newacc-' + idx + '-preview');
+  const copiedEl = document.getElementById('newacc-' + idx + '-copied');
+  if (!previewEl) return;
+  const text = previewEl.textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      if (copiedEl) {
+        copiedEl.textContent = '✅ 已複製,去 dim_account 貼上(Ctrl+End → Ctrl+V)';
+        setTimeout(function() { copiedEl.textContent = ''; }, 8000);
+      }
+    }).catch(function() {
+      _fallbackCopy(text, copiedEl);
+    });
+  } else {
+    _fallbackCopy(text, copiedEl);
+  }
+}
+
+function _fallbackCopy(text, copiedEl) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (copiedEl) {
+      copiedEl.textContent = '✅ 已複製';
+      setTimeout(function() { copiedEl.textContent = ''; }, 8000);
+    }
+  } catch(e) {
+    if (copiedEl) copiedEl.textContent = '❌ 複製失敗,請手動選取';
+  }
+}
+
+/* HTML 跳脫(避免科目名含特殊字元時破版) */
+function _escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* 重新解析 — 重新跑一次 adminOneClickImport,前提是老闆已經加完 dim_account */
+async function adminReparse() {
+  const ok = confirm('確認你已經把所有新科目加進 dim_account 並儲存了嗎?\n\n' +
+                     '按確定 → 重新跑一鍵匯入。\n' +
+                     '按取消 → 先去 dim_account 加完再回來。');
+  if (!ok) return;
+  /* 隱藏新科目助手區塊,不然下次失敗會看到舊的 */
+  document.getElementById('admin-new-account-section').style.display = 'none';
+  document.getElementById('admin-summary-section').style.display = 'none';
+  /* 重新載入 ACCOUNTS(因為 dim_account 變了) */
+  try {
+    const ar = await callApi('get_accounts');
+    if (ar && ar.accounts) ACCOUNTS = ar.accounts;
+  } catch(_){}
+  /* 重跑 */
+  adminOneClickImport();
+}
+
 
 /* M5: 紅色警告卡 — 健康檢查擋下時顯示,復用既有決策區塊讓老闆人工接管 */
 function adminShowBlockedCard(r) {
@@ -2203,8 +2517,10 @@ function adminCancel() {
   /* M3.5: 隱藏摘要與決策區 */
   const sumEl = document.getElementById('admin-summary-section');
   const decEl = document.getElementById('admin-decision-section');
+  const newAccEl = document.getElementById('admin-new-account-section');
   if (sumEl) sumEl.style.display = 'none';
   if (decEl) decEl.style.display = 'none';
+  if (newAccEl) newAccEl.style.display = 'none';  /* 2026-06-09 新增 */
   /* 重新啟用一鍵按鈕 */
   const btn = document.getElementById('admin-oneclick-btn');
   if (btn) btn.disabled = false;
