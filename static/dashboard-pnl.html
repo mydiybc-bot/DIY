@@ -1525,6 +1525,11 @@ adminHtmlEl.innerHTML = `
     <!-- 主功能階段(密碼通過後顯示) -->
     <div id="admin-stage-main" style="display:none;">
 
+      <!-- 區塊 -1: 上次 commit 持久狀態橫幅(2026-06-09 新增,避免重開不知做過了) -->
+      <div class="admin-section" id="admin-last-commit-banner" style="display:none; background:#e3f2fd; border-left:4px solid #1976d2;">
+        <div style="font-size:13px; line-height:1.6;" id="admin-last-commit-content"></div>
+      </div>
+
       <!-- 區塊 0: 檔名規範提示卡（2026-05-20 新增） -->
       <div class="admin-section" id="admin-filename-guide" style="background:#fff8e1; border-left:4px solid #f5a623;">
         <div class="admin-section-title" style="cursor:pointer; user-select:none;" onclick="toggleFilenameGuide()">
@@ -1669,6 +1674,44 @@ function closeAdminPanel() {
   document.getElementById('admin-overlay').classList.remove('show');
 }
 
+/* 2026-06-09: 顯示上次 commit 持久狀態橫幅(讀 sessionStorage) */
+function renderLastCommitBanner() {
+  const banner = document.getElementById('admin-last-commit-banner');
+  const content = document.getElementById('admin-last-commit-content');
+  if (!banner || !content) return;
+  try {
+    const raw = sessionStorage.getItem('pnl_last_commit');
+    if (!raw) { banner.style.display = 'none'; return; }
+    const info = JSON.parse(raw);
+    const ts = new Date(info.timestamp);
+    const tsStr = ts.getFullYear() + '/' +
+                  String(ts.getMonth() + 1).padStart(2, '0') + '/' +
+                  String(ts.getDate()).padStart(2, '0') + ' ' +
+                  String(ts.getHours()).padStart(2, '0') + ':' +
+                  String(ts.getMinutes()).padStart(2, '0');
+    const minutesAgo = Math.round((Date.now() - ts.getTime()) / 60000);
+    let agoStr;
+    if (minutesAgo < 1) agoStr = '剛剛';
+    else if (minutesAgo < 60) agoStr = minutesAgo + ' 分鐘前';
+    else if (minutesAgo < 1440) agoStr = Math.floor(minutesAgo / 60) + ' 小時前';
+    else agoStr = Math.floor(minutesAgo / 1440) + ' 天前';
+
+    let html = '<strong>📌 上次成功 commit:</strong> ' + tsStr + ' (' + agoStr + ')';
+    html += '<br>fact_pnl: ' + info.factPnlBefore + ' → ' + info.factPnlAfter + ' 筆';
+    if (info.rowsCommitted) html += ' | 寫入 ' + info.rowsCommitted + ' 筆';
+    if (info.rowsOverwritten) html += ' | 覆蓋 ' + info.rowsOverwritten + ' 筆';
+    if (info.duplicateMode) html += ' | mode: ' + info.duplicateMode;
+    if (info.countMismatch) {
+      html += '<br><span style="color:var(--red); font-weight:bold;">⚠️ 該次 countMismatch=TRUE(可能有雙資料殘留),建議查 audit_log 確認</span>';
+    }
+    html += '<br><span style="font-size:11px; color:var(--text2);">(此提示只在本次瀏覽器 session 內顯示,關閉分頁後消失)</span>';
+    content.innerHTML = html;
+    banner.style.display = 'block';
+  } catch(e) {
+    banner.style.display = 'none';
+  }
+}
+
 async function adminVerify() {
   const pwd = document.getElementById('admin-pwd').value.trim();
   const msg = document.getElementById('admin-pwd-msg');
@@ -1680,6 +1723,8 @@ async function adminVerify() {
       _adminToken = r.token || pwd;
       document.getElementById('admin-stage-pwd').style.display = 'none';
       document.getElementById('admin-stage-main').style.display = 'block';
+      /* 2026-06-09: 顯示上次 commit 持久狀態橫幅 */
+      renderLastCommitBanner();
       /* 密碼通過後立刻載入預設資料夾 */
       adminLoadDefaultFolder();
     } else {
@@ -1833,7 +1878,13 @@ async function adminAutoCommit() {
     /* 情況 C: 失敗(後端錯誤) */
     if (!r || !r.ok) {
       const errStr = (r && r.errors && r.errors.length) ? r.errors.join(' / ') : ((r && r.error) || '未知');
-      showAdminMsg(msg, 'err', '自動匯入失敗: ' + errStr + '(staging 已保留,可展開進階選項手動處理)');
+      /* 2026-06-09: 「未知 action」是後端 admin_auto_commit 尚未實作,屬已知狀態,靜默退回人工,不嚇人 */
+      const isMissingAction = /未知.*action|unknown action|未實作/i.test(errStr);
+      if (isMissingAction) {
+        showAdminMsg(msg, 'info', '✅ 解析完成,請在下方按「✓ 確認匯入」進入人工流程。');
+      } else {
+        showAdminMsg(msg, 'err', '自動匯入失敗: ' + errStr + '(staging 已保留,可展開進階選項手動處理)');
+      }
       adminShowManualFallback();
       btn.disabled = false;
       return;
@@ -1846,6 +1897,19 @@ async function adminAutoCommit() {
     if (r.rowsCommitted) summary += ' | 寫入 ' + r.rowsCommitted + ' 筆';
     showAdminMsg(msg, 'ok', summary);
     btn.disabled = true;
+    /* 2026-06-09: 同步寫 sessionStorage 持久狀態 */
+    try {
+      sessionStorage.setItem('pnl_last_commit', JSON.stringify({
+        timestamp: new Date().toISOString(),
+        factPnlBefore: r.factPnlBefore,
+        factPnlAfter: r.factPnlAfter,
+        rowsCommitted: r.rowsCommitted || 0,
+        rowsOverwritten: 0,
+        duplicateMode: 'auto-cancel',
+        replacedBackupSheet: null,
+        countMismatch: r.countMismatch || false
+      }));
+    } catch(_){}
 
   } catch(e) {
     showAdminMsg(msg, 'err', '自動匯入異常: ' + e.message + '(staging 可能已保留,請展開進階選項確認)');
@@ -1892,15 +1956,28 @@ function adminShowManualFallback() {
   sec.style.display = 'block';
 }
 
-/* M3.5: 精簡摘要(1-2 行) */
+/* M3.5: 精簡摘要(1-2 行)
+ * 2026-06-09 fallback: 後端 summary 偶會回 0,改從 r.stores 反推檔案數,
+ * total_records 0 時用「stores.length 個檔案」顯示,避免誤導(地雷 14 教訓)
+ */
 function renderAdminSummary(r) {
   const el = document.getElementById('admin-summary-content');
   const s = r.summary || {};
-  const total = s.total_records || 0;
-  const ok = s.success_files || 0;
+  const storesArr = r.stores || [];
+
+  let total = s.total_records || 0;
+  let ok = s.success_files || 0;
   const failed = s.failed_files || 0;
   const warnCount = (r.warnings || []).length;
-  const reconcileFailCount = ((r.stores || []).filter(x => !x.reconcile_ok)).length;
+  const reconcileFailCount = storesArr.filter(x => !x.reconcile_ok).length;
+
+  /* fallback: total_records/success_files 從 stores 反推 */
+  let usedFallback = false;
+  if ((total === 0 || ok === 0) && storesArr.length > 0) {
+    if (ok === 0) ok = storesArr.length;
+    if (total === 0) total = storesArr.reduce((sum, x) => sum + (x.records || 0), 0);
+    usedFallback = true;
+  }
 
   let statusIcon = '✅';
   let statusColor = 'var(--green)';
@@ -1916,7 +1993,13 @@ function renderAdminSummary(r) {
   }
 
   let html = '<div style="font-size:15px; padding:10px 0;">';
-  html += '<div><strong>' + ok + ' 個檔案 / ' + total + ' 筆資料</strong></div>';
+  html += '<div><strong>' + ok + ' 個檔案 / ' + total + ' 筆資料</strong>';
+  if (usedFallback && total === 0) {
+    html += ' <span style="font-size:11px; color:var(--text2);">(後端摘要為空,以各店明細顯示)</span>';
+  } else if (usedFallback) {
+    html += ' <span style="font-size:11px; color:var(--text2);">(以各店明細推算)</span>';
+  }
+  html += '</div>';
   html += '<div style="margin-top:6px; color:' + statusColor + ';">' + statusIcon + ' ' + statusText + '</div>';
   if (warnCount > 0) {
     html += '<div style="font-size:12px; color:var(--text2); margin-top:6px;">';
@@ -2094,6 +2177,19 @@ async function adminCommitDo(duplicateMode) {
     if (r.replacedBackupSheet) summary += ' | 備份分頁: ' + r.replacedBackupSheet;
     showAdminMsg(msg, 'ok', summary);
     document.getElementById('admin-commit-btn').disabled = true;
+    /* 2026-06-09: 記錄上次成功 commit 到 sessionStorage,避免 15 小時後重開不知道做過了(地雷 14 教訓) */
+    try {
+      sessionStorage.setItem('pnl_last_commit', JSON.stringify({
+        timestamp: new Date().toISOString(),
+        factPnlBefore: r.factPnlBefore,
+        factPnlAfter: r.factPnlAfter,
+        rowsCommitted: r.rowsCommitted || 0,
+        rowsOverwritten: r.rowsOverwritten || 0,
+        duplicateMode: duplicateMode,
+        replacedBackupSheet: r.replacedBackupSheet || null,
+        countMismatch: r.countMismatch || false
+      }));
+    } catch(_){}
   } catch(e) {
     showAdminMsg(msg, 'err', '匯入異常: ' + e.message);
   }
@@ -2181,15 +2277,19 @@ function showAdminMsg(el, type, text) {
   el.style.display = 'block';
 }
 
-/* 長 timeout 版本的 callApi (給解析、commit 用,90 秒) */
+/* 長 timeout 版本的 callApi (給解析、commit 用,300 秒)
+ * 2026-06-09 從 90 秒拉到 300 秒:過往發生過 deleteRow 200+ 列時觸發前端 timeout,
+ * 但後端仍在跑,導致 staging 已寫入新資料、舊資料沒刪除的「雙資料事故」(地雷 14)。
+ * Apps Script 後端 6 分鐘上限,留 1 分鐘 buffer。
+ */
 function callApiLong(action, params={}) {
   return new Promise((resolve, reject) => {
     const cbName = '_jsonpCb' + (++_jsonpId) + '_' + Date.now();
     const timeout = setTimeout(() => {
       delete window[cbName];
       if (script.parentNode) script.parentNode.removeChild(script);
-      reject(new Error('API 逾時(90s)'));
-    }, 90000);
+      reject(new Error('API 逾時(5 分鐘),但後端可能仍在跑。請等 1 分鐘後查 audit_log 最後一筆,確認是否已寫入。不要重新按確認匯入,避免重複寫入。'));
+    }, 300000);
     window[cbName] = function(data) {
       clearTimeout(timeout);
       delete window[cbName];
