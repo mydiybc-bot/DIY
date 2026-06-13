@@ -128,6 +128,9 @@ function setAdminSection(section) {
 
 function updateRoleUi() {
   const isAdmin = currentRole === "admin";
+  if (appPanel) {
+    appPanel.classList.toggle("role-admin", isAdmin);
+  }
   if (modeSwitch) {
     modeSwitch.classList.add("hidden");
   }
@@ -1242,18 +1245,6 @@ addSectionButton.addEventListener("click", () => addSectionEditor());
 addEmployeeButton.addEventListener("click", () => addEmployeeEditor());
 roleSelect.addEventListener("change", toggleLoginFields);
 
-saveAuthButton.addEventListener("click", async () => {
-  try {
-    const result = await api("/api/admin/auth", collectAuthData());
-    currentAuth = result.auth;
-    renderAuthForm();
-    renderEmployeesForm();
-    renderReportFilters();
-    showAdminFeedback("帳號與員工設定已儲存。");
-  } catch (err) {
-    showAdminFeedback(err.message, "error");
-  }
-});
 
 adminLogoutButton.addEventListener("click", async () => {
   await goToLoginPage();
