@@ -39,6 +39,10 @@ const adminFeedback = document.getElementById("admin-feedback");
 const adminLogoutButton = document.getElementById("admin-logout-button");
 const adminNavButtons = [...document.querySelectorAll("[data-admin-nav]")];
 const adminPanels = [...document.querySelectorAll("[data-admin-panel]")];
+const employeeSearch = document.getElementById("employee-search");
+const employeeCount = document.getElementById("employee-count");
+const showPasswords = document.getElementById("show-passwords");
+const saveAdminButtonBottom = document.getElementById("save-admin-button-bottom");
 
 let trainingActive = false;
 let lastCoachMessage = "";
@@ -66,6 +70,9 @@ let currentRole = null;
 let currentAuth = null;
 let currentReports = [];
 let currentAdminSection = "accounts";
+let isDirty = false;
+let toastTimer = null;
+let reportSort = { key: "created_at", dir: "desc" };
 let awaitingCoachReply = false;
 let waitingForUserReply = false;
 let reportFilters = {
@@ -81,19 +88,25 @@ const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
 const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
 
 const RULE_FIELDS = [
-  { key: "scoring_instruction", label: "AI 評分指令(改這裡就能調整評分風格)", type: "textarea" },
-  { key: "assistant_role", label: "AI 角色設定", type: "textarea" },
-  { key: "question_suffix", label: "每題結尾句" },
-  { key: "retry_prompt", label: "未滿分重答提示" },
-  { key: "answer_reveal_prompt", label: "公布答案後提示" },
-  { key: "reference_answer_intro", label: "標準答案前綴" },
-  { key: "pass_feedback", label: "滿分評語" },
-  { key: "retry_feedback", label: "未滿分評語" },
-  { key: "pass_message", label: "過關提示" },
-  { key: "summary_intro_if_empty", label: "未作答總結鼓勵", type: "textarea" },
-  { key: "summary_encouragement", label: "結訓鼓勵語", type: "textarea" },
-  { key: "max_attempts_before_answer", label: "幾次後公布答案", type: "number" },
-  { key: "end_phrase", label: "結束口令" },
+  { key: "max_attempts_before_answer", label: "幾次後公布答案", type: "number", group: "score", help: "員工答錯幾次後，教練直接公布標準答案。" },
+  { key: "question_suffix", label: "每題結尾句", group: "talk", help: "每題唸完後接的話，例如「請開始回答」。" },
+  { key: "retry_prompt", label: "未滿分重答提示", group: "talk", help: "答得不夠好時，請員工再試一次的提示語。" },
+  { key: "answer_reveal_prompt", label: "公布答案前提示", group: "talk", help: "準備公布標準答案前說的話。" },
+  { key: "reference_answer_intro", label: "標準答案前綴", group: "talk", help: "唸標準答案前的引言，例如「參考答案是」。" },
+  { key: "pass_feedback", label: "滿分評語", group: "talk", help: "答得很好時的稱讚語。" },
+  { key: "retry_feedback", label: "未滿分評語", group: "talk", help: "答得不夠好時的回饋語。" },
+  { key: "pass_message", label: "過關提示", group: "talk", help: "通過一題後的提示。" },
+  { key: "end_phrase", label: "結束口令", group: "talk", help: "員工說出這句話就結束本單元。" },
+  { key: "summary_intro_if_empty", label: "未作答總結鼓勵", type: "textarea", group: "encourage", help: "員工幾乎沒作答時，結尾給的鼓勵。" },
+  { key: "summary_encouragement", label: "結訓鼓勵語", type: "textarea", group: "encourage", help: "整個單元結束後的總結鼓勵。" },
+  { key: "scoring_instruction", label: "AI 評分指令", type: "textarea", group: "advanced", help: "進階：直接調整 AI 的評分標準與風格，沒把握可先不動。" },
+  { key: "assistant_role", label: "AI 角色設定", type: "textarea", group: "advanced", help: "進階：設定 AI 教練的個性與口吻。" },
+];
+const RULE_GROUPS = [
+  { id: "score", title: "評分設定", advanced: false },
+  { id: "talk", title: "提示與話術", advanced: false },
+  { id: "encourage", title: "鼓勵語", advanced: false },
+  { id: "advanced", title: "進階 AI 設定（沒把握可不動）", advanced: true },
 ];
 const AUTH_FIELDS = [
   { key: "admin_password", label: "管理員密碼" },
@@ -478,6 +491,10 @@ function toggleExitButtons(_showPracticeExit = false, showAdminExit = false) {
 }
 
 async function goToLoginPage() {
+  if (isDirty && currentRole === "admin" && !window.confirm("有尚未儲存的變更，確定要離開後台嗎？變更會遺失。")) {
+    return;
+  }
+  clearDirty();
   try {
     await api("/api/logout", {});
   } catch (_err) {
@@ -671,21 +688,126 @@ function createInput(value = "", rows = 2) {
   return textarea;
 }
 
+function createFieldWithHelp(labelText, inputEl, helpText, full = false) {
+  const wrapper = document.createElement("label");
+  wrapper.className = full ? "field full" : "field";
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  wrapper.append(label);
+  if (helpText) {
+    const help = document.createElement("span");
+    help.className = "field-help";
+    help.textContent = helpText;
+    wrapper.append(help);
+  }
+  wrapper.append(inputEl);
+  return wrapper;
+}
+
+function confirmDelete(message) {
+  return window.confirm(message);
+}
+
+function showToast(message, kind = "ok") {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.className = "toast " + (kind === "error" ? "toast-error" : "toast-ok");
+  if (toastTimer) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => toast.classList.add("hidden"), kind === "error" ? 5000 : 3000);
+}
+
+function markDirty() {
+  if (isDirty) return;
+  isDirty = true;
+  const bar = document.querySelector(".admin-save-bar");
+  if (bar) bar.classList.add("dirty");
+  const hint = document.getElementById("admin-save-hint");
+  if (hint) hint.textContent = "● 有尚未儲存的變更";
+}
+
+function clearDirty() {
+  isDirty = false;
+  const bar = document.querySelector(".admin-save-bar");
+  if (bar) bar.classList.remove("dirty");
+  const hint = document.getElementById("admin-save-hint");
+  if (hint) hint.textContent = "";
+}
+
+function refreshEmployeeCount() {
+  if (!employeeCount) return;
+  const total = employeesForm.querySelectorAll(".point-row").length;
+  employeeCount.textContent = `目前 ${total} 位員工`;
+}
+
+function applyEmployeeFilter() {
+  const q = (employeeSearch && employeeSearch.value ? employeeSearch.value : "").trim().toLowerCase();
+  employeesForm.querySelectorAll(".point-row").forEach((row) => {
+    const id = row.querySelector('[data-employee-field="employee_id"]').value.toLowerCase();
+    const name = row.querySelector('[data-employee-field="employee_name"]').value.toLowerCase();
+    const match = !q || id.includes(q) || name.includes(q);
+    row.classList.toggle("hidden", !match);
+  });
+}
+
+function applyPasswordVisibility() {
+  const show = !!(showPasswords && showPasswords.checked);
+  employeesForm.querySelectorAll('[data-employee-field="password"]').forEach((inp) => {
+    inp.type = show ? "text" : "password";
+  });
+}
+
+async function saveAllSettings() {
+  try {
+    const authResult = await api("/api/admin/auth", collectAuthData());
+    currentAuth = authResult.auth;
+    const contentResult = await api("/api/admin/content", collectAdminData());
+    currentConfig = contentResult.content;
+    renderAdmin();
+    renderReportFilters();
+    await loadConfig();
+    await loadReports();
+    setMode("admin");
+    setAdminSection(currentAdminSection);
+    clearDirty();
+    showToast("已儲存：密碼、員工、題庫與規則都更新了 ✓", "ok");
+  } catch (err) {
+    showToast(err && err.message ? err.message : "儲存失敗，請再試一次", "error");
+  }
+}
+
 function renderRulesForm() {
   if (!currentConfig) return;
   rulesForm.innerHTML = "";
-  RULE_FIELDS.forEach((field) => {
-    let input;
-    if (field.type === "textarea") {
-      const rows = field.key === "scoring_instruction" ? 14 : 3;
-      input = createInput(currentConfig.rules[field.key] || "", rows);
-    } else {
-      input = document.createElement("input");
-      input.type = field.type || "text";
-      input.value = currentConfig.rules[field.key] ?? "";
-    }
-    input.dataset.ruleKey = field.key;
-    rulesForm.append(createField(field.label, input, field.type === "textarea"));
+  RULE_GROUPS.forEach((group) => {
+    const wrap = document.createElement("div");
+    wrap.className = "rule-group" + (group.advanced ? " collapsed" : "");
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "rule-group-head";
+    head.innerHTML = `<span>${group.title}</span><span class="chevron">▾</span>`;
+    head.addEventListener("click", () => wrap.classList.toggle("collapsed"));
+
+    const body = document.createElement("div");
+    body.className = "rule-group-body rules-grid";
+
+    RULE_FIELDS.filter((f) => f.group === group.id).forEach((field) => {
+      let input;
+      if (field.type === "textarea") {
+        const rows = field.key === "scoring_instruction" ? 12 : 3;
+        input = createInput(currentConfig.rules[field.key] || "", rows);
+      } else {
+        input = document.createElement("input");
+        input.type = field.type || "text";
+        input.value = currentConfig.rules[field.key] ?? "";
+      }
+      input.dataset.ruleKey = field.key;
+      body.append(createFieldWithHelp(field.label, input, field.help, field.type === "textarea"));
+    });
+
+    wrap.append(head, body);
+    rulesForm.append(wrap);
   });
 }
 
@@ -713,18 +835,27 @@ function addEmployeeEditor(employee = { employee_id: "", employee_name: "", pass
   idInput.placeholder = "員工編號";
   idInput.value = employee.employee_id || "";
   idInput.dataset.employeeField = "employee_id";
+  idInput.addEventListener("input", applyEmployeeFilter);
 
   const nameInput = document.createElement("input");
   nameInput.placeholder = "員工姓名";
   nameInput.value = employee.employee_name || "";
   nameInput.dataset.employeeField = "employee_name";
+  nameInput.addEventListener("input", applyEmployeeFilter);
 
   const passwordInput = document.createElement("input");
   passwordInput.placeholder = "個人密碼";
   passwordInput.value = employee.password || "";
   passwordInput.dataset.employeeField = "password";
+  passwordInput.type = (showPasswords && showPasswords.checked) ? "text" : "password";
 
-  const removeButton = createButton("刪除員工", "ghost-button mini-button", () => row.remove());
+  const removeButton = createButton("刪除員工", "ghost-button mini-button", () => {
+    if (confirmDelete(`確定要刪除員工「${nameInput.value || idInput.value || "這位"}」嗎？`)) {
+      row.remove();
+      markDirty();
+      refreshEmployeeCount();
+    }
+  });
   row.append(idInput, nameInput, passwordInput, removeButton);
   employeesForm.appendChild(row);
 }
@@ -733,6 +864,9 @@ function renderEmployeesForm() {
   if (!currentAuth) return;
   employeesForm.innerHTML = "";
   (currentAuth.employees || []).forEach((employee) => addEmployeeEditor(employee));
+  refreshEmployeeCount();
+  applyEmployeeFilter();
+  applyPasswordVisibility();
 }
 
 function addPointEditor(pointsWrap, point = { label: "", keywords: [] }) {
@@ -744,37 +878,100 @@ function addPointEditor(pointsWrap, point = { label: "", keywords: [] }) {
   labelInput.value = point.label || "";
   labelInput.dataset.pointField = "label";
 
-  const keywordsInput = document.createElement("input");
-  keywordsInput.placeholder = "關鍵詞，用逗號分隔";
-  keywordsInput.value = Array.isArray(point.keywords) ? point.keywords.join(", ") : "";
-  keywordsInput.dataset.pointField = "keywords";
+  const chipWrap = document.createElement("div");
+  chipWrap.className = "chip-input";
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.dataset.pointField = "keywords";
+  hidden.value = Array.isArray(point.keywords) ? point.keywords.join(", ") : (point.keywords || "");
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  const entry = document.createElement("input");
+  entry.className = "chip-entry";
+  entry.placeholder = "輸入關鍵詞後按 Enter";
 
-  const removeButton = createButton("刪除重點", "ghost-button mini-button", () => row.remove());
+  function syncHidden() {
+    hidden.value = [...chips.querySelectorAll(".chip")].map((c) => c.dataset.value).join(", ");
+    markDirty();
+  }
+  function addChip(text) {
+    const v = String(text).trim();
+    if (!v) return;
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.dataset.value = v;
+    const t = document.createElement("span");
+    t.textContent = v;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "chip-x";
+    x.textContent = "×";
+    x.addEventListener("click", () => { chip.remove(); syncHidden(); });
+    chip.append(t, x);
+    chips.appendChild(chip);
+  }
+  (hidden.value ? hidden.value.split(",") : []).map((s) => s.trim()).filter(Boolean).forEach(addChip);
+  entry.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addChip(entry.value);
+      entry.value = "";
+      syncHidden();
+    }
+  });
+  entry.addEventListener("blur", () => {
+    if (entry.value.trim()) { addChip(entry.value); entry.value = ""; syncHidden(); }
+  });
 
-  row.append(labelInput, keywordsInput, removeButton);
+  chipWrap.append(chips, entry, hidden);
+
+  const removeButton = createButton("刪除重點", "ghost-button mini-button", () => {
+    if (confirmDelete("確定刪除這個重點？")) { row.remove(); markDirty(); }
+  });
+
+  row.append(labelInput, chipWrap, removeButton);
   pointsWrap.appendChild(row);
 }
 
 function addQuestionEditor(questionsWrap, question = null) {
   const questionIndex = questionsWrap.children.length + 1;
   const editor = document.createElement("article");
-  editor.className = "question-editor";
+  editor.className = "question-editor collapsed";
 
   const header = document.createElement("div");
-  header.className = "question-row";
+  header.className = "question-row collapsible-head";
   const title = document.createElement("strong");
-  title.textContent = `題目 ${questionIndex}`;
-  const removeButton = createButton("刪除此題", "ghost-button mini-button", () => {
-    editor.remove();
-    renumberQuestions(questionsWrap);
+  function setTitle() {
+    const idx = [...questionsWrap.children].indexOf(editor) + 1 || questionIndex;
+    const p = (editor.querySelector('[data-question-field="prompt"]')?.value || "").trim();
+    title.textContent = `題目 ${idx}` + (p ? `：${p.slice(0, 18)}${p.length > 18 ? "…" : ""}` : "（空白）");
+  }
+  const headRight = document.createElement("div");
+  headRight.className = "head-actions";
+  const chevron = document.createElement("span");
+  chevron.className = "chevron";
+  chevron.textContent = "▸";
+  const removeButton = createButton("刪除此題", "ghost-button mini-button", (e) => {
+    e.stopPropagation();
+    if (confirmDelete("確定刪除這一題？")) {
+      editor.remove();
+      renumberQuestions(questionsWrap);
+      markDirty();
+    }
   });
-  header.append(title, removeButton);
+  headRight.append(removeButton, chevron);
+  header.append(title, headRight);
+  header.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    editor.classList.toggle("collapsed");
+  });
 
   const fields = document.createElement("div");
-  fields.className = "question-fields";
+  fields.className = "question-fields collapsible-body";
 
   const promptInput = createInput(question?.prompt || "", 2);
   promptInput.dataset.questionField = "prompt";
+  promptInput.addEventListener("input", setTitle);
   fields.append(createField("題目內容", promptInput, true));
 
   const answerInput = createInput(question?.answer || "", 3);
@@ -784,19 +981,21 @@ function addQuestionEditor(questionsWrap, question = null) {
   const pointsList = document.createElement("div");
   pointsList.className = "points-list";
   pointsList.dataset.role = "points-list";
-
   (question?.required_points || [{ label: "", keywords: [] }]).forEach((point) => addPointEditor(pointsList, point));
   const addPointButton = createButton("新增重點", "secondary-button mini-button", () => addPointEditor(pointsList));
-
   fields.append(pointsList, addPointButton);
+
   editor.append(header, fields);
   questionsWrap.appendChild(editor);
+  setTitle();
 }
 
 function renumberQuestions(questionsWrap) {
   [...questionsWrap.children].forEach((editor, index) => {
     const title = editor.querySelector("strong");
-    title.textContent = `題目 ${index + 1}`;
+    if (!title) return;
+    const p = (editor.querySelector('[data-question-field="prompt"]')?.value || "").trim();
+    title.textContent = `題目 ${index + 1}` + (p ? `：${p.slice(0, 18)}${p.length > 18 ? "…" : ""}` : "（空白）");
   });
 }
 
@@ -805,34 +1004,56 @@ function addSectionEditor(section = null) {
   editor.className = "section-editor";
 
   const header = document.createElement("div");
-  header.className = "admin-sections-header";
+  header.className = "admin-sections-header collapsible-head";
   const title = document.createElement("strong");
   title.textContent = section?.title || "新單元";
-  const removeButton = createButton("刪除此單元", "ghost-button mini-button", () => editor.remove());
-  header.append(title, removeButton);
+  const headRight = document.createElement("div");
+  headRight.className = "head-actions";
+  const chevron = document.createElement("span");
+  chevron.className = "chevron";
+  chevron.textContent = "▾";
+  const removeButton = createButton("刪除此單元", "ghost-button mini-button", (e) => {
+    e.stopPropagation();
+    if (confirmDelete(`確定刪除單元「${title.textContent}」？此單元的題目會一起刪除。`)) {
+      editor.remove();
+      markDirty();
+    }
+  });
+  headRight.append(removeButton, chevron);
+  header.append(title, headRight);
+  header.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    editor.classList.toggle("collapsed");
+  });
 
   const fields = document.createElement("div");
-  fields.className = "section-fields";
+  fields.className = "section-fields collapsible-body";
+
   const idInput = document.createElement("input");
-  idInput.value = section?.id || "";
-  idInput.placeholder = "section_id";
+  idInput.type = "hidden";
   idInput.dataset.sectionField = "id";
+  idInput.value = section?.id || `section_${Math.random().toString(36).slice(2, 8)}`;
+
   const titleInput = document.createElement("input");
   titleInput.value = section?.title || "";
-  titleInput.placeholder = "單元名稱";
+  titleInput.placeholder = "例如：顧客服務應對練習";
   titleInput.dataset.sectionField = "title";
   titleInput.addEventListener("input", () => {
     title.textContent = titleInput.value.trim() || "新單元";
   });
-  fields.append(createField("單元 ID", idInput), createField("單元名稱", titleInput));
+  fields.append(idInput, createField("單元名稱", titleInput));
 
   const questionsWrap = document.createElement("div");
   questionsWrap.className = "questions-list";
   (section?.questions || []).forEach((question) => addQuestionEditor(questionsWrap, question));
 
-  const addQuestionButton = createButton("新增題目", "secondary-button mini-button", () => addQuestionEditor(questionsWrap));
+  const addQuestionButton = createButton("新增題目", "secondary-button mini-button", () => {
+    addQuestionEditor(questionsWrap);
+    markDirty();
+  });
 
-  editor.append(header, fields, questionsWrap, addQuestionButton);
+  fields.append(questionsWrap, addQuestionButton);
+  editor.append(header, fields);
   adminSections.appendChild(editor);
 }
 
@@ -905,20 +1126,81 @@ function renderReports() {
     reportsList.appendChild(empty);
     return;
   }
-  currentReports
-    .slice()
-    .reverse()
-    .forEach((report) => {
-      const card = document.createElement("article");
-      card.className = "section-editor";
-      const title = document.createElement("strong");
-      title.textContent = `${report.employee_name || "未記名"} (${report.employee_id || "-"}) | ${report.section_title} | 平均 ${report.average_score} 分`;
-      const meta = document.createElement("p");
-      meta.className = "status-text";
-      meta.textContent = `${report.created_at} | 題數 ${report.question_count} | ${report.scores.join("；") || "尚未作答"}`;
-      card.append(title, meta);
-      reportsList.appendChild(card);
+  const rows = currentReports.slice().sort((a, b) => {
+    let av, bv;
+    if (reportSort.key === "average_score") {
+      av = Number(a.average_score) || 0; bv = Number(b.average_score) || 0;
+    } else if (reportSort.key === "employee_name") {
+      av = a.employee_name || ""; bv = b.employee_name || "";
+    } else {
+      av = a.created_at || ""; bv = b.created_at || "";
+    }
+    if (av < bv) return reportSort.dir === "asc" ? -1 : 1;
+    if (av > bv) return reportSort.dir === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  const cols = [
+    { key: "employee_name", label: "員工", sortable: true },
+    { key: "employee_id", label: "員編", sortable: false },
+    { key: "section_title", label: "單元", sortable: false },
+    { key: "average_score", label: "平均分", sortable: true },
+    { key: "question_count", label: "題數", sortable: false },
+    { key: "created_at", label: "時間", sortable: true },
+  ];
+
+  const table = document.createElement("table");
+  table.className = "report-table";
+  const thead = document.createElement("thead");
+  const trh = document.createElement("tr");
+  cols.forEach((c) => {
+    const th = document.createElement("th");
+    if (!c.sortable) {
+      th.textContent = c.label;
+    } else {
+      th.className = "sortable";
+      const arrow = reportSort.key === c.key ? (reportSort.dir === "asc" ? " ▲" : " ▼") : "";
+      th.textContent = c.label + arrow;
+      th.addEventListener("click", () => {
+        if (reportSort.key === c.key) {
+          reportSort.dir = reportSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          reportSort.key = c.key;
+          reportSort.dir = c.key === "employee_name" ? "asc" : "desc";
+        }
+        renderReports();
+      });
+    }
+    trh.appendChild(th);
+  });
+  thead.appendChild(trh);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((report) => {
+    const tr = document.createElement("tr");
+    const cells = [
+      report.employee_name || "未記名",
+      report.employee_id || "-",
+      report.section_title || "-",
+      report.average_score,
+      report.question_count,
+      report.created_at,
+    ];
+    cells.forEach((val, i) => {
+      const td = document.createElement("td");
+      td.textContent = val;
+      if (i === 3) td.className = "score-cell";
+      tr.appendChild(td);
     });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-scroll";
+  wrap.appendChild(table);
+  reportsList.appendChild(wrap);
 }
 
 function collectAuthData() {
@@ -1022,6 +1304,7 @@ async function loadAdminView() {
   renderReportFilters();
   await loadReports();
   setAdminSection(currentAdminSection);
+  clearDirty();
 }
 
 function setupVoice() {
@@ -1241,8 +1524,26 @@ speakButton.addEventListener("click", async () => {
   await goToLoginPage();
 });
 
-addSectionButton.addEventListener("click", () => addSectionEditor());
-addEmployeeButton.addEventListener("click", () => addEmployeeEditor());
+addSectionButton.addEventListener("click", () => {
+  addSectionEditor();
+  markDirty();
+  const secs = adminSections.querySelectorAll(".section-editor");
+  const last = secs[secs.length - 1];
+  if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+addEmployeeButton.addEventListener("click", () => {
+  addEmployeeEditor();
+  refreshEmployeeCount();
+  applyPasswordVisibility();
+  markDirty();
+  const rows = employeesForm.querySelectorAll(".point-row");
+  const last = rows[rows.length - 1];
+  if (last) {
+    last.scrollIntoView({ behavior: "smooth", block: "center" });
+    const firstInput = last.querySelector("input");
+    if (firstInput) firstInput.focus();
+  }
+});
 roleSelect.addEventListener("change", toggleLoginFields);
 
 
@@ -1299,23 +1600,8 @@ importExcelInput.addEventListener("change", async () => {
   }
 });
 
-saveAdminButton.addEventListener("click", async () => {
-  try {
-    const authResult = await api("/api/admin/auth", collectAuthData());
-    currentAuth = authResult.auth;
-
-    const contentResult = await api("/api/admin/content", collectAdminData());
-    currentConfig = contentResult.content;
-    renderAdmin();
-    renderReportFilters();
-    await loadConfig();
-    await loadReports();
-    setMode("admin");
-    showAdminFeedback("後台全部設定已儲存，包含員工帳號、密碼、題庫與規則。");
-  } catch (err) {
-    showAdminFeedback(err.message, "error");
-  }
-});
+saveAdminButton.addEventListener("click", saveAllSettings);
+if (saveAdminButtonBottom) saveAdminButtonBottom.addEventListener("click", saveAllSettings);
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && trainingActive && waitingForUserReply && !responsePending && !isListening) {
@@ -1338,3 +1624,27 @@ window.addEventListener("pageshow", () => {
 setupVoice();
 toggleLoginFields();
 refreshActionState();
+
+// ---- 後台友善化：搜尋、密碼顯示、未存提醒 ----
+if (employeeSearch) employeeSearch.addEventListener("input", applyEmployeeFilter);
+if (showPasswords) showPasswords.addEventListener("change", applyPasswordVisibility);
+
+if (adminView) {
+  adminView.addEventListener("input", (event) => {
+    const t = event.target;
+    if (t.id === "employee-search" || (t.closest && t.closest("#reports-filters"))) return;
+    markDirty();
+  });
+  adminView.addEventListener("change", (event) => {
+    const t = event.target;
+    if (t.id === "show-passwords" || (t.closest && t.closest("#reports-filters"))) return;
+    markDirty();
+  });
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (isDirty && currentRole === "admin") {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
