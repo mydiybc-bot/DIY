@@ -73,6 +73,7 @@ let currentAdminSection = "accounts";
 let isDirty = false;
 let toastTimer = null;
 let reportSort = { key: "created_at", dir: "desc" };
+let currentAdminRev = null;
 let awaitingCoachReply = false;
 let waitingForUserReply = false;
 let reportFilters = {
@@ -759,10 +760,14 @@ function applyPasswordVisibility() {
 
 async function saveAllSettings() {
   try {
-    const authResult = await api("/api/admin/auth", collectAuthData());
-    currentAuth = authResult.auth;
-    const contentResult = await api("/api/admin/content", collectAdminData());
-    currentConfig = contentResult.content;
+    const result = await api("/api/admin/save-all", {
+      auth: collectAuthData(),
+      content: collectAdminData(),
+      base_rev: currentAdminRev,
+    });
+    currentAuth = result.auth;
+    currentConfig = result.content;
+    if (typeof result.rev !== "undefined") currentAdminRev = result.rev;
     renderAdmin();
     renderReportFilters();
     await loadConfig();
@@ -772,6 +777,7 @@ async function saveAllSettings() {
     clearDirty();
     showToast("已儲存：密碼、員工、題庫與規則都更新了 ✓", "ok");
   } catch (err) {
+    // 衝突（別人剛存過）時，保留目前未存的修改，提醒先重新整理
     showToast(err && err.message ? err.message : "儲存失敗，請再試一次", "error");
   }
 }
@@ -1284,11 +1290,13 @@ async function loadConfig() {
 async function loadAdminContent() {
   const data = await api("/api/admin/content", null, "GET");
   currentConfig = data.content;
+  if (typeof data.rev !== "undefined") currentAdminRev = data.rev;
 }
 
 async function loadAdminAuth() {
   const data = await api("/api/admin/auth", null, "GET");
   currentAuth = data.auth;
+  if (typeof data.rev !== "undefined") currentAdminRev = data.rev;
 }
 
 async function loadReports() {
