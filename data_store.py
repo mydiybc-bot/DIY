@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from storage_paths import data_file
+from storage_paths import data_file, FILE_LOCK, atomic_write_json
 from training_data import TRAINING_RULES, TRAINING_SECTIONS
 
 CONTENT_FILE = data_file("training_content.json")
@@ -31,13 +31,13 @@ class TrainingContentStore:
 
     def save(self, payload: dict) -> dict:
         validated = self.validate(payload)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(validated, handle, ensure_ascii=False, indent=2)
+        with FILE_LOCK:
+            atomic_write_json(self.path, validated)
         return validated
 
     def save_validated(self, payload: dict) -> dict:
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        with FILE_LOCK:
+            atomic_write_json(self.path, payload)
         return payload
 
     def validate(self, payload: dict) -> dict:

@@ -20,6 +20,7 @@ from progress_store import ProgressStore
 from reimbursement_dashboard import load_reimbursement_dashboard
 from report_store import ReportStore
 from self_dashboard import load_self_dashboard
+from storage_paths import FILE_LOCK, get_rev, bump_rev
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
 from recipe_auth import recipe_auth, call_anthropic
@@ -92,13 +93,13 @@ class TrainingHandler(BaseHTTPRequestHandler):
             session = self._require_auth(role="admin")
             if not session:
                 return
-            self.send_json({"ok": True, "content": STORE.load()})
+            self.send_json({"ok": True, "content": STORE.load(), "rev": get_rev("admin")})
             return
         if parsed.path == "/api/admin/auth":
             session = self._require_auth(role="admin")
             if not session:
                 return
-            self.send_json({"ok": True, "auth": AUTH_STORE.load()})
+            self.send_json({"ok": True, "auth": AUTH_STORE.load(), "rev": get_rev("admin")})
             return
         if parsed.path == "/api/admin/reports":
             session = self._require_auth(role="admin")
@@ -193,11 +194,13 @@ class TrainingHandler(BaseHTTPRequestHandler):
             raw = self.read_body_bytes()
             try:
                 validated = import_content_from_excel(raw, STORE)
-                saved = STORE.save_validated(validated)
+                with FILE_LOCK:
+                    saved = STORE.save_validated(validated)
+                    new_rev = bump_rev("admin")
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, status=400)
                 return
-            self.send_json({"ok": True, "content": saved})
+            self.send_json({"ok": True, "content": saved, "rev": new_rev})
             return
 
         if parsed.path == "/api/recipe/login":
@@ -297,6 +300,41 @@ class TrainingHandler(BaseHTTPRequestHandler):
                 return
 
             self.send_json({"ok": True, "transcript": transcript, **result})
+            return
+
+        if parsed.path == "/api/admin/save-all":
+            if session.get("role") != "admin":
+                self.send_json({"ok": False, "error": "只有管理員可以修改後台。"}, status=403)
+                return
+            body = self.read_json()
+            base_rev = body.get("base_rev")
+            with FILE_LOCK:
+                current_rev = get_rev("admin")
+                if base_rev is not None:
+                    try:
+                        base_rev_int = int(base_rev)
+                    except (TypeError, ValueError):
+                        base_rev_int = current_rev
+                    if base_rev_int != current_rev:
+                        self.send_json(
+                            {
+                                "ok": False,
+                                "conflict": True,
+                                "error": "後台有其他人剛剛儲存過了。請先重新整理頁面，再重新修改一次，以免蓋掉對方的變更。",
+                            },
+                            status=409,
+                        )
+                        return
+                try:
+                    auth_validated = AUTH_STORE.validate(body.get("auth", {}))
+                    content_validated = STORE.validate(body.get("content", {}))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+                saved_auth = AUTH_STORE.save(auth_validated)
+                saved_content = STORE.save_validated(content_validated)
+                new_rev = bump_rev("admin")
+            self.send_json({"ok": True, "auth": saved_auth, "content": saved_content, "rev": new_rev})
             return
 
         if parsed.path == "/api/admin/content":

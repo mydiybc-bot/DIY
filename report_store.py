@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from storage_paths import data_file
+from storage_paths import data_file, FILE_LOCK, atomic_write_json
 
 REPORT_FILE = data_file("training_reports.json")
 
@@ -20,8 +20,8 @@ class ReportStore:
         return payload if isinstance(payload, list) else []
 
     def append(self, record: dict) -> dict:
-        reports = self.load()
-        reports.append(record)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(reports, handle, ensure_ascii=False, indent=2)
+        with FILE_LOCK:
+            reports = self.load()
+            reports.append(record)
+            atomic_write_json(self.path, reports)
         return record

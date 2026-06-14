@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from storage_paths import data_file
+from storage_paths import data_file, FILE_LOCK, atomic_write_json
 
 PROGRESS_FILE = data_file("training_progress.json")
 
@@ -24,19 +24,19 @@ class ProgressStore:
         return payload.get(employee_id, {}).get(section_id)
 
     def save_section_progress(self, employee_id: str, section_id: str, progress: dict) -> dict:
-        payload = self.load()
-        employee_progress = payload.setdefault(employee_id, {})
-        employee_progress[section_id] = progress
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        with FILE_LOCK:
+            payload = self.load()
+            employee_progress = payload.setdefault(employee_id, {})
+            employee_progress[section_id] = progress
+            atomic_write_json(self.path, payload)
         return progress
 
     def clear_section_progress(self, employee_id: str, section_id: str) -> None:
-        payload = self.load()
-        if employee_id not in payload:
-            return
-        payload[employee_id].pop(section_id, None)
-        if not payload[employee_id]:
-            payload.pop(employee_id, None)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        with FILE_LOCK:
+            payload = self.load()
+            if employee_id not in payload:
+                return
+            payload[employee_id].pop(section_id, None)
+            if not payload[employee_id]:
+                payload.pop(employee_id, None)
+            atomic_write_json(self.path, payload)
