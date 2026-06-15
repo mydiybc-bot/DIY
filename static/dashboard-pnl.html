@@ -215,6 +215,23 @@ tr.subtotal td, tr.grandtotal td { border-bottom: 2px solid var(--primary); }
 .positive { color: var(--green); }
 
 /* 0514：比較表 + 明細表樣式 */
+/* Phase 3: 可點擊科目 + 總分類帳明細 modal */
+.ledger-clickable { cursor: pointer; transition: color .15s; }
+.ledger-clickable:hover { color: var(--accent); text-decoration: underline; }
+.ledger-hint { font-size: 11px; color: var(--text2); margin-left: 6px; }
+.ledger-clickable:hover .ledger-hint { color: var(--accent); }
+.ledger-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9998; align-items: center; justify-content: center; }
+.ledger-overlay.show { display: flex; }
+.ledger-modal { background: var(--card); border-radius: var(--radius); padding: 24px; width: 92%; max-width: 820px; max-height: 86vh; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.15); }
+.ledger-modal h2 { font-size: 18px; color: var(--accent); margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+.ledger-modal h2 .close-x { margin-left: auto; cursor: pointer; color: var(--text2); font-size: 20px; background: none; border: none; line-height: 1; }
+.ledger-sub { font-size: 13px; color: var(--text2); margin-bottom: 14px; }
+.ledger-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ledger-tbl th { background: #FAF7F3; color: var(--text2); padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+.ledger-tbl th.num { text-align: right; }
+.ledger-tbl td { padding: 8px 10px; border-bottom: 1px solid #F0ECE6; }
+.ledger-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.ledger-foot { margin-top: 14px; padding: 12px 14px; background: var(--bg); border-radius: 10px; display: flex; justify-content: space-between; font-size: 14px; }
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { background: #F0E6D8; color: var(--text); }
 /* 0514：明確排序按鈕 */
@@ -1066,9 +1083,10 @@ function renderPnL() {
     + (hasLY ? `<th class="num pnl-cmp">去年同期</th><th class="num pnl-cmp">去年佔比</th>` : '')
     + `</tr></thead><tbody>`;
 
-  /* 一般明細列 */
+  /* 一般明細列。name 可點擊 → 展開 fact_ledger 明細 */
   function detailRow(l1label, name, cur, lm, ly) {
-    return `<tr><td>${l1label}</td><td style="padding-left:20px">${name}</td>`
+    const nameCell = `<td class="ledger-clickable" data-acct-name="${name}" title="點擊看總分類帳明細" style="padding-left:20px">${name}<span class="ledger-hint">▸</span></td>`;
+    return `<tr><td>${l1label}</td>${nameCell}`
       + `<td class="num">${fmtF(cur)}</td><td class="num">${pct(cur,rev)}</td>`
       + (hasLM ? `<td class="num pnl-cmp">${fmtF(lm)}</td><td class="num pnl-cmp">${pct(lm,revLM)}</td>` : '')
       + (hasLY ? `<td class="num pnl-cmp">${fmtF(ly)}</td><td class="num pnl-cmp">${pct(ly,revLY)}</td>` : '')
@@ -1138,7 +1156,63 @@ function renderPnL() {
     calcNet(DATA), calcNet(COMP_LASTMONTH), calcNet(COMP_LASTYEAR), 'grandtotal', true);
   h += '</tbody></table>';
   document.getElementById('pnl-wrap').innerHTML = h;
+  /* Phase 3: 綁定科目點擊 → 展開 fact_ledger 明細 */
+  document.querySelectorAll('#pnl-wrap .ledger-clickable').forEach(el => {
+    el.addEventListener('click', () => openLedgerModal(el.getAttribute('data-acct-name')));
+  });
 }
+
+/* ===== Phase 3: 總分類帳明細 modal ===== */
+async function openLedgerModal(accountName) {
+  const ymS = document.getElementById('f-ym-start').value;
+  const ymE = document.getElementById('f-ym-end').value;
+  const sv  = document.getElementById('f-store').value;
+  let ids;
+  if (sv && sv !== 'all' && sv !== '__sep') {
+    ids = sv;
+  } else {
+    const filteredStores = STORES.filter(s => SELECTED_AREAS.has(s['區域']));
+    ids = filteredStores.map(s => s['店號']).join(',');
+  }
+  const ov = document.getElementById('ledger-overlay');
+  document.getElementById('ledger-title').textContent = '📒 ' + accountName + ' — 總分類帳明細';
+  const rangeTxt = (ymS === ymE) ? ymS : (ymS + '～' + ymE);
+  document.getElementById('ledger-sub').textContent = '範圍：店 ' + ids + '　期間 ' + rangeTxt + '　載入中…';
+  document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px">載入中…</td></tr>';
+  document.getElementById('ledger-foot').innerHTML = '';
+  ov.classList.add('show');
+  try {
+    const r = await callApi('get_ledger', { store_ids: ids, ym_min: ymS, ym_max: ymE, account_name: accountName });
+    if (!r || r.ok === false) {
+      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--red);padding:24px">查詢失敗：' + ((r && r.error) || '未知錯誤') + '</td></tr>';
+      document.getElementById('ledger-sub').textContent = '範圍：店 ' + ids + '　期間 ' + rangeTxt;
+      return;
+    }
+    const rows = r.rows || [];
+    document.getElementById('ledger-sub').textContent = '範圍：店 ' + ids + '　期間 ' + rangeTxt + '　共 ' + rows.length + ' 筆分錄';
+    if (rows.length === 0) {
+      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px">此範圍無明細（可能為加盟店或無此科目分錄）</td></tr>';
+      document.getElementById('ledger-foot').innerHTML = '';
+      return;
+    }
+    let body = '';
+    rows.forEach(it => {
+      const neg = it.amount < 0 ? ' style="color:var(--red)"' : '';
+      body += '<tr><td>' + sName(Number(it.store_id)) + '</td><td>' + it.voucher_date + '</td>'
+        + '<td>' + it.voucher_no + '</td><td>' + (it.summary || '—') + '</td>'
+        + '<td class="num"' + neg + '>' + fmtF(it.amount) + '</td><td>' + it.dc + '</td></tr>';
+    });
+    document.getElementById('ledger-body').innerHTML = body;
+    document.getElementById('ledger-foot').innerHTML =
+      '<span>明細加總</span><span style="font-weight:600">' + fmtF(r.total) + '</span>';
+  } catch (err) {
+    document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--red);padding:24px">載入失敗：' + String(err) + '</td></tr>';
+  }
+}
+function closeLedgerModal() {
+  document.getElementById('ledger-overlay').classList.remove('show');
+}
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeLedgerModal(); });
 
 /* ===== TREND ===== */
 function renderTrendStoreChips() {
@@ -1503,6 +1577,19 @@ document.head.appendChild(adminCssEl);
 /* ===== 管理員面板 HTML ===== */
 const adminHtmlEl = document.createElement('div');
 adminHtmlEl.innerHTML = `
+<!-- Phase 3: 總分類帳明細 modal -->
+<div class="ledger-overlay" id="ledger-overlay" onclick="if(event.target===this)closeLedgerModal()">
+  <div class="ledger-modal">
+    <h2><span id="ledger-title"></span><button class="close-x" onclick="closeLedgerModal()">×</button></h2>
+    <div class="ledger-sub" id="ledger-sub"></div>
+    <table class="ledger-tbl">
+      <thead><tr><th>店</th><th>傳票日期</th><th>傳票編號</th><th>摘要</th><th class="num">金額</th><th>借貸</th></tr></thead>
+      <tbody id="ledger-body"></tbody>
+    </table>
+    <div class="ledger-foot" id="ledger-foot"></div>
+  </div>
+</div>
+
 <div class="admin-overlay" id="admin-overlay">
   <div class="admin-modal">
     <h2>⚙️ 管理員面板 — 月度損益匯入
