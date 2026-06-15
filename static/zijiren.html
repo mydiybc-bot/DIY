@@ -381,6 +381,55 @@ function gvizSheetQuery(sheetName, tql) {
 
 function parseRows(res) { return (res && res.table && res.table.rows) ? res.table.rows : []; }
 
+// ─── 回頭客（依期間）endpoint ────────────────────────────────
+const REPEAT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbx61-Ww1W3CCAA1luawfKaO3lsc7kVrDw5sB0_z21HWtAbJ9BMy_Mm8T4fnkqU91QsP/exec';
+let _repeatReqId = 0;
+function _setText(id, txt) { const el = document.getElementById(id); if (el) el.textContent = txt; }
+function jsonp(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const cb = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const s = document.createElement('script');
+    const timer = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, timeoutMs || 20000);
+    function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch (e) { window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); }
+    window[cb] = (d) => { cleanup(); resolve(d); };
+    s.onerror = () => { cleanup(); reject(new Error('script')); };
+    s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+// 依所選期間更新「回頭客比例 / 回頭客消費次數 / 佔比」三張卡（呼叫 GAS endpoint）
+async function updateRepeatCards(startYM, endYM, denom, periodLabel, fallback) {
+  const myId = ++_repeatReqId;
+  _setText('kpiRepeatRate', '…');   _setText('kpiRepeatRateSub', '計算中…');
+  _setText('kpiRepeatVisits', '…'); _setText('kpiRepeatVisitsSub', '計算中…');
+  _setText('kpiRepeatPct', '…');    _setText('kpiRepeatPctSub', '計算中…');
+  try {
+    const r = await jsonp(REPEAT_ENDPOINT + '?start=' + startYM + '&end=' + endYM);
+    if (myId !== _repeatReqId) return; // 已有更新的請求，丟棄過時結果
+    if (!r || !r.ok) throw new Error((r && r.error) || 'bad response');
+    const rate = denom > 0 ? Math.round(r.repeatMembers / denom * 100) : 0;
+    const pct  = r.totalVisits > 0 ? Math.round(r.repeatVisits / r.totalVisits * 100) : 0;
+    _setText('kpiRepeatRate', rate + '%');
+    _setText('kpiRepeatRateSub', periodLabel + '｜消費 ≥2 次 (' + r.repeatMembers.toLocaleString() + ' / 現有會員 ' + denom.toLocaleString() + ')');
+    _setText('kpiRepeatVisits', r.repeatVisits.toLocaleString());
+    _setText('kpiRepeatVisitsSub', '≥2 次客群貢獻的消費次數｜以次數代替金額(資料源無金額欄)');
+    _setText('kpiRepeatPct', pct + '%');
+    _setText('kpiRepeatPctSub', r.repeatVisits.toLocaleString() + ' / ' + r.totalVisits.toLocaleString() + '（期間總消費次數）');
+  } catch (e) {
+    if (myId !== _repeatReqId) return;
+    // 失敗 → 退回 365 固定值（避免空白）並標註
+    const fb = fallback || { repeated: 0, repeatedVisits: 0, totalVisits: 0 };
+    const rate = denom > 0 ? Math.round((fb.repeated || 0) / denom * 100) : 0;
+    const pct  = (fb.totalVisits || 0) > 0 ? Math.round((fb.repeatedVisits || 0) / fb.totalVisits * 100) : 0;
+    _setText('kpiRepeatRate', rate + '%');
+    _setText('kpiRepeatRateSub', '⚠ 期間查詢失敗，暫顯示過去365天 (' + (fb.repeated || 0).toLocaleString() + ' / ' + denom.toLocaleString() + ')');
+    _setText('kpiRepeatVisits', (fb.repeatedVisits || 0).toLocaleString());
+    _setText('kpiRepeatVisitsSub', '⚠ 期間查詢失敗，暫顯示過去365天');
+    _setText('kpiRepeatPct', pct + '%');
+    _setText('kpiRepeatPctSub', '⚠ 期間查詢失敗，暫顯示過去365天');
+  }
+}
+
 // ─── INIT LOAD（改查 3 張預聚合小表 + 保留 2 張輔助表） ───────
 async function initLoad() {
   if (_rawCache) { applyRange(); return; }
@@ -880,10 +929,20 @@ function renderKPI(data) {
     <div class="kpi-card"><div class="kpi-label">期間新增會員</div><div class="kpi-value">${totalMembers.toLocaleString()}</div><div class="kpi-sub">期間內升等成自己人/素人/達人/職人 (與會員系統對齊 99%)</div></div>
     <div class="kpi-card a"><div class="kpi-label">期間消費次數</div><div class="kpi-value">${totalVisits.toLocaleString()}</div><div class="kpi-sub">會員實際來消費的次數</div></div>
     <div class="kpi-card g"><div class="kpi-label">平均消費次數/人</div><div class="kpi-value">${avgVisits}</div><div class="kpi-sub">一位有消費的會員平均來幾次</div></div>
-    <div class="kpi-card p"><div class="kpi-label">回頭客比例 (過去 365 天)</div><div class="kpi-value">${overallReturnRate}%</div><div class="kpi-sub">${windowStr}｜消費 ≥2 次 (${allRepeated.toLocaleString()} / 現有會員 ${allActive.toLocaleString()})</div></div>
+    <div class="kpi-card p"><div class="kpi-label">回頭客比例</div><div class="kpi-value" id="kpiRepeatRate">…</div><div class="kpi-sub" id="kpiRepeatRateSub">計算中…</div></div>
     <div class="kpi-card b"><div class="kpi-label">現有會員人數</div><div class="kpi-value">${totalCurrentMembers.toLocaleString()}</div><div class="kpi-sub">自己人+素人+達人+職人（不含群友）｜後台快照</div></div>
-    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數 (過去 365 天)</div><div class="kpi-value">${repeatVisits.toLocaleString()}</div><div class="kpi-sub">≥2 次客群貢獻的消費次數｜以次數代替金額(資料源無金額欄)</div></div>
-    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數佔比</div><div class="kpi-value">${repeatVisitsPct}%</div><div class="kpi-sub">${repeatVisits.toLocaleString()} / ${allVisits365.toLocaleString()} (全體會員 365 天消費次數)</div></div>`;
+    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數</div><div class="kpi-value" id="kpiRepeatVisits">…</div><div class="kpi-sub" id="kpiRepeatVisitsSub">計算中…</div></div>
+    <div class="kpi-card p"><div class="kpi-label">回頭客消費次數佔比</div><div class="kpi-value" id="kpiRepeatPct">…</div><div class="kpi-sub" id="kpiRepeatPctSub">計算中…</div></div>`;
+
+  // ★依所選期間更新回頭客三卡（呼叫 GAS endpoint）
+  const _selRC = getSelectedRange();
+  updateRepeatCards(
+    _selRC.fromDate.slice(0, 7),
+    _selRC.toDate.slice(0, 7),
+    totalCurrentMembers,
+    MONTHS[_selRC.fromIdx].label + '～' + MONTHS[_selRC.toIdx].label,
+    gkpi
+  );
 }
 
 function formatDate(d) {
