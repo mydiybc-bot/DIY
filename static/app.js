@@ -13,7 +13,6 @@ const messageInput = document.getElementById("message-input");
 const bubbleTemplate = document.getElementById("bubble-template");
 const voiceButton = document.getElementById("voice-button");
 const speakButton = document.getElementById("speak-button");
-const answerButton = document.getElementById("answer-button");
 const micIndicator = document.getElementById("mic-indicator");
 const voiceStatus = document.getElementById("voice-status");
 const practiceTab = document.getElementById("practice-tab");
@@ -66,6 +65,10 @@ let heardSpeech = false;
 let speechStartedAt = 0;
 let lastSpeechAt = 0;
 let recordingStartedAt = 0;
+let speakingThreshold = 0.032;
+let noiseCalibrationUntil = 0;
+let noiseSampleSum = 0;
+let noiseSampleCount = 0;
 let currentConfig = null;
 let currentSessionInfo = null;
 let currentRole = null;
@@ -85,10 +88,17 @@ let reportFilters = {
   date_to: "",
 };
 
-const AUTO_SUBMIT_SILENCE_MS = 2200;
-const AUTO_SUBMIT_MIN_SPEECH_MS = 1800;
+const AUTO_SUBMIT_SILENCE_MS = 1600;
+const AUTO_SUBMIT_MIN_SPEECH_MS = 1200;
 const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
 const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
+// 收音前先量這麼久的環境底噪,動態決定「算說話」的門檻(吵店自動墊高、安靜店維持靈敏)
+const NOISE_CALIBRATION_MS = 300;
+// 有效語音門檻 = 底噪 RMS × 此倍數,並以下方地板值為下限
+const SPEAKING_NOISE_MULTIPLIER = 1.6;
+const SPEAKING_FLOOR_RMS = 0.032;
+// 偵測到有效語音後,總錄音時長到此即可送出(避免背景雜音害靜音條件永遠湊不滿)
+const AUTO_SUBMIT_SOFT_CAP_MS = 9000;
 
 const RULE_FIELDS = [
   { key: "max_attempts_before_answer", label: "幾次後公布答案", type: "number", group: "score", help: "員工答錯幾次後，教練直接公布標準答案。" },
@@ -245,42 +255,17 @@ function buildCoachSpeechText(message, { autoListen = false } = {}) {
   return lines[0] || message;
 }
 
-function updateAnswerButton() {
-  if (!answerButton) return;
-  // 三種狀態：等教練回應中 / 正在收音 / 可以開始回答
-  if (responsePending || awaitingCoachReply) {
-    answerButton.textContent = "教練思考中…";
-    answerButton.disabled = true;
-    answerButton.classList.remove("listening");
-  } else if (isListening) {
-    answerButton.textContent = "我說完了，送出";
-    answerButton.disabled = false;
-    answerButton.classList.add("listening");
-  } else if (trainingActive && waitingForUserReply) {
-    answerButton.textContent = "開始回答";
-    answerButton.disabled = !mediaReady;
-    answerButton.classList.remove("listening");
-  } else {
-    answerButton.textContent = "開始回答";
-    answerButton.disabled = true;
-    answerButton.classList.remove("listening");
-  }
-  if (micIndicator) {
-    micIndicator.classList.toggle("recording", isListening);
-  }
-}
-
 function refreshActionState() {
   voiceButton.disabled = responsePending || !trainingActive;
   startButton.disabled = responsePending || isListening;
   speakButton.disabled = responsePending;
-  updateAnswerButton();
 }
 
 function stopListeningUi() {
   isListening = false;
   voiceButton.classList.remove("listening");
   voiceButton.textContent = "停止練習";
+  if (micIndicator) micIndicator.classList.remove("recording");
   refreshActionState();
 }
 
@@ -305,6 +290,10 @@ function stopSilenceMonitor() {
   speechStartedAt = 0;
   lastSpeechAt = 0;
   recordingStartedAt = 0;
+  speakingThreshold = SPEAKING_FLOOR_RMS;
+  noiseCalibrationUntil = 0;
+  noiseSampleSum = 0;
+  noiseSampleCount = 0;
 }
 
 function releaseRecordingResources(stopStream = true) {
@@ -407,6 +396,10 @@ function startSilenceMonitor(stream) {
   heardSpeech = false;
   speechStartedAt = 0;
   lastSpeechAt = 0;
+  speakingThreshold = SPEAKING_FLOOR_RMS;
+  noiseCalibrationUntil = recordingStartedAt + NOISE_CALIBRATION_MS;
+  noiseSampleSum = 0;
+  noiseSampleCount = 0;
 
   silenceMonitorId = window.setInterval(() => {
     if (!isListening || !analyserNode) return;
@@ -419,23 +412,44 @@ function startSilenceMonitor(stream) {
     }
     const rms = Math.sqrt(energy / buffer.length);
     const now = Date.now();
-    const speakingNow = rms >= 0.045;
+
+    // 開頭先量環境底噪,動態決定「算說話」的門檻:吵店自動墊高、安靜店維持靈敏
+    if (now < noiseCalibrationUntil) {
+      noiseSampleSum += rms;
+      noiseSampleCount += 1;
+      setVoiceStatus("正在校準環境音,請稍等半秒再開口。");
+      return;
+    }
+    if (noiseSampleCount > 0) {
+      const noiseAvg = noiseSampleSum / noiseSampleCount;
+      speakingThreshold = Math.max(SPEAKING_FLOOR_RMS, noiseAvg * SPEAKING_NOISE_MULTIPLIER);
+      noiseSampleCount = 0; // 只算一次
+    }
+
+    const speakingNow = rms >= speakingThreshold;
 
     if (speakingNow) {
       heardSpeech = true;
       if (!speechStartedAt) speechStartedAt = now;
       lastSpeechAt = now;
-      setVoiceStatus("教練正在聽你回答，停頓約 2 秒後才會自動送出。");
+      setVoiceStatus("教練正在聽你回答,停頓一下就會自動送出。");
       return;
     }
 
+    // 一般情況:偵測到有效語音後,靜音超過門檻就送
     if (heardSpeech && now - lastSpeechAt > AUTO_SUBMIT_SILENCE_MS && now - speechStartedAt > AUTO_SUBMIT_MIN_SPEECH_MS) {
       stopRecording(false);
       return;
     }
 
+    // 保底:背景有雜音害靜音條件湊不滿時,只要說過話且總時長到軟上限就送
+    if (heardSpeech && now - speechStartedAt > AUTO_SUBMIT_MIN_SPEECH_MS && now - recordingStartedAt > AUTO_SUBMIT_SOFT_CAP_MS) {
+      stopRecording(false);
+      return;
+    }
+
     if (!heardSpeech && now - recordingStartedAt > AUTO_SUBMIT_IDLE_HINT_MS) {
-      setVoiceStatus("教練正在等你回答，請直接開口。");
+      setVoiceStatus("教練正在等你回答,請直接開口。");
     }
 
     if (now - recordingStartedAt > AUTO_SUBMIT_MAX_RECORDING_MS) {
@@ -490,7 +504,10 @@ async function startRecording() {
     mediaRecorder.start();
     startSilenceMonitor(stream);
     isListening = true;
-    setVoiceStatus("● 收音中…說完請按「我說完了，送出」（停頓久了也會自動送出）。");
+    voiceButton.classList.add("listening");
+    voiceButton.textContent = "停止練習";
+    if (micIndicator) micIndicator.classList.add("recording");
+    setVoiceStatus("● 收音中…請開口回答,停頓一下會自動送出。");
     refreshActionState();
   } catch (error) {
     releaseRecordingResources(false);
@@ -557,7 +574,7 @@ async function goToLoginPage() {
   appPanel.classList.add("hidden");
   loginPanel.classList.remove("hidden");
   updateSessionBanner("準備開始今天的口語訓練", "選好單元後就能直接開口。", "員工練習");
-  setVoiceStatus(mediaReady ? "教練出題後，按「開始回答」開始錄音。" : "這台裝置目前不支援站內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援开內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -591,7 +608,7 @@ function resetPracticeHome(summaryMessage = "") {
     );
   }
   addBubble("coach", homeMessage);
-  setVoiceStatus(mediaReady ? "教練出題後，按「開始回答」開始錄音。" : "這台裝置目前不支援站內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -620,7 +637,7 @@ function removePendingCoachBubble() {
   if (pendingBubble) pendingBubble.remove();
 }
 
-function addPendingCoachBubble(text = "教練正在聽你的回答…") {
+function addPendingCoachBubble(text = "教練思考中…") {
   removePendingCoachBubble();
   const node = bubbleTemplate.content.firstElementChild.cloneNode(true);
   node.classList.add("coach", "pending");
@@ -659,10 +676,9 @@ function beginAutoListenAfterCoach() {
 function deliverCoachMessage(message, { autoListen = false } = {}) {
   const spokenText = buildCoachSpeechText(message, { autoListen });
   waitingForUserReply = autoListen;
-  refreshActionState();
   if (speechReady) {
     if (autoListen) {
-      setVoiceStatus("請先聽教練說明，接著會自動收音；也可直接按「開始回答」。");
+      setVoiceStatus("請先聽教練說明，接著會開始收音。");
       speak(spokenText, () => beginAutoListenAfterCoach());
       return;
     }
@@ -671,7 +687,7 @@ function deliverCoachMessage(message, { autoListen = false } = {}) {
   }
 
   if (autoListen) {
-    setVoiceStatus("教練已出題，按「開始回答」開始錄音，或直接開口。");
+    setVoiceStatus("教練已出題，請直接回答。");
     beginAutoListenAfterCoach();
   }
 }
@@ -1361,7 +1377,7 @@ function setupVoice() {
   } else if (!speechReady) {
     setVoiceStatus("可錄音作答，但這台裝置不支援自動朗讀教練回覆。");
   } else {
-    setVoiceStatus("教練出題後，按「開始回答」開始錄音。");
+    setVoiceStatus("教練出題後會自動開始聽你回答。");
   }
   refreshActionState();
 }
@@ -1379,8 +1395,8 @@ async function submitAudio(audioBlob, blobType) {
   setResponsePending(true);
   let restartListeningAfterError = false;
   removePendingCoachBubble();
-  addPendingCoachBubble("已收到你的回答，教練思考中…");
-  setVoiceStatus("已送出，教練思考中，請稍候…");
+  addPendingCoachBubble("已收到你的回答,教練思考中…");
+  setVoiceStatus("已送出,教練思考中,請稍候…");
 
   try {
     const formData = new FormData();
@@ -1532,7 +1548,7 @@ startButton.addEventListener("click", async () => {
     activeSection.textContent = result.title;
     updateSessionBanner(
       `目前練習：${result.title}`,
-      "教練說完後，按「開始回答」開始錄音。",
+      "教練說完後會自動開始聽你回答。",
       currentRole === "admin" ? "管理員測試" : "員工練習",
     );
     addBubble("coach", result.message);
@@ -1567,22 +1583,6 @@ async function stopPracticeSession() {
 }
 
 voiceButton.addEventListener("click", stopPracticeSession);
-
-if (answerButton) {
-  answerButton.addEventListener("click", () => {
-    if (responsePending || awaitingCoachReply || !trainingActive) return;
-    if (isListening) {
-      // 正在收音 → 手動送出
-      stopRecording(false);
-    } else if (waitingForUserReply && mediaReady) {
-      // 等你回答 → 手動開始收音
-      clearAutoListenTimer();
-      clearMicrophoneRecoveryTimer();
-      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-      startRecording();
-    }
-  });
-}
 
 speakButton.addEventListener("click", async () => {
   await goToLoginPage();
