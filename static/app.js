@@ -13,6 +13,8 @@ const messageInput = document.getElementById("message-input");
 const bubbleTemplate = document.getElementById("bubble-template");
 const voiceButton = document.getElementById("voice-button");
 const speakButton = document.getElementById("speak-button");
+const answerButton = document.getElementById("answer-button");
+const micIndicator = document.getElementById("mic-indicator");
 const voiceStatus = document.getElementById("voice-status");
 const practiceTab = document.getElementById("practice-tab");
 const adminTab = document.getElementById("admin-tab");
@@ -243,10 +245,36 @@ function buildCoachSpeechText(message, { autoListen = false } = {}) {
   return lines[0] || message;
 }
 
+function updateAnswerButton() {
+  if (!answerButton) return;
+  // 三種狀態：等教練回應中 / 正在收音 / 可以開始回答
+  if (responsePending || awaitingCoachReply) {
+    answerButton.textContent = "教練思考中…";
+    answerButton.disabled = true;
+    answerButton.classList.remove("listening");
+  } else if (isListening) {
+    answerButton.textContent = "我說完了，送出";
+    answerButton.disabled = false;
+    answerButton.classList.add("listening");
+  } else if (trainingActive && waitingForUserReply) {
+    answerButton.textContent = "開始回答";
+    answerButton.disabled = !mediaReady;
+    answerButton.classList.remove("listening");
+  } else {
+    answerButton.textContent = "開始回答";
+    answerButton.disabled = true;
+    answerButton.classList.remove("listening");
+  }
+  if (micIndicator) {
+    micIndicator.classList.toggle("recording", isListening);
+  }
+}
+
 function refreshActionState() {
   voiceButton.disabled = responsePending || !trainingActive;
   startButton.disabled = responsePending || isListening;
   speakButton.disabled = responsePending;
+  updateAnswerButton();
 }
 
 function stopListeningUi() {
@@ -391,7 +419,7 @@ function startSilenceMonitor(stream) {
     }
     const rms = Math.sqrt(energy / buffer.length);
     const now = Date.now();
-    const speakingNow = rms >= 0.032;
+    const speakingNow = rms >= 0.045;
 
     if (speakingNow) {
       heardSpeech = true;
@@ -462,9 +490,7 @@ async function startRecording() {
     mediaRecorder.start();
     startSilenceMonitor(stream);
     isListening = true;
-    voiceButton.classList.add("listening");
-    voiceButton.textContent = "停止練習";
-    setVoiceStatus("教練正在聽你回答，停頓約 2 秒後才會自動送出。");
+    setVoiceStatus("● 收音中…說完請按「我說完了，送出」（停頓久了也會自動送出）。");
     refreshActionState();
   } catch (error) {
     releaseRecordingResources(false);
@@ -531,7 +557,7 @@ async function goToLoginPage() {
   appPanel.classList.add("hidden");
   loginPanel.classList.remove("hidden");
   updateSessionBanner("準備開始今天的口語訓練", "選好單元後就能直接開口。", "員工練習");
-  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援开內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後，按「開始回答」開始錄音。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -565,7 +591,7 @@ function resetPracticeHome(summaryMessage = "") {
     );
   }
   addBubble("coach", homeMessage);
-  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援站內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後，按「開始回答」開始錄音。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -592,6 +618,16 @@ function showError(target, message) {
 function removePendingCoachBubble() {
   const pendingBubble = chat.querySelector(".bubble.pending");
   if (pendingBubble) pendingBubble.remove();
+}
+
+function addPendingCoachBubble(text = "教練正在聽你的回答…") {
+  removePendingCoachBubble();
+  const node = bubbleTemplate.content.firstElementChild.cloneNode(true);
+  node.classList.add("coach", "pending");
+  node.querySelector("p").textContent = text;
+  chat.appendChild(node);
+  chat.scrollTop = chat.scrollHeight;
+  return node;
 }
 
 function setResponsePending(pending) {
@@ -623,9 +659,10 @@ function beginAutoListenAfterCoach() {
 function deliverCoachMessage(message, { autoListen = false } = {}) {
   const spokenText = buildCoachSpeechText(message, { autoListen });
   waitingForUserReply = autoListen;
+  refreshActionState();
   if (speechReady) {
     if (autoListen) {
-      setVoiceStatus("請先聽教練說明，接著會開始收音。");
+      setVoiceStatus("請先聽教練說明，接著會自動收音；也可直接按「開始回答」。");
       speak(spokenText, () => beginAutoListenAfterCoach());
       return;
     }
@@ -634,7 +671,7 @@ function deliverCoachMessage(message, { autoListen = false } = {}) {
   }
 
   if (autoListen) {
-    setVoiceStatus("教練已出題，請直接回答。");
+    setVoiceStatus("教練已出題，按「開始回答」開始錄音，或直接開口。");
     beginAutoListenAfterCoach();
   }
 }
@@ -1324,7 +1361,7 @@ function setupVoice() {
   } else if (!speechReady) {
     setVoiceStatus("可錄音作答，但這台裝置不支援自動朗讀教練回覆。");
   } else {
-    setVoiceStatus("教練出題後會自動開始聽你回答。");
+    setVoiceStatus("教練出題後，按「開始回答」開始錄音。");
   }
   refreshActionState();
 }
@@ -1342,6 +1379,8 @@ async function submitAudio(audioBlob, blobType) {
   setResponsePending(true);
   let restartListeningAfterError = false;
   removePendingCoachBubble();
+  addPendingCoachBubble("已收到你的回答，教練思考中…");
+  setVoiceStatus("已送出，教練思考中，請稍候…");
 
   try {
     const formData = new FormData();
@@ -1414,6 +1453,7 @@ async function submitMessage(rawMessage) {
   setResponsePending(true);
   let restartListeningAfterError = false;
   removePendingCoachBubble();
+  addPendingCoachBubble("教練思考中…");
 
   try {
     const result = await api("/api/respond", { message });
@@ -1492,7 +1532,7 @@ startButton.addEventListener("click", async () => {
     activeSection.textContent = result.title;
     updateSessionBanner(
       `目前練習：${result.title}`,
-      "教練說完後會自動開始聽你回答。",
+      "教練說完後，按「開始回答」開始錄音。",
       currentRole === "admin" ? "管理員測試" : "員工練習",
     );
     addBubble("coach", result.message);
@@ -1527,6 +1567,22 @@ async function stopPracticeSession() {
 }
 
 voiceButton.addEventListener("click", stopPracticeSession);
+
+if (answerButton) {
+  answerButton.addEventListener("click", () => {
+    if (responsePending || awaitingCoachReply || !trainingActive) return;
+    if (isListening) {
+      // 正在收音 → 手動送出
+      stopRecording(false);
+    } else if (waitingForUserReply && mediaReady) {
+      // 等你回答 → 手動開始收音
+      clearAutoListenTimer();
+      clearMicrophoneRecoveryTimer();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      startRecording();
+    }
+  });
+}
 
 speakButton.addEventListener("click", async () => {
   await goToLoginPage();
