@@ -1184,14 +1184,31 @@ async function openLedgerModal(accountName) {
   try {
     const r = await callApi('get_ledger', { store_ids: ids, ym_min: ymS, ym_max: ymE, account_name: accountName });
     if (!r || r.ok === false) {
-      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--red);padding:24px">查詢失敗：' + ((r && r.error) || '未知錯誤') + '</td></tr>';
+      // 找不到鼎新代碼 = 該科目不在總分類帳範圍（如營收類，來自 POS／發票）
+      const errMsg = (r && r.error) || '';
+      const isNoCode = errMsg.indexOf('找不到科目') >= 0 || errMsg.indexOf('鼎新代碼') >= 0;
+      const friendly = isNoCode
+        ? '此科目不在總分類帳範圍<br><span style="font-size:12px">（營收類科目的金額來自 POS／開立發票，非鼎新總帳分錄）</span>'
+        : '查詢失敗：' + errMsg;
+      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px;line-height:1.7">' + friendly + '</td></tr>';
       document.getElementById('ledger-sub').textContent = '範圍：店 ' + ids + '　期間 ' + rangeTxt;
+      document.getElementById('ledger-foot').innerHTML = '';
       return;
     }
     const rows = r.rows || [];
     document.getElementById('ledger-sub').textContent = '範圍：店 ' + ids + '　期間 ' + rangeTxt + '　共 ' + rows.length + ' 筆分錄';
     if (rows.length === 0) {
-      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px">此範圍無明細（可能為加盟店或無此科目分錄）</td></tr>';
+      // 區分：選到尚未匯入的年度 vs 該範圍真的無分錄
+      // fact_ledger 目前涵蓋 113-114；115 以後尚未匯入
+      const LEDGER_MAX_YM = 11412; // fact_ledger 已匯入的最大年月（補 115 後請更新此值）
+      const startYm = Number(ymS);
+      let emptyMsg;
+      if (startYm > LEDGER_MAX_YM) {
+        emptyMsg = '所選期間（' + rangeTxt + '）的總分類帳尚未匯入<br><span style="font-size:12px">（目前總分類帳明細涵蓋 113～114 年度，115 年度待匯入）</span>';
+      } else {
+        emptyMsg = '此範圍無明細<br><span style="font-size:12px">（可能為加盟店 9／10，或該店該期間無此科目分錄）</span>';
+      }
+      document.getElementById('ledger-body').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px;line-height:1.7">' + emptyMsg + '</td></tr>';
       document.getElementById('ledger-foot').innerHTML = '';
       return;
     }
