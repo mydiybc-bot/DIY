@@ -320,6 +320,7 @@ table th.pnl-cmp { color: #A89B88; }
     <div class="topbar-right">
       <span class="update-label" id="update-label">資料載入中…</span>
       <span class="company">共好平台有限公司</span>
+      <button id="btnUpdateLedger" class="logout-btn" style="background:#2563eb;color:#fff;border-color:#2563eb" title="讀取 Drive 總分類帳並更新 fact_ledger">⬆️ 更新總分類帳</button>
       <button class="admin-gear-btn" onclick="openAdminPanel()" title="管理員">⚙️</button>
       <button class="logout-btn" onclick="doLogout()">登出</button>
       <a href="/static/hub.html" style="display:inline-flex;align-items:center;gap:5px;background:#f5ece0;border:1px solid #ddd;border-radius:16px;padding:5px 13px;font-size:12px;font-weight:600;color:#6B4F2A;text-decoration:none;white-space:nowrap;">⬅ 回首頁</a>
@@ -2764,5 +2765,40 @@ function callApiLong(action, params={}) {
 /* ===== hub 單一登入整合 END ===== */
 
 </script>
+<!-- ===== 更新總分類帳：訊息框 + 邏輯（呼叫 Render 引擎，背景執行+輪詢） ===== -->
+<div id="ledgerMsg" style="position:fixed;top:62px;right:14px;z-index:9999;max-width:320px;font-family:sans-serif;font-size:12px;line-height:1.5;color:#333;background:#fff;border:1px solid #ddd;border-radius:8px;padding:8px 10px;display:none;white-space:pre-wrap;box-shadow:0 2px 8px rgba(0,0,0,.15)"></div>
+<script>
+(function(){
+  const ENGINE='https://diybc-ledger.onrender.com';   // 引擎網址
+  const btn=document.getElementById('btnUpdateLedger');
+  const msg=document.getElementById('ledgerMsg');
+  let timer=null,t0=0;
+  function show(t){msg.style.display='block';msg.textContent=t;}
+  function busy(b){btn.disabled=b;btn.textContent=b?'更新中…':'⬆️ 更新總分類帳';}
+  async function poll(tok){
+    try{
+      const r=await fetch(ENGINE+'/status?token='+encodeURIComponent(tok));
+      const d=await r.json();
+      if(d.state==='running'){show('更新中…（已 '+Math.round((Date.now()-t0)/1000)+' 秒，請稍候）');return;}
+      clearInterval(timer);timer=null;busy(false);
+      if(d.state==='done'){show('✅ 完成：'+d.files+' 檔 / '+d.rows+' 列。3 秒後重新整理…');setTimeout(()=>location.reload(),3000);}
+      else if(d.state==='recon'){show('⚠️ 對帳未通過，未寫入：\n'+d.detail.join('\n'));}
+      else if(d.state==='error'){show('❌ '+d.error);}
+    }catch(e){/* 輪詢偶爾失敗，下次再試 */}
+  }
+  btn.onclick=async()=>{
+    const tok=prompt('請輸入通行碼以更新總分類帳');
+    if(!tok)return;
+    busy(true);show('開始更新…（首次喚醒可能等約 1 分鐘）');t0=Date.now();
+    try{
+      const r=await fetch(ENGINE+'/update-ledger?token='+encodeURIComponent(tok),{method:'POST'});
+      if(r.status===401){busy(false);show('❌ 通行碼錯誤');return;}
+      if(timer)clearInterval(timer);
+      timer=setInterval(()=>poll(tok),3000);poll(tok);
+    }catch(e){busy(false);show('❌ '+e.message);}
+  };
+})();
+</script>
+<!-- ===== /更新總分類帳 ===== -->
 </body>
 </html>
