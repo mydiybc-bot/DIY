@@ -244,7 +244,23 @@ def _build_scoring_prompt(question: dict, answer: str, rules: dict) -> str:
         points_text.append(f"  重點 {idx}: {point['label']}  (參考關鍵詞: {keywords_str})")
     points_block = "\n".join(points_text)
 
+    # 把管理員在後台設定的話術與鼓勵語明確交給 AI,要求一定融入回饋
+    pass_feedback = rules.get("pass_feedback", "")
+    retry_feedback = rules.get("retry_feedback", "")
+    retry_prompt = rules.get("retry_prompt", "")
+    encouragement = rules.get("summary_encouragement", "")
+    style_block = (
+        "【務必遵守的回饋語風格(這些是店家指定話術,coaching 內容必須採用同樣語氣與用詞,不可忽略)】\n"
+        f"- 答對(滿分)時的稱讚語氣參考: {pass_feedback or '(未設定)'}\n"
+        f"- 未滿分時的鼓勵語氣參考: {retry_feedback or '(未設定)'}\n"
+        f"- 引導再答一次的提示參考: {retry_prompt or '(未設定)'}\n"
+        f"- 整體鼓勵風格參考: {encouragement or '(未設定)'}\n"
+        "請讓 coaching 讀起來就像上面這些話術的延伸,溫暖、具體、帶鼓勵。"
+    )
+
     return f"""{scoring_instruction}
+
+{style_block}
 
 【本題資訊】
 題目: {question['prompt']}
@@ -262,7 +278,7 @@ def _build_scoring_prompt(question: dict, answer: str, rules: dict) -> str:
   "missing_labels": [<員工沒抓到的重點 label 文字陣列>],
   "needs_better_expression": <true 或 false,如果回答像條列式或口語不自然就 true>,
   "uses_profanity": <true 或 false,如果有髒話或攻擊字眼就 true>,
-  "coaching": "<給員工的回饋,2-3 句,先肯定再建議,溫暖鼓勵>"
+  "coaching": "<給員工的回饋,2-3 句,先肯定再建議,必須採用上面店家指定的話術語氣>"
 }}"""
 
 
@@ -468,10 +484,16 @@ def respond(session: dict, answer: str) -> dict:
         if result["score_protected"]:
             parts.append("這次有依照建議補強，分數先不倒扣。")
         parts.append(result["coaching"])
+        # 後端保險:管理員設定的「未滿分重答提示」一定要出現,即使 AI 的 coaching 沒帶到
+        retry_prompt = (rules.get("retry_prompt") or "").strip()
+        coaching_text = result.get("coaching") or ""
+        if retry_prompt and normalize_text(retry_prompt) not in normalize_text(coaching_text):
+            parts.append(retry_prompt)
         if session["attempts"] >= rules["max_attempts_before_answer"]:
             parts.append(rules["reference_answer_intro"] + question["answer"])
             parts.append(rules["answer_reveal_prompt"])
-        return {"done": False, "message": "\n".join(parts)}
+        message = "\n".join(part for part in parts if str(part).strip())
+        return {"done": False, "message": message}
 
     session["attempts"] = 0
     session["last_result"] = None
@@ -481,8 +503,10 @@ def respond(session: dict, answer: str) -> dict:
     if session["current_index"] >= len(session["questions"]):
         parts.append("本單元題目已完成。")
         parts.append(summarize_session(session))
-        return {"done": True, "message": "\n".join(parts)}
+        message = "\n".join(part for part in parts if str(part).strip())
+        return {"done": True, "message": message}
 
     next_question = session["questions"][session["current_index"]]
     parts.append(build_question_text(next_question, rules))
-    return {"done": False, "message": "\n".join(parts)}
+    message = "\n".join(part for part in parts if str(part).strip())
+    return {"done": False, "message": message}
