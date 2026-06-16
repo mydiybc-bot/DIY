@@ -69,6 +69,8 @@ let speakingThreshold = 0.032;
 let noiseCalibrationUntil = 0;
 let noiseSampleSum = 0;
 let noiseSampleCount = 0;
+let keywordRecognition = null;
+let finishedByKeyword = false;
 let currentConfig = null;
 let currentSessionInfo = null;
 let currentRole = null;
@@ -88,8 +90,8 @@ let reportFilters = {
   date_to: "",
 };
 
-const AUTO_SUBMIT_SILENCE_MS = 1600;
-const AUTO_SUBMIT_MIN_SPEECH_MS = 1200;
+const AUTO_SUBMIT_SILENCE_MS = 2200;
+const AUTO_SUBMIT_MIN_SPEECH_MS = 1800;
 const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
 const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
 // 收音前先量這麼久的環境底噪,動態決定「算說話」的門檻(吵店自動墊高、安靜店維持靈敏)
@@ -99,6 +101,18 @@ const SPEAKING_NOISE_MULTIPLIER = 1.6;
 const SPEAKING_FLOOR_RMS = 0.032;
 // 偵測到有效語音後,總錄音時長到此即可送出(避免背景雜音害靜音條件永遠湊不滿)
 const AUTO_SUBMIT_SOFT_CAP_MS = 9000;
+// 夥伴說出這些口令其中之一,立即送出評分,不再等靜音(用瀏覽器即時辨識偵測,僅作觸發用)
+const FINISH_KEYWORDS = [
+  "回答完成",
+  "回答完畢",
+  "回答結束",
+  "我說完了",
+  "我講完了",
+  "說完了",
+  "講完了",
+  "結束回答",
+  "回答好了",
+];
 
 const RULE_FIELDS = [
   { key: "max_attempts_before_answer", label: "幾次後公布答案", type: "number", group: "score", help: "員工答錯幾次後，教練直接公布標準答案。" },
@@ -270,6 +284,7 @@ function stopListeningUi() {
 }
 
 function stopSilenceMonitor() {
+  stopKeywordListener();
   if (silenceMonitorId) {
     window.clearInterval(silenceMonitorId);
     silenceMonitorId = null;
@@ -458,6 +473,57 @@ function startSilenceMonitor(stream) {
   }, 180);
 }
 
+function normalizeKeyword(text) {
+  return (text || "").replace(/[\s，。、！？!?～~.,]/g, "");
+}
+
+function transcriptHasFinishKeyword(text) {
+  const cleaned = normalizeKeyword(text);
+  return FINISH_KEYWORDS.some((kw) => cleaned.includes(kw));
+}
+
+function startKeywordListener() {
+  finishedByKeyword = false;
+  const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognitionClass) return; // 不支援就靜默降級,維持原本靜音偵測
+
+  try {
+    keywordRecognition = new SpeechRecognitionClass();
+    keywordRecognition.lang = "zh-TW";
+    keywordRecognition.continuous = true;
+    keywordRecognition.interimResults = true;
+    keywordRecognition.onresult = (event) => {
+      if (!isListening) return;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0]?.transcript || "";
+        if (transcriptHasFinishKeyword(transcript)) {
+          finishedByKeyword = true;
+          setVoiceStatus("已聽到「回答完成」,正在送出…");
+          stopRecording(false);
+          return;
+        }
+      }
+    };
+    keywordRecognition.onerror = () => {}; // 辨識失敗不影響主流程
+    keywordRecognition.onend = () => {};
+    keywordRecognition.start();
+  } catch (_err) {
+    keywordRecognition = null; // 任何例外都回退到純靜音偵測
+  }
+}
+
+function stopKeywordListener() {
+  if (keywordRecognition) {
+    try {
+      keywordRecognition.onresult = null;
+      keywordRecognition.stop();
+    } catch (_err) {
+      // ignore
+    }
+    keywordRecognition = null;
+  }
+}
+
 async function startRecording() {
   if (!mediaReady || responsePending || isListening || !trainingActive) return;
   try {
@@ -503,6 +569,7 @@ async function startRecording() {
 
     mediaRecorder.start();
     startSilenceMonitor(stream);
+    startKeywordListener();
     isListening = true;
     voiceButton.classList.add("listening");
     voiceButton.textContent = "停止練習";
@@ -1425,7 +1492,16 @@ async function submitAudio(audioBlob, blobType) {
     }
 
     removePendingCoachBubble();
-    addBubble("user", data.transcript || "已收到你的語音回答。");
+    let shownTranscript = data.transcript || "已收到你的語音回答。";
+    if (finishedByKeyword && data.transcript) {
+      // 把結尾口令詞從顯示文字中去除,讓對話泡泡乾淨
+      shownTranscript = FINISH_KEYWORDS.reduce(
+        (acc, kw) => acc.replace(new RegExp(kw + "[。.!！~～\\s]*$"), ""),
+        data.transcript,
+      ).trim() || data.transcript;
+    }
+    finishedByKeyword = false;
+    addBubble("user", shownTranscript);
     addBubble("coach", data.message);
     if (data.done) {
       await loadConfig();
