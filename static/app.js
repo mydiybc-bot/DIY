@@ -90,17 +90,19 @@ let reportFilters = {
   date_to: "",
 };
 
-const AUTO_SUBMIT_SILENCE_MS = 2200;
+const AUTO_SUBMIT_SILENCE_MS = 5000;
 const AUTO_SUBMIT_MIN_SPEECH_MS = 1800;
-const AUTO_SUBMIT_IDLE_HINT_MS = 12000;
-const AUTO_SUBMIT_MAX_RECORDING_MS = 45000;
+const AUTO_SUBMIT_IDLE_HINT_MS = 20000;
+const AUTO_SUBMIT_MAX_RECORDING_MS = 60000;
 // 收音前先量這麼久的環境底噪,動態決定「算說話」的門檻(吵店自動墊高、安靜店維持靈敏)
 const NOISE_CALIBRATION_MS = 300;
-// 有效語音門檻 = 底噪 RMS × 此倍數,並以下方地板值為下限
-const SPEAKING_NOISE_MULTIPLIER = 1.6;
+// 有效語音門檻 = 底噪 RMS × 此倍數,夾在地板與上限之間
+// 倍數放低(1.3)+ 上限保護,避免安靜環境底噪極低時把門檻壓太低、害正常停頓被當靜音
+const SPEAKING_NOISE_MULTIPLIER = 1.3;
 const SPEAKING_FLOOR_RMS = 0.032;
-// 偵測到有效語音後,總錄音時長到此即可送出(避免背景雜音害靜音條件永遠湊不滿)
-const AUTO_SUBMIT_SOFT_CAP_MS = 9000;
+const SPEAKING_CEILING_RMS = 0.075;
+// 說過話後總時長到此即可送出(僅作異常兜底,平時靠 5 秒靜音判斷)
+const AUTO_SUBMIT_SOFT_CAP_MS = 20000;
 // 夥伴說出這些口令其中之一,立即送出評分,不再等靜音(用瀏覽器即時辨識偵測,僅作觸發用)
 const FINISH_KEYWORDS = [
   "回答完成",
@@ -437,7 +439,9 @@ function startSilenceMonitor(stream) {
     }
     if (noiseSampleCount > 0) {
       const noiseAvg = noiseSampleSum / noiseSampleCount;
-      speakingThreshold = Math.max(SPEAKING_FLOOR_RMS, noiseAvg * SPEAKING_NOISE_MULTIPLIER);
+      // 夾在地板(0.032)與上限(0.075)之間:安靜環境吃地板、不過度靈敏;吵店才墊高但不離譜
+      const dynamic = noiseAvg * SPEAKING_NOISE_MULTIPLIER;
+      speakingThreshold = Math.min(SPEAKING_CEILING_RMS, Math.max(SPEAKING_FLOOR_RMS, dynamic));
       noiseSampleCount = 0; // 只算一次
     }
 
@@ -447,7 +451,7 @@ function startSilenceMonitor(stream) {
       heardSpeech = true;
       if (!speechStartedAt) speechStartedAt = now;
       lastSpeechAt = now;
-      setVoiceStatus("教練正在聽你回答,停頓一下就會自動送出。");
+      setVoiceStatus("教練正在聽你回答,可以慢慢講;說完停一下,或說「回答完成」即可送出。");
       return;
     }
 
@@ -457,8 +461,15 @@ function startSilenceMonitor(stream) {
       return;
     }
 
-    // 保底:背景有雜音害靜音條件湊不滿時,只要說過話且總時長到軟上限就送
-    if (heardSpeech && now - speechStartedAt > AUTO_SUBMIT_MIN_SPEECH_MS && now - recordingStartedAt > AUTO_SUBMIT_SOFT_CAP_MS) {
+    // 保底(安全版):只有「已經靜音一段時間」+ 總時長到軟上限才送
+    // 加上靜音條件後,夥伴只要還在持續講話就絕不會被 20 秒硬切,只兜底處理講完卻卡住的情況
+    const softCapSilenceMs = AUTO_SUBMIT_SILENCE_MS / 2; // 2.5 秒
+    if (
+      heardSpeech &&
+      now - speechStartedAt > AUTO_SUBMIT_MIN_SPEECH_MS &&
+      now - recordingStartedAt > AUTO_SUBMIT_SOFT_CAP_MS &&
+      now - lastSpeechAt > softCapSilenceMs
+    ) {
       stopRecording(false);
       return;
     }
@@ -574,7 +585,7 @@ async function startRecording() {
     voiceButton.classList.add("listening");
     voiceButton.textContent = "停止練習";
     if (micIndicator) micIndicator.classList.add("recording");
-    setVoiceStatus("● 收音中…請開口回答,停頓一下會自動送出。");
+    setVoiceStatus("● 收音中…可以慢慢講,說完停一下或說「回答完成」就會送出。");
     refreshActionState();
   } catch (error) {
     releaseRecordingResources(false);
