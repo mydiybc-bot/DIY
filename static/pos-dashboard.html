@@ -559,7 +559,7 @@ function App(){
     </div>
   );
 
-  const tabs = ['目標達成','營收趨勢','分店比較','品項分析','客單價分析','季節&活動','折扣分析'];
+  const tabs = ['目標達成','營收趨勢','分店比較','品項分析','客單價分析','季節&活動','折扣分析','生日壽星'];
 
   return (
     <div>
@@ -688,6 +688,7 @@ function App(){
         {activeTab===4 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
         {activeTab===5 && <TabSeasonal data={rawData}/>}
         {activeTab===6 && <TabDiscount rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
+        {activeTab===7 && <TabBirthday rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
       </div>
 
       {/* FOOTER */}
@@ -1365,7 +1366,7 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
             <LineChart data={storeMonthlyAvg.data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
               <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
-              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)} domain={[dataMin=>Math.max(0,Math.floor((dataMin-20)/50)*50), dataMax=>Math.ceil((dataMax+20)/50)*50]} allowDataOverflow={false}/>
+              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>'$'+fmt.short(v)}/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
               <Legend wrapperStyle={{fontSize:10}}/>
               {storeMonthlyAvg.stores.map((s,i)=>(
@@ -1839,6 +1840,201 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
               <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
               <Line type="monotone" dataKey="rate" stroke="#ef4444" strokeWidth={2.5} dot={{r:3}} name="折扣率(%)"/>
             </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ================================================================
+   TAB 7: 生日壽星分析
+   資料源：rawData.birthdayCake（年月×店×type 數量/營收）
+           rawData.birthdayItems（年×加價購品項 數量/營收）
+   免費 = 我的生日蛋糕；加價購 = 其他生日蛋糕（皆主類別「生日蛋糕」）
+   ================================================================ */
+const BD_FREE = '#f59e0b';   // 免費 = 琥珀
+const BD_PAID = '#06b6d4';   // 加價購 = 青
+const BD_YEAR_COLORS = ['#C4412F','#06b6d4','#22c55e'];
+
+function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
+  const bc = (rawData && rawData.birthdayCake) ? rawData.birthdayCake : [];
+  const items = (rawData && rawData.birthdayItems) ? rawData.birthdayItems : [];
+
+  const filteredBC = useMemo(()=>bc.filter(m=>{
+    if(dateStart && m.yearMonth < dateStart) return false;
+    if(dateEnd && m.yearMonth > dateEnd) return false;
+    if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
+    if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
+    return true;
+  }),[bc, dateStart, dateEnd, selRegion, selStores]);
+
+  const kpi = useMemo(()=>{
+    let free=0, paid=0, paidRev=0;
+    filteredBC.forEach(m=>{
+      if(m.type==='免費') free+=(m.qty||0);
+      else { paid+=(m.qty||0); paidRev+=(m.revenue||0); }
+    });
+    const total = free+paid;
+    return { free, paid, total, paidRev, upgradeRate: total>0 ? (paid/total*100) : 0 };
+  },[filteredBC]);
+
+  const monthlyTrend = useMemo(()=>{
+    const byYM={};
+    filteredBC.forEach(m=>{
+      if(!byYM[m.yearMonth]) byYM[m.yearMonth]={name:m.yearMonth, free:0, paid:0};
+      if(m.type==='免費') byYM[m.yearMonth].free+=(m.qty||0);
+      else byYM[m.yearMonth].paid+=(m.qty||0);
+    });
+    return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1);
+  },[filteredBC]);
+
+  const storeData = useMemo(()=>{
+    const byStore={};
+    filteredBC.forEach(m=>{
+      if(!byStore[m.store]) byStore[m.store]={store:m.store, free:0, paid:0};
+      if(m.type==='免費') byStore[m.store].free+=(m.qty||0);
+      else byStore[m.store].paid+=(m.qty||0);
+    });
+    return Object.values(byStore)
+      .map(s=>({...s, total:s.free+s.paid, upgradeRate:(s.free+s.paid)>0?(s.paid/(s.free+s.paid)*100):0}))
+      .sort((a,b)=>b.total-a.total);
+  },[filteredBC]);
+
+  // 加價購品項年度對比（年為最近兩年，動態取，避免寫死年份）
+  const itemYears = useMemo(()=>[...new Set(items.map(it=>+it.yr))].sort((a,b)=>a-b).slice(-2),[items]);
+  const itemRank = useMemo(()=>{
+    const byP={};
+    items.forEach(it=>{
+      const y=+it.yr;
+      if(!itemYears.includes(y)) return;
+      if(!byP[it.product]){ byP[it.product]={product:it.product, total:0}; itemYears.forEach(yy=>byP[it.product]['y'+yy]=0); }
+      byP[it.product]['y'+y]=(byP[it.product]['y'+y]||0)+(it.qty||0);
+      byP[it.product].total+=(it.qty||0);
+    });
+    return Object.values(byP).sort((a,b)=>b.total-a.total);
+  },[items, itemYears]);
+
+  if(!rawData) return null;
+
+  // 後端 birthdayCake 尚未部署時的友善佔位
+  if(bc.length===0){
+    return (
+      <div className="charts-grid">
+        <div className="chart-card full-width" style={{textAlign:'center',padding:'48px 24px'}}>
+          <div style={{fontSize:'2rem',marginBottom:12}}>🎂</div>
+          <div className="chart-title" style={{justifyContent:'center'}}>生日壽星分析・資料準備中</div>
+          <div className="chart-subtitle" style={{marginTop:8}}>
+            後端 birthdayCake 聚合尚未部署，部署完成後本頁將自動顯示。
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="charts-grid cols-2">
+      {/* KPI row */}
+      <div className="kpi-grid" style={{gridColumn:'1/-1',marginBottom:8}}>
+        <div className="kpi-card">
+          <div className="kpi-label">壽星到店總數</div>
+          <div className="kpi-value">{fmt.number(kpi.total)}</div>
+          <div className="kpi-sub">免費 + 加價購 顆數</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">加購率</div>
+          <div className="kpi-value" style={{color:BD_PAID}}>{fmt.pct(kpi.upgradeRate)}</div>
+          <div className="kpi-sub">加價購 ÷ 總數</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">免費兌換</div>
+          <div className="kpi-value" style={{color:BD_FREE}}>{fmt.number(kpi.free)}</div>
+          <div className="kpi-sub">我的生日蛋糕</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">加價購</div>
+          <div className="kpi-value" style={{color:BD_PAID}}>{fmt.number(kpi.paid)}</div>
+          <div className="kpi-sub">其他生日蛋糕</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">加價購營收</div>
+          <div className="kpi-value" style={{color:'var(--success)'}}>{fmt.currency(kpi.paidRev)}</div>
+          <div className="kpi-sub">免費款營收 = 0</div>
+        </div>
+      </div>
+
+      {/* Chart 1: 月趨勢（數量） */}
+      <div className="chart-card full-width">
+        <div className="chart-title">月趨勢・兌換數量</div>
+        <div className="chart-subtitle">免費 vs 加價購 顆數（看淡旺季）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={monthlyTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
+              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.number}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Line type="monotone" dataKey="free" name="免費" stroke={BD_FREE} strokeWidth={2.5} dot={{r:2}}/>
+              <Line type="monotone" dataKey="paid" name="加價購" stroke={BD_PAID} strokeWidth={2.5} dot={{r:2}}/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Chart 2: 分店堆疊（數量） */}
+      <div className="chart-card">
+        <div className="chart-title">分店・兌換數量</div>
+        <div className="chart-subtitle">免費 + 加價購 堆疊，依總量降冪</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={storeData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="store" width={90} stroke="#B89E97" tick={{fontSize:9}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.number}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              <Bar dataKey="free" stackId="a" name="免費" fill={BD_FREE} radius={[0,0,0,0]}/>
+              <Bar dataKey="paid" stackId="a" name="加價購" fill={BD_PAID} radius={[0,4,4,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Chart 3: 分店加購率 */}
+      <div className="chart-card">
+        <div className="chart-title">分店・加購率</div>
+        <div className="chart-subtitle">加價購 ÷ 總數（%），看現場推升級的成效</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={[...storeData].sort((a,b)=>b.upgradeRate-a.upgradeRate)} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>v.toFixed(0)+'%'}/>
+              <YAxis type="category" dataKey="store" width={90} stroke="#B89E97" tick={{fontSize:9}}/>
+              <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
+              <Bar dataKey="upgradeRate" name="加購率(%)" fill={BD_PAID} radius={[0,4,4,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Chart 4: 加價購品項年度對比 */}
+      <div className="chart-card full-width">
+        <div className="chart-title">加價購品項・年度對比</div>
+        <div className="chart-subtitle">最近兩年各款加價購蛋糕顆數，看上新替換（不受月份/分店篩選影響）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={itemRank} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="product" width={90} stroke="#B89E97" tick={{fontSize:10}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.number}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              {itemYears.map((y,i)=>(
+                <Bar key={y} dataKey={'y'+y} name={y+' 年'} fill={BD_YEAR_COLORS[i%BD_YEAR_COLORS.length]} radius={[0,4,4,0]}/>
+              ))}
+            </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
