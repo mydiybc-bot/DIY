@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>廠商單價追蹤 · 原物料成本</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --red1:#8B2D1F; --red2:#C4412F; --up:#C4412F; --down:#2E7D52;
+    --ink:#2A2320; --muted:#7A726C; --line:#E7E0DA; --paper:#FBF8F5; --card:#FFFFFF;
+    --gold:#FFF2CC;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    background:var(--paper);color:var(--ink);font-size:14px;line-height:1.5}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+  /* 導航 */
+  header{background:linear-gradient(100deg,var(--red1),var(--red2));color:#fff;
+    padding:14px 22px;position:sticky;top:0;z-index:20;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  header .wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{margin:0;font-size:19px;font-weight:700;letter-spacing:.5px}
+  header .sub{font-size:12.5px;opacity:.85}
+  header .season{margin-left:auto;font-size:12.5px;background:rgba(255,255,255,.16);
+    padding:4px 12px;border-radius:20px}
+  main{max-width:1180px;margin:0 auto;padding:22px}
+  /* KPI */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .v{font-size:24px;font-weight:700;color:var(--red1)}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:2px}
+  /* 卡片 */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;margin-bottom:20px}
+  .card h2{margin:0 0 4px;font-size:16px;font-weight:700}
+  .card .desc{font-size:12.5px;color:var(--muted);margin-bottom:14px}
+  .tax-note{display:inline-block;font-size:11.5px;color:var(--red1);
+    background:var(--gold);padding:2px 9px;border-radius:6px;margin-left:6px}
+  /* 試算器 */
+  .calc-top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  select,input,button{font:inherit;border:1px solid var(--line);border-radius:8px;
+    padding:8px 10px;background:#fff;color:var(--ink)}
+  select{min-width:280px;flex:1}
+  button.add{background:var(--red1);color:#fff;border-color:var(--red1);cursor:pointer;font-weight:600}
+  button.add:hover{background:var(--red2)}
+  button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--red2);outline-offset:1px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 8px;text-align:left;border-bottom:1px solid var(--line)}
+  th{font-size:11.5px;color:var(--muted);font-weight:600;text-transform:none}
+  td.r,th.r{text-align:right}
+  .calc-row input{width:90px;text-align:right}
+  .x{color:var(--muted);cursor:pointer;border:none;background:none;font-size:16px;padding:0 4px}
+  .x:hover{color:var(--up)}
+  .calc-total{display:flex;justify-content:flex-end;gap:18px;align-items:baseline;
+    margin-top:14px;padding-top:12px;border-top:2px solid var(--ink)}
+  .calc-total .big{font-size:26px;font-weight:700;color:var(--red1)}
+  .empty{color:var(--muted);font-size:13px;padding:14px 0}
+  /* 篩選 */
+  .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .filters input{flex:1;min-width:160px}
+  .pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#F2ECE7;color:var(--muted)}
+  .vol{font-weight:700}
+  .vol.hot{color:var(--up)}
+  tbody tr:hover{background:#FAF6F2}
+  .chartbox{position:relative;height:300px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  footer{max-width:1180px;margin:0 auto;padding:8px 22px 40px;color:var(--muted);font-size:11.5px}
+  @media(max-width:860px){.kpis{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}
+    select{min-width:0}main{padding:16px}}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>廠商單價追蹤</h1>
+  <span class="sub">原物料成本 · 含稅基準</span>
+  <span class="season" id="seasonTag">2026 Q2</span>
+</div></header>
+
+<main>
+  <div class="kpis">
+    <div class="kpi"><div class="v num" id="kItems">–</div><div class="l">追蹤品項</div></div>
+    <div class="kpi"><div class="v num" id="kSups">–</div><div class="l">供應商</div></div>
+    <div class="kpi"><div class="v num" id="kVol">–</div><div class="l">本季有波動品項</div></div>
+    <div class="kpi"><div class="v num" id="kCmp">–</div><div class="l">可跨供應商比價</div></div>
+  </div>
+
+  <!-- 成本試算器(主角) -->
+  <div class="card">
+    <h2>開發商品成本試算器<span class="tax-note">所有單價皆含稅</span></h2>
+    <div class="desc">選品項、填用量,即時算出這個配方的含稅總原料成本。用量單位以該品項的進貨單位計(包/箱/kg…)。</div>
+    <div class="calc-top">
+      <select id="picker"></select>
+      <button class="add" id="addBtn">加入配方</button>
+    </div>
+    <table>
+      <thead><tr><th>品項</th><th>供應商</th><th class="r">含稅單價</th><th class="r">用量</th><th class="r">小計</th><th></th></tr></thead>
+      <tbody id="calcBody"><tr><td colspan="6" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr></tbody>
+    </table>
+    <div class="calc-total"><span>含稅總成本</span><span class="big num" id="calcTotal">$0</span></div>
+  </div>
+
+  <!-- 跨供應商比價 -->
+  <div class="card">
+    <h2>跨供應商比價（每 kg／每 L）<span class="tax-note">同品類才有意義</span></h2>
+    <div class="desc">選一個品類,把不同供應商的品項換算成同一基準(每公斤或每公升)後並排比。長條越短=單位成本越低。計數類品項(盒/罐/Case)無法換算,不顯示。</div>
+    <div class="calc-top"><select id="catPick" style="min-width:0;width:100%"></select></div>
+    <div class="chartbox"><canvas id="cmpChart"></canvas></div>
+  </div>
+
+  <div class="two">
+    <!-- 波動排行 -->
+    <div class="card">
+      <h2>本季價格波動排行</h2>
+      <div class="desc">同品項本季最高與最低單價的落差%。波動大=供應商在調價或跨店/跨批不同價,優先盯。</div>
+      <div class="chartbox"><canvas id="volChart"></canvas></div>
+    </div>
+    <!-- 趨勢線 -->
+    <div class="card">
+      <h2>單品跨季趨勢</h2>
+      <div class="desc">選一個品項看含稅單價的季度走勢。目前只有 2026 Q2,下季資料灌入後會自動延伸成趨勢線。</div>
+      <div class="calc-top"><select id="trendPick" style="min-width:0;width:100%"></select></div>
+      <div class="chartbox" style="height:230px"><canvas id="trendChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- 品項總覽 -->
+  <div class="card">
+    <h2>品項單價總覽</h2>
+    <div class="desc">全部追蹤品項。可搜尋品名、篩供應商。單價為含稅。</div>
+    <div class="filters">
+      <input id="search" placeholder="搜尋品名…">
+      <select id="supFilter"><option value="">全部供應商</option></select>
+      <select id="catFilter"><option value="">全部品類</option></select>
+    </div>
+    <table>
+      <thead><tr><th>品名</th><th>供應商</th><th>品類</th><th>規格</th><th class="r">含稅單價</th><th class="r">每kg/L</th><th class="r">vs前季</th><th class="r">波動%</th></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</main>
+<footer>
+  資料來源:廠商送貨單／對帳單／發票明細表抽取(vendor-price-tracker)。德麥、皓廷為單據原含稅;其餘原未稅已×1.05換算為含稅。
+  生鮮蛋類若實際免稅,洗散蛋等不應加稅,以實際發票為準。
+</footer>
+
+<script>
+// ====== 資料載入：直讀 Google Sheet（gviz JSONP，不受 CORS 限制）======
+const SHEET_ID = '1Pp0C7zLWWwhO7miAxDQmxfYmX0bbh6crOK7dk0a_Zyw';
+const SHEET_NAME = 'fact_vendor_price';
+
+function loadData(){
+  return new Promise((resolve, reject) => {
+    const cb = '__gviz_cb_' + Math.random().toString(36).slice(2);
+    const s = document.createElement('script');
+    let done = false;
+    window[cb] = (json) => {
+      done = true;
+      try { resolve(aggregate(parseTable(json))); }
+      catch(e){ reject(e); }
+      finally { delete window[cb]; if(s.parentNode) s.parentNode.removeChild(s); }
+    };
+    s.onerror = () => { if(!done){ reject(new Error('無法載入 Sheet（多半是共用權限未開）')); if(s.parentNode) s.parentNode.removeChild(s); } };
+    s.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`
+          + `?sheet=${encodeURIComponent(SHEET_NAME)}&headers=1`
+          + `&tqx=responseHandler:${cb};out:json`;
+    document.body.appendChild(s);
+    setTimeout(() => { if(!done) reject(new Error('讀取逾時，請確認共用權限與分頁名稱')); }, 15000);
+  });
+}
+
+// gviz table → 列物件陣列（key 用中文表頭）
+function parseTable(json){
+  const cols = json.table.cols.map(c => (c.label || c.id || '').trim());
+  return json.table.rows.map(r => {
+    const o = {};
+    r.c.forEach((cell, i) => { o[cols[i]] = cell ? cell.v : null; });
+    return o;
+  }).filter(r => r['季別']);
+}
+
+// 長表 → 品項層級聚合（主鍵=供應商+貨號;無貨號用品名）
+function aggregate(rows){
+  const seasons = [...new Set(rows.map(r => String(r['季別'])))].sort();
+  const latestQ = seasons[seasons.length-1];
+  const prevQ = seasons.length >= 2 ? seasons[seasons.length-2] : null;
+  const groups = {};
+  rows.forEach(r => {
+    const code = r['料號'];
+    const key = r['供應商'] + '|' + ((code && code !== '-') ? code : 'name:'+r['品名']);
+    (groups[key] = groups[key] || []).push(r);
+  });
+  return Object.values(groups).map(rs => {
+    const q = {};
+    seasons.forEach(s => {
+      const sv = rs.filter(r => String(r['季別'])===s).map(r => +r['含稅單價']).filter(v => !isNaN(v));
+      if(sv.length) q[s] = Math.max(...sv);
+    });
+    const sample = rs.find(r => String(r['季別'])===latestQ) || rs[rs.length-1];
+    const lr = rs.filter(r => String(r['季別'])===latestQ).map(r => +r['含稅單價']).filter(v => !isNaN(v));
+    const mn = lr.length?Math.min(...lr):0, mx = lr.length?Math.max(...lr):0;
+    const vol = (mn>0 && mx!==mn) ? Math.round((mx-mn)/mn*1000)/10 : 0;
+    const up = sample['每基準單位單價'];
+    const chg = (prevQ && q[prevQ] && q[latestQ]) ? Math.round((q[latestQ]-q[prevQ])/q[prevQ]*1000)/10 : null;
+    return {
+      name: sample['品名'], sup: sample['供應商'], code: sample['料號'],
+      spec: sample['規格'], unit: sample['單位'], tax: sample['稅別'],
+      cat: sample['品類'] || '未分類', dim: sample['基準維度'] || '計數',
+      base: q[latestQ] ?? mx, min: mn, max: mx, vol_pct: vol,
+      unit_price: (up !== '' && up != null && !isNaN(+up)) ? +up : null,
+      chg: chg, q: q
+    };
+  }).sort((a,b) => b.vol_pct - a.vol_pct);
+}
+
+const fmt = n => '$' + (Math.round(n*100)/100).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+let recipe = [];
+
+(async function init(){
+  let data;
+  try {
+    data = await loadData();
+  } catch(e){
+    document.querySelector('main').insertAdjacentHTML('afterbegin',
+      `<div class="card" style="border-color:#C4412F"><h2 style="color:#C4412F">讀不到資料</h2>
+      <div class="desc">無法讀取 Google Sheet。請確認該試算表的共用權限已設為「知道連結的使用者 → 檢視者」,
+      且分頁名為 <b>fact_vendor_price</b>。錯誤:${esc(e.message)}</div></div>`);
+    return;
+  }
+  if(!data.length){
+    document.querySelector('main').insertAdjacentHTML('afterbegin',
+      `<div class="card"><div class="desc">Sheet 讀到了,但沒有資料列。確認 fact_vendor_price 分頁有資料。</div></div>`);
+    return;
+  }
+  const sups = [...new Set(data.map(d=>d.sup))];
+  const cats = [...new Set(data.map(d=>d.cat))];
+  document.getElementById('kItems').textContent = data.length;
+  document.getElementById('kSups').textContent = sups.length;
+  document.getElementById('kVol').textContent = data.filter(d=>d.vol_pct>0).length;
+  document.getElementById('kCmp').textContent = data.filter(d=>d.unit_price).length;
+
+  const picker=document.getElementById('picker'), trendPick=document.getElementById('trendPick'),
+        supF=document.getElementById('supFilter'), catF=document.getElementById('catFilter'),
+        catPick=document.getElementById('catPick');
+  data.forEach((d,i)=>{
+    picker.add(new Option(`${d.name}｜${d.sup} (${d.spec}) ${fmt(d.base)}/${d.unit}`, i));
+    trendPick.add(new Option(`${d.name}｜${d.sup}`, i));
+  });
+  sups.forEach(s=>supF.add(new Option(s,s)));
+  // 只列「有≥2個可比價品項」的品類
+  const cmpCats=cats.filter(c=>data.filter(d=>d.cat===c&&d.unit_price).length>=2);
+  cats.forEach(c=>catF.add(new Option(c,c)));
+  cmpCats.forEach(c=>catPick.add(new Option(c,c)));
+
+  document.getElementById('addBtn').onclick=()=>{ recipe.push({d:data[+picker.value],qty:1}); renderCalc(); };
+  document.getElementById('search').oninput=renderTable;
+  supF.onchange=renderTable; catF.onchange=renderTable;
+  trendPick.onchange=()=>renderTrend(data[+trendPick.value]);
+  catPick.onchange=()=>renderCmp(data, catPick.value);
+
+  renderCalc(); renderTable(); renderVol(data); renderTrend(data[0]);
+  if(cmpCats.length) renderCmp(data, cmpCats[0]);
+
+  function renderTable(){
+    const q=(document.getElementById('search').value||'').trim();
+    const rows=data.filter(d=>(!q||d.name.includes(q))&&(!supF.value||d.sup===supF.value)&&(!catF.value||d.cat===catF.value));
+    document.getElementById('tableBody').innerHTML = rows.map(d=>{
+      const vc = d.vol_pct>=3?'vol hot':'vol';
+      const up = d.unit_price ? fmt(d.unit_price)+'/'+(d.dim==='容量'?'L':'kg') : '–';
+      const chg = d.chg==null ? '–' : `<span style="color:${d.chg>0?'#C4412F':(d.chg<0?'#2E7D52':'#7A726C')}">${d.chg>0?'+':''}${d.chg}%</span>`;
+      return `<tr><td>${esc(d.name)}</td><td>${esc(d.sup)}</td><td><span class="pill">${esc(d.cat)}</span></td>
+        <td>${esc(d.spec)}</td><td class="r num">${fmt(d.base)}</td>
+        <td class="r num">${up}</td><td class="r num">${chg}</td>
+        <td class="r num ${vc}">${d.vol_pct>0?d.vol_pct+'%':'–'}</td></tr>`;
+    }).join('') || `<tr><td colspan="8" class="empty">沒有符合的品項。</td></tr>`;
+  }
+})();
+
+function renderCalc(){
+  const body=document.getElementById('calcBody');
+  if(!recipe.length){ body.innerHTML='<tr><td colspan="6" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr>';
+    document.getElementById('calcTotal').textContent='$0'; return; }
+  let total=0;
+  body.innerHTML=recipe.map((r,i)=>{
+    const sub=r.d.base*r.qty; total+=sub;
+    return `<tr class="calc-row"><td>${esc(r.d.name)}</td><td>${esc(r.d.sup)}</td>
+      <td class="r num">${fmt(r.d.base)}</td>
+      <td class="r"><input type="number" min="0" step="0.1" value="${r.qty}" data-i="${i}"></td>
+      <td class="r num">${fmt(sub)}</td>
+      <td><button class="x" data-del="${i}" aria-label="移除">×</button></td></tr>`;
+  }).join('');
+  document.getElementById('calcTotal').textContent=fmt(total);
+  body.querySelectorAll('input').forEach(inp=>inp.oninput=e=>{recipe[+e.target.dataset.i].qty=parseFloat(e.target.value)||0;renderCalc();});
+  body.querySelectorAll('[data-del]').forEach(b=>b.onclick=e=>{recipe.splice(+e.target.dataset.del,1);renderCalc();});
+}
+
+let volC, trendC, cmpC;
+function renderCmp(data, cat){
+  const items=data.filter(d=>d.cat===cat&&d.unit_price).sort((a,b)=>a.unit_price-b.unit_price);
+  const dim=items.length?items[0].dim:'重量';
+  const unit=dim==='容量'?'L':'kg';
+  if(cmpC) cmpC.destroy();
+  cmpC=new Chart(document.getElementById('cmpChart'),{type:'bar',
+    data:{labels:items.map(d=>`${d.name}｜${d.sup}`),datasets:[{data:items.map(d=>d.unit_price),
+      backgroundColor:items.map((_,i)=>i===0?'#2E7D52':'#8B2D1F'),borderRadius:5}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${fmt(c.parsed.x)}/${unit}`}}},
+      scales:{x:{ticks:{callback:v=>'$'+v},title:{display:true,text:'每'+unit+'含稅單價'},grid:{color:'#F0EAE5'}},
+        y:{grid:{display:false}}}}});
+}
+function renderVol(data){
+  const top=data.filter(d=>d.vol_pct>0).sort((a,b)=>b.vol_pct-a.vol_pct).slice(0,10);
+  if(volC) volC.destroy();
+  volC=new Chart(document.getElementById('volChart'),{type:'bar',
+    data:{labels:top.map(d=>d.name),datasets:[{data:top.map(d=>d.vol_pct),
+      backgroundColor:'#C4412F',borderRadius:5}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{
+        const d=top[c.dataIndex];return ` ${d.min}~${d.max} 波動 ${d.vol_pct}%`;}}}},
+      scales:{x:{ticks:{callback:v=>v+'%'},grid:{color:'#F0EAE5'}},y:{grid:{display:false}}}}});
+}
+function renderTrend(d){
+  const seasons=Object.keys(d.q), vals=seasons.map(s=>d.q[s]);
+  if(trendC) trendC.destroy();
+  trendC=new Chart(document.getElementById('trendChart'),{type:'line',
+    data:{labels:seasons,datasets:[{label:d.name,data:vals,borderColor:'#8B2D1F',
+      backgroundColor:'rgba(139,45,31,.12)',pointRadius:5,pointBackgroundColor:'#8B2D1F',
+      tension:.25,fill:true}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+fmt(c.parsed.y)+' 含稅'}}},
+      scales:{y:{ticks:{callback:v=>'$'+v},grid:{color:'#F0EAE5'}},x:{grid:{display:false}}}}});
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+</script>
+</body>
+</html>
