@@ -1709,138 +1709,238 @@ const DISCOUNT_LABELS_FALLBACK = ['好客券','自己人$100甜點券','自己�
 const DISCOUNT_COLORS = ['#C4412F','#D4654F','#06b6d4','#22c55e','#f59e0b','#ec4899'];
 
 function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
-  // v3: 券種標籤以後端 discountLabels 為準（daily_discount D~I 真實欄名），離線時用 fallback
-  const DISCOUNT_LABELS = (rawData && rawData.discountLabels && rawData.discountLabels.length===6)
-    ? rawData.discountLabels : DISCOUNT_LABELS_FALLBACK;
-  // v2 fix-3: hooks before conditional return (Rules of Hooks)
-  // Filter monthlyByStore
-  const mbs = rawData ? rawData.monthlyByStore || [] : [];
-  const filteredMBS = useMemo(()=>mbs.filter(m=>{
+  // v13: 分券種折扣，來源 rawData.discountByProgram（年月×店×標準方案×大類）
+  const CAT_COLORS = { '行銷折扣':'#C4412F', '加價購':'#06b6d4', '非行銷折扣':'#f59e0b', '其他':'#9ca3af' };
+  const dbp = rawData ? (rawData.discountByProgram || []) : [];
+  const mbs = rawData ? (rawData.monthlyByStore || []) : [];
+
+  const filt = (m)=>{
     if(dateStart && m.yearMonth < dateStart) return false;
     if(dateEnd && m.yearMonth > dateEnd) return false;
     if(selRegion && selRegion!=='全部' && m.region!==selRegion) return false;
     if(selStores && selStores.length>0 && !selStores.includes(m.store)) return false;
     return true;
-  }),[mbs, dateStart, dateEnd, selRegion, selStores]);
+  };
+  const fDBP = useMemo(()=>dbp.filter(filt),[dbp, dateStart, dateEnd, selRegion, selStores]);
+  const fMBS = useMemo(()=>mbs.filter(filt),[mbs, dateStart, dateEnd, selRegion, selStores]);
 
-  // KPI calcs
-  const totalDiscount = useMemo(()=>filteredMBS.reduce((s,m)=>s+(m.discount||0),0),[filteredMBS]);
-  const totalGross = useMemo(()=>filteredMBS.reduce((s,m)=>s+(m.revenue_gross||0),0),[filteredMBS]);
-  const discountRate = totalGross>0 ? (totalDiscount/totalGross*100) : 0;
+  const totalGross = useMemo(()=>fMBS.reduce((s,m)=>s+(m.revenue_gross||0),0),[fMBS]);
 
-  // Monthly stacked by discount type
-  const monthlyDiscountData = useMemo(()=>{
-    const byYM={};
-    filteredMBS.forEach(m=>{
-      if(!byYM[m.yearMonth]) { byYM[m.yearMonth]={name:m.yearMonth}; DISCOUNT_LABELS.forEach((_,i)=>byYM[m.yearMonth]['d'+i]=0); }
-      const db = m.discount_breakdown || [];
-      db.forEach((v,i)=>{ byYM[m.yearMonth]['d'+i]=(byYM[m.yearMonth]['d'+i]||0)+v; });
+  const catTotals = useMemo(()=>{
+    const c={'行銷折扣':0,'加價購':0,'非行銷折扣':0,'其他':0};
+    fDBP.forEach(m=>{ c[m.category]=(c[m.category]||0)+(m.discount||0); });
+    return c;
+  },[fDBP]);
+  const mktTotal = catTotals['行銷折扣']||0;
+  const allTotal = mktTotal + (catTotals['加價購']||0) + (catTotals['非行銷折扣']||0) + (catTotals['其他']||0);
+  const mktRate = totalGross>0 ? (mktTotal/totalGross*100) : 0;
+
+  const ymNum = (ym)=>{ const p=String(ym).split('-'); return (+p[0])*12+(+p[1]); };
+  const maxYMnum = useMemo(()=>{ let mx=0; fDBP.forEach(m=>{ const n=ymNum(m.yearMonth); if(n>mx)mx=n; }); return mx; },[fDBP]);
+
+  const programRank = useMemo(()=>{
+    const byV={};
+    fDBP.forEach(m=>{
+      if(m.category!=='行銷折扣') return;
+      if(!byV[m.voucher]) byV[m.voucher]={voucher:m.voucher,discount:0,uses:0,lastYM:''};
+      byV[m.voucher].discount+=(m.discount||0);
+      byV[m.voucher].uses+=(m.uses||0);
+      if(m.yearMonth>byV[m.voucher].lastYM) byV[m.voucher].lastYM=m.yearMonth;
     });
-    return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1);
-  },[filteredMBS]);
+    return Object.values(byV).sort((a,b)=>b.discount-a.discount);
+  },[fDBP]);
+  const programTop = programRank.slice(0,15);
 
-  // Store discount ranking
-  const storeDiscountData = useMemo(()=>{
-    const byStore={};
-    filteredMBS.forEach(m=>{
-      if(!byStore[m.store]) byStore[m.store]={store:m.store,discount:0,revenue_gross:0};
-      byStore[m.store].discount+=(m.discount||0);
-      byStore[m.store].revenue_gross+=(m.revenue_gross||0);
+  const yearCompare = useMemo(()=>{
+    const byV={}, ys={};
+    fDBP.forEach(m=>{
+      if(m.category!=='行銷折扣') return;
+      const y=String(m.yearMonth).slice(0,4); ys[y]=true;
+      if(!byV[m.voucher]) byV[m.voucher]={voucher:m.voucher,total:0};
+      byV[m.voucher]['y'+y]=(byV[m.voucher]['y'+y]||0)+(m.discount||0);
+      byV[m.voucher].total+=(m.discount||0);
     });
-    return Object.values(byStore)
-      .map(s=>({...s, discountRate:s.revenue_gross>0?(s.discount/s.revenue_gross*100):0}))
-      .sort((a,b)=>b.discount-a.discount);
-  },[filteredMBS]);
+    const yrs=Object.keys(ys).sort().slice(-2);
+    const data=Object.values(byV).sort((a,b)=>b.total-a.total).slice(0,10);
+    return {yrs, data};
+  },[fDBP]);
 
-  // Monthly discount rate trend
-  const discountRateTrend = useMemo(()=>{
-    const byYM={};
-    filteredMBS.forEach(m=>{
-      if(!byYM[m.yearMonth]) byYM[m.yearMonth]={name:m.yearMonth,discount:0,gross:0};
-      byYM[m.yearMonth].discount+=(m.discount||0);
-      byYM[m.yearMonth].gross+=(m.revenue_gross||0);
-    });
-    return Object.values(byYM).sort((a,b)=>a.name<b.name?-1:1).map(t=>({
-      ...t, rate: t.gross>0?(t.discount/t.gross*100):0
-    }));
-  },[filteredMBS]);
+  const rateTrend = useMemo(()=>{
+    const g={}, d={};
+    fMBS.forEach(m=>{ g[m.yearMonth]=(g[m.yearMonth]||0)+(m.revenue_gross||0); });
+    fDBP.forEach(m=>{ if(m.category==='行銷折扣') d[m.yearMonth]=(d[m.yearMonth]||0)+(m.discount||0); });
+    return Object.keys(g).sort().map(ym=>({name:ym, rate: g[ym]>0?((d[ym]||0)/g[ym]*100):0}));
+  },[fMBS, fDBP]);
 
-  // guard after all hooks
+  const retireCandidates = useMemo(()=>{
+    return programRank
+      .map(p=>({...p, stale: maxYMnum>0 && (maxYMnum - ymNum(p.lastYM))>=3}))
+      .filter(p=>p.stale || p.uses<=5)
+      .sort((a,b)=>ymNum(a.lastYM)-ymNum(b.lastYM))
+      .slice(0,12);
+  },[programRank, maxYMnum]);
+
+  const nonMkt = useMemo(()=>{
+    const byV={};
+    fDBP.forEach(m=>{ if(m.category!=='非行銷折扣') return; byV[m.voucher]=(byV[m.voucher]||0)+(m.discount||0); });
+    return Object.keys(byV).map(k=>({voucher:k, discount:byV[k]})).sort((a,b)=>b.discount-a.discount);
+  },[fDBP]);
+
   if(!rawData) return null;
+
+  const catBarData = [{ name:'折扣結構',
+    '行銷折扣': catTotals['行銷折扣']||0, '加價購': catTotals['加價購']||0,
+    '非行銷折扣': catTotals['非行銷折扣']||0, '其他': catTotals['其他']||0 }];
 
   return (
     <div className="charts-grid cols-2">
-      {/* KPI row */}
+      {/* KPI */}
       <div className="kpi-grid" style={{gridColumn:'1/-1',marginBottom:8}}>
         <div className="kpi-card">
-          <div className="kpi-label">篩選範圍折扣總額</div>
-          <div className="kpi-value" style={{color:'#ef4444'}}>{fmt.currency(totalDiscount)}</div>
-          <div className="kpi-sub">SUM monthlyByStore.discount</div>
+          <div className="kpi-label">行銷折扣總額</div>
+          <div className="kpi-value" style={{color:'#C4412F'}}>{fmt.currency(mktTotal)}</div>
+          <div className="kpi-sub">佔全部折扣 {allTotal>0?fmt.pct(mktTotal/allTotal*100):'0%'}</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label">折扣率</div>
-          <div className="kpi-value" style={{color:'#f59e0b'}}>{fmt.pct(discountRate)}</div>
-          <div className="kpi-sub">折扣 ÷ 含折扣營收</div>
+          <div className="kpi-label">行銷折扣率</div>
+          <div className="kpi-value" style={{color:'#f59e0b'}}>{fmt.pct(mktRate)}</div>
+          <div className="kpi-sub">行銷折扣 ÷ Gross</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label">含折扣營收 (Gross)</div>
-          <div className="kpi-value" style={{color:'var(--text-secondary)'}}>{fmt.currency(totalGross)}</div>
-          <div className="kpi-sub">SUM revenue_gross</div>
+          <div className="kpi-label">行銷方案數</div>
+          <div className="kpi-value">{programRank.length}</div>
+          <div className="kpi-sub">收斂後標準方案</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">非行銷折扣</div>
+          <div className="kpi-value" style={{color:'#f59e0b'}}>{fmt.currency(catTotals['非行銷折扣']||0)}</div>
+          <div className="kpi-sub">含訂金等，不應算讓利</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">加價購</div>
+          <div className="kpi-value" style={{color:'#06b6d4'}}>{fmt.currency(catTotals['加價購']||0)}</div>
+          <div className="kpi-sub">加購餅乾，獨立看</div>
         </div>
       </div>
 
-      {/* Chart 1: Monthly stacked discount by type */}
+      {/* 大類占比 */}
       <div className="chart-card full-width">
-        <div className="chart-title">各月折扣結構（券種堆疊）</div>
-        <div className="chart-subtitle">按券種分拆月折扣金額</div>
+        <div className="chart-title">折扣結構・大類占比</div>
+        <div className="chart-subtitle">真正的行銷讓利 vs 加價購 vs 非行銷（訂金/補償/手動）vs 其他</div>
         <div className="chart-body">
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={monthlyDiscountData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
-              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+          <ResponsiveContainer width="100%" height={110}>
+            <BarChart data={catBarData} layout="vertical" margin={{top:5,right:20,bottom:5,left:20}}>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="name" hide/>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
               <Legend wrapperStyle={{fontSize:11}}/>
-              {DISCOUNT_LABELS.map((label,i)=>(
-                <Area key={i} type="monotone" dataKey={'d'+i} stackId="1" name={label}
-                  fill={DISCOUNT_COLORS[i]} stroke={DISCOUNT_COLORS[i]} fillOpacity={0.75}/>
-              ))}
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Chart 2: Store discount ranking */}
-      <div className="chart-card">
-        <div className="chart-title">各店折扣金額排名</div>
-        <div className="chart-subtitle">降冪排列</div>
-        <div className="chart-body">
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={storeDiscountData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
-              <YAxis type="category" dataKey="store" width={90} stroke="#B89E97" tick={{fontSize:9}}/>
-              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
-              <Bar dataKey="discount" name="折扣金額" fill="#ef4444" radius={[0,4,4,0]}/>
+              <Bar dataKey="行銷折扣" stackId="c" fill={CAT_COLORS['行銷折扣']}/>
+              <Bar dataKey="加價購" stackId="c" fill={CAT_COLORS['加價購']}/>
+              <Bar dataKey="非行銷折扣" stackId="c" fill={CAT_COLORS['非行銷折扣']}/>
+              <Bar dataKey="其他" stackId="c" fill={CAT_COLORS['其他']} radius={[0,4,4,0]}/>
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* Chart 3: Monthly discount rate trend */}
-      <div className="chart-card">
-        <div className="chart-title">折扣率月趨勢</div>
-        <div className="chart-subtitle">折扣 ÷ 含折扣營收（%）</div>
+      {/* 行銷折扣方案排行 */}
+      <div className="chart-card full-width">
+        <div className="chart-title">行銷折扣方案排行・成本</div>
+        <div className="chart-subtitle">前 15 大方案（手打變體已收斂）。錢花在哪一目了然</div>
         <div className="chart-body">
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={discountRateTrend}>
+          <ResponsiveContainer width="100%" height={480}>
+            <BarChart data={programTop} layout="vertical" margin={{left:10,right:30}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="voucher" width={150} stroke="#B89E97" tick={{fontSize:10}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Bar dataKey="discount" name="折扣金額" fill="#C4412F" radius={[0,4,4,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 方案年度對比 */}
+      <div className="chart-card">
+        <div className="chart-title">方案年度對比</div>
+        <div className="chart-subtitle">前 10 方案 {yearCompare.yrs.join(' vs ')}（看成長/萎縮）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={360}>
+            <BarChart data={yearCompare.data} layout="vertical" margin={{left:10,right:20}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:10}} tickFormatter={fmt.short}/>
+              <YAxis type="category" dataKey="voucher" width={130} stroke="#B89E97" tick={{fontSize:9}}/>
+              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Legend wrapperStyle={{fontSize:11}}/>
+              {yearCompare.yrs.map((y,i)=>(
+                <Bar key={y} dataKey={'y'+y} name={y+'年'} fill={i===0?'#C4412F':'#06b6d4'} radius={[0,3,3,0]}/>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 行銷折扣率月趨勢 */}
+      <div className="chart-card">
+        <div className="chart-title">行銷折扣率・月趨勢</div>
+        <div className="chart-subtitle">行銷折扣 ÷ Gross（%）</div>
+        <div className="chart-body">
+          <ResponsiveContainer width="100%" height={360}>
+            <LineChart data={rateTrend}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
               <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:10}}/>
               <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>v.toFixed(1)+'%'}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
-              <Line type="monotone" dataKey="rate" stroke="#ef4444" strokeWidth={2.5} dot={{r:3}} name="折扣率(%)"/>
+              <Line type="monotone" dataKey="rate" stroke="#C4412F" strokeWidth={2.5} dot={{r:2}} name="行銷折扣率(%)"/>
             </LineChart>
           </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 淘汰候選 */}
+      <div className="chart-card">
+        <div className="chart-title">淘汰候選</div>
+        <div className="chart-subtitle">🔴 末月距今 ≥3 月（停用）或使用 ≤5 次</div>
+        <div className="chart-body" style={{maxHeight:360,overflowY:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr style={{textAlign:'left',color:'#B89E97'}}>
+              <th style={{padding:'4px 6px'}}>方案</th><th style={{padding:'4px 6px',textAlign:'right'}}>折扣</th>
+              <th style={{padding:'4px 6px',textAlign:'right'}}>次數</th><th style={{padding:'4px 6px'}}>末月</th>
+            </tr></thead>
+            <tbody>
+              {retireCandidates.map((p,i)=>(
+                <tr key={i} style={{borderTop:'1px solid #F0D9D5'}}>
+                  <td style={{padding:'4px 6px'}}>{p.stale?'🔴 ':''}{p.voucher}</td>
+                  <td style={{padding:'4px 6px',textAlign:'right'}}>{fmt.currency(p.discount)}</td>
+                  <td style={{padding:'4px 6px',textAlign:'right'}}>{p.uses}</td>
+                  <td style={{padding:'4px 6px'}}>{p.lastYM}</td>
+                </tr>
+              ))}
+              {retireCandidates.length===0 && (<tr><td colSpan={4} style={{padding:'8px',color:'#B89E97'}}>無候選（所有方案皆活躍）</td></tr>)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 非行銷折扣明細 */}
+      <div className="chart-card">
+        <div className="chart-title">非行銷折扣明細</div>
+        <div className="chart-subtitle">這些不該算行銷讓利；訂金更是預收款記錯欄</div>
+        <div className="chart-body" style={{maxHeight:360,overflowY:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr style={{textAlign:'left',color:'#B89E97'}}>
+              <th style={{padding:'4px 6px'}}>項目</th><th style={{padding:'4px 6px',textAlign:'right'}}>金額</th>
+            </tr></thead>
+            <tbody>
+              {nonMkt.map((p,i)=>(
+                <tr key={i} style={{borderTop:'1px solid #F0D9D5'}}>
+                  <td style={{padding:'4px 6px'}}>{p.voucher}</td>
+                  <td style={{padding:'4px 6px',textAlign:'right'}}>{fmt.currency(p.discount)}</td>
+                </tr>
+              ))}
+              {nonMkt.length===0 && (<tr><td colSpan={2} style={{padding:'8px',color:'#B89E97'}}>無</td></tr>)}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
