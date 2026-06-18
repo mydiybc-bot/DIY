@@ -88,14 +88,14 @@
   <!-- 成本試算器(主角) -->
   <div class="card">
     <h2>開發商品成本試算器<span class="tax-note">所有單價皆含稅</span></h2>
-    <div class="desc">選品項、填用量,即時算出這個配方的含稅總原料成本。用量單位以該品項的進貨單位計(包/箱/kg…)。</div>
+    <div class="desc">選品項、填配方用量,即時算含稅成本。<b>重量類填 g、液體類填 ml</b>(系統用每kg/每L單價換算);計數類(盒/罐/Case/粒)填原單位。</div>
     <div class="calc-top">
       <select id="picker"></select>
       <button class="add" id="addBtn">加入配方</button>
     </div>
     <table>
-      <thead><tr><th>品項</th><th>供應商</th><th class="r">含稅單價</th><th class="r">用量</th><th class="r">小計</th><th></th></tr></thead>
-      <tbody id="calcBody"><tr><td colspan="6" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr></tbody>
+      <thead><tr><th>品項</th><th>供應商</th><th class="r">單價</th><th class="r">用量</th><th>單位</th><th class="r">小計</th><th></th></tr></thead>
+      <tbody id="calcBody"><tr><td colspan="7" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr></tbody>
     </table>
     <div class="calc-total"><span>含稅總成本</span><span class="big num" id="calcTotal">$0</span></div>
   </div>
@@ -243,7 +243,11 @@ let recipe = [];
         supF=document.getElementById('supFilter'), catF=document.getElementById('catFilter'),
         catPick=document.getElementById('catPick');
   data.forEach((d,i)=>{
-    picker.add(new Option(`${d.name}｜${d.sup} (${d.spec}) ${fmt(d.base)}/${d.unit}`, i));
+    let pl;
+    if(d.dim==='重量'&&d.unit_price) pl=fmt(d.unit_price)+'/kg';
+    else if(d.dim==='容量'&&d.unit_price) pl=fmt(d.unit_price)+'/L';
+    else pl=fmt(d.base)+'/'+d.unit;
+    picker.add(new Option(`${d.name}｜${d.sup} ${pl}`, i));
     trendPick.add(new Option(`${d.name}｜${d.sup}`, i));
   });
   sups.forEach(s=>supF.add(new Option(s,s)));
@@ -252,7 +256,11 @@ let recipe = [];
   cats.forEach(c=>catF.add(new Option(c,c)));
   cmpCats.forEach(c=>catPick.add(new Option(c,c)));
 
-  document.getElementById('addBtn').onclick=()=>{ recipe.push({d:data[+picker.value],qty:1}); renderCalc(); };
+  document.getElementById('addBtn').onclick=()=>{
+    const d=data[+picker.value];
+    const q=((d.dim==='重量'||d.dim==='容量')&&d.unit_price)?100:1;
+    recipe.push({d, qty:q}); renderCalc();
+  };
   document.getElementById('search').oninput=renderTable;
   supF.onchange=renderTable; catF.onchange=renderTable;
   trendPick.onchange=()=>renderTrend(data[+trendPick.value]);
@@ -278,14 +286,20 @@ let recipe = [];
 
 function renderCalc(){
   const body=document.getElementById('calcBody');
-  if(!recipe.length){ body.innerHTML='<tr><td colspan="6" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr>';
+  if(!recipe.length){ body.innerHTML='<tr><td colspan="7" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr>';
     document.getElementById('calcTotal').textContent='$0'; return; }
   let total=0;
   body.innerHTML=recipe.map((r,i)=>{
-    const sub=r.d.base*r.qty; total+=sub;
-    return `<tr class="calc-row"><td>${esc(r.d.name)}</td><td>${esc(r.d.sup)}</td>
-      <td class="r num">${fmt(r.d.base)}</td>
-      <td class="r"><input type="number" min="0" step="0.1" value="${r.qty}" data-i="${i}"></td>
+    const d=r.d;
+    let inUnit, priceTxt, sub;
+    if(d.dim==='重量' && d.unit_price){ inUnit='g';  priceTxt=fmt(d.unit_price)+'/kg'; sub=d.unit_price/1000*r.qty; }
+    else if(d.dim==='容量' && d.unit_price){ inUnit='ml'; priceTxt=fmt(d.unit_price)+'/L'; sub=d.unit_price/1000*r.qty; }
+    else { inUnit=d.unit||'個'; priceTxt=fmt(d.base)+'/'+(d.unit||'個'); sub=d.base*r.qty; }
+    total+=sub;
+    return `<tr class="calc-row"><td>${esc(d.name)}</td><td>${esc(d.sup)}</td>
+      <td class="r num">${priceTxt}</td>
+      <td class="r"><input type="number" min="0" step="${inUnit==='g'||inUnit==='ml'?'1':'0.1'}" value="${r.qty}" data-i="${i}"></td>
+      <td>${esc(inUnit)}</td>
       <td class="r num">${fmt(sub)}</td>
       <td><button class="x" data-del="${i}" aria-label="移除">×</button></td></tr>`;
   }).join('');
