@@ -71,6 +71,12 @@ a{color:var(--accent-light);text-decoration:none}
 .kpi-yoy.up .yoy-delta{background:rgba(82,183,136,.18);color:#2F8F63}
 .kpi-yoy.down .yoy-delta{background:rgba(196,65,47,.15);color:var(--danger)}
 .kpi-yoy.flat .yoy-delta{background:var(--border);color:var(--text-secondary)}
+.cmp-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:.85rem}
+.cmp-bar.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(196,65,47,.10)}
+.cmp-bar input[type=date]{padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:.85rem;color:var(--text-primary);background:#fff}
+.cmp-bar .cmp-clear{background:var(--accent);color:#fff;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:.8rem;font-weight:600}
+.cmp-bar .cmp-hint{color:var(--text-muted);font-size:.78rem}
+.cmp-bar .cmp-warn{color:var(--danger);font-size:.78rem;font-weight:600}
 
 /* Tabs */
 .tabs-nav{display:flex;gap:4px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;border-bottom:1px solid var(--border)}
@@ -241,6 +247,9 @@ function App(){
   const [selRegion, setSelRegion] = useState('全部');
   const [selStores, setSelStores] = useState([]);
   const [quickDate, setQuickDate] = useState('');
+  /* 精確日期比較模式（全公司日粒度，用 daily）：兩者皆有值即啟用 */
+  const [cmpStart, setCmpStart] = useState('');
+  const [cmpEnd, setCmpEnd] = useState('');
 
   /* ---------- v3: net 由後端算好（daily_discount 白名單口徑，storeCode JOIN）
      已移除前端 STORE_ID_TO_POS_NAME / applyFactDiscountToPOS / fetchFactDiscount
@@ -438,6 +447,29 @@ function App(){
   const pctGrow = (now, prev)=> (prev>0 ? ((now-prev)/prev*100) : null);  // 金額/數量類：成長率%
   const pptGrow = (now, prev)=> (now - prev);                              // 比率類：百分點 ppt
 
+  /* ---------- 精確日期模式：全公司日粒度 KPI（用 daily，無店號/品項，僅 net/headcount） ---------- */
+  const dayKpis = useMemo(()=>{
+    if(!rawData || !cmpStart || !cmpEnd || cmpStart>cmpEnd) return null;
+    const daily = rawData.daily || [];
+    const minDate = daily.reduce((mn,d)=>(!mn||d.date<mn)?d.date:mn,'');
+    const sum=(s,e)=>{
+      let net=0,hc=0,gross=0,disc=0,days=0;
+      daily.forEach(d=>{ if(d.date>=s && d.date<=e){ net+=d.revenue_net||0; hc+=d.headcount||0; gross+=d.revenue_gross||0; disc+=d.discount||0; days++; }});
+      return {net, hc, gross, disc, days, avg: hc>0?Math.round(net/hc):0};
+    };
+    const shiftD=(ds)=>{ const [y,m,dd]=ds.split('-'); return (parseInt(y,10)-1)+'-'+m+'-'+dd; };
+    const cur=sum(cmpStart, cmpEnd);
+    const lyStart=shiftD(cmpStart), lyEnd=shiftD(cmpEnd);
+    const noData = lyStart < minDate;
+    const ly = noData ? null : sum(lyStart, lyEnd);
+    return { cur, ly, noData, lyStart, lyEnd };
+  },[rawData, cmpStart, cmpEnd]);
+  const dateMode = !!dayKpis;
+  const dailyMaxDate = useMemo(()=>{
+    const daily = rawData?.daily || [];
+    return daily.reduce((mx,d)=>(d.date>mx?d.date:mx),'');
+  },[rawData]);
+
   /* ---------- COMPUTED KPIs ---------- */
   const kpis = useMemo(()=>{
     let totalRev=0, desserts=0, companions=0, limitedRev=0, txns=0;
@@ -617,9 +649,9 @@ function App(){
 
   const tabs = ['目標達成','營收趨勢','分店比較','品項分析','客單價分析','季節&活動','折扣分析','生日壽星'];
 
-  // 渲染一張卡的「去年同期」行；mode: 'pct'(金額/數量) | 'ppt'(比率)
-  const renderYoY = (curVal, lyVal, mode, fmtBase)=>{
-    if(!yoy || yoy.noData || yoy.ly==null){
+  // 渲染一張卡的「去年同期」行；mode: 'pct'(金額/數量) | 'ppt'(比率)；noData 由呼叫端傳入
+  const renderYoYRow = (curVal, lyVal, mode, fmtBase, noData)=>{
+    if(noData || lyVal==null || curVal==null){
       return <div className="kpi-yoy flat"><span className="yoy-base">去年同期 — ｜無資料</span></div>;
     }
     let cls, deltaTxt;
@@ -637,6 +669,8 @@ function App(){
     }
     return <div className={"kpi-yoy "+cls}><span className="yoy-base">去年 {fmtBase(lyVal)}</span><span className="yoy-delta">{deltaTxt}</span></div>;
   };
+  // 日期模式：此指標日粒度不支援（daily 無拆分）
+  const yoyNA = ()=> <div className="kpi-yoy flat"><span className="yoy-base">📅 日期模式不支援此指標</span></div>;
 
   return (
     <div>
@@ -716,43 +750,63 @@ function App(){
           </div>
         </div>
 
+        {/* 精確日期比較列 */}
+        <div className={"cmp-bar"+(dateMode?" active":"")}>
+          <span style={{fontWeight:700}}>📅 精確日期比較</span>
+          <input type="date" value={cmpStart} max={dailyMaxDate} onChange={e=>setCmpStart(e.target.value)}/>
+          <span>～</span>
+          <input type="date" value={cmpEnd} max={dailyMaxDate} onChange={e=>setCmpEnd(e.target.value)}/>
+          <span className="cmp-hint">自動對比去年同期（年-1、同月日）｜全公司、僅淨營收/來客數/客單價</span>
+          {dateMode && (selRegion!=='全部'||selStores.length>0) && <span className="cmp-warn">⚠ 日期模式為全公司，已忽略區域/分店篩選</span>}
+          {(cmpStart||cmpEnd) && <button className="cmp-clear" onClick={()=>{setCmpStart('');setCmpEnd('');}}>清除</button>}
+        </div>
+
         {/* KPI CARDS */}
         <div className="kpi-grid">
           <div className="kpi-card">
             <div className="kpi-label">淨營收（已扣折扣）</div>
-            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(kpis.totalRevenueNet)}</div>
-            <div className="kpi-sub">{monthlyTotals.length} 個月份</div>
-            {renderYoY(kpis.totalRevenueNet, yoy&&yoy.ly&&yoy.ly.totalRevenueNet, 'pct', fmt.currency)}
+            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(dateMode?dayKpis.cur.net:kpis.totalRevenueNet)}</div>
+            <div className="kpi-sub">{dateMode ? `${cmpStart} ～ ${cmpEnd}（${dayKpis.cur.days} 天）` : `${monthlyTotals.length} 個月份`}</div>
+            {dateMode
+              ? renderYoYRow(dayKpis.cur.net, dayKpis.ly&&dayKpis.ly.net, 'pct', fmt.currency, dayKpis.noData)
+              : renderYoYRow(kpis.totalRevenueNet, yoy&&yoy.ly&&yoy.ly.totalRevenueNet, 'pct', fmt.currency, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">來客數</div>
-            <div className="kpi-value" style={{color:'var(--success)'}}>{fmt.number(kpis.headcount)}</div>
-            <div className="kpi-sub">甜點 {fmt.number(kpis.dessertCount)} + 陪同 {fmt.number(kpis.companionCount)}</div>
-            {renderYoY(kpis.headcount, yoy&&yoy.ly&&yoy.ly.headcount, 'pct', fmt.number)}
+            <div className="kpi-value" style={{color:'var(--success)'}}>{fmt.number(dateMode?dayKpis.cur.hc:kpis.headcount)}</div>
+            <div className="kpi-sub">{dateMode ? '全公司每日來客合計' : `甜點 ${fmt.number(kpis.dessertCount)} + 陪同 ${fmt.number(kpis.companionCount)}`}</div>
+            {dateMode
+              ? renderYoYRow(dayKpis.cur.hc, dayKpis.ly&&dayKpis.ly.hc, 'pct', fmt.number, dayKpis.noData)
+              : renderYoYRow(kpis.headcount, yoy&&yoy.ly&&yoy.ly.headcount, 'pct', fmt.number, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">客單價</div>
-            <div className="kpi-value" style={{color:'var(--warning)'}}>{fmt.currency(kpis.avgSpendPerHead)}</div>
+            <div className="kpi-value" style={{color:'var(--warning)'}}>{fmt.currency(dateMode?dayKpis.cur.avg:kpis.avgSpendPerHead)}</div>
             <div className="kpi-sub">淨營收 ÷ 來客數</div>
-            {renderYoY(kpis.avgSpendPerHead, yoy&&yoy.ly&&yoy.ly.avgSpendPerHead, 'pct', fmt.currency)}
+            {dateMode
+              ? renderYoYRow(dayKpis.cur.avg, dayKpis.ly&&dayKpis.ly.avg, 'pct', fmt.currency, dayKpis.noData)
+              : renderYoYRow(kpis.avgSpendPerHead, yoy&&yoy.ly&&yoy.ly.avgSpendPerHead, 'pct', fmt.currency, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">陪同率</div>
-            <div className="kpi-value" style={{color:'var(--info)'}}>{fmt.pct(kpis.companionRate)}</div>
+            <div className="kpi-value" style={{color:'var(--info)'}}>{dateMode ? '—' : fmt.pct(kpis.companionRate)}</div>
             <div className="kpi-sub">陪同 ÷ 總來客</div>
-            {renderYoY(kpis.companionRate, yoy&&yoy.ly&&yoy.ly.companionRate, 'ppt', fmt.pct)}
+            {dateMode ? yoyNA()
+              : renderYoYRow(kpis.companionRate, yoy&&yoy.ly&&yoy.ly.companionRate, 'ppt', fmt.pct, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">甜點銷售數</div>
-            <div className="kpi-value" style={{color:'var(--danger)'}}>{fmt.number(kpis.dessertCount)}</div>
+            <div className="kpi-value" style={{color:'var(--danger)'}}>{dateMode ? '—' : fmt.number(kpis.dessertCount)}</div>
             <div className="kpi-sub">甜點品項列數合計</div>
-            {renderYoY(kpis.dessertCount, yoy&&yoy.ly&&yoy.ly.dessertCount, 'pct', fmt.number)}
+            {dateMode ? yoyNA()
+              : renderYoYRow(kpis.dessertCount, yoy&&yoy.ly&&yoy.ly.dessertCount, 'pct', fmt.number, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">限定甜點營收佔比</div>
-            <div className="kpi-value" style={{color:'#8B6A63'}}>{fmt.pct(kpis.limitedRevenueRatio)}</div>
-            <div className="kpi-sub">限定甜點 {fmt.currency(kpis.limitedRevenue)}</div>
-            {renderYoY(kpis.limitedRevenueRatio, yoy&&yoy.ly&&yoy.ly.limitedRevenueRatio, 'ppt', fmt.pct)}
+            <div className="kpi-value" style={{color:'#8B6A63'}}>{dateMode ? '—' : fmt.pct(kpis.limitedRevenueRatio)}</div>
+            <div className="kpi-sub">{dateMode ? '日粒度需後端品項拆分' : `限定甜點 ${fmt.currency(kpis.limitedRevenue)}`}</div>
+            {dateMode ? yoyNA()
+              : renderYoYRow(kpis.limitedRevenueRatio, yoy&&yoy.ly&&yoy.ly.limitedRevenueRatio, 'ppt', fmt.pct, yoy&&yoy.noData)}
           </div>
         </div>
 
@@ -1178,7 +1232,55 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
     return {data, stores};
   },[monthlyByStoreNoDate]);
 
+  // 各店 vs 去年同期：淨營收成長率（月粒度，用 monthlyByStore；去年同期＝相同月份區間年-1）
+  const storeYoY = useMemo(()=>{
+    const mbs = rawData?.monthlyByStore || [];
+    const shift = ym => { const [y,m]=ym.split('-'); return (parseInt(y,10)-1)+'-'+m; };
+    const minYM = mbs.reduce((mn,m)=>(!mn||m.yearMonth<mn)?m.yearMonth:mn,'');
+    const lyStart = dateStart?shift(dateStart):null, lyEnd = dateEnd?shift(dateEnd):null;
+    const noLY = !lyStart || lyStart < minYM;
+    const curBy={}, lyBy={};
+    mbs.forEach(m=>{
+      if(selRegion && selRegion!=='全部' && m.region!==selRegion) return;
+      if(selStores && selStores.length>0 && !selStores.includes(m.store)) return;
+      const inCur = (!dateStart||m.yearMonth>=dateStart)&&(!dateEnd||m.yearMonth<=dateEnd);
+      const inLY  = !noLY && m.yearMonth>=lyStart && m.yearMonth<=lyEnd;
+      if(inCur) curBy[m.store]=(curBy[m.store]||0)+(m.revenue_net||0);
+      if(inLY)  lyBy[m.store] =(lyBy[m.store] ||0)+(m.revenue_net||0);
+    });
+    const rows = Object.keys(curBy).map(s=>{
+      const cur=curBy[s], ly=lyBy[s]||0;
+      return {store:s, cur, ly, grow: ly>0?((cur-ly)/ly*100):null};
+    }).filter(r=>r.grow!==null).sort((a,b)=>b.grow-a.grow);
+    return {rows, noLY};
+  },[rawData,dateStart,dateEnd,selRegion,selStores]);
+
   return (
+    <div>
+      {/* 0. 各店 vs 去年同期淨營收成長率 */}
+      <div className="chart-card" style={{marginBottom:16}}>
+        <div className="chart-title">各店 vs 去年同期：淨營收成長率</div>
+        <div className="chart-subtitle">綠＝成長、紅＝衰退；以淨營收（已扣折扣）比較相同月份區間的去年同期</div>
+        <div className="chart-body">
+          {storeYoY.noLY ? (
+            <div style={{padding:'48px 16px',textAlign:'center',color:'var(--text-muted)'}}>所選區間的去年同期無資料，無法比較成長率</div>
+          ) : (
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={storeYoY.rows} margin={{top:20,right:20,left:0,bottom:10}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
+              <XAxis dataKey="store" stroke="#B89E97" tick={{fontSize:9,angle:-30,textAnchor:'end'}} height={80}/>
+              <YAxis stroke="#B89E97" tick={{fontSize:10}} tickFormatter={v=>v.toFixed(0)+'%'}/>
+              <Tooltip content={<CustomTooltip formatter={v=>(v>=0?'+':'')+Number(v).toFixed(1)+'%'}/>}/>
+              <ReferenceLine y={0} stroke="#8B6A63"/>
+              <Bar dataKey="grow" name="淨營收成長率" radius={[4,4,0,0]}>
+                {storeYoY.rows.map((r,i)=><Cell key={i} fill={r.grow>=0?'#52B788':'#C4412F'}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
     <div className="charts-grid cols-2">
       {/* 1. 各店:營收 vs 來客數 */}
       <div className="chart-card">
@@ -1259,6 +1361,7 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
           </ResponsiveContainer>
         </div>
       </div>
+    </div>
     </div>
   );
 }
