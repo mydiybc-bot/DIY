@@ -21,6 +21,9 @@
   header .wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
   header h1{margin:0;font-size:19px;font-weight:700;letter-spacing:.5px}
   header .sub{font-size:12.5px;opacity:.85}
+  header .home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);
+    padding:5px 12px;border-radius:8px;transition:background .15s;white-space:nowrap}
+  header .home:hover{background:rgba(255,255,255,.32)}
   header .season{margin-left:auto;font-size:12.5px;background:rgba(255,255,255,.16);
     padding:4px 12px;border-radius:20px}
   main{max-width:1180px;margin:0 auto;padding:22px}
@@ -83,6 +86,7 @@
 </head>
 <body>
 <header><div class="wrap">
+  <a href="hub.html" class="home">← 返回首頁</a>
   <h1>廠商單價追蹤</h1>
   <span class="sub">原物料成本 · 含稅基準</span>
   <span class="season" id="seasonTag">2026 Q2</span>
@@ -111,6 +115,14 @@
       <tbody id="calcBody"><tr><td colspan="7" class="empty">尚未加入品項 — 從上方選一個品項加入配方。</td></tr></tbody>
     </table>
     <div class="calc-total"><span>含稅總成本</span><span class="big num" id="calcTotal">$0</span></div>
+  </div>
+
+  <!-- 跨公司比同品項 -->
+  <div class="card">
+    <h2>跨公司比同品項<span class="tax-note">同一品項 4 家進價對比</span></h2>
+    <div class="desc">選一個品項,看共好/共享/共有/共力哪一家進得便宜(含稅單價)。只有一家進貨的品項就只顯示一根。目前僅共好資料,其餘公司資料貼進 Sheet 後自動出現。</div>
+    <div class="calc-top"><select id="itemPick" style="min-width:0;width:100%"></select></div>
+    <div class="chartbox" style="height:230px"><canvas id="coChart"></canvas></div>
   </div>
 
   <!-- 跨供應商比價 -->
@@ -147,11 +159,12 @@
     </div>
     <div class="filters">
       <input id="search" placeholder="搜尋品名…">
+      <select id="coFilter"><option value="">全部公司</option></select>
       <select id="supFilter"><option value="">全部供應商</option></select>
       <select id="catFilter"><option value="">全部品類</option></select>
     </div>
     <table>
-      <thead><tr><th>品名</th><th>供應商</th><th>品類</th><th>規格</th><th class="r">含稅單價</th><th class="r">每kg/L</th><th class="r" title="本季 vs 上一季 的價格漲跌">vs前季</th><th class="r" title="本季內跨店/跨日的單價落差,非跨季">季內價差%</th></tr></thead>
+      <thead><tr><th>公司</th><th>品名</th><th>供應商</th><th>品類</th><th>規格</th><th class="r">含稅單價</th><th class="r">每kg/L</th><th class="r" title="本季 vs 上一季 的價格漲跌">vs前季</th><th class="r" title="本季內跨店/跨日的單價落差,非跨季">季內價差%</th></tr></thead>
       <tbody id="tableBody"></tbody>
     </table>
   </div>
@@ -198,6 +211,7 @@ function parseTable(json){
       // 數字欄取原始值;其餘(含日期)取格式化字串,日期才會是 2026/04/02 而非 Date 物件
       o[col] = NUM.has(col) ? cell.v : (cell.f != null ? cell.f : cell.v);
     });
+    if(!o['公司'] && o['公司名稱']) o['公司'] = o['公司名稱'];  // 兼容 Sheet 欄名「公司名稱」
     return o;
   }).filter(r => r['季別']);
 }
@@ -210,7 +224,7 @@ function aggregate(rows){
   const groups = {};
   rows.forEach(r => {
     const code = r['料號'];
-    const key = r['供應商'] + '|' + ((code && code !== '-') ? code : 'name:'+r['品名']);
+    const key = (r['公司']||'') + '|' + r['供應商'] + '|' + ((code && code !== '-') ? code : 'name:'+r['品名']);
     (groups[key] = groups[key] || []).push(r);
   });
   return Object.values(groups).map(rs => {
@@ -231,6 +245,7 @@ function aggregate(rows){
       .filter(x => !isNaN(x.price))
       .sort((a,b) => a.price - b.price);
     return {
+      company: sample['公司'] || '—',
       name: sample['品名'], sup: sample['供應商'], code: sample['料號'],
       spec: sample['規格'], unit: sample['單位'], tax: sample['稅別'],
       cat: sample['品類'] || '未分類', dim: sample['基準維度'] || '計數',
@@ -262,6 +277,7 @@ let recipe = [];
   }
   const sups = [...new Set(data.map(d=>d.sup))];
   const cats = [...new Set(data.map(d=>d.cat))];
+  const cos = [...new Set(data.map(d=>d.company))];
   document.getElementById('kItems').textContent = data.length;
   document.getElementById('kSups').textContent = sups.length;
   document.getElementById('kVol').textContent = data.filter(d=>d.vol_pct>0).length;
@@ -269,7 +285,8 @@ let recipe = [];
 
   const picker=document.getElementById('picker'), trendPick=document.getElementById('trendPick'),
         supF=document.getElementById('supFilter'), catF=document.getElementById('catFilter'),
-        catPick=document.getElementById('catPick');
+        catPick=document.getElementById('catPick'), coF=document.getElementById('coFilter'),
+        itemPick=document.getElementById('itemPick');
   data.forEach((d,i)=>{
     let pl;
     if(d.dim==='重量'&&d.unit_price) pl=fmt(d.unit_price)+'/kg';
@@ -279,10 +296,19 @@ let recipe = [];
     trendPick.add(new Option(`${d.name}｜${d.sup}`, i));
   });
   sups.forEach(s=>supF.add(new Option(s,s)));
+  cos.forEach(c=>coF.add(new Option(c,c)));
   // 只列「有≥2個可比價品項」的品類
   const cmpCats=cats.filter(c=>data.filter(d=>d.cat===c&&d.unit_price).length>=2);
   cats.forEach(c=>catF.add(new Option(c,c)));
   cmpCats.forEach(c=>catPick.add(new Option(c,c)));
+  // 跨公司:以 供應商+貨號(無貨號用品名) 聚合各公司
+  const itemMap={};
+  data.forEach(d=>{
+    const ik=d.sup+'|'+((d.code&&d.code!=='-')?d.code:'n:'+d.name);
+    (itemMap[ik]=itemMap[ik]||{name:d.name,sup:d.sup,rows:[]}).rows.push(d);
+  });
+  const itemKeys=Object.keys(itemMap).sort((a,b)=>itemMap[b].rows.length-itemMap[a].rows.length);
+  itemKeys.forEach(k=>itemPick.add(new Option(`${itemMap[k].name}｜${itemMap[k].sup}`,k)));
 
   document.getElementById('addBtn').onclick=()=>{
     const d=data[+picker.value];
@@ -290,17 +316,19 @@ let recipe = [];
     recipe.push({d, qty:q}); renderCalc();
   };
   document.getElementById('search').oninput=renderTable;
-  supF.onchange=renderTable; catF.onchange=renderTable;
+  supF.onchange=renderTable; catF.onchange=renderTable; coF.onchange=renderTable;
   trendPick.onchange=()=>renderTrend(data[+trendPick.value]);
   catPick.onchange=()=>renderCmp(data, catPick.value);
+  itemPick.onchange=()=>renderCo(itemMap[itemPick.value]);
 
   renderCalc(); renderTable(); renderVol(data); renderTrend(data[0]);
   if(cmpCats.length) renderCmp(data, cmpCats[0]);
+  if(itemKeys.length) renderCo(itemMap[itemKeys[0]]);
 
   function renderTable(){
     window.__tableData = data;
     const q=(document.getElementById('search').value||'').trim();
-    const rows=data.filter(d=>(!q||d.name.includes(q))&&(!supF.value||d.sup===supF.value)&&(!catF.value||d.cat===catF.value));
+    const rows=data.filter(d=>(!q||d.name.includes(q))&&(!coF.value||d.company===coF.value)&&(!supF.value||d.sup===supF.value)&&(!catF.value||d.cat===catF.value));
     document.getElementById('tableBody').innerHTML = rows.map((d)=>{
       const gi = data.indexOf(d);
       const vc = d.vol_pct>=3?'vol hot':'vol';
@@ -309,13 +337,29 @@ let recipe = [];
       const volCell = d.vol_pct>0
         ? `<span class="vol-click ${vc}" onclick="toggleDetail(${gi},this)">${d.vol_pct}% ▾</span>`
         : '<span class="vol">–</span>';
-      return `<tr><td>${esc(d.name)}</td><td>${esc(d.sup)}</td><td><span class="pill">${esc(d.cat)}</span></td>
+      return `<tr><td><span class="pill">${esc(d.company)}</span></td><td>${esc(d.name)}</td><td>${esc(d.sup)}</td><td><span class="pill">${esc(d.cat)}</span></td>
         <td>${esc(d.spec)}</td><td class="r num">${fmt(d.base)}</td>
         <td class="r num">${up}</td><td class="r num">${chg}</td>
         <td class="r num">${volCell}</td></tr>`;
-    }).join('') || `<tr><td colspan="8" class="empty">沒有符合的品項。</td></tr>`;
+    }).join('') || `<tr><td colspan="9" class="empty">沒有符合的品項。</td></tr>`;
   }
 })();
+
+let coC;
+function renderCo(item){
+  if(!item) return;
+  const byCo={};
+  item.rows.forEach(d=>{ byCo[d.company]=Math.max(byCo[d.company]||0, d.base); });
+  const labels=Object.keys(byCo).sort((a,b)=>byCo[a]-byCo[b]);
+  const vals=labels.map(c=>byCo[c]);
+  if(coC) coC.destroy();
+  coC=new Chart(document.getElementById('coChart'),{type:'bar',
+    data:{labels,datasets:[{data:vals,backgroundColor:vals.map((_,i)=>i===0?'#2E7D52':'#8B2D1F'),borderRadius:5}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},title:{display:true,text:`${item.name}｜${item.sup} — 各公司含稅進價`,font:{size:13}},
+        tooltip:{callbacks:{label:c=>' '+fmt(c.parsed.x)}}},
+      scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'#F0EAE5'}},y:{grid:{display:false}}}}});
+}
 
 // 點季內價差% → 在該行下方展開/收合本季各批進貨明細
 function toggleDetail(gi, el){
