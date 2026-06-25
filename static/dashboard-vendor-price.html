@@ -127,8 +127,8 @@
 
   <!-- 跨供應商比價 -->
   <div class="card">
-    <h2>跨供應商比價（每 kg／每 L）<span class="tax-note">同品類才有意義</span></h2>
-    <div class="desc">選一個品類,把不同供應商的品項換算成同一基準(每公斤或每公升)後並排比。長條越短=單位成本越低。計數類品項(盒/罐/Case)無法換算,不顯示。</div>
+    <h2>各品項價格帶（每 kg／每 L）<span class="tax-note">條長=本季價格落差</span></h2>
+    <div class="desc">選一個品類,每個品項畫一條「本季最低～最高」的價格帶(已換算每kg/L、跨公司合併同品項)。<b>條越長=這季價格波動越大</b>(像生鮮蔬果時價);條越短或一點=價格穩定。<span style="color:#C4412F">紅</span>=落差≥30%、<span style="color:#D98C3F">橘</span>=10~30%、<span style="color:#2E7D52">綠</span>=穩定。計數類(盒/罐/Case)不換算、不顯示。</div>
     <div class="calc-top"><select id="catPick" style="min-width:0;width:100%"></select></div>
     <div class="chartbox"><canvas id="cmpChart"></canvas></div>
   </div>
@@ -246,6 +246,8 @@ function aggregate(rows){
     const mn = lr.length?Math.min(...lr):0, mx = lr.length?Math.max(...lr):0;
     const vol = (mn>0 && mx!==mn) ? Math.round((mx-mn)/mn*1000)/10 : 0;
     const up = sample['每基準單位單價'];
+    const pbNum = +sample['每基準量'];
+    const perbase = (sample['每基準量'] !== '' && !isNaN(pbNum) && pbNum > 0) ? pbNum : null;
     const chg = (prevQ && q[prevQ] && q[latestQ]) ? Math.round((q[latestQ]-q[prevQ])/q[prevQ]*1000)/10 : null;
     // 本季各批進貨明細(店/日/含稅單價),依價排序,供點開看價差來源
     const detail = rs.filter(r => String(r['季別'])===latestQ)
@@ -257,7 +259,7 @@ function aggregate(rows){
       name: sample['品名'], sup: sample['供應商'], code: sample['料號'],
       spec: sample['規格'], unit: sample['單位'], tax: sample['稅別'],
       cat: sample['品類'] || '未分類', dim: sample['基準維度'] || '計數',
-      base: q[latestQ] ?? mx, min: mn, max: mx, vol_pct: vol,
+      base: q[latestQ] ?? mx, min: mn, max: mx, vol_pct: vol, perbase: perbase,
       unit_price: (up !== '' && up != null && !isNaN(+up)) ? +up : null,
       chg: chg, q: q, detail: detail
     };
@@ -417,16 +419,34 @@ function renderCalc(){
 
 let volC, trendC, cmpC;
 function renderCmp(data, cat){
-  const items=data.filter(d=>d.cat===cat&&d.unit_price).sort((a,b)=>a.unit_price-b.unit_price);
-  const dim=items.length?items[0].dim:'重量';
-  const unit=dim==='容量'?'L':'kg';
+  // 跨公司合併同品項(供應商+品名),收集本季所有每kg/L值,算最低~最高
+  const groups={};
+  data.filter(d=>d.cat===cat && d.unit_price && d.perbase).forEach(d=>{
+    const k=d.sup+'|'+d.name;
+    (groups[k]=groups[k]||{name:d.name,sup:d.sup,dim:d.dim,ups:[]});
+    d.detail.forEach(x=> groups[k].ups.push(x.price/d.perbase));
+  });
+  const items=Object.values(groups).map(g=>({
+    name:g.name, sup:g.sup, dim:g.dim,
+    lo:Math.min(...g.ups), hi:Math.max(...g.ups), n:g.ups.length
+  })).sort((a,b)=>a.lo-b.lo);
+  const unit = items.length && items[0].dim==='容量' ? 'L':'kg';
   if(cmpC) cmpC.destroy();
   cmpC=new Chart(document.getElementById('cmpChart'),{type:'bar',
-    data:{labels:items.map(d=>`${d.name}｜${d.sup}`),datasets:[{data:items.map(d=>d.unit_price),
-      backgroundColor:items.map((_,i)=>i===0?'#2E7D52':'#8B2D1F'),borderRadius:5}]},
+    data:{labels:items.map(d=>`${d.name}｜${d.sup}`),
+      datasets:[{
+        data:items.map(d=>[d.lo, d.hi]),   // floating bar：最低~最高
+        backgroundColor:items.map(d=> d.hi/d.lo>=1.3 ? '#C4412F' : (d.hi/d.lo>=1.1 ? '#D98C3F' : '#2E7D52')),
+        borderRadius:4, barThickness:'flex'
+      }]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${fmt(c.parsed.x)}/${unit}`}}},
-      scales:{x:{ticks:{callback:v=>'$'+v},title:{display:true,text:'每'+unit+'含稅單價'},grid:{color:'#F0EAE5'}},
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>{
+          const d=items[c.dataIndex];
+          return d.lo===d.hi ? ` ${fmt(d.lo)}/${unit}（${d.n}筆,無落差）`
+            : ` ${fmt(d.lo)} ~ ${fmt(d.hi)}/${unit}（${d.n}筆,落差${Math.round((d.hi/d.lo-1)*100)}%）`;
+        }}}},
+      scales:{x:{ticks:{callback:v=>'$'+v},title:{display:true,text:'每'+unit+'含稅單價（條長=本季最低到最高的價格帶）'},grid:{color:'#F0EAE5'}},
         y:{grid:{display:false}}}}});
 }
 function renderVol(data){
