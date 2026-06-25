@@ -250,6 +250,10 @@ function App(){
   /* 精確日期比較模式（全公司日粒度，用 daily）：兩者皆有值即啟用 */
   const [cmpStart, setCmpStart] = useState('');
   const [cmpEnd, setCmpEnd] = useState('');
+  /* daily_by_store 日×店明細（按需載入，僅日期模式用）*/
+  const [dbsData, setDbsData] = useState(null);
+  const [dbsLoading, setDbsLoading] = useState(false);
+  const [dbsError, setDbsError] = useState(null);
 
   /* ---------- v3: net 由後端算好（daily_discount 白名單口徑，storeCode JOIN）
      已移除前端 STORE_ID_TO_POS_NAME / applyFactDiscountToPOS / fetchFactDiscount
@@ -447,24 +451,54 @@ function App(){
   const pctGrow = (now, prev)=> (prev>0 ? ((now-prev)/prev*100) : null);  // 金額/數量類：成長率%
   const pptGrow = (now, prev)=> (now - prev);                              // 比率類：百分點 ppt
 
-  /* ---------- 精確日期模式：全公司日粒度 KPI（用 daily，無店號/品項，僅 net/headcount） ---------- */
+  /* ---------- 精確日期模式（v2）：按需載入 daily_by_store，支援 6 卡＋分店 ---------- */
+  const dateMode = !!(cmpStart && cmpEnd && cmpStart<=cmpEnd);
+
+  // 進日期模式且未載入 → 按需抓 daily_by_store（JSONP；冷快取首打可能近 1 分鐘）
+  useEffect(()=>{
+    if(!dateMode || dbsData || dbsLoading) return;
+    setDbsLoading(true); setDbsError(null);
+    const cbName='_dbsCb_'+Date.now();
+    const timeout=setTimeout(()=>{ delete window[cbName]; setDbsError('日粒度資料載入逾時，請點清除後重試'); setDbsLoading(false); }, 90000);
+    window[cbName]=(d)=>{ clearTimeout(timeout); delete window[cbName]; setDbsData(Array.isArray(d)?d:(d&&d.rows)||[]); setDbsLoading(false); };
+    const script=document.createElement('script');
+    script.src=API_URL+(API_URL.includes('?')?'&':'?')+'action=daily_by_store&callback='+cbName;
+    script.onerror=()=>{ clearTimeout(timeout); delete window[cbName]; setDbsError('日粒度資料載入失敗'); setDbsLoading(false); };
+    document.body.appendChild(script);
+  },[dateMode, dbsData, dbsLoading]);
+
   const dayKpis = useMemo(()=>{
-    if(!rawData || !cmpStart || !cmpEnd || cmpStart>cmpEnd) return null;
-    const daily = rawData.daily || [];
-    const minDate = daily.reduce((mn,d)=>(!mn||d.date<mn)?d.date:mn,'');
+    if(!dateMode) return null;
+    if(!dbsData) return { pending:true };
+    const inFilter=(d)=>{
+      if(selRegion && selRegion!=='全部' && d.region!==selRegion) return false;
+      if(selStores && selStores.length>0 && !selStores.includes(d.store)) return false;
+      return true;
+    };
+    const minDate = dbsData.reduce((mn,d)=>(!mn||d.date<mn)?d.date:mn,'');
     const sum=(s,e)=>{
-      let net=0,hc=0,gross=0,disc=0,days=0;
-      daily.forEach(d=>{ if(d.date>=s && d.date<=e){ net+=d.revenue_net||0; hc+=d.headcount||0; gross+=d.revenue_gross||0; disc+=d.discount||0; days++; }});
-      return {net, hc, gross, disc, days, avg: hc>0?Math.round(net/hc):0};
+      let net=0,hc=0,dessert=0,comp=0,lim=0,item=0; const days=new Set();
+      dbsData.forEach(d=>{
+        if(d.date>=s && d.date<=e && inFilter(d)){
+          net+=d.revenue_net||0; hc+=d.headcount||0; dessert+=d.dessert_count||0;
+          comp+=d.companion_count||0; lim+=d.limited_revenue||0; item+=d.item_revenue||0;
+          days.add(d.date);
+        }
+      });
+      return { net, hc, dessert, comp, lim, item, days:days.size,
+        avg: hc>0?Math.round(net/hc):0,
+        compRate: hc>0?(comp/hc*100):0,
+        limRatio: item>0?(lim/item*100):0 };
     };
     const shiftD=(ds)=>{ const [y,m,dd]=ds.split('-'); return (parseInt(y,10)-1)+'-'+m+'-'+dd; };
     const cur=sum(cmpStart, cmpEnd);
     const lyStart=shiftD(cmpStart), lyEnd=shiftD(cmpEnd);
     const noData = lyStart < minDate;
     const ly = noData ? null : sum(lyStart, lyEnd);
-    return { cur, ly, noData, lyStart, lyEnd };
-  },[rawData, cmpStart, cmpEnd]);
-  const dateMode = !!dayKpis;
+    return { cur, ly, noData, pending:false };
+  },[dbsData, dateMode, cmpStart, cmpEnd, selRegion, selStores]);
+  const datePending = dateMode && (dbsLoading || (dayKpis && dayKpis.pending));
+
   const dailyMaxDate = useMemo(()=>{
     const daily = rawData?.daily || [];
     return daily.reduce((mx,d)=>(d.date>mx?d.date:mx),'');
@@ -756,8 +790,9 @@ function App(){
           <input type="date" value={cmpStart} max={dailyMaxDate} onChange={e=>setCmpStart(e.target.value)}/>
           <span>～</span>
           <input type="date" value={cmpEnd} max={dailyMaxDate} onChange={e=>setCmpEnd(e.target.value)}/>
-          <span className="cmp-hint">自動對比去年同期（年-1、同月日）｜全公司、僅淨營收/來客數/客單價</span>
-          {dateMode && (selRegion!=='全部'||selStores.length>0) && <span className="cmp-warn">⚠ 日期模式為全公司，已忽略區域/分店篩選</span>}
+          <span className="cmp-hint">自動對比去年同期（年-1、同月日）｜6 項指標、可套區域/分店</span>
+          {datePending && <span className="cmp-hint">⏳ 載入日粒度資料中（首次約 1 分鐘）…</span>}
+          {dbsError && <span className="cmp-warn">{dbsError}</span>}
           {(cmpStart||cmpEnd) && <button className="cmp-clear" onClick={()=>{setCmpStart('');setCmpEnd('');}}>清除</button>}
         </div>
 
@@ -765,47 +800,50 @@ function App(){
         <div className="kpi-grid">
           <div className="kpi-card">
             <div className="kpi-label">淨營收（已扣折扣）</div>
-            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(dateMode?dayKpis.cur.net:kpis.totalRevenueNet)}</div>
-            <div className="kpi-sub">{dateMode ? `${cmpStart} ～ ${cmpEnd}（${dayKpis.cur.days} 天）` : `${monthlyTotals.length} 個月份`}</div>
+            <div className="kpi-value" style={{color:'var(--accent-light)'}}>{dateMode ? (datePending?'…':fmt.currency(dayKpis.cur.net)) : fmt.currency(kpis.totalRevenueNet)}</div>
+            <div className="kpi-sub">{dateMode ? (datePending?'載入日粒度…':`${cmpStart} ～ ${cmpEnd}（${dayKpis.cur.days} 天）`) : `${monthlyTotals.length} 個月份`}</div>
             {dateMode
-              ? renderYoYRow(dayKpis.cur.net, dayKpis.ly&&dayKpis.ly.net, 'pct', fmt.currency, dayKpis.noData)
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.net, dayKpis.ly&&dayKpis.ly.net, 'pct', fmt.currency, dayKpis.noData))
               : renderYoYRow(kpis.totalRevenueNet, yoy&&yoy.ly&&yoy.ly.totalRevenueNet, 'pct', fmt.currency, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">來客數</div>
-            <div className="kpi-value" style={{color:'var(--success)'}}>{fmt.number(dateMode?dayKpis.cur.hc:kpis.headcount)}</div>
-            <div className="kpi-sub">{dateMode ? '全公司每日來客合計' : `甜點 ${fmt.number(kpis.dessertCount)} + 陪同 ${fmt.number(kpis.companionCount)}`}</div>
+            <div className="kpi-value" style={{color:'var(--success)'}}>{dateMode ? (datePending?'…':fmt.number(dayKpis.cur.hc)) : fmt.number(kpis.headcount)}</div>
+            <div className="kpi-sub">{dateMode ? (datePending?'—':`甜點 ${fmt.number(dayKpis.cur.dessert)} + 陪同 ${fmt.number(dayKpis.cur.comp)}`) : `甜點 ${fmt.number(kpis.dessertCount)} + 陪同 ${fmt.number(kpis.companionCount)}`}</div>
             {dateMode
-              ? renderYoYRow(dayKpis.cur.hc, dayKpis.ly&&dayKpis.ly.hc, 'pct', fmt.number, dayKpis.noData)
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.hc, dayKpis.ly&&dayKpis.ly.hc, 'pct', fmt.number, dayKpis.noData))
               : renderYoYRow(kpis.headcount, yoy&&yoy.ly&&yoy.ly.headcount, 'pct', fmt.number, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">客單價</div>
-            <div className="kpi-value" style={{color:'var(--warning)'}}>{fmt.currency(dateMode?dayKpis.cur.avg:kpis.avgSpendPerHead)}</div>
+            <div className="kpi-value" style={{color:'var(--warning)'}}>{dateMode ? (datePending?'…':fmt.currency(dayKpis.cur.avg)) : fmt.currency(kpis.avgSpendPerHead)}</div>
             <div className="kpi-sub">淨營收 ÷ 來客數</div>
             {dateMode
-              ? renderYoYRow(dayKpis.cur.avg, dayKpis.ly&&dayKpis.ly.avg, 'pct', fmt.currency, dayKpis.noData)
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.avg, dayKpis.ly&&dayKpis.ly.avg, 'pct', fmt.currency, dayKpis.noData))
               : renderYoYRow(kpis.avgSpendPerHead, yoy&&yoy.ly&&yoy.ly.avgSpendPerHead, 'pct', fmt.currency, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">陪同率</div>
-            <div className="kpi-value" style={{color:'var(--info)'}}>{dateMode ? '—' : fmt.pct(kpis.companionRate)}</div>
+            <div className="kpi-value" style={{color:'var(--info)'}}>{dateMode ? (datePending?'…':fmt.pct(dayKpis.cur.compRate)) : fmt.pct(kpis.companionRate)}</div>
             <div className="kpi-sub">陪同 ÷ 總來客</div>
-            {dateMode ? yoyNA()
+            {dateMode
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.compRate, dayKpis.ly&&dayKpis.ly.compRate, 'ppt', fmt.pct, dayKpis.noData))
               : renderYoYRow(kpis.companionRate, yoy&&yoy.ly&&yoy.ly.companionRate, 'ppt', fmt.pct, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">甜點銷售數</div>
-            <div className="kpi-value" style={{color:'var(--danger)'}}>{dateMode ? '—' : fmt.number(kpis.dessertCount)}</div>
-            <div className="kpi-sub">甜點品項列數合計</div>
-            {dateMode ? yoyNA()
+            <div className="kpi-value" style={{color:'var(--danger)'}}>{dateMode ? (datePending?'…':fmt.number(dayKpis.cur.dessert)) : fmt.number(kpis.dessertCount)}</div>
+            <div className="kpi-sub">甜點品項數合計</div>
+            {dateMode
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.dessert, dayKpis.ly&&dayKpis.ly.dessert, 'pct', fmt.number, dayKpis.noData))
               : renderYoYRow(kpis.dessertCount, yoy&&yoy.ly&&yoy.ly.dessertCount, 'pct', fmt.number, yoy&&yoy.noData)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">限定甜點營收佔比</div>
-            <div className="kpi-value" style={{color:'#8B6A63'}}>{dateMode ? '—' : fmt.pct(kpis.limitedRevenueRatio)}</div>
-            <div className="kpi-sub">{dateMode ? '日粒度需後端品項拆分' : `限定甜點 ${fmt.currency(kpis.limitedRevenue)}`}</div>
-            {dateMode ? yoyNA()
+            <div className="kpi-value" style={{color:'#8B6A63'}}>{dateMode ? (datePending?'…':fmt.pct(dayKpis.cur.limRatio)) : fmt.pct(kpis.limitedRevenueRatio)}</div>
+            <div className="kpi-sub">{dateMode ? (datePending?'—':`限定甜點 ${fmt.currency(dayKpis.cur.lim)}`) : `限定甜點 ${fmt.currency(kpis.limitedRevenue)}`}</div>
+            {dateMode
+              ? (datePending ? <div className="kpi-yoy flat"><span className="yoy-base">⏳ 載入中…</span></div> : renderYoYRow(dayKpis.cur.limRatio, dayKpis.ly&&dayKpis.ly.limRatio, 'ppt', fmt.pct, dayKpis.noData))
               : renderYoYRow(kpis.limitedRevenueRatio, yoy&&yoy.ly&&yoy.ly.limitedRevenueRatio, 'ppt', fmt.pct, yoy&&yoy.noData)}
           </div>
         </div>
