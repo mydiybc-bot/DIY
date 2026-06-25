@@ -65,6 +65,11 @@ a{color:var(--accent-light);text-decoration:none}
 .kpi-label{font-size:.75rem;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .kpi-value{font-size:1.6rem;font-weight:800;letter-spacing:-.5px}
 .kpi-sub{font-size:.75rem;color:var(--text-muted);margin-top:2px}
+.kpi-yoy{font-size:.72rem;margin-top:5px;padding-top:5px;border-top:1px dashed var(--border);font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.kpi-yoy .yoy-base{color:var(--text-muted);font-weight:500}
+.kpi-yoy.up{color:var(--success)}
+.kpi-yoy.down{color:var(--danger)}
+.kpi-yoy.flat{color:var(--text-muted)}
 
 /* Tabs */
 .tabs-nav{display:flex;gap:4px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;border-bottom:1px solid var(--border)}
@@ -382,6 +387,56 @@ function App(){
     });
   },[rawData, dateStart, dateEnd]);
 
+  /* ---------- 去年同期 YoY：共用 KPI 計算（吃任意起迄月份，口徑與下方 kpis 一致） ---------- */
+  const shiftYearBack = (ym)=>{ if(!ym) return ym; const [y,m]=ym.split('-'); return (parseInt(y,10)-1)+'-'+m; };
+
+  const computeKpisFor = useCallback((dStart,dEnd)=>{
+    if(!rawData) return null;
+    const mF = rawData.monthly.filter(m=>{
+      if(dStart && m.yearMonth < dStart) return false;
+      if(dEnd && m.yearMonth > dEnd) return false;
+      if(selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    let totalRev=0, desserts=0, companions=0, limitedRev=0;
+    mF.forEach(m=>{
+      totalRev+=m.revenue; desserts+=m.dessertCount; companions+=m.companionCount;
+      if(m.mainCategory==='限定甜點') limitedRev+=m.revenue;
+    });
+    const mbs = (rawData.monthlyByStore||[]).filter(m=>{
+      if(dStart && m.yearMonth < dStart) return false;
+      if(dEnd && m.yearMonth > dEnd) return false;
+      if(selRegion!=='全部' && m.region!==selRegion) return false;
+      if(selStores.length>0 && !selStores.includes(m.store)) return false;
+      return true;
+    });
+    const netTotal = mbs.length>0 ? mbs.reduce((s,m)=>s+(m.revenue_net||0),0) : totalRev;
+    const hc = desserts + companions;
+    return {
+      totalRevenueNet: netTotal,
+      headcount: hc,
+      dessertCount: desserts,
+      companionCount: companions,
+      avgSpendPerHead: hc>0?Math.round(netTotal/hc):0,
+      companionRate: hc>0?(companions/hc*100):0,
+      limitedRevenue: limitedRev,
+      limitedRevenueRatio: totalRev>0?(limitedRev/totalRev*100):0
+    };
+  },[rawData, selRegion, selStores]);
+
+  const yoy = useMemo(()=>{
+    if(!rawData) return null;
+    const minYM = (rawData.monthly||[]).reduce((mn,m)=>(!mn||m.yearMonth<mn)?m.yearMonth:mn, '');
+    const lyStart = shiftYearBack(dateStart), lyEnd = shiftYearBack(dateEnd);
+    const noData = !lyStart || lyStart < minYM;       // 去年同期起月早於資料最早月 → 無可比資料
+    const ly = noData ? null : computeKpisFor(lyStart, lyEnd);
+    return { noData, ly };
+  },[rawData, dateStart, dateEnd, computeKpisFor]);
+
+  const pctGrow = (now, prev)=> (prev>0 ? ((now-prev)/prev*100) : null);  // 金額/數量類：成長率%
+  const pptGrow = (now, prev)=> (now - prev);                              // 比率類：百分點 ppt
+
   /* ---------- COMPUTED KPIs ---------- */
   const kpis = useMemo(()=>{
     let totalRev=0, desserts=0, companions=0, limitedRev=0, txns=0;
@@ -561,6 +616,27 @@ function App(){
 
   const tabs = ['目標達成','營收趨勢','分店比較','品項分析','客單價分析','季節&活動','折扣分析','生日壽星'];
 
+  // 渲染一張卡的「去年同期」行；mode: 'pct'(金額/數量) | 'ppt'(比率)
+  const renderYoY = (curVal, lyVal, mode, fmtBase)=>{
+    if(!yoy || yoy.noData || yoy.ly==null){
+      return <div className="kpi-yoy flat"><span className="yoy-base">去年同期 — ｜無資料</span></div>;
+    }
+    let cls, deltaTxt;
+    if(mode==='ppt'){
+      const d = pptGrow(curVal, lyVal);
+      cls = d>0.05?'up':(d<-0.05?'down':'flat');
+      deltaTxt = (cls==='up'?'▲ +':(cls==='down'?'▼ ':''))+d.toFixed(1)+'ppt';
+    }else{
+      const g = pctGrow(curVal, lyVal);
+      if(g===null){ cls='up'; deltaTxt='▲ 新增'; }
+      else{
+        cls = g>0.05?'up':(g<-0.05?'down':'flat');
+        deltaTxt = (cls==='up'?'▲ +':(cls==='down'?'▼ ':''))+g.toFixed(1)+'%';
+      }
+    }
+    return <div className={"kpi-yoy "+cls}><span className="yoy-base">去年 {fmtBase(lyVal)}</span><span>{deltaTxt}</span></div>;
+  };
+
   return (
     <div>
       {/* HEADER */}
@@ -645,31 +721,37 @@ function App(){
             <div className="kpi-label">淨營收（已扣折扣）</div>
             <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(kpis.totalRevenueNet)}</div>
             <div className="kpi-sub">{monthlyTotals.length} 個月份</div>
+            {renderYoY(kpis.totalRevenueNet, yoy&&yoy.ly&&yoy.ly.totalRevenueNet, 'pct', fmt.currency)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">來客數</div>
             <div className="kpi-value" style={{color:'var(--success)'}}>{fmt.number(kpis.headcount)}</div>
             <div className="kpi-sub">甜點 {fmt.number(kpis.dessertCount)} + 陪同 {fmt.number(kpis.companionCount)}</div>
+            {renderYoY(kpis.headcount, yoy&&yoy.ly&&yoy.ly.headcount, 'pct', fmt.number)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">客單價</div>
             <div className="kpi-value" style={{color:'var(--warning)'}}>{fmt.currency(kpis.avgSpendPerHead)}</div>
             <div className="kpi-sub">淨營收 ÷ 來客數</div>
+            {renderYoY(kpis.avgSpendPerHead, yoy&&yoy.ly&&yoy.ly.avgSpendPerHead, 'pct', fmt.currency)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">陪同率</div>
             <div className="kpi-value" style={{color:'var(--info)'}}>{fmt.pct(kpis.companionRate)}</div>
             <div className="kpi-sub">陪同 ÷ 總來客</div>
+            {renderYoY(kpis.companionRate, yoy&&yoy.ly&&yoy.ly.companionRate, 'ppt', fmt.pct)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">甜點銷售數</div>
             <div className="kpi-value" style={{color:'var(--danger)'}}>{fmt.number(kpis.dessertCount)}</div>
             <div className="kpi-sub">甜點品項列數合計</div>
+            {renderYoY(kpis.dessertCount, yoy&&yoy.ly&&yoy.ly.dessertCount, 'pct', fmt.number)}
           </div>
           <div className="kpi-card">
             <div className="kpi-label">限定甜點營收佔比</div>
             <div className="kpi-value" style={{color:'#8B6A63'}}>{fmt.pct(kpis.limitedRevenueRatio)}</div>
             <div className="kpi-sub">限定甜點 {fmt.currency(kpis.limitedRevenue)}</div>
+            {renderYoY(kpis.limitedRevenueRatio, yoy&&yoy.ly&&yoy.ly.limitedRevenueRatio, 'ppt', fmt.pct)}
           </div>
         </div>
 
