@@ -193,7 +193,8 @@ function loadData(){
     s.onerror = () => { if(!done){ reject(new Error('無法載入 Sheet（多半是共用權限未開）')); if(s.parentNode) s.parentNode.removeChild(s); } };
     s.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`
           + `?sheet=${encodeURIComponent(SHEET_NAME)}&headers=1`
-          + `&tqx=responseHandler:${cb};out:json`;
+          + `&tqx=responseHandler:${cb};out:json`
+          + `&_cb=${Date.now()}`;   // 避開 gviz 欄位範圍快取
     document.body.appendChild(s);
     setTimeout(() => { if(!done) reject(new Error('讀取逾時，請確認共用權限與分頁名稱')); }, 15000);
   });
@@ -203,7 +204,9 @@ function loadData(){
 function parseTable(json){
   const cols = json.table.cols.map(c => (c.label || c.id || '').trim());
   const NUM = new Set(['含稅單價','每基準量','每基準單位單價']);
-  return json.table.rows.map(r => {
+  // 動態找「公司」欄:欄名含「公司」就算(公司 / 公司名稱 / 公司別 都認)
+  const coIdx = cols.findIndex(c => c && c.indexOf('公司') >= 0);
+  const rows = json.table.rows.map(r => {
     const o = {};
     r.c.forEach((cell, i) => {
       const col = cols[i];
@@ -211,9 +214,14 @@ function parseTable(json){
       // 數字欄取原始值;其餘(含日期)取格式化字串,日期才會是 2026/04/02 而非 Date 物件
       o[col] = NUM.has(col) ? cell.v : (cell.f != null ? cell.f : cell.v);
     });
-    if(!o['公司'] && o['公司名稱']) o['公司'] = o['公司名稱'];  // 兼容 Sheet 欄名「公司名稱」
+    // 公司欄:優先用動態偵測到的欄,再退回欄名兼容
+    if(coIdx >= 0 && r.c[coIdx]){ const cc = r.c[coIdx]; o['公司'] = (cc.f != null ? cc.f : cc.v); }
+    if(!o['公司'] && o['公司名稱']) o['公司'] = o['公司名稱'];
     return o;
   }).filter(r => r['季別']);
+  // debug:把偵測到的公司欄與公司清單印到 console(F12 可查)
+  console.log('[vendor] 公司欄索引:', coIdx, '| 欄名:', cols[coIdx], '| 公司清單:', [...new Set(rows.map(r=>r['公司']))]);
+  return rows;
 }
 
 // 長表 → 品項層級聚合（主鍵=供應商+貨號;無貨號用品名）
