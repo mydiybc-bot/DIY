@@ -113,16 +113,17 @@ var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"�
 var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,qmode:"品項用量",qperiod:"近4週",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
-  var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&sheet='+encodeURIComponent(sheetName);
-  return fetch(url).then(function(r){return r.text();}).then(function(t){
+  var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
+  var p=fetch(url).then(function(r){return r.text();}).then(function(t){
     var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
-    var cols=j.table.cols.map(function(c){return (c.label||c.id);});
-    return j.table.rows.map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
+    var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
+    return ((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
   }).catch(function(e){console.warn('gviz '+sheetName+' 失敗',e);return [];});
+  return Promise.race([p, new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
 }
 function toBool(x){return x===true||x==="TRUE"||x==="true"||x===1||x==="1";}
 
-async function bootstrap(){
+async function bootstrap(){ try {
   var res=await Promise.all([gviz('dim_sku'),gviz('dim_store_par'),gviz('agg_purchase'),gviz('agg_container'),gviz('dim_season'),gviz('dim_unitconv'),gviz('fact_inventory')]);
   var dSku=res[0],dPar=res[1],aP=res[2],aC=res[3],dS=res[4],dU=res[5],fInv=res[6];
   SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"])};}).filter(function(s){return s.id&&s.name;});
@@ -140,7 +141,11 @@ async function bootstrap(){
   ST.storeId=STORES[0].id;
   $("#storeSel").innerHTML=STORES.map(function(s){return '<option value="'+s.id+'">'+s.name+'</option>';}).join("");
   $("#upd").textContent="已更新";
-  render();
+  } catch(e){ console.warn("bootstrap 發生問題",e); }
+  if(!STORES.length){STORES=[{id:"1",name:"1號店"}];}
+  if(!ST.storeId)ST.storeId=STORES[0].id;
+  if(!$("#storeSel").options.length)$("#storeSel").innerHTML=STORES.map(function(s){return '<option value="'+s.id+'">'+s.name+'</option>';}).join("");
+  try{ render(); }catch(e2){ console.warn(e2); $("#view").innerHTML='<div class="card">載入發生問題，請重新整理頁面；若持續，回報我。</div>'; }
 }
 
 /* ===== 工具 ===== */
