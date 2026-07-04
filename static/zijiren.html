@@ -234,6 +234,39 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
     </div>
   </div>
 
+  <!-- 🍰 甜點分析（2026-07-04 新增） -->
+  <div class="section">
+    <div class="section-title">🍰 甜點分析 <span class="badge">🟢 GAS 每日自動</span> <span style="font-weight:400;font-size:12px;color:var(--muted)">以自己人會員實際 DIY 甜點品項分析，365 天口徑（首購留存圖為生涯口徑）</span></div>
+    <div class="grid-2" style="grid-template-columns:1fr">
+      <div class="chart-card">
+        <div class="chart-title">入坑款回購率 Top 20 <span class="badge">365 天｜買過人數 ≥ 門檻</span></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+          <label style="font-size:12px;color:var(--muted);white-space:nowrap">最低買過人數</label>
+          <input type="range" id="itemRepeatMinSlider" min="0" max="500" step="10" value="30" style="flex:1;min-width:140px" oninput="renderItemRepeatChart()">
+          <span class="badge" id="itemRepeatMinLabel">門檻 30｜符合 0 品項</span>
+        </div>
+        <canvas id="itemRepeatChart"></canvas>
+        <div id="itemRepeatNoData" class="no-data" style="display:none">資料載入中／暫無</div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">分層 × 品項熱力圖 Top 15 <span class="badge">365 天｜依買過人數合計排序｜每欄各自正規化上色</span></div>
+        <div class="table-wrapper">
+          <table id="itemTierTable">
+            <thead>
+              <tr><th>品項</th><th style="text-align:center">新客(1次)</th><th style="text-align:center">回頭客(2-3次)</th><th style="text-align:center">高頻客(4+次)</th></tr>
+            </thead>
+            <tbody id="itemTierTableBody"><tr><td colspan="4" class="no-data">資料載入中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">首購獲客款留存率 Top 20 <span class="badge">生涯口徑｜首購人數 ≥ 30</span></div>
+        <canvas id="itemFirstbuyChart"></canvas>
+        <div id="itemFirstbuyNoData" class="no-data" style="display:none">資料載入中／暫無</div>
+      </div>
+    </div>
+  </div>
+
   <!-- 跨店消費 -->
   <div class="section">
     <div class="section-title">🗺 跨店消費分析</div>
@@ -446,16 +479,20 @@ async function initLoad() {
   if (_rawCache) { applyRange(); return; }
   showLoading(true, '正在載入預聚合資料…');
   try {
-    const [aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026] = await Promise.all([
+    const [aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst] = await Promise.all([
       gvizSheetQuery('agg_store_kpi_365',   'SELECT *'),
       gvizSheetQuery('agg_store_freq_365',  'SELECT *'),
       gvizSheetQuery('agg_store_month',     'SELECT *'),
       gvizSheetQuery('agg_cross_365',       'SELECT *'),
       gvizSheetQuery('自己人各級別人數統計', 'SELECT *'),
       gvizSheetQuery('2025 各店新增自己人',  'SELECT *'),
-      gvizSheetQuery('2026 各店新增自己人',  'SELECT *')
+      gvizSheetQuery('2026 各店新增自己人',  'SELECT *'),
+      // 🍰 甜點分析（2026-07-04 新增）：3 表個別 .catch 容錯，失敗回 null，不拖累既有 7 表／整頁 Promise.all
+      gvizSheetQuery('agg_item_repeat_365', 'SELECT *').catch(() => null),
+      gvizSheetQuery('agg_item_tier_365',   'SELECT *').catch(() => null),
+      gvizSheetQuery('agg_item_firstbuy',   'SELECT *').catch(() => null)
     ]);
-    _rawCache = { aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026 };
+    _rawCache = { aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst };
 
     // 365 天視窗由 GAS 決定，前端不需重算；以今天為基準動態計算 ELAPSED_MONTHS_2026
     updateElapsedMonths(new Date());
@@ -874,6 +911,9 @@ function renderAll(data) {
   renderCrossChart(data);
   renderVisitsChart(data);
   renderTable(data);
+  renderItemRepeatChart();
+  renderItemTierHeatmap();
+  renderItemFirstbuyChart();
 }
 
 // ─── KPI ──────────────────────────────────────────────────────
@@ -1223,6 +1263,169 @@ function renderTable(data) {
       <td><span style="color:${repeatColor};font-weight:600">${s.repeatRate}%</span> <span style="font-size:12px;color:var(--muted)">${repeatStr}</span></td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--muted)">本期間無資料</td></tr>';
+}
+
+// ─── 🍰 甜點分析（2026-07-04 新增）─────────────────────────────
+function getItemRepeatData() {
+  if (!_rawCache || !_rawCache.qItemRepeat) return null;
+  const rows = parseRows(_rawCache.qItemRepeat);
+  if (!rows.length) return null;
+  return rows.map(r => ({
+    item:      r.c && r.c[0] && r.c[0].v != null ? String(r.c[0].v) : '',
+    buyers:    r.c && r.c[1] && r.c[1].v != null ? Number(r.c[1].v) : 0,
+    repeaters: r.c && r.c[2] && r.c[2].v != null ? Number(r.c[2].v) : 0,
+    rate:      r.c && r.c[3] && r.c[3].v != null ? parseFloat(r.c[3].v) * 100 : 0,
+    visits:    r.c && r.c[4] && r.c[4].v != null ? Number(r.c[4].v) : 0
+  })).filter(d => d.item);
+}
+
+function renderItemRepeatChart() {
+  const noDataEl = document.getElementById('itemRepeatNoData');
+  const canvasEl = document.getElementById('itemRepeatChart');
+  const all = getItemRepeatData();
+  if (!all || !all.length) {
+    if (noDataEl) { noDataEl.style.display = 'flex'; noDataEl.textContent = '資料載入中／暫無'; }
+    if (canvasEl) canvasEl.style.display = 'none';
+    return;
+  }
+  const min = Number(document.getElementById('itemRepeatMinSlider').value) || 0;
+  const passCount = all.filter(d => d.buyers >= min).length;
+  document.getElementById('itemRepeatMinLabel').textContent = `門檻 ${min}｜符合 ${passCount} 品項`;
+  const filtered = all.filter(d => d.buyers >= min).sort((a,b) => b.rate - a.rate).slice(0, 20);
+
+  if (!filtered.length) {
+    if (noDataEl) { noDataEl.style.display = 'flex'; noDataEl.textContent = '無符合門檻的品項'; }
+    if (canvasEl) canvasEl.style.display = 'none';
+    if (charts.itemRepeat) { charts.itemRepeat.destroy(); charts.itemRepeat = null; }
+    return;
+  }
+  if (noDataEl) noDataEl.style.display = 'none';
+  if (canvasEl) canvasEl.style.display = '';
+
+  if (charts.itemRepeat) charts.itemRepeat.destroy();
+  charts.itemRepeat = new Chart(canvasEl, {
+    type: 'bar',
+    data: {
+      labels: filtered.map(d => d.item),
+      datasets: [{ label: '回購率(%)', data: filtered.map(d => Math.round(d.rate*10)/10), backgroundColor: filtered.map((_,i)=>i===0?'#C4412F':'#C4412F99'), borderRadius: 5, borderSkipped: false }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          label: c => ` 回購率 ${c.raw}%`,
+          afterLabel: c => {
+            const d = filtered[c.dataIndex];
+            return `買過人數 ${d.buyers.toLocaleString()}｜回頭客數 ${d.repeaters.toLocaleString()}｜銷次 ${d.visits.toLocaleString()}`;
+          }
+        }}
+      },
+      scales: {
+        x: { grid:{color:'#F0D9D5'}, beginAtZero:true, ticks:{font:{size:12}, callback:v=>v+'%'} },
+        y: { grid:{display:false}, ticks:{font:{size:12}} }
+      }
+    }
+  });
+}
+
+function getItemTierData() {
+  if (!_rawCache || !_rawCache.qItemTier) return null;
+  const rows = parseRows(_rawCache.qItemTier);
+  if (!rows.length) return null;
+  const byItem = {};
+  rows.forEach(r => {
+    if (!r.c || !r.c[0] || r.c[0].v == null) return;
+    const item = String(r.c[0].v);
+    const tier = r.c[1] && r.c[1].v != null ? String(r.c[1].v) : '';
+    const cnt  = r.c[2] && r.c[2].v != null ? Number(r.c[2].v) : 0;
+    if (!byItem[item]) byItem[item] = { item, '新客':0, '回頭客':0, '高頻客':0, total:0 };
+    if (tier === '新客' || tier === '回頭客' || tier === '高頻客') { byItem[item][tier] = cnt; byItem[item].total += cnt; }
+  });
+  return Object.values(byItem);
+}
+
+function renderItemTierHeatmap() {
+  const tbody = document.getElementById('itemTierTableBody');
+  if (!tbody) return;
+  const data = getItemTierData();
+  if (!data || !data.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="no-data">資料載入中／暫無</td></tr>';
+    return;
+  }
+  const top15 = [...data].sort((a,b) => b.total - a.total).slice(0, 15);
+  const cols = ['新客','回頭客','高頻客'];
+  const maxByCol = {};
+  cols.forEach(c => { maxByCol[c] = Math.max(...top15.map(d => d[c] || 0), 1); });
+
+  tbody.innerHTML = top15.map(d => {
+    const cells = cols.map(c => {
+      const v = d[c] || 0;
+      const alpha = v > 0 ? (0.1 + 0.9 * v / maxByCol[c]) : 0;
+      return `<td style="text-align:center;background:rgba(196,65,47,${alpha.toFixed(2)});font-weight:${v>0?600:400}">${v.toLocaleString()}</td>`;
+    }).join('');
+    return `<tr><td>${d.item}</td>${cells}</tr>`;
+  }).join('') || '<tr><td colspan="4" class="no-data">資料載入中／暫無</td></tr>';
+}
+
+function getItemFirstbuyData() {
+  if (!_rawCache || !_rawCache.qItemFirst) return null;
+  const rows = parseRows(_rawCache.qItemFirst);
+  if (!rows.length) return null;
+  return rows.map(r => ({
+    item:        r.c && r.c[0] && r.c[0].v != null ? String(r.c[0].v) : '',
+    firstBuyers: r.c && r.c[1] && r.c[1].v != null ? Number(r.c[1].v) : 0,
+    retained:    r.c && r.c[2] && r.c[2].v != null ? Number(r.c[2].v) : 0,
+    rate:        r.c && r.c[3] && r.c[3].v != null ? parseFloat(r.c[3].v) * 100 : 0
+  })).filter(d => d.item);
+}
+
+function renderItemFirstbuyChart() {
+  const noDataEl = document.getElementById('itemFirstbuyNoData');
+  const canvasEl = document.getElementById('itemFirstbuyChart');
+  const all = getItemFirstbuyData();
+  if (!all || !all.length) {
+    if (noDataEl) { noDataEl.style.display = 'flex'; noDataEl.textContent = '資料載入中／暫無'; }
+    if (canvasEl) canvasEl.style.display = 'none';
+    return;
+  }
+  const filtered = all.filter(d => d.firstBuyers >= 30).sort((a,b) => b.rate - a.rate).slice(0, 20);
+  if (!filtered.length) {
+    if (noDataEl) { noDataEl.style.display = 'flex'; noDataEl.textContent = '無符合門檻的品項'; }
+    if (canvasEl) canvasEl.style.display = 'none';
+    if (charts.itemFirstbuy) { charts.itemFirstbuy.destroy(); charts.itemFirstbuy = null; }
+    return;
+  }
+  if (noDataEl) noDataEl.style.display = 'none';
+  if (canvasEl) canvasEl.style.display = '';
+
+  if (charts.itemFirstbuy) charts.itemFirstbuy.destroy();
+  charts.itemFirstbuy = new Chart(canvasEl, {
+    type: 'bar',
+    data: {
+      labels: filtered.map(d => d.item),
+      datasets: [{ label: '留存率(%)', data: filtered.map(d => Math.round(d.rate*10)/10), backgroundColor: filtered.map((_,i)=>i===0?'#4A9BB8':'#4A9BB899'), borderRadius: 5, borderSkipped: false }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          label: c => ` 留存率 ${c.raw}%`,
+          afterLabel: c => {
+            const d = filtered[c.dataIndex];
+            return `首購人數 ${d.firstBuyers.toLocaleString()}｜回訪人數 ${d.retained.toLocaleString()}`;
+          }
+        }}
+      },
+      scales: {
+        x: { grid:{color:'#F0D9D5'}, beginAtZero:true, ticks:{font:{size:12}, callback:v=>v+'%'} },
+        y: { grid:{display:false}, ticks:{font:{size:12}} }
+      }
+    }
+  });
 }
 
 // ─── ERROR DISPLAY ────────────────────────────────────────────
