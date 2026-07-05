@@ -85,6 +85,16 @@ PROFANITY_PATTERNS = (
     r"干(?!嘛|麻|話|線|部|事|活|員|道)",
 )
 
+# 員工說出這些口令(整句只有口令本身)時,跳過目前這題、直接進下一題。
+# 政策:維持嚴格訓練,10 分才放行;跳過是給「真的卡死」的人自救用,
+# 該題以目前已得的最佳分數計(從未答過即為 0 分),總結會標記(跳過)。
+SKIP_PHRASES = (
+    "跳過這題",
+    "跳過此題",
+    "略過這題",
+    "跳過",
+)
+
 
 def build_catalog(sections: list[dict]) -> dict[str, dict]:
     return {section["id"]: deepcopy(section) for section in sections}
@@ -410,7 +420,10 @@ def summarize_session(session: dict) -> str:
         )
 
     scores = [item["best_score"] for item in attempted]
-    score_lines = [f"Q{item['number']}：{item['best_score']} 分" for item in attempted]
+    score_lines = [
+        f"Q{item['number']}：{item['best_score']} 分" + ("（跳過）" if item.get("skipped") else "")
+        for item in attempted
+    ]
     average = sum(scores) / len(scores)
     return (
         f"本次練習主題：{title}\n"
@@ -429,7 +442,10 @@ def build_report_record(session: dict) -> dict:
         "section_id": session["section_id"],
         "section_title": session["section_title"],
         "question_count": len(attempted),
-        "scores": [f"Q{item['number']}:{item['best_score']}" for item in attempted],
+        "scores": [
+            f"Q{item['number']}:{item['best_score']}" + ("(跳過)" if item.get("skipped") else "")
+            for item in attempted
+        ],
         "average_score": average,
     }
 
@@ -451,12 +467,53 @@ def _ensure_scoreboard_item(session: dict, question: dict) -> dict:
     return item
 
 
+def _is_skip_command(clean_answer: str) -> bool:
+    """整句只有跳過口令本身才算,避免正常回答裡剛好含有『跳過』被誤判。"""
+    normalized = normalize_text(clean_answer)
+    return normalized in {normalize_text(phrase) for phrase in SKIP_PHRASES}
+
+
+def _skip_current_question(session: dict) -> dict:
+    question = session["questions"][session["current_index"]]
+    record = _ensure_scoreboard_item(session, question)
+    record["skipped"] = True
+    best = record["best_score"]
+
+    session["attempts"] = 0
+    session["last_result"] = None
+    session["current_index"] += 1
+
+    parts = [f"已幫你跳過 Q{question['number']}，這題先以目前最佳 {best} 分計，之後可以再回來練。"]
+
+    if session["current_index"] >= len(session["questions"]):
+        parts.append("本單元題目已完成。")
+        parts.append(summarize_session(session))
+        return {"done": True, "message": "\n".join(parts)}
+
+    next_question = session["questions"][session["current_index"]]
+    parts.append(build_question_text(next_question, session["rules"]))
+    return {
+        "done": False,
+        "message": "\n".join(parts),
+        "skipped": True,
+        "passed": False,
+        "revealed": False,
+        "score": best,
+        "coaching": "",
+        "question_no": next_question["number"],
+        "total_questions": len(session["questions"]),
+    }
+
+
 def respond(session: dict, answer: str) -> dict:
     clean_answer = answer.strip()
     rules = session["rules"]
 
     if clean_answer == rules["end_phrase"]:
         return {"done": True, "message": summarize_session(session)}
+
+    if _is_skip_command(clean_answer):
+        return _skip_current_question(session)
 
     question = session["questions"][session["current_index"]]
     session["attempts"] += 1
@@ -481,6 +538,7 @@ def respond(session: dict, answer: str) -> dict:
     ]
 
     if result["score"] < 10:
+        revealed = False
         if result["score_protected"]:
             parts.append("這次有依照建議補強，分數先不倒扣。")
         parts.append(result["coaching"])
@@ -490,10 +548,22 @@ def respond(session: dict, answer: str) -> dict:
         if retry_prompt and normalize_text(retry_prompt) not in normalize_text(coaching_text):
             parts.append(retry_prompt)
         if session["attempts"] >= rules["max_attempts_before_answer"]:
+            revealed = True
             parts.append(rules["reference_answer_intro"] + question["answer"])
             parts.append(rules["answer_reveal_prompt"])
+            parts.append("如果真的卡住，也可以直接說「跳過這題」，先往下一題。")
         message = "\n".join(part for part in parts if str(part).strip())
-        return {"done": False, "message": message}
+        return {
+            "done": False,
+            "message": message,
+            "passed": False,
+            "skipped": False,
+            "revealed": revealed,
+            "score": result["score"],
+            "coaching": result.get("coaching", ""),
+            "question_no": question["number"],
+            "total_questions": len(session["questions"]),
+        }
 
     session["attempts"] = 0
     session["last_result"] = None
@@ -509,4 +579,14 @@ def respond(session: dict, answer: str) -> dict:
     next_question = session["questions"][session["current_index"]]
     parts.append(build_question_text(next_question, rules))
     message = "\n".join(part for part in parts if str(part).strip())
-    return {"done": False, "message": message}
+    return {
+        "done": False,
+        "message": message,
+        "passed": True,
+        "skipped": False,
+        "revealed": False,
+        "score": result["score"],
+        "coaching": "",
+        "question_no": next_question["number"],
+        "total_questions": len(session["questions"]),
+    }

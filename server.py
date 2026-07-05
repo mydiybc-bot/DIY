@@ -253,12 +253,15 @@ class TrainingHandler(BaseHTTPRequestHandler):
 
             training = create_session(section_id, content, progress)
             session["training"] = training
-            question = build_question_text(training["questions"][training["current_index"]], training["rules"])
+            current_question = training["questions"][training["current_index"]]
+            question = build_question_text(current_question, training["rules"])
             self.send_json(
                 {
                     "ok": True,
                     "message": resume_note + question,
                     "title": training["section_title"],
+                    "question_no": current_question["number"],
+                    "total_questions": len(training["questions"]),
                 }
             )
             return
