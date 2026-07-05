@@ -109,7 +109,7 @@ function computeRow(sku,p){p=p||{};var onHand=num(p.onHand),dur=sku.cat==="器�
 var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},UNITCONV=[],CONTAINER={},DIRTY={};
 var SKU={}; // sku_id -> sku
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,needOnly:true,qmode:"品項用量",qperiod:"近4週",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,needOnly:true,qmode:"品項用量",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
@@ -120,6 +120,19 @@ function gviz(sheetName){
   }).catch(function(e){console.warn('gviz '+sheetName+' 失敗',e);return [];});
   return Promise.race([p, new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
 }
+function gvizQ(sheetName,tq){
+  var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName)+'&tq='+encodeURIComponent(tq);
+  var p=fetch(url).then(function(r){return r.text();}).then(function(t){
+    var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
+    var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
+    return ((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
+  }).catch(function(e){console.warn('gvizQ 失敗',e);return [];});
+  return Promise.race([p,new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
+}
+function isoWeekOf(d){var t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));var day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);var ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));var wk=Math.ceil((((t-ys)/86400000)+1)/7);return t.getUTCFullYear()+'-W'+(wk<10?'0':'')+wk;}
+function lastWeeks(n){var a=[],d=new Date();for(var i=0;i<n;i++){a.unshift(isoWeekOf(new Date(d.getTime()-i*7*86400000)));}return a;}
+function weekMonday(label){var m=label.match(/(\d{4})-W(\d{2})/);if(!m)return'';var y=+m[1],w=+m[2];var jan4=new Date(Date.UTC(y,0,4));var mon=new Date(jan4.getTime()-((jan4.getUTCDay()||7)-1)*86400000+(w-1)*7*86400000);return (mon.getUTCMonth()+1)+'/'+mon.getUTCDate();}
+var CMPRES=null;
 function toBool(x){return x===true||x==="TRUE"||x==="true"||x===1||x==="1";}
 
 async function bootstrap(){ try {
@@ -252,10 +265,45 @@ function orderText(store){var need=liveItems(store).map(function(s){return {s:s,
   Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def;lines.push("　"+s.name+(statusOf(store,s)==="即將上市"?"(新品)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit));});});return lines.join("\n");}
 
 /* ===== 查詢 ===== */
+function viewCompare(){
+  var wks=lastWeeks(26);
+  if(!ST.cmpFrom||wks.indexOf(ST.cmpFrom)<0)ST.cmpFrom=wks[wks.length-4];
+  if(!ST.cmpTo||wks.indexOf(ST.cmpTo)<0)ST.cmpTo=wks[wks.length-1];
+  var opts=SKUS.slice().sort(function(a,b){return (a.cat+a.name)<(b.cat+b.name)?-1:1;})
+    .map(function(s){return '<option value="'+s.id+'"'+(s.id===ST.cmpSku?' selected':'')+'>'+s.cat+'｜'+s.name+'</option>';}).join('');
+  function wsel(id,val){return '<select class="sm" id="'+id+'">'+wks.map(function(w){return '<option value="'+w+'"'+(w===val?' selected':'')+'>'+w.slice(5)+'週('+weekMonday(w)+'~)</option>';}).join('')+'</select>';}
+  var h='<div class="note">12 店同品項比較 · 週粒度（起訖含），資料滾動保留 26 週。器具/模具無耗用資料，備品(非BOM)僅估計不在此列。</div>';
+  h+='<div class="card"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select class="sm" id="cmpSku" style="max-width:230px"><option value="">— 選品項 —</option>'+opts+'</select>'
+    +wsel("cmpFrom",ST.cmpFrom)+'<span class="muted">→</span>'+wsel("cmpTo",ST.cmpTo)
+    +'<button class="btn" id="cmpRun">查詢</button></div></div>';
+  if(CMPRES&&CMPRES.sku===ST.cmpSku&&CMPRES.from===ST.cmpFrom&&CMPRES.to===ST.cmpTo){
+    var s=skuById(ST.cmpSku),rows=CMPRES.rows,tot=0,max=0,nw=CMPRES.nWeeks;
+    rows.forEach(function(r){tot+=r.qty;if(r.qty>max)max=r.qty;});
+    var avg=rows.length?tot/rows.length:0;
+    h+='<div class="card"><table><tr><th>店</th><th class="right">用量('+s.useUnit+')</th><th class="right">換算採購</th><th class="right">週平均</th><th class="right">vs 全店均</th><th style="width:30%"></th></tr>';
+    rows.sort(function(a,b){return b.qty-a.qty;}).forEach(function(r){
+      var pk=s.packQty>0?(r.qty/s.packQty):0, dv=avg>0?Math.round((r.qty/avg-1)*100):0;
+      h+='<tr><td><b>'+storeName(r.store)+'</b></td><td class="right"><b>'+fmt(r.qty)+'</b></td><td class="right">'+dec(pk)+' '+s.buyUnit+'</td><td class="right">'+fmt(r.qty/nw)+'</td>'
+        +'<td class="right" style="color:'+(dv>15?'#C0392B':dv<-15?'#2E7D32':'#55606E')+'">'+(dv>0?'+':'')+dv+'%</td>'
+        +'<td><div style="background:#DCEBDD;height:12px;border-radius:6px;width:'+(max?Math.round(r.qty/max*100):0)+'%"></div></td></tr>';});
+    h+='<tr><td><b>合計</b></td><td class="right"><b>'+fmt(tot)+'</b></td><td class="right">'+(s.packQty>0?dec(tot/s.packQty)+' '+s.buyUnit:'')+'</td><td class="right">'+fmt(tot/nw||0)+'</td><td></td><td></td></tr></table></div>';
+    if(!rows.length)h+='<div class="note">此期間無用量資料。</div>';
+  }else if(CMPRES==="loading"){h+='<div class="note">查詢中…</div>';}
+  return h;}
+function skuById(id){for(var i=0;i<SKUS.length;i++)if(SKUS[i].id===id)return SKUS[i];return {useUnit:"",buyUnit:"",packQty:0};}
+function runCompare(){var sk=ST.cmpSku;if(!sk){toast("請先選品項");return;}
+  CMPRES="loading";render();
+  gvizQ("agg_usage_week","select A,C,D where B='"+sk+"'").then(function(rs){
+    var f=ST.cmpFrom,t=ST.cmpTo,by={},wkset={};
+    rs.forEach(function(r){var w=String(r["週"]||"");if(w>=f&&w<=t){var st=String(r["店號"]);by[st]=(by[st]||0)+(+r["用量"]||0);wkset[w]=1;}});
+    var wksAll=lastWeeks(26),i1=wksAll.indexOf(f),i2=wksAll.indexOf(t),nW=(i1>=0&&i2>=i1)?(i2-i1+1):Object.keys(wkset).length||1;
+    CMPRES={sku:sk,from:f,to:t,nWeeks:nW,rows:Object.keys(by).filter(function(s){return s!=="13";}).map(function(s){return {store:s,qty:by[s]};})};
+    render();});}
 function viewQuery(){var store=ST.storeId,weeks={"上週":1,"近4週":4,"近8週":8}[ST.qperiod]||4;
   var html='<div class="note">門市：'+storeName(store)+'　·　期間用量（週平均）。資料來自每日 POS×BOM 預聚合。</div>';
-  html+='<div style="margin-bottom:6px"><span class="seg">'+["品項用量","容器用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
+  html+='<div style="margin-bottom:6px"><span class="seg">'+["品項用量","容器用量","跨店比較"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
   html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
+  if(ST.qmode==="跨店比較")return html+viewCompare();
   if(ST.qmode==="容器用量"){var cs=CONTAINER[store]||{};html+='<div class="card"><table><tr><th>容器</th><th class="right">週平均</th></tr>';
     Object.keys(cs).forEach(function(t){html+='<tr><td><b>'+t+'</b></td><td class="right"><b>'+fmt(cs[t].avg4)+'</b> 次/週</td></tr>';});if(!Object.keys(cs).length)html+='<tr><td colspan="2" class="muted">無資料</td></tr>';html+='</table></div>';return html;}
   html+=catChips();var rows=SKUS.filter(function(s){return ST.cat==="全部"||s.cat===ST.cat;}).map(function(s){var a=aggOf(store,s);return {s:s,avg:a.avg4,wk:a.week};}).filter(function(x){return x.avg>0||x.wk>0;}).sort(function(a,b){return b.avg-a.avg;});
@@ -311,6 +359,10 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-need]"),function(el){el.onclick=function(){ST.needOnly=el.dataset.need==="1";render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-qmode]"),function(el){el.onclick=function(){ST.qmode=el.dataset.qmode;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-qperiod]"),function(el){el.onclick=function(){ST.qperiod=el.dataset.qperiod;render();};});
+  var cs=$("#cmpSku");if(cs)cs.onchange=function(){ST.cmpSku=cs.value;};
+  var cf=$("#cmpFrom");if(cf)cf.onchange=function(){ST.cmpFrom=cf.value;};
+  var ct=$("#cmpTo");if(ct)ct.onchange=function(){ST.cmpTo=ct.value;};
+  var cr=$("#cmpRun");if(cr)cr.onclick=runCompare;
   Array.prototype.forEach.call(document.querySelectorAll(".why[data-why]"),function(el){el.onclick=function(){ST.exp[el.dataset.why]=!ST.exp[el.dataset.why];render();};});
   var tg=$('[data-toggleexcl]');if(tg)tg.onclick=function(){ST.showExcl=!ST.showExcl;render();};
   var sb=$('[data-season]');if(sb)sb.onclick=function(){ST.season=!ST.season;render();};
