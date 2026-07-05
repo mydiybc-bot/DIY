@@ -13,6 +13,7 @@ const messageInput = document.getElementById("message-input");
 const bubbleTemplate = document.getElementById("bubble-template");
 const voiceButton = document.getElementById("voice-button");
 const speakButton = document.getElementById("speak-button");
+const endPracticeButton = document.getElementById("end-practice-button");
 const micIndicator = document.getElementById("mic-indicator");
 const voiceStatus = document.getElementById("voice-status");
 const practiceTab = document.getElementById("practice-tab");
@@ -115,6 +116,8 @@ const FINISH_KEYWORDS = [
   "結束回答",
   "回答好了",
 ];
+// 記住上次登入的員工編號(不記密碼),門市共用平板可少打一次
+const LAST_EMPLOYEE_ID_KEY = "diybc_training_last_employee_id";
 
 const RULE_FIELDS = [
   { key: "max_attempts_before_answer", label: "幾次後公布答案", type: "number", group: "score", help: "員工答錯幾次後，教練直接公布標準答案。" },
@@ -144,6 +147,15 @@ const AUTH_FIELDS = [
 function updateSessionBanner(title, subtitle, roleLabel = null) {
   sessionTitle.textContent = title;
   sessionSubtitle.textContent = subtitle;
+}
+
+// 練習進度顯示：第 x／N 題(＋上一答得分)
+function updateProgressDisplay(questionNo, totalQuestions, lastScore = null) {
+  if (!questionNo || !totalQuestions) return;
+  const scorePart = (lastScore === null || typeof lastScore === "undefined")
+    ? ""
+    : `｜上一答 ${lastScore}/10 分`;
+  sessionSubtitle.textContent = `第 ${questionNo}／${totalQuestions} 題${scorePart}`;
 }
 
 function setVoiceStatus(text) {
@@ -224,13 +236,39 @@ function summarizeSpeechLabels(rawText, limit = 2) {
   return `${labels.slice(0, limit).join("、")}等重點`;
 }
 
-function buildCoachSpeechText(message, { autoListen = false } = {}) {
+function buildCoachSpeechText(message, { autoListen = false, meta = null } = {}) {
   const lines = message
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 
   const questionLine = lines.find((line) => /^Q\d+：/.test(line));
+
+  // 後端有回傳結構化欄位時，優先用它組語音：
+  // 讓員工「聽得到」分數與 AI 教練的具體指導，不用一直盯螢幕。
+  if (meta && !meta.done) {
+    if (meta.skipped) {
+      return questionLine ? `已跳過，下一題。${questionLine}` : "已跳過這題。";
+    }
+    if (meta.passed) {
+      return questionLine ? `這題通過。下一題。${questionLine}` : "這題通過。";
+    }
+    if (typeof meta.score === "number") {
+      const spokenParts = [`這次 ${meta.score} 分。`];
+      const coaching = (meta.coaching || "").trim().slice(0, 180);
+      if (coaching) {
+        spokenParts.push(coaching);
+      }
+      if (meta.revealed) {
+        spokenParts.push("參考答案已顯示在畫面上，可以照這個方向再說一次，真的卡住也可以說「跳過這題」。");
+      }
+      if (!coaching) {
+        spokenParts.push("請再回答一次。");
+      }
+      return spokenParts.join("");
+    }
+  }
+
   const passLine = lines.find((line) => line.includes("這題通過"));
   const missingLine = lines.find((line) => line.startsWith("請補上：") || line.startsWith("應該補上："));
   const profanityLine = lines.find((line) => line.includes("不能帶髒話"));
@@ -272,15 +310,31 @@ function buildCoachSpeechText(message, { autoListen = false } = {}) {
 }
 
 function refreshActionState() {
-  voiceButton.disabled = responsePending || !trainingActive;
+  // 主按鈕＝「說完了，送出」：只有正在收音時可按（按了立即送出，不用等靜音）。
+  // 結束練習改由 endPracticeButton 負責，避免員工講完話誤按大按鈕整場結束。
+  if (!trainingActive) {
+    voiceButton.textContent = "說完了，送出";
+    voiceButton.disabled = true;
+  } else if (isListening) {
+    voiceButton.textContent = "說完了，送出";
+    voiceButton.disabled = false;
+  } else if (responsePending) {
+    voiceButton.textContent = "教練評分中…";
+    voiceButton.disabled = true;
+  } else {
+    voiceButton.textContent = "等教練說完，會自動收音";
+    voiceButton.disabled = true;
+  }
   startButton.disabled = responsePending || isListening;
   speakButton.disabled = responsePending;
+  if (endPracticeButton) {
+    endPracticeButton.disabled = responsePending || !trainingActive;
+  }
 }
 
 function stopListeningUi() {
   isListening = false;
   voiceButton.classList.remove("listening");
-  voiceButton.textContent = "停止練習";
   if (micIndicator) micIndicator.classList.remove("recording");
   refreshActionState();
 }
@@ -451,7 +505,7 @@ function startSilenceMonitor(stream) {
       heardSpeech = true;
       if (!speechStartedAt) speechStartedAt = now;
       lastSpeechAt = now;
-      setVoiceStatus("教練正在聽你回答,可以慢慢講;說完停一下,或說「回答完成」即可送出。");
+      setVoiceStatus("教練正在聽你回答,可以慢慢講;說完停一下、按「說完了，送出」,或說「回答完成」。");
       return;
     }
 
@@ -583,9 +637,8 @@ async function startRecording() {
     startKeywordListener();
     isListening = true;
     voiceButton.classList.add("listening");
-    voiceButton.textContent = "停止練習";
     if (micIndicator) micIndicator.classList.add("recording");
-    setVoiceStatus("● 收音中…可以慢慢講,說完停一下或說「回答完成」就會送出。");
+    setVoiceStatus("● 收音中…可以慢慢講,說完按「說完了，送出」、停一下,或說「回答完成」。");
     refreshActionState();
   } catch (error) {
     releaseRecordingResources(false);
@@ -610,6 +663,28 @@ function stopRecording(discard = false) {
 
 function toggleExitButtons(_showPracticeExit = false, showAdminExit = false) {
   adminLogoutButton.classList.toggle("hidden", !showAdminExit);
+}
+
+function prefillLastEmployeeId() {
+  try {
+    const savedId = window.localStorage.getItem(LAST_EMPLOYEE_ID_KEY) || "";
+    const employeeIdInput = document.getElementById("employee-id");
+    if (savedId && employeeIdInput && !employeeIdInput.value) {
+      employeeIdInput.value = savedId;
+    }
+  } catch (_err) {
+    // localStorage 不可用時直接略過,不影響登入
+  }
+}
+
+function rememberEmployeeId(employeeId) {
+  try {
+    if (employeeId) {
+      window.localStorage.setItem(LAST_EMPLOYEE_ID_KEY, employeeId);
+    }
+  } catch (_err) {
+    // ignore
+  }
 }
 
 async function goToLoginPage() {
@@ -649,10 +724,11 @@ async function goToLoginPage() {
   reportsSummary.textContent = "尚未載入報告。";
   loginForm.reset();
   toggleLoginFields();
+  prefillLastEmployeeId();
   appPanel.classList.add("hidden");
   loginPanel.classList.remove("hidden");
   updateSessionBanner("準備開始今天的口語訓練", "選好單元後就能直接開口。", "員工練習");
-  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援开內錄音。");
+  setVoiceStatus(mediaReady ? "教練出題後會自動開始聽你回答。" : "這台裝置目前不支援站內錄音。");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -672,7 +748,7 @@ function resetPracticeHome(summaryMessage = "") {
   messageInput.value = "";
   chat.innerHTML = "";
   const homeMessage = summaryMessage
-    ? `本輾練習已結束，已返回首頁。\n\n${summaryMessage}\n\n請重新選擇練習單元並按下「開始本單元」。`
+    ? `本輪練習已結束，已返回首頁。\n\n${summaryMessage}\n\n請重新選擇練習單元並按下「開始本單元」。`
     : "請選擇一個訓練單元，然後按下「開始本單元」。";
   if (currentRole === "admin") {
     updateSessionBanner("管理與練習都已準備完成", "你可以切換後台管理，或回到練習模式開始測試。", "管理員");
@@ -751,8 +827,8 @@ function beginAutoListenAfterCoach() {
   }, 1200);
 }
 
-function deliverCoachMessage(message, { autoListen = false } = {}) {
-  const spokenText = buildCoachSpeechText(message, { autoListen });
+function deliverCoachMessage(message, { autoListen = false, meta = null } = {}) {
+  const spokenText = buildCoachSpeechText(message, { autoListen, meta });
   waitingForUserReply = autoListen;
   if (speechReady) {
     if (autoListen) {
@@ -1451,7 +1527,6 @@ function setupVoice() {
   mediaReady = Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
   if (!mediaReady) {
     setVoiceStatus("這台裝置目前不支援站內錄音，請改用新版 Chrome 或 Safari。");
-    voiceButton.textContent = "停止練習";
   } else if (!speechReady) {
     setVoiceStatus("可錄音作答，但這台裝置不支援自動朗讀教練回覆。");
   } else {
@@ -1519,8 +1594,9 @@ async function submitAudio(audioBlob, blobType) {
       resetPracticeHome(data.message);
       return;
     }
+    updateProgressDisplay(data.question_no, data.total_questions, data.score);
     awaitingCoachReply = false;
-    deliverCoachMessage(data.message, { autoListen: true });
+    deliverCoachMessage(data.message, { autoListen: true, meta: data });
   } catch (err) {
     removePendingCoachBubble();
     addBubble("coach", `這次沒有成功收到完整語音。\n原因：${err.message}\n請重新錄一次。`);
@@ -1567,8 +1643,9 @@ async function submitMessage(rawMessage) {
       resetPracticeHome(result.message);
       return;
     }
+    updateProgressDisplay(result.question_no, result.total_questions, result.score);
     awaitingCoachReply = false;
-    deliverCoachMessage(result.message, { autoListen: true });
+    deliverCoachMessage(result.message, { autoListen: true, meta: result });
   } catch (err) {
     removePendingCoachBubble();
     addBubble("coach", `目前暫時沒有收到教練回應。\n原因：${err.message}\n請再說一次。`);
@@ -1595,6 +1672,9 @@ loginForm.addEventListener("submit", async (event) => {
     const employee_id = new FormData(loginForm).get("employee_id");
     const login = await api("/api/login", { password, role, employee_id });
     currentRole = login.role;
+    if (currentRole === "employee") {
+      rememberEmployeeId(login.employee_id);
+    }
     loginPanel.classList.add("hidden");
     appPanel.classList.remove("hidden");
     toggleExitButtons(false, false);
@@ -1638,6 +1718,7 @@ startButton.addEventListener("click", async () => {
       "教練說完後會自動開始聽你回答。",
       currentRole === "admin" ? "管理員測試" : "員工練習",
     );
+    updateProgressDisplay(result.question_no, result.total_questions);
     addBubble("coach", result.message);
     deliverCoachMessage(result.message, { autoListen: true });
   } catch (err) {
@@ -1661,7 +1742,7 @@ async function stopPracticeSession() {
     resetPracticeHome(result.message);
   } catch (err) {
     removePendingCoachBubble();
-    addBubble("coach", `目前無法結束這輾練習。\n原因：${err.message}`);
+    addBubble("coach", `目前無法結束這輪練習。\n原因：${err.message}`);
     setVoiceStatus("目前無法結束練習，請稍後再試一次。");
     showError(appPanel, err.message);
   } finally {
@@ -1669,7 +1750,24 @@ async function stopPracticeSession() {
   }
 }
 
-voiceButton.addEventListener("click", stopPracticeSession);
+// 大按鈕＝提前送出這次回答(不用等 5 秒靜音);還沒開口時按會先提醒。
+voiceButton.addEventListener("click", () => {
+  if (!isListening) return;
+  if (!heardSpeech) {
+    setVoiceStatus("還沒聽到你的聲音，請先開口回答，說完再按「說完了，送出」。");
+    return;
+  }
+  stopRecording(false);
+});
+
+// 結束練習改為獨立按鈕＋確認,避免誤觸直接斷練
+if (endPracticeButton) {
+  endPracticeButton.addEventListener("click", async () => {
+    if (!trainingActive || responsePending) return;
+    if (!window.confirm("確定要結束本輪練習嗎？結束後會直接產生總結。")) return;
+    await stopPracticeSession();
+  });
+}
 
 speakButton.addEventListener("click", async () => {
   await goToLoginPage();
@@ -1774,6 +1872,7 @@ window.addEventListener("pageshow", () => {
 
 setupVoice();
 toggleLoginFields();
+prefillLastEmployeeId();
 refreshActionState();
 
 // ---- 後台友善化：搜尋、密碼顯示、未存提醒 ----
