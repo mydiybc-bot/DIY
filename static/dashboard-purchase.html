@@ -77,7 +77,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="h-top"><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:11px"></span><a href="hub.html" style="color:#fff;text-decoration:none;font-size:13px;font-weight:600;border:1px solid rgba(255,255,255,.4);border-radius:14px;padding:4px 12px;white-space:nowrap">⬅ 回首頁</a></div>
+    <div class="h-top"><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:11px"></span></div>
     <div class="selrow">
       <select id="roleSel"><option value="店長">店長</option><option value="總部">總部</option><option value="經營者">經營者</option></select>
       <select id="storeSel"></select>
@@ -280,8 +280,12 @@ function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
   html+='</tr></table></div>'+(ed?'<div class="toolbar"><button class="btn" id="saveSeason">儲存季節指數</button></div>':'')+'<div class="note">本月 '+sm+'月（'+(SIDX[sm]||1)+'）→ 備貨 '+tm+'月（'+(SIDX[tm]||1)+'）＝×'+((SIDX[tm]||1)/(SIDX[sm]||1)).toFixed(2)+'。</div>';return html;}
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
-function viewUnitConv(){var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note">同食材多單位→基準單位，GAS 展開 BOM 前統一換算。編輯請於 dim_unitconv 分頁直接維護。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th></tr>';
-  UNITCONV.forEach(function(u){html+='<tr><td>'+u.item+'</td><td>1 '+u.unit+'</td><td><b>'+u.amt+'</b> '+u.base+'</td></tr>';});if(!UNITCONV.length)html+='<tr><td colspan="3" class="muted">無資料</td></tr>';html+='</table></div>';return html;}
+function viewUnitConv(){var ed=ST.role==="總部";
+  var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note">同食材多單位→基準單位，GAS 展開 BOM 前統一換算。改「＝基準量」或於底部新增，按「儲存」寫回 dim_unitconv；隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th></tr>';
+  UNITCONV.forEach(function(u,i){html+='<tr><td>'+u.item+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td></tr>';});
+  if(!UNITCONV.length)html+='<tr><td colspan="4" class="muted">無資料</td></tr>';html+='</table></div>';
+  if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">新增換算（例：品項「鹹蛋黃」單位「包」換算量 45 基準「g」）</div><div style="display:flex;gap:6px;flex-wrap:wrap"><input class="sm" style="width:150px" placeholder="適用品項或（通用）" id="cvItem"><input class="sm" style="width:64px" placeholder="單位" id="cvUnit"><input class="sm" style="width:80px" type="number" step="0.01" placeholder="換算量" id="cvAmt"><input class="sm" style="width:80px" placeholder="基準單位" id="cvBase" value="g"></div></div><div class="toolbar"><button class="btn" id="saveConv">儲存單位對照</button></div>';
+  return html;}
 
 /* ===== 主檔（總部，唯讀；編輯走 Sheet）===== */
 function viewMaster(){var html='<div class="toolbar"><span class="lock">🔒 主檔 dim_sku（總部）</span></div><div class="note">品項定義全店共用。新增/改名/改採購單位請於 dim_sku 分頁維護；改完隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>品名</th><th>類別</th><th>廠商</th><th>採購單位</th><th>內容量</th><th>單價</th></tr>';
@@ -325,6 +329,12 @@ function wire(){
   // 季節
   Array.prototype.forEach.call(document.querySelectorAll("[data-si]"),function(el){el.onchange=function(){SIDX[+el.dataset.si]=+el.value;};});
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});toast("已送出季節指數");};
+  // 單位對照
+  Array.prototype.forEach.call(document.querySelectorAll("[data-cvi]"),function(el){el.onchange=function(){var u=UNITCONV[+el.dataset.cvi];u.amt=+el.value;u._dirty=1;};});
+  var sc=$("#saveConv");if(sc)sc.onclick=function(){var n=0;UNITCONV.forEach(function(u){if(u._dirty){post({type:"conv",item:u.item,unit:u.unit,base:u.base,amt:u.amt},true);delete u._dirty;n++;}});
+    var it=($("#cvItem").value||"").trim(),un=($("#cvUnit").value||"").trim(),am=+$("#cvAmt").value,ba=($("#cvBase").value||"g").trim();
+    if(it&&un&&am>0){post({type:"conv",item:it,unit:un,base:ba,amt:am},true);UNITCONV.push({item:it,unit:un,base:ba,amt:am});n++;}
+    toast(n?("已送出 "+n+" 筆換算"):"沒有變更");render();};
   // 訂貨單
   Array.prototype.forEach.call(document.querySelectorAll("[data-off]"),function(el){el.onchange=function(){ST.orderOff[el.dataset.off]=!el.checked;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-oq]"),function(el){el.onchange=function(){ST.orderEdit[el.dataset.oq]=+el.value;render();};});
