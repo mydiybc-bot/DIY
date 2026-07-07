@@ -60,6 +60,10 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
 .mx td.g{background:var(--grn-f);color:var(--grn-t)}
 .mx td.na{color:#B8A49E}
 .mx td small{display:block;font-size:12px;font-weight:600;opacity:.8}
+.mx tr.avgrow td{background:#FBF1EE;font-weight:800;border-top:2px solid #E0C9C2}
+.mx tr.avgrow td.store{color:var(--primary-dark)}
+.mx tr.avgrow.all td{background:#F6E8E4}
+.zk-hint{font-size:12px;color:var(--muted);align-self:center;font-weight:600}
 /* agenda */
 .agenda-item{padding:9px 4px;border-bottom:1px dashed var(--border);font-size:14px;line-height:1.7}
 .agenda-item:last-child{border-bottom:none}
@@ -70,11 +74,11 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
 /* thresholds */
 #thPanel{display:none}
 #thPanel.open{display:block}
-.thgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 18px}
-.throw{display:flex;align-items:center;gap:6px;font-size:13px}
-.throw .nm{flex:0 0 92px;font-weight:700}
+.thgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px 16px}
+.throw{display:flex;align-items:center;gap:7px;font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:#FFFDFC;white-space:nowrap}
+.throw .nm{flex:0 0 80px;font-weight:800}
 .throw input{width:64px;font-family:inherit;font-size:13px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:center}
-.throw .d{font-size:12px;color:var(--muted)}
+.throw .d{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
 .thbtns{margin-top:12px;display:flex;gap:10px}
 .thbtns button{font-family:inherit;font-size:13px;font-weight:700;padding:7px 16px;border-radius:8px;border:1px solid var(--border);background:var(--card);cursor:pointer}
 .thbtns .save{background:var(--primary);border-color:var(--primary);color:#fff}
@@ -140,6 +144,7 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
   <button class="zk" data-z="北二區">北二區 7·11</button>
   <button class="zk" data-z="北三區">北三區 9·10</button>
   <button class="zk" data-z="中南區">中南區 1·2·5·6·12</button>
+  <span class="zk-hint">區域可複選（如北一＋北二），再點一次取消</span>
 </div>
 
 <div class="panel" id="thPanel">
@@ -152,7 +157,7 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
 </div>
 
 <div class="panel" id="mxPanel" style="display:none">
-  <h2>KPI 燈號矩陣<span class="note">欄位標題可點入來源儀表板；滑鼠停留看計算明細；綠燈不進會議</span></h2>
+  <h2>KPI 燈號矩陣<span class="note">欄位標題可點入來源儀表板；滑鼠停留看計算明細；綠燈不進會議；平均列為加權平均（店損益、新增會員取每店平均）</span></h2>
   <table class="mx"><thead id="mxHead"></thead><tbody id="mxBody"></tbody></table>
 </div>
 
@@ -272,7 +277,10 @@ function rocAdd(ym,delta){ let y=Math.floor(ym/100), m=ym%100, t=y*12+(m-1)+delt
 function rocLbl(ym){ return Math.floor(ym/100)+'/'+String(ym%100).padStart(2,'0')+'（'+rocToWest(ym)+'）'; }
 
 /* ═════════ 全域狀態 ═════════ */
-let AVAILABLE_YMS=[], SEL_YM=null, SIGN_MAP={}, RAW={}, SRC={}, RESULT={}, ZONE_FILTER='ALL';
+let AVAILABLE_YMS=[], SEL_YM=null, SIGN_MAP={}, RAW={}, SRC={}, RESULT={};
+let ZONE_SEL=new Set();   /* 空=全部；可複選（北一＋北二合併管理情境），存本機 */
+try{ ZONE_SEL=new Set(JSON.parse(localStorage.getItem('mr_zones_v1')||'[]')); }catch(_){}
+function zoneIncluded(zn){ return ZONE_SEL.size===0 || ZONE_SEL.has(zn); }
 const ALL_IDS = STORES.map(s=>s.id).join(',');
 
 /* ═════════ 資料載入 ═════════ */
@@ -455,8 +463,52 @@ function compute(wYm, year, lyYm){
     const rv=revAgg[sid];
     o.neg = rv?{v:rv.neg/rv.n*100, tip:'當月 '+rv.n+' 則｜≤4星 '+rv.neg+' 則｜平均 '+(rv.sum/rv.n).toFixed(2)+' 星'}:{v:(SRC.reviews==='ok'?0:null), tip:SRC.reviews==='ok'?'當月無新評論（0 則）':'評論表讀取失敗'};
     if(rv===undefined&&SRC.reviews==='ok'){ o.neg.v=null; o.neg.tip='當月無新評論'; }
+    /* 平均列用的原始元件 */
+    o._raw={ p, pl, mBud:(bud[sid]&&bud[sid][wYm])?bud[sid][wYm]:0, pc:pc||null, py:py||null, sc:sc||null,
+             nm:(SRC.zjNew==='ok'&&nmMap[sid]!==undefined)?nmMap[sid]:null, tgt,
+             rep:repMap[sid]||null, rv:rv||null };
     RESULT.stores[sid]=o;
   });
+}
+
+/* ═════════ 平均列（加權；店損益/新增會員取每店平均） ═════════ */
+function aggKpis(ids){
+  const R=ids.map(i=>RESULT.stores[i]&&RESULT.stores[i]._raw).filter(Boolean);
+  const sum=(arr,f)=>arr.reduce((s,r)=>s+f(r),0);
+  const o={};
+  const wp=R.filter(r=>r.p);
+  if(wp.length){
+    const rev=sum(wp,r=>r.p.rev), food=sum(wp,r=>r.p.food), hr=sum(wp,r=>r.p.hr), net=sum(wp,r=>r.p.net);
+    o.net={v:net/1000/wp.length, tip:wp.length+' 店損益合計 '+wan(net)+' ÷ 店數（每店平均）'};
+    o.gm ={v:rev>0?(rev-food)/rev*100:null, tip:'加權：Σ(營收−食材)÷Σ營收（'+wp.length+' 店）'};
+    o.hr ={v:rev>0?hr/rev*100:null, tip:'加權：Σ人事÷Σ營收（'+wp.length+' 店）'};
+    const wb=wp.filter(r=>r.mBud>0), revB=sum(wb,r=>r.p.rev), budS=sum(wb,r=>r.mBud);
+    o.ach={v:budS>0?revB/budS*100:null, tip:'加權：Σ實際 '+wan(revB)+' ÷ Σ預算 '+wan(budS)};
+    const wy=wp.filter(r=>r.pl&&r.pl.rev>0), rc=sum(wy,r=>r.p.rev), rl=sum(wy,r=>r.pl.rev);
+    o.yoy={v:rl>0?(rc-rl)/rl*100:null, tip:'加權：Σ本月÷Σ去年同月（'+wy.length+' 店）'};
+  }else{ o.net=o.gm=o.hr=o.ach=o.yoy={v:null,tip:'無 P&L 資料'}; }
+  const ws=R.filter(r=>r.pc&&r.pc.hc>0), pr=sum(ws,r=>r.pc.rev), ph=sum(ws,r=>r.pc.hc);
+  o.ticket= ph>0?{v:pr/ph, tip:'加權：Σ營收÷Σ來客（'+ws.length+' 店）'}:{v:null,tip:'無資料'};
+  const wc=ws.filter(r=>r.py&&r.py.hc>0), hc=sum(wc,r=>r.pc.hc), hl=sum(wc,r=>r.py.hc);
+  o.cyoy= hl>0?{v:(hc-hl)/hl*100, tip:'加權：Σ本月來客÷Σ去年（'+wc.length+' 店）'}:{v:null,tip:'無資料'};
+  const wh=R.filter(r=>r.sc&&r.sc.hrs>0), sr=sum(wh,r=>r.sc.rev), sh=sum(wh,r=>r.sc.hrs);
+  o.rph= sh>0?{v:sr/sh, tip:'加權：Σ淨營收÷Σ工時（'+wh.length+' 店）'}:{v:null,tip:'無資料'};
+  const wn=R.filter(r=>r.nm!==null), nmS=sum(wn,r=>r.nm), tgS=sum(wn,r=>r.tgt);
+  o.nm= wn.length?{v:nmS/wn.length, tgt:tgS/wn.length, tip:'每店平均新增 vs 平均月目標（'+wn.length+' 店）'}:{v:null,tgt:0,tip:'無資料'};
+  const wr=R.filter(r=>r.rep), rp=sum(wr,r=>r.rep.repeated), ra=sum(wr,r=>r.rep.active);
+  o.rep= ra>0?{v:rp/ra*100, tip:'加權：Σ回頭÷Σ現有會員（'+wr.length+' 店）'}:{v:null,tip:'無資料'};
+  const wv=R.filter(r=>r.rv), vn=sum(wv,r=>r.rv.n), vg=sum(wv,r=>r.rv.neg);
+  o.neg= vn>0?{v:vg/vn*100, tip:'加權：Σ負評÷Σ評論（'+wv.length+' 店，共 '+vn+' 則）'}:{v:null,tip:'當月無評論'};
+  return o;
+}
+function avgRowHtml(o,label,extra){
+  let h='<tr class="avgrow'+(extra?' '+extra:'')+'"><td class="store">'+label+'</td>';
+  KPIS.forEach(k=>{
+    const cell=o[k.key], lt=light(k,cell);
+    const cls=lt==='info'?'':(lt==='na'?'na':lt);
+    h+='<td class="'+cls+'" title="'+esc((cell&&cell.tip)||'')+'">'+fmtKpi(k,cell)+'</td>';
+  });
+  return h+'</tr>';
 }
 
 /* ═════════ 燈號 ═════════ */
@@ -508,9 +560,10 @@ function renderMatrix(){
   head.innerHTML='<tr><th style="text-align:left">店</th>'+KPIS.map(k=>
     '<th><a href="'+k.link+'" title="開啟來源儀表板">'+k.name+'</a><span class="u">'+k.unit+'</span></th>').join('')+'</tr>';
   const body=document.getElementById('mxBody');
-  let html='';
+  let html=''; const selIds=[];
   ZONES.forEach(([zn,ids])=>{
-    if(ZONE_FILTER!=='ALL'&&ZONE_FILTER!==zn) return;
+    if(!zoneIncluded(zn)) return;
+    selIds.push(...ids);
     html+='<tr class="zrow"><td colspan="'+(KPIS.length+1)+'">'+zn+'</td></tr>';
     ids.forEach(sid=>{
       const st=STORES.find(s=>s.id===sid), o=RESULT.stores[sid]||{};
@@ -522,13 +575,16 @@ function renderMatrix(){
       });
       html+='</tr>';
     });
+    html+=avgRowHtml(aggKpis(ids),'▸ '+zn+'平均');
   });
+  if(ZONE_SEL.size>=2) html+=avgRowHtml(aggKpis(selIds),'▸ 選取區平均（'+selIds.length+'店）');
+  html+=avgRowHtml(aggKpis(STORES.map(s=>s.id)),'▸ 全店平均（12店）','all');
   body.innerHTML=html;
 }
 function renderSummaryAgenda(){
   let nr=0,ny=0,ng=0; const items=[];
   ZONES.forEach(([zn,ids])=>{
-    if(ZONE_FILTER!=='ALL'&&ZONE_FILTER!==zn) return;
+    if(!zoneIncluded(zn)) return;
     ids.forEach(sid=>{
       const st=STORES.find(s=>s.id===sid), o=RESULT.stores[sid]||{}, tags=[];
       KPIS.forEach(k=>{
@@ -562,9 +618,9 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 
 /* ═════════ 閾值面板 ═════════ */
 const TH_DESC={
-  ach:'％：低於紅界=🔴，低於黃界=🟡，其餘🟢', yoy:'％：同左', net:'千元：同左', gm:'％：同左',
-  hr:'％：高於紅界=🔴，高於黃界=🟡，其餘🟢', cyoy:'％：低於紅界=🔴', rph:'元：低於紅界=🔴',
-  nm:'％月目標：達成率低於紅界=🔴', rep:'％：低於紅界=🔴', neg:'％：高於紅界=🔴'
+  ach:'%｜＜紅🔴 ＜黃🟡 其餘🟢', yoy:'%｜＜紅🔴 ＜黃🟡 其餘🟢', net:'千元｜＜紅🔴 ＜黃🟡',
+  gm:'%｜＜紅🔴 ＜黃🟡 其餘🟢', hr:'%｜＞紅🔴 ＞黃🟡 其餘🟢', cyoy:'%｜＜紅🔴 ＜黃🟡',
+  rph:'元｜＜紅🔴 ＜黃🟡 其餘🟢', nm:'對月目標%｜＜紅🔴 ＜黃🟡', rep:'%｜＜紅🔴 ＜黃🟡', neg:'%｜＞紅🔴 ＞黃🟡'
 };
 function buildThPanel(){
   const g=document.getElementById('thGrid');
@@ -604,13 +660,25 @@ function stepMonth(d){
   if(i+d<0||i+d>=yms.length) return;
   SEL_YM=yms[i+d]; buildMonthSel(); loadMonth();
 }
+function syncZoneBtns(){
+  document.querySelectorAll('.zk').forEach(b=>{
+    const z=b.dataset.z;
+    b.classList.toggle('on', z==='ALL' ? ZONE_SEL.size===0 : ZONE_SEL.has(z));
+  });
+}
 document.querySelectorAll('.zk').forEach(b=>{
   b.onclick=()=>{
-    document.querySelectorAll('.zk').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); ZONE_FILTER=b.dataset.z;
-    renderMatrix(); renderSummaryAgenda();
+    const z=b.dataset.z;
+    if(z==='ALL') ZONE_SEL.clear();
+    else{
+      ZONE_SEL.has(z)?ZONE_SEL.delete(z):ZONE_SEL.add(z);
+      if(ZONE_SEL.size===ZONES.length) ZONE_SEL.clear();  /* 全選=全部 */
+    }
+    try{ localStorage.setItem('mr_zones_v1',JSON.stringify([...ZONE_SEL])); }catch(_){}
+    syncZoneBtns(); renderMatrix(); renderSummaryAgenda();
   };
 });
+syncZoneBtns();
 document.getElementById('btnCopy').onclick=()=>{
   let txt='【月會討論清單】'+rocLbl(SEL_YM)+'\n';
   document.querySelectorAll('.agenda-item').forEach(d=>{ txt+=d.textContent.trim()+'\n'; });
