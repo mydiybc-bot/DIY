@@ -142,6 +142,15 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
   <button class="zk" data-z="中南區">中南區 1·2·5·6·12</button>
 </div>
 
+<div class="panel" id="thPanel">
+  <h2>⚙️ 燈號閾值設定<span class="note">改完按儲存立即重算；只存在這台裝置的瀏覽器</span></h2>
+  <div class="thgrid" id="thGrid"></div>
+  <div class="thbtns">
+    <button class="save" id="thSave">儲存並重算</button>
+    <button id="thReset">回復預設值</button>
+  </div>
+</div>
+
 <div class="panel" id="mxPanel" style="display:none">
   <h2>KPI 燈號矩陣<span class="note">欄位標題可點入來源儀表板；滑鼠停留看計算明細；綠燈不進會議</span></h2>
   <table class="mx"><thead id="mxHead"></thead><tbody id="mxBody"></tbody></table>
@@ -150,15 +159,6 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
 <div class="panel" id="agPanel" style="display:none">
   <h2>會議討論清單（自動彙整紅黃燈）<button class="copybtn" id="btnCopy">📋 複製清單</button></h2>
   <div id="agenda"></div>
-</div>
-
-<div class="panel" id="thPanel">
-  <h2>⚙️ 燈號閾值設定<span class="note">改完按儲存立即重算；只存在這台裝置的瀏覽器</span></h2>
-  <div class="thgrid" id="thGrid"></div>
-  <div class="thbtns">
-    <button class="save" id="thSave">儲存並重算</button>
-    <button id="thReset">回復預設值</button>
-  </div>
 </div>
 
 <div class="foot">
@@ -192,7 +192,7 @@ const HR_EXCLUDE_CODES = ['C008','C009'];   /* 與 dashboard-pnl.html 一致 */
 /* KPI 定義：dir=high(越高越好) / low(越低越好) / target(對月目標) / info(不亮燈) */
 const KPI_DEFAULT_TH = {
   ach:{red:90,yellow:100}, yoy:{red:-5,yellow:0}, net:{red:-50,yellow:0},
-  gm:{red:60,yellow:65}, hr:{red:32,yellow:28}, cyoy:{red:-5,yellow:0},
+  gm:{red:80,yellow:83}, hr:{red:32,yellow:28}, cyoy:{red:-5,yellow:0},
   rph:{red:950,yellow:1100}, nm:{red:70,yellow:100}, rep:{red:30,yellow:40}, neg:{red:20,yellow:10}
 };
 const KPIS = [
@@ -239,7 +239,7 @@ function jsonp(base, params, timeoutMs){
     document.body.appendChild(s);
   });
 }
-function gvizJsonp(sheetId, sheetName, timeoutMs){
+function gvizJsonp(sheetId, sheetName, timeoutMs, tq){
   return new Promise((resolve,reject)=>{
     const cb='__gviz'+(++_jid)+'_'+Math.random().toString(36).slice(2);
     let done=false;
@@ -247,6 +247,7 @@ function gvizJsonp(sheetId, sheetName, timeoutMs){
     window[cb]=json=>{ done=true; delete window[cb]; if(s.parentNode)s.parentNode.removeChild(s); resolve(json); };
     s.onerror=()=>{ if(!done){ delete window[cb]; if(s.parentNode)s.parentNode.removeChild(s); reject(new Error('Sheet 無法載入')); } };
     s.src='https://docs.google.com/spreadsheets/d/'+sheetId+'/gviz/tq?sheet='+encodeURIComponent(sheetName)
+        +(tq?'&tq='+encodeURIComponent(tq):'')
         +'&tqx=responseHandler:'+cb+';out:json&_cb='+Date.now();
     document.body.appendChild(s);
     setTimeout(()=>{ if(!done) reject(new Error('Sheet 讀取逾時')); }, timeoutMs||20000);
@@ -296,7 +297,7 @@ async function initApp(){
     pos:    jsonp(POS_API,{},120000).then(r=>{ RAW.pos=r; }),
     sched:  jsonp(SCHED_API,{action:'getWeekKpiData'},60000).then(r=>{ RAW.sched=r; }),
     zjKpi:  gvizJsonp(ZJ_SHEET,'agg_store_kpi_365').then(r=>{ RAW.zjKpi=r; }),
-    reviews:gvizJsonp(REV_SHEET,'工作表1',30000).then(r=>{ RAW.reviews=r; })
+    reviews:gvizJsonp(REV_SHEET,'工作表1',30000,'SELECT A, G, H WHERE A IS NOT NULL').then(r=>{ RAW.reviews=r; })
   };
   const keys=Object.keys(jobs);
   const rs=await Promise.allSettled(keys.map(k=>jobs[k]));
@@ -575,7 +576,7 @@ function buildThPanel(){
       +'<span class="d">'+TH_DESC[k.key]+'</span></div>';
   }).join('');
 }
-document.getElementById('btnTh').onclick=()=>{ buildThPanel(); document.getElementById('thPanel').classList.toggle('open'); };
+document.getElementById('btnTh').onclick=()=>{ buildThPanel(); const p=document.getElementById('thPanel'); p.classList.toggle('open'); if(p.classList.contains('open')) p.scrollIntoView({behavior:'smooth',block:'nearest'}); };
 document.getElementById('thSave').onclick=()=>{
   KPIS.filter(k=>k.dir!=='info').forEach(k=>{
     TH[k.key]={red:Number(document.getElementById('th_'+k.key+'_r').value), yellow:Number(document.getElementById('th_'+k.key+'_y').value)};
