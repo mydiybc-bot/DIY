@@ -39,6 +39,15 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .store-chip { font-size: 11px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--border); background: white; color: var(--muted); cursor: pointer; white-space: nowrap; transition: all .12s; font-family: inherit; line-height: 1.4; }
 .store-chip:hover { border-color: var(--primary-light); color: var(--primary); }
 .store-chip.active { background: var(--primary); color: white; border-color: var(--primary); font-weight: 600; }
+.filter-group-col { align-items: flex-start; }
+.store-col { display: flex; flex-direction: column; gap: 6px; }
+.quick-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.quick-chip { font-size: 12px; padding: 4px 11px; border-radius: 14px; border: 1px solid var(--blue); background: white; color: var(--blue); cursor: pointer; white-space: nowrap; font-family: inherit; font-weight: 600; line-height: 1.4; transition: all .12s; }
+.quick-chip:hover { background: var(--blue); color: white; }
+.quick-chip-zone { border-color: var(--accent); color: #B5790F; }
+.quick-chip-zone:hover { background: var(--accent); color: white; }
+.quick-chip-zone.zone-active { background: var(--accent); color: white; border-color: var(--accent); }
+.quick-sep { width: 1px; height: 15px; background: var(--border); display: inline-block; margin: 0 2px; }
 .period-sep { font-size: 12px; color: var(--muted); }
 .clear-btn { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); line-height: 1; transition: all .12s; }
 .clear-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
@@ -105,16 +114,34 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 
 <div class="filter-bar">
 <div class="filter-label">🔍 篩選</div>
-<div class="filter-group">
+<div class="filter-group filter-group-col">
 <label>門市</label>
+<div class="store-col">
+<div class="quick-chips">
+<button class="quick-chip" onclick="selectAllStores()">全部店</button>
+<span class="quick-sep"></span>
+<span id="zone-quick-chips"></span>
+</div>
 <div class="store-chips" id="f-store-chips"></div>
+</div>
 <button class="clear-btn" onclick="clearStoreChips()" title="清除門市">✕</button>
 </div>
-<div class="filter-group">
+<div class="filter-group filter-group-col">
 <label>期間</label>
+<div class="store-col">
+<div class="quick-chips">
+<button class="quick-chip" onclick="periodQuick('3m')">近3月</button>
+<button class="quick-chip" onclick="periodQuick('6m')">近6月</button>
+<button class="quick-chip" onclick="periodQuick('year')">今年</button>
+<button class="quick-chip" onclick="periodQuick('last')">去年</button>
+<button class="quick-chip" onclick="periodQuick('all')">全部</button>
+</div>
+<div class="quick-chips">
 <select id="f-month-from" onchange="applyFilters()"><option value="">起始月</option></select>
 <span class="period-sep">~</span>
 <select id="f-month-to" onchange="applyFilters()"><option value="">結束月</option></select>
+</div>
+</div>
 <button class="clear-btn" onclick="clearPeriod()" title="清除期間">✕</button>
 </div>
 <div class="filter-group">
@@ -158,8 +185,14 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 </div>
 </div>
 
+<div class="section" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+<div class="section-title" style="margin-bottom:0;">🏪 各店評論比較（單月達標）</div>
+<div style="display:flex; align-items:center; gap:6px;">
+<label style="font-size:12px; color:var(--muted);">月份</label>
+<select id="store-chart-month" onchange="renderStoreChart()" style="border:1px solid var(--border); border-radius:8px; padding:5px 10px; font-size:12px; color:var(--text); background:white; cursor:pointer; font-family:inherit; outline:none;"></select>
+</div>
+</div>
 <div class="section">
-<div class="section-title">🏪 各店評論比較</div>
 <div class="chart-card">
 <canvas id="storeChart" style="max-height:320px;"></canvas>
 </div>
@@ -276,30 +309,95 @@ showLoading(false);
 }
 
 let _selectedStores = new Set();
+let _monthList = [];        // 升序月份清單
+let _storesByZone = {};     // 區域 → 該區店集合（依 J 欄資料）
 
 function populateFilters() {
 const stores = [...new Set(_allRows.map(r => r.store))].sort();
-const months = [...new Set(_allRows.map(r => r.ym).filter(Boolean))].sort();
+_monthList = [...new Set(_allRows.map(r => r.ym).filter(Boolean))].sort();
+_storesByZone = {};
+_allRows.forEach(r => {
+if (!r.region || !r.store) return;
+(_storesByZone[r.region] = _storesByZone[r.region] || new Set()).add(r.store);
+});
 document.getElementById('f-store-chips').innerHTML = stores.map(s =>
 `<button class="store-chip" data-store="${esc(s)}" onclick="toggleStoreChip('${esc(s)}')">${esc(s)}</button>`
 ).join('');
-const monthOpts = months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+const ZONE_ORDER = ['北一區','北二區','北三區','中南區'];
+const zones = ZONE_ORDER.filter(z => _storesByZone[z]);
+document.getElementById('zone-quick-chips').innerHTML = zones.map(z =>
+`<button class="quick-chip quick-chip-zone" data-zone="${esc(z)}" onclick="selectZone('${esc(z)}')">${esc(z)}</button>`
+).join('');
+// 月份下拉倒序（最新在最上，一眼看到近期）
+const monthOpts = [..._monthList].reverse().map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
 document.getElementById('f-month-from').innerHTML = '<option value="">起始月</option>' + monthOpts;
 document.getElementById('f-month-to').innerHTML = '<option value="">結束月</option>' + monthOpts;
+// 各店比較（單月達標）專屬月份下拉：倒序、預設最新月
+const scm = document.getElementById('store-chart-month');
+if (scm) {
+const prev = scm.value;
+scm.innerHTML = [..._monthList].reverse().map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+scm.value = (prev && _monthList.includes(prev)) ? prev : (_monthList[_monthList.length - 1] || '');
+}
+}
+
+function syncStoreChips() {
+document.querySelectorAll('.store-chip').forEach(c =>
+c.classList.toggle('active', _selectedStores.has(c.dataset.store)));
+// 分區鍵：該區店全數選中則標作用中（讓複選中的區一眼可見）
+document.querySelectorAll('.quick-chip-zone').forEach(btn => {
+const set = _storesByZone[btn.dataset.zone];
+const allOn = set && set.size > 0 && [...set].every(s => _selectedStores.has(s));
+btn.classList.toggle('zone-active', !!allOn);
+});
+}
+function selectAllStores() {
+_selectedStores = new Set(_allRows.map(r => r.store).filter(Boolean));
+syncStoreChips();
+applyFilters();
+}
+function selectZone(zone) {
+const set = _storesByZone[zone];
+if (!set) return;
+const allOn = [...set].every(s => _selectedStores.has(s));
+if (allOn) set.forEach(s => _selectedStores.delete(s));  // 已全選 → 取消該區
+else set.forEach(s => _selectedStores.add(s));           // 否則 → 加入該區（可與其他區並存）
+syncStoreChips();
+applyFilters();
+}
+function _setSel(id, val) {
+const el = document.getElementById(id);
+el.value = val || '';
+if (val && el.value !== val) el.value = '';  // 該月無資料則退為不限制此端
+}
+function periodQuick(type) {
+if (!_monthList.length) return;
+const maxM = _monthList[_monthList.length - 1];
+const curY = new Date().getFullYear();
+function addMonths(ym, delta) {
+const p = ym.split('-'); const d = new Date(+p[0], +p[1] - 1 + delta, 1);
+return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+}
+let f = '', t = '';
+if (type === '3m') { t = maxM; f = addMonths(maxM, -2); }
+else if (type === '6m') { t = maxM; f = addMonths(maxM, -5); }
+else if (type === 'year') { f = curY + '-01'; }
+else if (type === 'last') { f = (curY - 1) + '-01'; t = (curY - 1) + '-12'; }
+_setSel('f-month-from', f);
+_setSel('f-month-to', t);
+applyFilters();
 }
 
 function toggleStoreChip(store) {
 if (_selectedStores.has(store)) _selectedStores.delete(store);
 else _selectedStores.add(store);
-document.querySelectorAll('.store-chip').forEach(c => {
-c.classList.toggle('active', _selectedStores.has(c.dataset.store));
-});
+syncStoreChips();
 applyFilters();
 }
 
 function clearStoreChips() {
 _selectedStores.clear();
-document.querySelectorAll('.store-chip').forEach(c => c.classList.remove('active'));
+syncStoreChips();
 applyFilters();
 }
 
@@ -327,7 +425,7 @@ renderAll(rows);
 
 function renderAll(rows) {
 renderKPI(rows); renderTrendChart(rows); renderStarChart(rows);
-renderStoreChart(rows); renderStoreTable(rows); renderNegTable(rows); renderDetailTable(rows);
+renderStoreChart(); renderStoreTable(rows); renderNegTable(rows); renderDetailTable(rows);
 }
 
 function renderKPI(rows) {
@@ -360,17 +458,46 @@ if (_starChart) _starChart.destroy();
 _starChart = new Chart(ctx, { type:'doughnut', data:{ labels:['★1','★2','★3','★4','★5'], datasets:[{ data:[d[1],d[2],d[3],d[4],d[5]], backgroundColor:['#C43030','#E87060','#F4A620','#52B788','#4A9BB8'], borderWidth:2 }] }, options:{ responsive:true, plugins:{legend:{position:'bottom', labels:{font:{size:11}}}} } });
 }
 
-function renderStoreChart(rows) {
+const MONTHLY_REVIEW_TARGET = 15;  // 各店每月評論目標則數（單月固定）
+
+// 各店評論比較＝「單月達標」專屬圖：只看自己的月份下拉 + 門市選取，與上方期間/星等/關鍵字脫鉤。
+// 目標線固定 15；達標看的是該月「總則數」，故不套星等/關鍵字篩選。
+function renderStoreChart() {
+const monthSel = document.getElementById('store-chart-month');
+const month = (monthSel && monthSel.value) || (_monthList.length ? _monthList[_monthList.length - 1] : '');
+let src = _allRows.filter(r => r.ym === month);
+if (_selectedStores.size) src = src.filter(r => _selectedStores.has(r.store));
 const bs = {};
-rows.forEach(r => {
+src.forEach(r => {
 if (!bs[r.store]) bs[r.store] = {total:0, neg:0};
 bs[r.store].total++;
 if (r.stars !== null && r.stars <= 4) bs[r.store].neg++;
 });
-const stores = Object.keys(bs).sort();
+// 門市範圍：有選門市就顯示所選（含該月掛零者→0 則灰柱，才抓得出完全沒評論的店）；否則顯示全部店
+const universe = _selectedStores.size ? [..._selectedStores] : [...new Set(_allRows.map(r => r.store).filter(Boolean))];
+universe.forEach(s => { if (!bs[s]) bs[s] = {total:0, neg:0}; });
+const stores = universe.sort();
+const target = MONTHLY_REVIEW_TARGET;
+const totals = stores.map(s => bs[s].total);
+const barColors = totals.map(v => v >= target ? 'rgba(196,65,47,.65)' : 'rgba(150,150,150,.5)');  // 未達標染灰
 const ctx = document.getElementById('storeChart').getContext('2d');
 if (_storeChart) _storeChart.destroy();
-_storeChart = new Chart(ctx, { type:'bar', data:{ labels:stores, datasets:[{ label:'評論總數', data:stores.map(s=>bs[s].total), backgroundColor:'rgba(196,65,47,.65)', borderRadius:4 }, { label:'負評數', data:stores.map(s=>bs[s].neg), backgroundColor:'rgba(74,155,184,.85)', borderRadius:4 }] }, options:{ responsive:true, plugins:{legend:{position:'top'}}, scales:{y:{beginAtZero:true}} } });
+_storeChart = new Chart(ctx, {
+type:'bar',
+data:{ labels:stores, datasets:[
+{ label:'該月評論數（灰＝未達標）', data:totals, backgroundColor:barColors, borderRadius:4, order:2 },
+{ label:'負評數', data:stores.map(s=>bs[s].neg), backgroundColor:'rgba(74,155,184,.85)', borderRadius:4, order:2 },
+{ label:'每月目標 '+target+' 則', type:'line', data:stores.map(()=>target),
+  borderColor:'#8B2D1F', borderWidth:2, borderDash:[6,4], pointRadius:0, fill:false, order:1, tension:0 }
+] },
+options:{ responsive:true,
+plugins:{ legend:{position:'top', labels:{font:{size:12}}},
+tooltip:{callbacks:{ label:(c)=> c.dataset.type==='line'
+  ? ('每月目標 '+target+' 則')
+  : (c.dataset.label.replace('（灰＝未達標）','') + '：' + c.parsed.y + ' 則'
+     + (c.datasetIndex===0 ? '（' + (c.parsed.y>=target?'達標':'差 '+(target-c.parsed.y)+' 則') + '）' : '')) }}},
+scales:{y:{beginAtZero:true, suggestedMax: Math.max(target, ...totals, 1) * 1.15, ticks:{font:{size:12}}}, x:{ticks:{font:{size:12}}}} }
+});
 }
 
 function renderStoreTable(rows) {
@@ -410,7 +537,7 @@ tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)
 function clearFilter(id) { document.getElementById(id).value = ''; applyFilters(); }
 function resetAllFilters() {
 _selectedStores.clear();
-document.querySelectorAll('.store-chip').forEach(c => c.classList.remove('active'));
+syncStoreChips();
 ['f-month-from','f-month-to','f-star'].forEach(id => document.getElementById(id).value = '');
 document.getElementById('f-keyword').value = '';
 applyFilters();
