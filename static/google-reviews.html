@@ -198,6 +198,7 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 
 <script>
 const SHEET_ID = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
+const GAS_REVIEWS_URL = 'https://script.google.com/macros/s/AKfycbwoOqVB03froYy4frO4dUDUEPN3YfURH4bx1H71PWIYyoN5C0Pk16rBX-TblKxWgN91/exec';  // GAS 讀取端點（伺服器端 getValues，繞過 gviz 截斷）
 let _allRows = [], _trendChart = null, _starChart = null, _storeChart = null;
 
 function gvizQuery(tql) {
@@ -231,56 +232,47 @@ if (m) return m[1].trim();
 return text;
 }
 
+// JSONP 載入 GAS 端點（script tag 注入，跨域安全、無回應大小上限，不受 gviz cell cap 限制）
+function gasJsonp(url) {
+return new Promise((resolve, reject) => {
+const cb = '__revCb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+let s;
+const timer = setTimeout(() => { cleanup(); reject(new Error('端點逾時')); }, 30000);
+function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch(_) {} if (s && s.parentNode) s.parentNode.removeChild(s); }
+window[cb] = (data) => { cleanup(); resolve(data); };
+s = document.createElement('script');
+s.onerror = () => { cleanup(); reject(new Error('端點載入失敗')); };
+s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
+document.body.appendChild(s);
+});
+}
+
 async function initLoad() {
 showLoading(true);
 try {
-// 指標查詢刻意最輕：不抓 E（評論內容，佔 gviz 回應約 8 成）也不抓 F。回應從 ~3.85MB 降到 ~0.82MB，
-// 避免 gviz 因回應過大只讀到 Sheet 前段、漏掉往下追加的最新月份（含本月）。
-// A=門市 G=年月 H=星等數字 I=品牌 J=區域 K=負評標記 B=評論者
-const res = await gvizQuery('SELECT A, G, H, I, J, K, B WHERE A IS NOT NULL ORDER BY G DESC');
-const rows = parseRows(res);
-_allRows = rows.map(r => ({
-store: v(r.c[0]),
-ym:     parseYM(v(r.c[1])),
-stars: (r.c[2] && r.c[2].v !== null) ? Number(r.c[2].v) : null,
-brand: v(r.c[3]),
-region: v(r.c[4]),
-tag: v(r.c[5]),
-author: v(r.c[6]),
-text: '',
+// 改由 GAS 後端讀 Sheet（伺服器端 getValues，完整不截斷），一次取回全部列。
+// GAS rows 欄位順序：0 門市 1 評論者 2 年月 3 星等 4 品牌 5 區域 6 標記 7 內容
+const data = await gasJsonp(GAS_REVIEWS_URL);
+if (!data || !data.ok) throw new Error((data && data.error) || '端點回應異常');
+_allRows = (data.rows || []).map(c => ({
+store:  c[0] || '',
+author: c[1] || '',
+ym:     c[2] || '',
+stars:  (c[3] === '' || c[3] === null || c[3] === undefined) ? null : Number(c[3]),
+brand:  c[4] || '',
+region: c[5] || '',
+tag:    c[6] || '',
+text:   c[7] || '',
 })).filter(r => r.store);
 
 populateFilters();
-applyFilters();          // 先渲染：KPI／圖表／各店計數立即正確（含最新月份）
-
-loadReviewText();        // 評論內容另抓，合併後補渲染；失敗不影響上方指標
+applyFilters();
 } catch(e) {
 document.getElementById('kpi1').textContent = '錯誤';
 document.getElementById('kpi1s').textContent = e.message || '無法載入';
 } finally {
 showLoading(false);
 }
-}
-
-// 評論內容（E）拆成獨立、有上限的查詢，依「門市｜評論者｜年月」合併回 _allRows。
-// 指標與圖表已由上方輕量查詢完成，這裡即使失敗或被 gviz 限縮也不影響數字，只影響負評／明細表的文字顯示。
-function _rowKey(store, author, ym) { return store + '｜' + author + '｜' + ym; }
-async function loadReviewText() {
-try {
-const res = await gvizQuery('SELECT A, B, G, E WHERE A IS NOT NULL ORDER BY G DESC LIMIT 3000');
-const rows = parseRows(res);
-const byKey = {};
-rows.forEach(r => {
-const k = _rowKey(v(r.c[0]), v(r.c[1]), parseYM(v(r.c[2])));
-if (k) byKey[k] = v(r.c[3]);
-});
-let hit = 0;
-_allRows.forEach(r => {
-const k = _rowKey(r.store, r.author, r.ym);
-if (byKey[k] !== undefined && byKey[k] !== '') { r.text = byKey[k]; hit++; }
-});
-if (hit) applyFilters();
-} catch(e) { /* 內容補抓失敗，指標不受影響 */ }
 }
 
 let _selectedStores = new Set();
