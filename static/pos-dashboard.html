@@ -1492,12 +1492,23 @@ function TabSeasonal({ data }) {
   const { campaigns } = data.seasonal;
   const today = new Date().toISOString().slice(0, 10);
 
+  // 依「檔期年份 → 檔期結束日」由近到遠排序（越接近現在越前面）。
+  // 註：只用 dateRange.end 排序在跨年時會失準——部分檔期的 end 抓到跨年或雜訊
+  // 交易日，年份與活動年份不一致，會讓舊年檔期插到新年檔期前面。故先用權威的
+  // year 欄位排年份（新→舊），同一年內再用結束日細排。
+  const _cy = (c) => Number(c && c.year) || Number((((c && c.dateRange && c.dateRange.end) || '')).slice(0, 4)) || 0;
+  const byRecency = (a, b) => {
+    const dy = _cy(b) - _cy(a);
+    if (dy) return dy;
+    return (((b && b.dateRange && b.dateRange.end) || '')).localeCompare(((a && a.dateRange && a.dateRange.end) || ''));
+  };
+
   const featured = React.useMemo(() => {
     const ongoing = campaigns.find(c => c.ongoing);
     if (ongoing) return ongoing;
     const past = campaigns
       .filter(c => c.dateRange.end < today)
-      .sort((a, b) => b.dateRange.end.localeCompare(a.dateRange.end));
+      .sort(byRecency);
     return past[0] || campaigns[0] || null;
   }, [campaigns, today]);
 
@@ -1622,8 +1633,7 @@ function TabSeasonal({ data }) {
 
         {/* 其他檔期小卡 */}
 {campaigns.length > 1 && (() => {
-  const otherCampaigns = [...campaigns]
-    .sort((a, b) => b.dateRange.end.localeCompare(a.dateRange.end));
+  const otherCampaigns = [...campaigns].sort(byRecency);
   const SHOW_DEFAULT = 6;
   const [showAll, setShowAll] = React.useState(false);
   const visible = showAll ? otherCampaigns : otherCampaigns.slice(0, SHOW_DEFAULT);
