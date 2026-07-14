@@ -210,7 +210,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 
   <!-- 2026 目標達成追蹤 -->
   <div class="section">
-    <div class="section-title">🎯 2026 年度自己人目標達成追蹤 <span style="font-weight:400;font-size:12px;color:var(--muted)">分子=真會員新增｜目標 72,528 仍保留(原訂目標)｜固定全年進度,不受日期篩選影響｜點欄位標題可改排序</span></div>
+    <div class="section-title">🎯 2026 年度自己人目標達成追蹤 <span style="font-weight:400;font-size:12px;color:var(--muted)">分子=真會員新增｜目標 72,528 仍保留(原訂目標)｜只計已完結月份(排除進行中的當月)，不受日期篩選影響｜點欄位標題可改排序</span></div>
     <div id="targetSection"><div class="chart-card no-data">資料載入中…</div></div>
   </div>
 
@@ -331,15 +331,34 @@ const TARGETS_2026 = {
 };
 const TOTAL_TARGET_2026 = 72528;
 
-let ELAPSED_MONTHS_2026 = 4; // 預設值，由 updateElapsedMonths() 動態計算
+let ELAPSED_MONTHS_2026 = 6; // 預設值，由 updateElapsedMonths() 動態計算
 
+// ★ 2026-07-14 修正：2026 已完結的最後一個月（0-indexed；7月時 = 5，代表 6 月）
+//   原因：「2026 各店新增自己人」表的當月欄會有「跑到今天為止」的不完整數字
+//   （例 7/13 時 7 月欄只有 162 人＝半個月），把它算進達成率分子會虛胖。
+//   分子一律只計「已完結月份」，分母（年度進度標準）也必須同步只算已完結月數。
+const CLOSED_IDX_2026 = (() => {
+  const n = new Date();
+  if (n.getFullYear() > 2026) return 11;
+  if (n.getFullYear() < 2026) return -1;
+  return n.getMonth() - 1;   // 7月 → 5（＝6月）
+})();
+
+// 只加總「1月 ～ 已完結月」的新增人數（key 格式 `2026/0` ~ `2026/11`，0-indexed）
+function sumClosed2026(monthMap) {
+  return Object.entries(monthMap || {}).reduce((sum, [k, v]) => {
+    const mo = parseInt(k.split('/')[1], 10);
+    return (!isNaN(mo) && mo <= CLOSED_IDX_2026) ? sum + (Number(v) || 0) : sum;
+  }, 0);
+}
+
+// 年度進度標準＝「已完結整月數 / 12」。★ 不可用「今天在年度中的位置」（會變成 6.45/12=54%），
+//    因為分子只到上個月底；分母若含當月，等於拿 6 個月的成績去比 6.45 個月的標準。
 function updateElapsedMonths(lastDataDate) {
   const d = lastDataDate || new Date();
   if (d.getFullYear() < 2026) { ELAPSED_MONTHS_2026 = 0; return; }
   if (d.getFullYear() > 2026) { ELAPSED_MONTHS_2026 = 12; return; }
-  const lastDayOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  const dayFraction = d.getDate() / lastDayOfMonth;
-  ELAPSED_MONTHS_2026 = d.getMonth() + dayFraction;
+  ELAPSED_MONTHS_2026 = d.getMonth();   // 7月 → 6（＝已完結 6 個月 → 50%）
 }
 
 // Available months 動態生成：從 2025-04 到「上個月」
@@ -662,10 +681,11 @@ function processFromCache(cache, fromIdx, toIdx) {
     }, 0);
   });
 
-  // ytdActual2026：2026 年各店累計新增（不受期間篩選，固定全年 YTD）
+  // ytdActual2026：2026 各店累計新增（不受期間篩選）
+  // ★ 只計「1月～已完結月」，排除進行中的當月（不完整 → 會虛胖招募達成率）
   const ytdActual2026 = {};
   STORE_NAMES.forEach(s => {
-    ytdActual2026[s] = Object.entries(sheet2026[s] || {}).reduce((sum, [, v]) => sum + v, 0);
+    ytdActual2026[s] = sumClosed2026(sheet2026[s]);
   });
 
   // newMemberMonths2026ByStore：給 renderTargetSection 用
@@ -833,9 +853,10 @@ function renderTargetSection() {
 
   const sheet2026 = parseNewMembersSheet(_rawCache.qNewMembers2026, 2026);
 
+  // ★ 實際＝1月～已完結月累計（排除進行中的當月，例 7 月的半個月 162 人）
   const actual2026 = {};
   STORE_NAMES.forEach(s => {
-    actual2026[s] = Object.values(sheet2026[s] || {}).reduce((sum, v) => sum + v, 0);
+    actual2026[s] = sumClosed2026(sheet2026[s]);
   });
 
   // 月度趨勢：掃描所有店實際有資料的最大 gvizMonth
@@ -848,9 +869,9 @@ function renderTargetSection() {
   });
   // ★ 排除進行中的當月（未完整，月增減會失真）：上限 = 本月-1
   //   例：今天 7 月 → 顯示 6月(vs 5月)、5月(vs 4月)
-  const _now = new Date();
-  const _capIdx = _now.getFullYear() > 2026 ? 11 : _now.getFullYear() < 2026 ? -1 : _now.getMonth() - 1;
-  if (lastMoIdx > _capIdx) lastMoIdx = _capIdx;
+  if (lastMoIdx > CLOSED_IDX_2026) lastMoIdx = CLOSED_IDX_2026;
+  // ★ 年度進度標準的分母 = 實際完結月數（與分子同口徑）；回寫全域供招募排名表共用
+  ELAPSED_MONTHS_2026 = Math.max(0, lastMoIdx + 1);
   const prevMoIdx = lastMoIdx - 1;
   const prevPrevMoIdx = lastMoIdx - 2;
   const monthly = {};
@@ -967,8 +988,9 @@ function renderTargetSection() {
           </div>
           <div class="target-meta">
             <strong>${totalActual.toLocaleString()}</strong> 人 已招募<br>
+            <span style="font-size:12px;color:var(--muted)">（累計 1～${_moLast}，不含未結束的當月）</span><br>
             目標 <strong>${TOTAL_TARGET_2026.toLocaleString()}</strong> 人(全年)<br>
-            年度進度標準 <strong>${elapsedPct}%</strong><br>
+            年度進度標準 <strong>${elapsedPct}%</strong> <span style="font-size:12px;color:var(--muted)">(${ELAPSED_MONTHS_2026}/12 個月)</span><br>
             <span style="color:${statusColor};font-weight:600">${statusText}</span>
           </div>
         </div>
