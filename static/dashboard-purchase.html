@@ -100,13 +100,13 @@ function num(x){return (x===null||x===undefined||x===""||isNaN(+x))?0:+x;}
 function reorderPoint(f,w,cyc,lead,safe){return num(f)*(w||1)*((cyc||1)+num(lead)/7)+num(safe);}
 function computeRow(sku,p){p=p||{};var onHand=num(p.onHand),dur=sku.cat==="器具"||sku.cat==="模具",suggested,rp=null,basis;
   if(dur){var par=num(p.par),br=num(p.breakage);suggested=Math.max(0,par+br-onHand);basis={mode:"par",par:par,breakage:br,onHand:onHand};}
-  else{rp=reorderPoint(p.forecastWeekly,p.weight,p.orderCycleWeeks,p.leadDays,p.safety)+num(p.booking);suggested=Math.max(0,rp-onHand);
-    basis={mode:"forecast",manual:!!p.manual,forecastWeekly:num(p.forecastWeekly),weight:(p.weight||1),coverageWeeks:(p.orderCycleWeeks||1)+num(p.leadDays)/7,safety:num(p.safety),booking:num(p.booking),reorderPoint:rp,onHand:onHand};}
+  else{rp=reorderPoint(p.forecastWeekly,p.weight,p.orderCycleWeeks,p.leadDays,p.safety)+num(p.booking)+num(p.newitem);suggested=Math.max(0,rp-onHand);
+    basis={mode:"forecast",manual:!!p.manual,forecastWeekly:num(p.forecastWeekly),weight:(p.weight||1),coverageWeeks:(p.orderCycleWeeks||1)+num(p.leadDays)/7,safety:num(p.safety),booking:num(p.booking),newitem:num(p.newitem),reorderPoint:rp,onHand:onHand};}
   var pq=num(sku.packQty);var packs=pq>0?ceilDiv(suggested,pq):Math.round(suggested);
   return{suggested:Math.round(suggested),reorderPoint:rp==null?null:Math.round(rp),packs:packs,isDurable:dur,basis:basis};}
 
 /* ===== 資料（bootstrap 由 gviz 載入） ===== */
-var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UNITCONV=[],CONTAINER={},DIRTY={},BOOKAGG={},DESSERTS=[],BOOKINGS=[],USAGED={},ORDERS=[],FLOWST="";
+var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UNITCONV=[],CONTAINER={},DIRTY={},BOOKAGG={},DESSERTS=[],BOOKINGS=[],USAGED={},ORDERS=[],FLOWST="",EVENTS=[],NEWAGG={};
 var SKU={}; // sku_id -> sku
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
 var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"品項用量",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
@@ -142,11 +142,13 @@ function ymd(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"
 function toBool(x){return x===true||x==="TRUE"||x==="true"||x===1||x==="1";}
 
 async function bootstrap(){ try {
-  var res=await Promise.all([gviz('dim_sku'),gviz('dim_store_par'),gviz('agg_purchase'),gviz('agg_container'),gviz('dim_season'),gviz('dim_unitconv'),gviz('fact_inventory'),gviz('agg_booking'),gviz('dim_dessert'),gviz('fact_booking')]);
-  var dSku=res[0],dPar=res[1],aP=res[2],aC=res[3],dS=res[4],dU=res[5],fInv=res[6],aB=res[7],dD=res[8],fB=res[9];
+  var res=await Promise.all([gviz('dim_sku'),gviz('dim_store_par'),gviz('agg_purchase'),gviz('agg_container'),gviz('dim_season'),gviz('dim_unitconv'),gviz('fact_inventory'),gviz('agg_booking'),gviz('dim_dessert'),gviz('fact_booking'),gviz('dim_event'),gviz('agg_newitem')]);
+  var dSku=res[0],dPar=res[1],aP=res[2],aC=res[3],dS=res[4],dU=res[5],fInv=res[6],aB=res[7],dD=res[8],fB=res[9],dEv=res[10]||[],dNi=res[11]||[];
   BOOKAGG={};aB.forEach(function(r){var st=String(r['店號']);((BOOKAGG[st]=BOOKAGG[st]||{})[r['sku_id']]=num(r['需求量']));});
   DESSERTS=dD.map(function(r){return r['甜點名稱'];}).filter(Boolean);
   BOOKINGS=fB.map(function(r){return {id:String(r['預約ID']||''),store:String(r['店號']),date:(function(){var d=gvDate(r['日期']);return d?ymd(d):String(r['日期']||'').slice(0,10);})(),dessert:r['甜點']||'',qty:num(r['數量']),note:r['備註']||'',status:r['狀態']||''};}).filter(function(b){return b.id;});
+  EVENTS=dEv.map(function(r){var f=gvDate(r["開始日"]),g=gvDate(r["結束日"]);return {name:r["事件名"]||"",from:f,to:g,coef:num(r["加成係數"]),scope:r["適用品類"]||"全部",on:(r["啟用"]==null||r["啟用"]==="")?true:(toBool(r["啟用"])||r["啟用"]==="是")};}).filter(function(e){return e.name&&e.from&&e.to&&e.coef>0&&e.to>=e.from;});
+  NEWAGG={};dNi.forEach(function(r){var st=String(r["店號"]);if(!st||!r["sku_id"])return;((NEWAGG[st]=NEWAGG[st]||{})[r["sku_id"]]={qty:num(r["需求量"]),ev:r["事件名"]||"",excl:(r["專屬"]==="是"||r["專屬"]===true),who:r["新品清單"]||""});});
   SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"])};}).filter(function(s){return s.id&&s.name;});
   SKU={};SKUS.forEach(function(s){SKU[s.id]=s;});
   AGG={};var storeSet={};
@@ -186,6 +188,34 @@ function srcMonth(){return TODAY.getMonth()+1;}
 function tgtMonth(){return new Date(TODAY.getTime()+10*864e5).getMonth()+1;}
 function seasonAdj(){var m=ST.seasonMode;if(m==="關")return 1;if(m==="淡季")return SFACT.low;if(m==="旺季")return SFACT.high;return (SIDX[tgtMonth()]||1)/(SIDX[srcMonth()]||1);}
 function seasonLabel(){var m=ST.seasonMode;if(m==="淡季")return "淡季手動 ×"+SFACT.low;if(m==="旺季")return "旺季手動 ×"+SFACT.high;return "季節 "+seasonAdj().toFixed(2)+"（"+srcMonth()+"月→"+tgtMonth()+"月）";}
+/* ===== 節慶事件層（dim_event）：以備貨覆蓋窗重疊比例攤入，逾期自動失效 ===== */
+function ymdShort(d){return (d.getMonth()+1)+"/"+d.getDate();}
+function coverWin(st,s){var sp=pOf(st,s),lead=(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),days=Math.max(1,Math.round((sp.orderCycleWeeks||1)*7));
+  var t0=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()+Math.round(num(lead)));
+  var t1=new Date(t0.getFullYear(),t0.getMonth(),t0.getDate()+days-1);return {t0:t0,t1:t1,days:days};}
+function eventHit(st,s){if(!EVENTS.length)return null;var w=coverWin(st,s),best=null,bestEff=0;
+  EVENTS.forEach(function(ev){if(!ev.on)return;if(ev.scope&&ev.scope!=="全部"&&ev.scope!==s.cat)return;
+    var a=Math.max(w.t0.getTime(),ev.from.getTime()),b=Math.min(w.t1.getTime(),ev.to.getTime());if(b<a)return;
+    var ovd=Math.floor((b-a)/864e5)+1,ov=Math.min(1,ovd/w.days),eff=Math.abs((ev.coef-1)*ov);
+    if(!best||eff>bestEff){bestEff=eff;best={ev:ev,ovDays:ovd,days:w.days,ov:ov};}});
+  return best;}
+function demandAdj(st,s){var sea=seasonAdj(),hit=eventHit(st,s);if(!hit)return {adj:sea,sea:sea,hit:null};
+  return {adj:sea*(1-hit.ov)+hit.ev.coef*hit.ov,sea:sea,hit:hit};}
+function demandLabel(st,s){var da=demandAdj(st,s);if(!da.hit)return seasonLabel();
+  return seasonLabel()+"，🎉"+da.hit.ev.name+" ×"+da.hit.ev.coef+"（重疊 "+da.hit.ovDays+"/"+da.hit.days+" 天）→ 綜合 ×"+da.adj.toFixed(2);}
+function activeEvents(){var lim=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()+30);
+  return EVENTS.filter(function(ev){return ev.on&&ev.to>=TODAY&&ev.from<=lim;});}
+function seasonStrip(){var m=ST.seasonMode,txt;
+  if(m==="淡季")txt="🍃 手動淡季 ×"+SFACT.low;else if(m==="旺季")txt="🔥 手動旺季 ×"+SFACT.high;else if(m==="關")txt="季節調整已關閉";
+  else txt="季節（自動）×"+seasonAdj().toFixed(2)+"（"+srcMonth()+"月→"+tgtMonth()+"月）";
+  var evs=activeEvents().map(function(ev){return "🎉 "+ev.name+" "+ymdShort(ev.from)+"–"+ymdShort(ev.to)+" ×"+ev.coef+(ev.scope&&ev.scope!=="全部"?"（"+ev.scope+"）":"");});
+  var ni=newActive(ST.storeId);var niTxt=ni?'　｜　🆕 檔期新品備料生效中（'+ni+'）':'';
+  return '<div class="banner" style="background:#f0f7ff;border-color:#cfe3ff;color:#1e4e8c">📈 需求調整：'+txt+(evs.length?'　｜　'+evs.join('　'):'')+niTxt+'</div>';}
+function newOf(st,s){var m=(NEWAGG[st]||{})[s.id];return m?m.qty:0;}
+function markOf(st,s){return (NEWAGG[st]||{})[s.id]||null;}
+function newBadge(st,s){var m=markOf(st,s);if(!m)return '';
+  return m.excl?'<span style="display:inline-block;margin-left:4px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#c62828;border:1px solid #c62828;font-size:11px;font-weight:700" title="'+(m.who||'')+'">🎉'+(m.ev||'檔期')+'·專屬</span>':'<span style="display:inline-block;margin-left:4px;padding:1px 7px;border-radius:10px;background:#fff7e6;color:#b45309;border:1px solid #e8b96a;font-size:11px;font-weight:700" title="'+(m.who||'')+'">🎉'+(m.ev||'檔期')+'</span>';}
+function newActive(st){var g=NEWAGG[st]||{};for(var k in g){if(g[k].qty>0)return g[k].ev||'檔期';}return null;}
 function periodLabel(){return PLABEL[ST.period]||ST.period;}
 function periodWeekly(st,s){var a=aggOf(st,s);return ST.period==="上週"?a.week:a.avg4;}
 function manualOf(st,s){return num(pOf(st,s).manualWeekly);}
@@ -212,15 +242,15 @@ function estOnHand(st,s){var iv=ivOf(st,s);if(iv.t==null||iv.onHand==null)return
 function invLight(st,s){var r=rowFor(st,s),rp=r.reorderPoint||0;
   if(isDur(s)){var oh=num(ivOf(st,s).onHand);return oh<parOf(st,s)?"r":"w";}
   var est=estOnHand(st,s);
-  if(est==null)return ((r.basis&&r.basis.forecastWeekly>0)||manualOf(st,s)>0)?"r":"w";
+  if(est==null)return ((r.basis&&r.basis.forecastWeekly>0)||manualOf(st,s)>0||(r.basis&&r.basis.newitem>0))?"r":"w";
   if(est<rp)return"r";if(est<rp*1.3)return"y";return"w";}
 function invAge(st,s){var t=ivOf(st,s).t;if(!t)return null;return Math.max(0,Math.floor((TODAY.getTime()-t)/864e5));}
 function invTag(st,s){var a=invAge(st,s);if(a==null)return '<span style="color:#C0392B">（未盤點估算）</span>';if(a>7)return '<span style="color:#B45309">（盤點 '+a+' 天前）</span>';return "";}
 function upcomingBk(st){var t=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()),e=new Date(t.getTime()+14*864e5);return BOOKINGS.filter(function(b){if(b.status==="取消"||b.store!==String(st))return false;var d=new Date(b.date);return d>=t&&d<=e;});}
 function matchQ(s){if(!ST.q)return true;var q=ST.q.trim();if(!q)return true;return s.name.indexOf(q)>=0||String(s.vendor||"").indexOf(q)>=0;}
 function isManual(st,s){return !isDur(s)&&!periodWeekly(st,s)&&manualOf(st,s)>0;}
-function forecastWeekly(st,s){if(statusOf(st,s)==="已停售")return 0;var w=periodWeekly(st,s);if(!w&&!isDur(s)&&manualOf(st,s)>0)w=manualOf(st,s);return w*seasonAdj();}
-function bundle(st,s){var sp=pOf(st,s),iv=ivOf(st,s);return {forecastWeekly:forecastWeekly(st,s),manual:isManual(st,s),weight:sp.weight,leadDays:(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),orderCycleWeeks:sp.orderCycleWeeks,safety:sp.safety,par:sp.par,onHand:num(iv.onHand)*s.packQty,breakage:num(iv.breakage),booking:bookOf(st,s)};}
+function forecastWeekly(st,s){if(statusOf(st,s)==="已停售")return 0;var w=periodWeekly(st,s);if(!w&&!isDur(s)&&manualOf(st,s)>0)w=manualOf(st,s);return w*demandAdj(st,s).adj;}
+function bundle(st,s){var sp=pOf(st,s),iv=ivOf(st,s);return {forecastWeekly:forecastWeekly(st,s),manual:isManual(st,s),weight:sp.weight,leadDays:(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),orderCycleWeeks:sp.orderCycleWeeks,safety:sp.safety,par:sp.par,onHand:num(iv.onHand)*s.packQty,breakage:num(iv.breakage),booking:bookOf(st,s),newitem:newOf(st,s)};}
 function rowFor(st,s){return computeRow(s,bundle(st,s));}
 function liveItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售";});}
 function exclItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)==="已停售"&&aggOf(st,s).week>0;});}
@@ -247,8 +277,10 @@ function seasonBar(){var adj=seasonAdj(),pct=Math.round((adj-1)*100);
   else if(m==="淡季")msg='🍃 手動淡季檔：建議量一律 ×'+SFACT.low+'（覆蓋月指數）。';
   else if(m==="旺季")msg='🔥 手動旺季檔：建議量一律 ×'+SFACT.high+'（覆蓋月指數）。';
   else msg=(Math.abs(pct)>=5?('📈 季節（自動）：本月 '+srcMonth()+' 月（'+(SIDX[srcMonth()]||1)+'）→ 備貨期 '+tgtMonth()+' 月（'+(SIDX[tgtMonth()]||1)+'），建議量'+(pct>0?'上調 +'+pct+'%（旺季將至）':(pct+'%（淡季將至）'))):'📈 季節（自動）：本月與備貨期相近，未調整。');
-  var seg=["自動","淡季","旺季","關"].map(function(x){return '<span class="why" data-smode="'+x+'" style="color:#7a5b00;font-weight:'+(ST.seasonMode===x?'800':'400')+';text-decoration:'+(ST.seasonMode===x?'underline':'none')+'">'+x+'</span>';}).join('　');
-  return '<div class="banner" style="background:#fff7e6;border-color:#ffe1a8;color:#7a5b00">'+msg+'　｜　'+seg+'</div>';}
+  var evs=activeEvents();if(evs.length)msg+='<br>🎉 節慶檔期：'+evs.map(function(ev){return ev.name+' '+ymdShort(ev.from)+'–'+ymdShort(ev.to)+' ×'+ev.coef+(ev.scope&&ev.scope!=="全部"?'（'+ev.scope+'）':'');}).join('、')+'（依重疊天數自動攤入，逾期自動失效）';
+  var pal={"自動":["#e8f5e9","#2E7D32"],"淡季":["#e3f2fd","#1565c0"],"旺季":["#fdecea","#c62828"],"關":["#f1f1f1","#555"]};
+  var seg=["自動","淡季","旺季","關"].map(function(x){var on=ST.seasonMode===x,c=pal[x];return '<span class="why" data-smode="'+x+'" style="display:inline-block;padding:2px 10px;border-radius:12px;margin:2px 4px 2px 0;background:'+(on?c[0]:'#fff')+';color:'+(on?c[1]:'#7a5b00')+';border:1px solid '+(on?c[1]:'#e8ddb8')+';font-weight:'+(on?'800':'400')+'">'+(x==="淡季"?"🌱 ":(x==="旺季"?"🔥 ":""))+x+'</span>';}).join('');
+  return '<div class="banner" style="background:#fff7e6;border-color:#ffe1a8;color:#7a5b00">'+msg+'<div style="margin-top:4px">'+seg+'</div></div>';}
 
 /* ===== 建議採購 ===== */
 function viewSuggest(){var store=ST.storeId,items=liveItems(store).filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
@@ -274,14 +306,15 @@ function suggestRow(s,r){var store=ST.storeId,z=r.packs<=0,dur=isDur(s),iv=ivOf(
   var big=dur?r.suggested:r.packs,unit=dur?s.useUnit:s.buyUnit;
   var usageTxt=dur?('標配 '+fmt(parOf(store,s))):(up?'新品（無歷史）':(isManual(store,s)?('手動週用量 '+dec(manualOf(store,s))+' '+s.useUnit):(periodLabel()+' '+dec(periodWeekly(store,s)/s.packQty)+' '+s.buyUnit)));
   var upTag=up?(function(){var u=upInfo(store,s);return '<span class="tagnew">🆕 '+(u?u.days+'天後上市':'即將上市')+'</span>';})():'';
-  var h='<div class="row"><div class="nm"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b>'+upTag+'<div class="sub">現有 '+dec(num(iv.onHand))+' '+(dur?s.useUnit:s.buyUnit)+''+invTag(store,s)+'　·　'+usageTxt+'</div></div>'
+  var h='<div class="row"><div class="nm"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b>'+newBadge(store,s)+upTag+'<div class="sub">現有 '+dec(num(iv.onHand))+' '+(dur?s.useUnit:s.buyUnit)+''+invTag(store,s)+'　·　'+usageTxt+'</div></div>'
     +'<div class="sug"><div class="big'+(z?' zero':'')+'">'+(z?'—':big)+'</div><div class="u">'+(z?'庫存足':('建議 '+unit))+'</div><div class="why" data-why="'+s.id+'">'+(ST.exp[s.id]?'收合 ▲':'為什麼 ▾')+'</div></div></div>';
   if(ST.exp[s.id])h+=reasonBox(s,r,up);return h;}
 function reasonBox(s,r,up){var b=r.basis,pq=s.packQty;
   if(b.mode==="par")return '<div class="reason"><b>'+s.name+'</b>（補到標配）<br>標配數量 <b>'+fmt(b.par)+'</b> − 現有 '+fmt(b.onHand)+(b.breakage?' ＋破損 '+fmt(b.breakage):'')+' = 建議補 <b>'+fmt(r.suggested)+' '+s.useUnit+'</b></div>';
-  var adj=up?1:seasonAdj(),raw=adj?(b.forecastWeekly/adj):b.forecastWeekly;
+  var adj=up?1:demandAdj(ST.storeId,s).adj,raw=adj?(b.forecastWeekly/adj):b.forecastWeekly;
   var bline=(b.booking>0)?('<br>＋ 未來14天預約/包館需求 <b>'+dec(b.booking/pq)+' '+s.buyUnit+'</b>'):'';
-  var fline=up?('預測週用量 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>（依新品預估）'):(b.manual?('手動週用量 <b>'+dec(raw)+' '+s.useUnit+'</b>'+(adj!=1?' × '+seasonLabel():'')+' = 預測 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>'):(periodLabel()+' <b>'+dec(raw/pq)+' '+s.buyUnit+'</b>'+(adj!=1?' × '+seasonLabel():'')+' = 預測 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>'));
+  var nim=markOf(ST.storeId,s);if(b.newitem>0)bline+='<br>＋ 🆕檔期新品備料 <b>'+dec(b.newitem/pq)+' '+s.buyUnit+'</b>'+(nim?('（'+nim.ev+(nim.who?'：'+nim.who:'')+'）'):'');
+  var fline=up?('預測週用量 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>（依新品預估）'):(b.manual?('手動週用量 <b>'+dec(raw)+' '+s.useUnit+'</b>'+(adj!=1?' × '+demandLabel(ST.storeId,s):'')+' = 預測 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>'):(periodLabel()+' <b>'+dec(raw/pq)+' '+s.buyUnit+'</b>'+(adj!=1?' × '+demandLabel(ST.storeId,s):'')+' = 預測 <b>'+dec(b.forecastWeekly/pq)+' '+s.buyUnit+'</b>'));
   return '<div class="reason"><b>'+s.name+'</b><br>'+fline+(b.weight!=1?' × 權數 '+b.weight:'')+' × 涵蓋 '+(Math.round(b.coverageWeeks*100)/100)+' 週'+bline+' = 訂貨點 <b>'+dec(r.reorderPoint/pq)+' '+s.buyUnit+'</b><br>訂貨點 − 現有 '+dec(b.onHand/pq)+' = 進位 <b>'+r.packs+' '+s.buyUnit+'</b>（每'+s.buyUnit+' '+fmt(pq)+' '+s.useUnit+'）</div>';}
 
 /* ===== 盤點 ===== */
@@ -291,15 +324,16 @@ function viewCount(){var store=ST.storeId,all=liveItems(store).filter(function(s
   var cls={};all.forEach(function(s){cls[s.id]=invLight(store,s);});
   var nR=all.filter(function(s){return cls[s.id]==="r";}).length,
       nY=all.filter(function(s){return cls[s.id]==="y";}).length,
-      nOld=all.filter(function(s){var a=invAge(store,s);return a==null||a>7;}).length;
+      nOld=all.filter(function(s){var a=invAge(store,s);return a==null||a>7;}).length,nEv=all.filter(function(s){return !!markOf(store,s);}).length;
   var items=all.filter(function(s){var f=ST.invFilter;
     if(f==="需關注")return cls[s.id]==="r";
     if(f==="接近")return cls[s.id]==="y";
     if(f==="久未盤")return (function(a){return a==null||a>7;})(invAge(store,s));
+    if(f==="檔期")return !!markOf(store,s);
     return true;});
   var groups=zonesOrderedZ(store,items);
-  var html='<div class="note">門市：'+storeName(store)+'　·　🔴 推估已低於訂貨點（先盤先訂）　🟡 接近　·　填入真實數量後即時顯示建議訂貨量。</div>'+catChips();
-  html+='<div class="chips">'+[["需關注","🔴 需關注("+nR+")"],["接近","🟡 接近("+nY+")"],["久未盤","⏰ 久未盤("+nOld+")"],["全部","全部("+all.length+")"]].map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
+  var html=seasonStrip()+'<div class="note">門市：'+storeName(store)+'　·　🔴 推估已低於訂貨點（先盤先訂）　🟡 接近　·　填入真實數量後即時顯示建議訂貨量。</div>'+catChips();
+  html+='<div class="chips">'+[["需關注","🔴 需關注("+nR+")"],["接近","🟡 接近("+nY+")"],["久未盤","⏰ 久未盤("+nOld+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat([["全部","全部("+all.length+")"]]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
   html+='<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項或廠商…" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
   if(!items.length)html+='<div class="note">此篩選目前沒有品項 ✅</div>';
   html+='<div class="groups">';
@@ -311,7 +345,7 @@ function viewCount(){var store=ST.storeId,all=liveItems(store).filter(function(s
       var estP=(est==null)?"—":(s.packQty>0?dec(est/s.packQty):dec(est));
       var pu=(s.packQty>0?s.buyUnit:s.useUnit);var ref=dur?('標配 '+fmt(parOf(store,s))+' '+s.useUnit):('訂貨點 '+rpP+' '+pu+'　推估 '+estP+' '+pu+invTag(store,s));
       var sug=(((DIRTY[store]||{})[s.id])||iv.onHand!=null)?('<div class="sub" style="color:'+(r.packs>0?'#C0392B':'#2E7D32')+';font-weight:600">'+(r.packs>0?('建議 '+r.packs+' '+s.buyUnit):'庫存足')+'</div>'):'';
-      html+='<div class="row"><div><span class="tag t'+({食材:1,耗材:2,器具:3,模具:4})[s.cat]+'">'+s.cat+'</span>'+dot+'<b>'+s.name+'</b><div class="sub">'+ref+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span><input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+(iv.onHand!=null?iv.onHand:"")+'" placeholder="0">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+(iv.breakage!=null?iv.breakage:"")+'" placeholder="0"></div>':'')+'</div></div>';});
+      html+='<div class="row"><div><span class="tag t'+({食材:1,耗材:2,器具:3,模具:4})[s.cat]+'">'+s.cat+'</span>'+dot+'<b>'+s.name+'</b>'+newBadge(store,s)+'<div class="sub">'+ref+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span><input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+(iv.onHand!=null?iv.onHand:"")+'" placeholder="0">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+(iv.breakage!=null?iv.breakage:"")+'" placeholder="0"></div>':'')+'</div></div>';});
     html+='</div></div>';});
   html+='</div>';
   html+='<div class="toolbar"><button class="btn" id="saveCount">儲存盤點</button></div>';
@@ -324,10 +358,10 @@ function zonesOrderedZ(store,items){var by={};items.forEach(function(s){var z=zo
 function viewOrder(){var store=ST.storeId,need=liveItems(store).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;});
   if(!need.length)return '<div class="card">本店目前無需採購 🎉</div>';
   var byV={};need.forEach(function(x){(byV[x.s.vendor]=byV[x.s.vendor]||[]).push(x);});var total=0;
-  var html='<div class="note">門市：'+storeName(store)+'　·　可調量/取消勾選，再複製給廠商。</div>';
+  var html=seasonStrip()+'<div class="note">門市：'+storeName(store)+'　·　可調量/取消勾選，再複製給廠商。</div>';
   Object.keys(byV).sort().forEach(function(vd){html+='<div class="vh"><span class="vn">'+(vd||"未指定廠商")+'</span><span class="vl"></span></div><div class="card" style="padding:4px 12px">';
     byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,off=ST.orderOff[s.id],unit=dur?s.useUnit:s.buyUnit;if(!off)total+=qty*s.price;
-      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+s.name+'</b><div class="sub">建議 '+def+' '+unit+(!dur&&s.packQty>0?'（'+fmt(s.packQty)+' '+s.useUnit+'/'+s.buyUnit+'）':'')+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
+      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+s.name+'</b>'+newBadge(store,s)+'<div class="sub">建議 '+def+' '+unit+(!dur&&s.packQty>0?'（'+fmt(s.packQty)+' '+s.useUnit+'/'+s.buyUnit+'）':'')+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
     html+='</div>';});
   html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>';return html;}
 function orderText(store){var need=liveItems(store).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0&&!ST.orderOff[x.s.id];});
@@ -421,6 +455,7 @@ function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
   for(var k=1;k<=12;k++)html+='<td class="right" '+((k==sm||k==tm)?'style="background:#fff7e6"':'')+'>'+(ed?'<input class="sm" style="width:46px" type="number" step="0.05" data-si="'+k+'" value="'+(SIDX[k]||1)+'">':(SIDX[k]||1))+'</td>';
   html+='</tr></table></div>';
   html+='<div class="card"><div class="muted" style="margin-bottom:6px">手動淡旺季檔係數（店長臨時切換用）</div><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+'<span class="ipt-lbl">🍃 淡季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfLow" value="'+SFACT.low+'">':'<b>'+SFACT.low+'</b>')+'<span class="ipt-lbl">🔥 旺季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfHigh" value="'+SFACT.high+'">':'<b>'+SFACT.high+'</b>')+'</div></div>';
+  html+='<div class="card"><div class="muted" style="margin-bottom:6px">🎉 節慶事件層（於 BOM 本 dim_event 分頁維護；係數依「備貨覆蓋窗與事件重疊天數」按比例攤入，逾期自動失效）</div>'+(EVENTS.length?('<div style="overflow-x:auto"><table><tr><th>事件</th><th>期間</th><th class="right">係數</th><th>適用</th><th>狀態</th></tr>'+EVENTS.map(function(ev){var past=ev.to<TODAY;return '<tr><td>'+ev.name+'</td><td>'+ymd(ev.from)+' ~ '+ymd(ev.to)+'</td><td class="right">×'+ev.coef+'</td><td>'+(ev.scope||'全部')+'</td><td>'+(ev.on?(past?'⏳ 已過期':'✅ 啟用'):'⛔ 停用')+'</td></tr>';}).join('')+'</table></div>'):'<div class="note">尚未設定。到 BOM 本新增分頁 dim_event（欄位：事件名／開始日／結束日／加成係數／適用品類／啟用），存檔後重新整理本頁即生效。</div>')+'</div>';
   html+=(ed?'<div class="toolbar"><button class="btn" id="saveSeason">儲存季節指數</button></div>':'')+'<div class="note">本月 '+sm+'月（'+(SIDX[sm]||1)+'）→ 備貨 '+tm+'月（'+(SIDX[tm]||1)+'）＝×'+((SIDX[tm]||1)/(SIDX[sm]||1)).toFixed(2)+'。</div>';return html;}
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
