@@ -36,6 +36,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .quick-btn { padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border); background: white; font-size: 12px; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .15s; }
 .quick-btn:hover { background: var(--hover); color: var(--primary); border-color: var(--primary-light); }
 .quick-btn.active { background: var(--primary); color: white; border-color: var(--primary); font-weight: 600; }
+.date-note { font-size: 12px; color: #6F4E45; opacity: .85; white-space: nowrap; cursor: help; }
 .period-info { margin-left: auto; font-size: 12px; color: var(--muted); background: var(--bg); padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border); white-space: nowrap; }
 
 /* LOADING OVERLAY */
@@ -98,7 +99,12 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 .target-ring-sub { font-size:12px; color:var(--muted); margin-top:2px; }
 .target-meta { margin-top:10px; font-size:12px; color:var(--muted); line-height:1.8; }
 .target-meta strong { color: var(--text); }
-.store-target-row { display:grid; grid-template-columns:108px 1fr 52px 72px 68px 74px; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.store-target-row { display:grid; grid-template-columns:108px 1fr 60px 72px 68px 74px; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.th-sort { cursor:pointer; user-select:none; transition:color .15s; }
+.th-sort:hover { color:var(--primary); }
+.th-sort.active { color:var(--primary); font-weight:700; }
+.th-arrow { margin-left:2px; opacity:.5; }
+.th-sort.active .th-arrow { opacity:1; }
 .store-target-row:last-child { border-bottom:none; }
 .store-target-name { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .progress-track { position:relative; height:8px; background:var(--border); border-radius:4px; overflow:visible; }
@@ -154,9 +160,11 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
     <button class="quick-btn" onclick="setQuick(1)">單月</button>
     <button class="quick-btn" onclick="setQuick(3)">最近3個月</button>
     <button class="quick-btn" onclick="setQuick(6)">最近6個月</button>
-    <button class="quick-btn active" id="qAll" onclick="setQuick(0)">全部期間</button>
+    <button class="quick-btn active" id="qYTD" onclick="setQuickYTD()">本年度</button>
+    <button class="quick-btn" id="qAll" onclick="setQuick(0)">全部期間</button>
   </div>
-  <div class="period-info" id="periodInfo">共 12 個月</div>
+  <div class="date-note" title="原始名單每月 1 日才匯入上月資料，當月尚未結束、資料不完整，故不列入分析">ⓘ 當月未結束（資料未匯入），選單只到上月</div>
+  <div class="period-info" id="periodInfo">共 6 個月</div>
 </div>
 
 <div class="container">
@@ -202,7 +210,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
 
   <!-- 2026 目標達成追蹤 -->
   <div class="section">
-    <div class="section-title">🎯 2026 年度自己人目標達成追蹤 <span style="font-weight:400;font-size:12px;color:var(--muted)">分子=真會員新增｜目標 72,528 仍保留(原訂目標)｜固定全年進度,不受日期篩選影響</span></div>
+    <div class="section-title">🎯 2026 年度自己人目標達成追蹤 <span style="font-weight:400;font-size:12px;color:var(--muted)">分子=真會員新增｜目標 72,528 仍保留(原訂目標)｜固定全年進度,不受日期篩選影響｜點欄位標題可改排序</span></div>
     <div id="targetSection"><div class="chart-card no-data">資料載入中…</div></div>
   </div>
 
@@ -334,12 +342,18 @@ function updateElapsedMonths(lastDataDate) {
   ELAPSED_MONTHS_2026 = d.getMonth() + dayFraction;
 }
 
-// Available months 動態生成：從 2025-04 到當月
+// Available months 動態生成：從 2025-04 到「上個月」
+// ★ 2026-07-14：排除進行中的當月。原始名單是每月 1 日手動 append 上月資料，
+//   當月永遠不完整（例：7/14 時 7 月名單尚未匯入），列出來只會誤導。
+//   → 選單上限＝上個月，「單月/最近N個月/全部期間」快速鍵也自動跟著不碰當月。
 const MONTHS = (() => {
   const arr = [];
   const today = new Date();
+  const lastClosed = new Date(today.getFullYear(), today.getMonth(), 0); // 上個月最後一天（自動跨年）
+  const endY = lastClosed.getFullYear();
+  const endM = lastClosed.getMonth() + 1;
   let y = 2025, m = 4;
-  while (y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth() + 1)) {
+  while (y < endY || (y === endY && m <= endM)) {
     const lastDay = new Date(y, m, 0).getDate();
     arr.push({
       label: `${y}年${m}月`,
@@ -352,11 +366,32 @@ const MONTHS = (() => {
   return arr;
 })();
 
+// 預設期間 = 本年度 1 月 ～ 上個月（最後一個已完結月份）
+// 例：今天 2026/7/14 → 2026年1月 ～ 2026年6月
+// 邊界：若當月為 1 月（最後可用月＝去年 12 月）→ 自動退為「去年 1 月～去年 12 月」
+// 邊界：若該年 1 月不在清單內（2025 起點是 4 月）→ 退為清單第一個月
+function defaultRangeIdx() {
+  const last = MONTHS.length - 1;
+  const lastYear = MONTHS[last].fromDate.slice(0, 4);
+  let first = MONTHS.findIndex(m => m.fromDate === lastYear + '-01-01');
+  if (first < 0) first = 0;
+  return { first, last };
+}
+
 // ─── STATE ────────────────────────────────────────────────────
 let charts = {};
 let activeStores = new Set(['台北南京店','台北士林店','高雄SKM Park店','新北板橋店']);
 let loyaltyMode = 'repeat';
 let sortKey = 'recruitRate'; let sortAsc = false;
+
+// 🎯 目標達成追蹤表排序（2026-07-14 新增）
+// pct=達成率｜diff=月增減(最新月 vs 前月)｜lastCnt=新增人數(最新月)
+let targetSortKey = 'pct'; let targetSortAsc = false;   // 預設：達成率高→低（同原行為）
+function sortTarget(key) {
+  targetSortAsc = (targetSortKey === key) ? !targetSortAsc : false;  // 同欄再點 → 反向
+  targetSortKey = key;
+  renderTargetSection();
+}
 let currentData = null;
 let _rawCache = null;
 
@@ -368,7 +403,9 @@ function initDateSelectors() {
     from.innerHTML += `<option value="${i}">${m.label}</option>`;
     to.innerHTML   += `<option value="${i}">${m.label}</option>`;
   });
-  to.value = MONTHS.length - 1;
+  const d = defaultRangeIdx();
+  from.value = d.first;   // 本年度 1 月
+  to.value   = d.last;    // 上個月（最後一個完整月）
 }
 
 function getSelectedRange() {
@@ -391,6 +428,18 @@ function setQuick(n) {
   document.getElementById('fromMonth').value = n === 0 ? 0 : Math.max(0, last - n + 1);
   document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
+  updatePeriodInfo();
+  if (_rawCache) { applyRange(); } else { initLoad(); }
+}
+
+// 本年度：1 月 ～ 上個月（＝進站預設值，按一下即可回到預設）
+function setQuickYTD() {
+  const d = defaultRangeIdx();
+  document.getElementById('fromMonth').value = d.first;
+  document.getElementById('toMonth').value   = d.last;
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  const btn = (typeof event !== 'undefined' && event && event.target) ? event.target : document.getElementById('qYTD');
+  if (btn) btn.classList.add('active');
   updatePeriodInfo();
   if (_rawCache) { applyRange(); } else { initLoad(); }
 }
@@ -836,7 +885,16 @@ function renderTargetSection() {
     lastCnt: monthly[s] ? monthly[s].last : 0,
     prevCnt: monthly[s] ? monthly[s].prev : 0,
     prevPrevCnt: monthly[s] ? monthly[s].prevPrev : null,
-  })).sort((a,b) => b.pct - a.pct);
+    diff: (monthly[s] ? monthly[s].last : 0) - (monthly[s] ? monthly[s].prev : 0),  // 月增減（最新月 vs 前月）
+  }));
+  // 依使用者選的欄位排序（預設 pct 降冪 = 原行為）；同值時以達成率為次序
+  storeRows.sort((a, b) => {
+    const av = Number(a[targetSortKey]) || 0;
+    const bv = Number(b[targetSortKey]) || 0;
+    let r = bv - av;
+    if (r === 0) r = b.pct - a.pct;
+    return targetSortAsc ? -r : r;
+  });
 
   const rowsHtml = storeRows.map(r => {
     const barW = Math.min(r.pct, 100);
@@ -888,6 +946,14 @@ function renderTargetSection() {
     : overallPct >= elapsedPct * 0.8 ? '⚠️ 接近目標' : '❗ 低於目標';
   const statusColor = overallPct >= elapsedPct ? '#2D7A55' : overallPct >= elapsedPct * 0.8 ? '#B87A00' : '#C4412F';
 
+  const _MO_NAMES = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  const _moLast = (lastMoIdx >= 0 && lastMoIdx <= 11) ? _MO_NAMES[lastMoIdx] : '最新月';
+  const th = (key, label, tip) => {
+    const on = targetSortKey === key;
+    const arrow = on ? (targetSortAsc ? '▲' : '▼') : '↕';
+    return `<div class="th-sort${on ? ' active' : ''}" style="text-align:right" onclick="sortTarget('${key}')" title="${tip}">${label}<span class="th-arrow">${arrow}</span></div>`;
+  };
+
   document.getElementById('targetSection').innerHTML = `
     <div class="chart-card">
       <div class="target-grid">
@@ -907,8 +973,8 @@ function renderTargetSection() {
           </div>
         </div>
         <div>
-          <div style="display:grid;grid-template-columns:108px 1fr 52px 72px 68px 74px;gap:8px;padding:4px 0 6px;font-size:12px;color:var(--muted);font-weight:600;border-bottom:2px solid var(--border)">
-            <div>門市</div><div>進度 <span style="font-weight:400">(｜= 年度進度標準 ${elapsedPct}%)</span></div><div style="text-align:right">達成率</div><div style="text-align:right">實際 / 目標</div><div style="text-align:right">月增減</div><div style="text-align:right">新增人數</div>
+          <div style="display:grid;grid-template-columns:108px 1fr 60px 72px 68px 74px;gap:8px;padding:4px 0 6px;font-size:12px;color:var(--muted);font-weight:600;border-bottom:2px solid var(--border)">
+            <div>門市</div><div>進度 <span style="font-weight:400">(｜= 年度進度標準 ${elapsedPct}%)</span></div>${th('pct','達成率','點擊依 2026 累計達成率排序')}<div style="text-align:right">實際 / 目標</div>${th('diff','月增減',`點擊依「${_moLast}月增減」排序`)}${th('lastCnt','新增人數',`點擊依「${_moLast}新增人數」排序`)}
           </div>
           ${rowsHtml}
         </div>
