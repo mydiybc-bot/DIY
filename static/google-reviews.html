@@ -91,6 +91,8 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 .star-badge { display: inline-block; background: var(--accent-light); color: #B87A00; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
 .neg-badge { display: inline-block; background: #FFEDED; color: #C43030; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
 .pos-badge { display: inline-block; background: #EDFFF5; color: #2D7A55; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+.valid-badge { display: inline-block; background: #2D7A55; color: #fff; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 12px; white-space: nowrap; }
+.empty-badge { display: inline-block; background: #ECE6E2; color: #6F4E45; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 12px; white-space: nowrap; }
 ::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 </style>
 </head>
@@ -222,7 +224,7 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 <div class="section-title">📄 評論明細 <span id="detailCount" style="font-weight:400;font-size:12px;color:var(--muted);margin-left:8px;"></span></div>
 <div class="table-wrap">
 <table>
-<thead><tr><th>年月</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>標記</th><th>評論者</th><th>評論內容</th></tr></thead>
+<thead><tr><th>年月</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>評論性質</th><th>評論者</th><th>評論內容</th></tr></thead>
 <tbody id="detailTbody"></tbody>
 </table>
 </div>
@@ -458,10 +460,17 @@ if (_starChart) _starChart.destroy();
 _starChart = new Chart(ctx, { type:'doughnut', data:{ labels:['★1','★2','★3','★4','★5'], datasets:[{ data:[d[1],d[2],d[3],d[4],d[5]], backgroundColor:['#C43030','#E87060','#F4A620','#52B788','#4A9BB8'], borderWidth:2 }] }, options:{ responsive:true, plugins:{legend:{position:'bottom', labels:{font:{size:11}}}} } });
 }
 
-const MONTHLY_REVIEW_TARGET = 15;  // 各店每月評論目標則數（單月固定）
+const MONTHLY_REVIEW_TARGET = 15;  // 各店每月「有效評論」目標則數（單月固定）
+
+// 有效評論（真實評論）判定：必須 5 星，且評論內容非空白（只有星等、無任何文字者不算）
+function isValidReview(r){ return r.stars === 5 && String(r.text||'').trim() !== ''; }
+
+// 各店固定顯示序＝店號 1→12（末位 13 西門已歇業放最後）；字串須與評論 Sheet「門市」完全一致
+const STORE_SEQ = ['台中精明店','台中草悟道店','台北南京店','台北士林店','台南focus店','新竹文化店','新北板橋店','新北新店店','桃園中壢店','桃園藝文店','吳寶春(台北信義A13)','吳寶春(高雄SKM)','台南新光西門店'];
+const storeSeqCmp = (a,b) => { const ia=STORE_SEQ.indexOf(a), ib=STORE_SEQ.indexOf(b); return (ia<0?999:ia)-(ib<0?999:ib) || a.localeCompare(b); };
 
 // 各店評論比較＝「單月達標」專屬圖：只看自己的月份下拉 + 門市選取，與上方期間/星等/關鍵字脫鉤。
-// 目標線固定 15；達標看的是該月「總則數」，故不套星等/關鍵字篩選。
+// ★達標改依「有效評論」則數（5 星＋非空白內容），不再看總則數；總則數僅作背景水位參考。
 function renderStoreChart() {
 const monthSel = document.getElementById('store-chart-month');
 const month = (monthSel && monthSel.value) || (_monthList.length ? _monthList[_monthList.length - 1] : '');
@@ -469,33 +478,41 @@ let src = _allRows.filter(r => r.ym === month);
 if (_selectedStores.size) src = src.filter(r => _selectedStores.has(r.store));
 const bs = {};
 src.forEach(r => {
-if (!bs[r.store]) bs[r.store] = {total:0, neg:0};
+if (!bs[r.store]) bs[r.store] = {total:0, valid:0, neg:0};
 bs[r.store].total++;
+if (isValidReview(r)) bs[r.store].valid++;              // 有效評論：5 星且內容非空白
 if (r.stars !== null && r.stars <= 4) bs[r.store].neg++;
 });
 // 門市範圍：有選門市就顯示所選（含該月掛零者→0 則灰柱，才抓得出完全沒評論的店）；否則顯示全部店
 const universe = _selectedStores.size ? [..._selectedStores] : [...new Set(_allRows.map(r => r.store).filter(Boolean))];
-universe.forEach(s => { if (!bs[s]) bs[s] = {total:0, neg:0}; });
-const stores = universe.sort();
+universe.forEach(s => { if (!bs[s]) bs[s] = {total:0, valid:0, neg:0}; });
+const stores = universe.sort(storeSeqCmp);
 const target = MONTHLY_REVIEW_TARGET;
 const totals = stores.map(s => bs[s].total);
-const barColors = totals.map(v => v >= target ? 'rgba(196,65,47,.65)' : 'rgba(150,150,150,.5)');  // 未達標染灰
+const valids = stores.map(s => bs[s].valid);
+const negs   = stores.map(s => bs[s].neg);
+// 達標色綁在「有效評論」：達標→磚紅、未達標→灰
+const validColors = valids.map(v => v >= target ? 'rgba(196,65,47,.75)' : 'rgba(150,150,150,.55)');
 const ctx = document.getElementById('storeChart').getContext('2d');
 if (_storeChart) _storeChart.destroy();
 _storeChart = new Chart(ctx, {
 type:'bar',
 data:{ labels:stores, datasets:[
-{ label:'該月評論數（灰＝未達標）', data:totals, backgroundColor:barColors, borderRadius:4, order:2 },
-{ label:'負評數', data:stores.map(s=>bs[s].neg), backgroundColor:'rgba(74,155,184,.85)', borderRadius:4, order:2 },
+{ label:'該月評論數（總量參考）', data:totals, backgroundColor:'rgba(214,190,170,.55)', borderRadius:4, order:2 },
+{ label:'有效評論（灰＝未達標）', data:valids, backgroundColor:validColors, borderRadius:4, order:2 },
+{ label:'負評數', data:negs, backgroundColor:'rgba(74,155,184,.85)', borderRadius:4, order:2 },
 { label:'每月目標 '+target+' 則', type:'line', data:stores.map(()=>target),
   borderColor:'#8B2D1F', borderWidth:2, borderDash:[6,4], pointRadius:0, fill:false, order:1, tension:0 }
 ] },
 options:{ responsive:true,
 plugins:{ legend:{position:'top', labels:{font:{size:12}}},
-tooltip:{callbacks:{ label:(c)=> c.dataset.type==='line'
-  ? ('每月目標 '+target+' 則')
-  : (c.dataset.label.replace('（灰＝未達標）','') + '：' + c.parsed.y + ' 則'
-     + (c.datasetIndex===0 ? '（' + (c.parsed.y>=target?'達標':'差 '+(target-c.parsed.y)+' 則') + '）' : '')) }}},
+tooltip:{callbacks:{ label:(c)=> {
+  if (c.dataset.type==='line') return '每月目標 '+target+' 則';
+  const name = c.dataset.label.replace('（灰＝未達標）','').replace('（總量參考）','');
+  let out = name + '：' + c.parsed.y + ' 則';
+  if (c.datasetIndex===1) out += '（' + (c.parsed.y>=target ? '達標' : '差 '+(target-c.parsed.y)+' 則') + '）';
+  return out;
+} }}},
 scales:{y:{beginAtZero:true, suggestedMax: Math.max(target, ...totals, 1) * 1.15, ticks:{font:{size:12}}}, x:{ticks:{font:{size:12}}}} }
 });
 }
@@ -508,7 +525,7 @@ bs[r.store].total++;
 if (r.stars !== null) { bs[r.store].sum += r.stars; bs[r.store].cnt++; }
 if (r.stars !== null && r.stars <= 4) bs[r.store].neg++;
 });
-const stores = Object.keys(bs).sort();
+const stores = Object.keys(bs).sort(storeSeqCmp);
 const tb = document.getElementById('storeTbody');
 if (!stores.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">暫無資料</td></tr>'; return; }
 tb.innerHTML = stores.map(s => {
@@ -531,7 +548,7 @@ const show = rows.slice(0,200);
 document.getElementById('detailCount').textContent = `共 ${rows.length} 筆${rows.length>200?' （顯示前 200）':''}`;
 const tb = document.getElementById('detailTbody');
 if (!show.length) { tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">無符合條件的資料</td></tr>'; return; }
-tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=4?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td><span class="${r.tag&&r.tag!=='達標'?'neg-badge':'pos-badge'}">${esc(r.tag||'—')}</span></td><td>${esc(r.author||'—')}</td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}</td></tr>`).join('');
+tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=4?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td>${ isValidReview(r) ? '<span class="valid-badge">✓ 真實評論</span>' : (r.stars!==null&&r.stars<=4) ? '<span class="neg-badge">負評</span>' : (r.stars===5) ? '<span class="empty-badge">5★ 空白</span>' : '<span class="empty-badge">—</span>' }</td><td>${esc(r.author||'—')}</td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}</td></tr>`).join('');
 }
 
 function clearFilter(id) { document.getElementById(id).value = ''; applyFilters(); }
