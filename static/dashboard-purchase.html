@@ -110,7 +110,7 @@ function computeRow(sku,p){p=p||{};var onHand=num(p.onHand),dur=sku.cat==="器�
 var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UNITCONV=[],CONTAINER={},DIRTY={},BOOKAGG={},DESSERTS=[],BOOKINGS=[],USAGED={},ORDERS=[],FLOWST="",EVENTS=[],NEWAGG={};
 var SKU={}; // sku_id -> sku
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"品項用量",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
@@ -408,18 +408,12 @@ function loadStoreFlow(st){if(FLOWST===String(st))return Promise.resolve();FLOWS
     rs[0].forEach(function(r){var d=gvDate(r["日"]);if(!d)return;((USAGED[r["sku_id"]]=USAGED[r["sku_id"]]||{})[ymd(d)]=num(r["用量"]));});
     ORDERS=rs[1].map(function(r){var d=gvDate(r["時間戳"]);return {sku_id:r["sku_id"],qty:num(r["訂購量"]),t:d?d.getTime():0};}).filter(function(o){return o.t>0;});
   });}
-var TOTRES=null,RANKRES=null;
+var TOTRES=null,RANKRES=null,SALESRES=null;
+function ymNow(off){var d=new Date();d.setDate(1);d.setMonth(d.getMonth()+(off||0));return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);}
 function runRank(){if(!ST.totFrom||!ST.totTo||ST.totFrom>ST.totTo){toast("請選起迄月份");return;}
   RANKRES="loading";TOTRES=null;render();
-  var f0=ST.totFrom+"-01",tp=ST.totTo.split("-"),ny=+tp[0],nm=+tp[1]+1;if(nm>12){nm=1;ny++;}
-  var tEx=ny+"-"+("0"+nm).slice(-2)+"-01";
-  var sc=(ST.totScope==="本店"?" and A='"+ST.storeId+"'":"");
-  var tqD="select B,sum(D) where C >= date '"+f0+"' and C < date '"+tEx+"'"+sc+" group by B";
-  var tqS="select B,sum(D) where C>='"+ST.totFrom+"' and C<='"+ST.totTo+"'"+sc+" group by B";
-  gvizQ("agg_usage_month",tqD,MONTH_SHEET_ID).then(function(rs){
-    if(rs.length)return rs;
-    return gvizQ("agg_usage_month",tqS,MONTH_SHEET_ID);
-  }).then(function(rs){
+  var tq="select B,sum(D) where C>='"+ST.totFrom+"' and C<='"+ST.totTo+"'"+(ST.totScope==="本店"?" and A='"+ST.storeId+"'":"")+" group by B";
+  gvizQ("agg_usage_month",tq,MONTH_SHEET_ID).then(function(rs){
     var rows=[];rs.forEach(function(r){var id=r["sku_id"];if(id==null)return;var q=null;
       Object.keys(r).forEach(function(k){if(k!=="sku_id"&&q==null&&r[k]!=null&&!isNaN(+r[k]))q=+r[k];});
       if(q&&q>0)rows.push({id:String(id),qty:q});});
@@ -429,44 +423,22 @@ function runTotal(sk){if(!sk){toast("請先選品項");return;}
   TOTRES="loading";render();
   gvizQ("agg_usage_month","select A,C,D where B='"+sk+"'",MONTH_SHEET_ID).then(function(rs){
     var f=ST.totFrom,t=ST.totTo,by={},byMo={},total=0;
-    rs.forEach(function(r){var mv=r["月"],md=gvDate(mv);var mo=md?(md.getFullYear()+"-"+("0"+(md.getMonth()+1)).slice(-2)):String(mv||"").slice(0,7);if(mo>=f&&mo<=t){var st=String(r["店號"]);if(st==="13")return;var q=+r["用量"]||0;by[st]=(by[st]||0)+q;byMo[mo]=(byMo[mo]||0)+q;total+=q;}});
+    rs.forEach(function(r){var mo=String(r["月"]||"");if(mo>=f&&mo<=t){var st=String(r["店號"]);if(st==="13")return;var q=+r["用量"]||0;by[st]=(by[st]||0)+q;byMo[mo]=(byMo[mo]||0)+q;total+=q;}});
     TOTRES={sku:sk,from:f,to:t,total:total,rows:Object.keys(by).sort(function(a,b){return by[b]-by[a];}).map(function(s2){return {store:s2,qty:by[s2]};}),months:Object.keys(byMo).sort().map(function(m){return {mo:m,qty:byMo[m]};})};
     render();});}
-function viewTotal(){
-  var h='<div class="card"><div class="muted" style="margin-bottom:6px">期間用量排行（月粒度，資料自 2024-12 起；用量＝POS×BOM 理論耗用含耗損；<b>器具/模具非消耗品、不在此列</b>）</div>'
-    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
-    +'<input class="sm" type="month" id="totFrom" value="'+(ST.totFrom||'')+'">〜<input class="sm" type="month" id="totTo" value="'+(ST.totTo||'')+'">'
-    +'<span class="seg">'+["全公司","本店"].map(function(x){return '<div class="'+((ST.totScope||"全公司")===x?"on":"")+'" data-totscope="'+x+'">'+x+'</div>';}).join('')+'</span>'
-    +'<button class="btn sm" id="totRun">查詢</button></div></div>';
-  if(RANKRES==="loading")return h+'<div class="note">統計中…</div>';
-  if(!RANKRES)return h+'<div class="note">選起迄月按查詢 → 直接看<b>全品項用量排行</b>（誰用最多一目了然）；點任一列展開該品項的 12 店分布與逐月。</div>';
-  var list=RANKRES.rows.map(function(r){return {r:r,s:SKU[r.id]};}).filter(function(x){return x.s;});
-  if(ST.totCat&&ST.totCat!=="全部")list=list.filter(function(x){return x.s.cat===ST.totCat;});
-  var q=(ST.totQ||"").trim();if(q)list=list.filter(function(x){return x.s.name.indexOf(q)>=0||String(x.s.vendor||"").indexOf(q)>=0;});
-  var sumCost=0;list.forEach(function(x){if(x.s.price&&x.s.packQty>0)x.cost=x.r.qty/x.s.packQty*x.s.price;else if(x.s.price)x.cost=x.r.qty*x.s.price;else x.cost=0;sumCost+=x.cost;});
-  h+='<div class="chips">'+["全部","食材","耗材"].map(function(c){return '<div class="chip '+((ST.totCat||"全部")===c?"on":"")+'" data-totcat="'+c+'">'+c+'</div>';}).join('')+'</div>';
-  h+='<div style="margin-bottom:8px"><input class="sm" id="totQ" style="width:100%;max-width:340px" placeholder="🔍 過濾品名或廠商…" value="'+(ST.totQ||'').replace(/"/g,'&quot;')+'"></div>';
-  h+='<div class="note">'+RANKRES.from+' 〜 '+RANKRES.to+'　·　'+(RANKRES.scope==="本店"?storeName(ST.storeId):"12 店合計")+'　·　'+list.length+' 項有用量　·　估算成本合計 <b>$'+fmt(Math.round(sumCost))+'</b></div>';
-  var shown=ST.totAll?list:list.slice(0,50);
-  h+='<div class="card" style="overflow-x:auto"><table><tr><th>#</th><th>品項</th><th class="right">總用量</th><th class="right">約合</th><th class="right">估算成本</th><th class="right">成本佔比</th></tr>';
-  shown.forEach(function(x,i){var s=x.s;
-    h+='<tr data-drill="'+s.id+'" style="cursor:pointer"><td>'+(i+1)+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b></td>'
-      +'<td class="right">'+fmt(Math.round(x.r.qty))+' '+s.useUnit+'</td>'
-      +'<td class="right">'+(s.packQty>0?dec(x.r.qty/s.packQty)+' '+s.buyUnit:'—')+'</td>'
-      +'<td class="right">'+(x.cost?'$'+fmt(Math.round(x.cost)):'—')+'</td>'
-      +'<td class="right">'+(x.cost&&sumCost?Math.round(x.cost/sumCost*100)+'%':'—')+'</td></tr>';});
-  if(!shown.length)h+='<tr><td colspan="6" class="muted">此期間無用量（若連麵粉都是 0，代表 agg_usage_month 尚未重算）</td></tr>';
-  h+='</table>'+(list.length>50&&!ST.totAll?'<div style="text-align:center;margin-top:6px"><span class="why" id="totAll">展開全部 '+list.length+' 項 ▾</span></div>':'')+'</div>';
-  if(TOTRES==="loading")h+='<div class="note">載入品項明細…</div>';
-  else if(TOTRES&&SKU[TOTRES.sku]){var s=SKU[TOTRES.sku];var packs=s.packQty>0?TOTRES.total/s.packQty:null;
-    h+='<div class="card"><div class="muted" style="margin-bottom:4px">🔎 <b>'+s.name+'</b>　'+TOTRES.from+' 〜 '+TOTRES.to+'（12 店）</div>'
-      +'<div class="summary"><div class="stat"><div class="n">'+fmt(Math.round(TOTRES.total))+'</div><div class="l">總用量（'+s.useUnit+'）</div></div>'
-      +(packs!=null?'<div class="stat"><div class="n">'+dec(packs)+'</div><div class="l">約合 '+s.buyUnit+'</div></div>':'')+'</div>'
-      +'<table><tr><th>店</th><th class="right">用量（'+s.useUnit+'）</th><th class="right">佔比</th></tr>'
-      +TOTRES.rows.map(function(r){return '<tr><td>'+storeName(r.store)+'</td><td class="right">'+fmt(Math.round(r.qty))+'</td><td class="right">'+(TOTRES.total?Math.round(r.qty/TOTRES.total*100):0)+'%</td></tr>';}).join('')
-      +'</table><table style="margin-top:8px"><tr><th>月份</th><th class="right">用量（'+s.useUnit+'）</th></tr>'
-      +TOTRES.months.map(function(m){return '<tr><td>'+m.mo+'</td><td class="right">'+fmt(Math.round(m.qty))+'</td></tr>';}).join('')+'</table></div>';}
-  return h;}
+function runSales(){ if(!ST.totFrom||!ST.totTo||ST.totFrom>ST.totTo){SALESRES=null;return;}
+  SALESRES="loading";
+  var tq="select B,sum(D) where C>='"+ST.totFrom+"' and C<='"+ST.totTo+"'"+(ST.totScope==="本店"?" and A='"+ST.storeId+"'":"")+" group by B";
+  gvizQ("agg_sales_month",tq,MONTH_SHEET_ID).then(function(rs){
+    var rows=[];rs.forEach(function(r){var nm=r["商品"];if(nm==null||nm==="")return;var q=null;
+      Object.keys(r).forEach(function(k){if(k!=="商品"&&q==null&&r[k]!=null&&!isNaN(+r[k]))q=+r[k];});
+      if(q&&q>0)rows.push({name:String(nm),qty:q});});
+    rows.sort(function(a,b){return b.qty-a.qty;});
+    SALESRES={from:ST.totFrom,to:ST.totTo,scope:ST.totScope||"全公司",rows:rows};render();});}
+function runPeriod(){ if(!ST.totFrom||!ST.totTo){toast("請選起迄月份");return;}
+  if(ST.totFrom>ST.totTo){toast("起月不能大於迄月");return;}
+  TOTRES=null;ST.totSku="";ST.totAll=false;ST.salesAll=false;
+  runSales();runRank();}
 function runCompare(){var sk=ST.cmpSku;if(!sk){toast("請先選品項");return;}
   CMPRES="loading";render();
   gvizQ("agg_usage_week","select A,C,D where B='"+sk+"'").then(function(rs){
@@ -475,14 +447,72 @@ function runCompare(){var sk=ST.cmpSku;if(!sk){toast("請先選品項");return;}
     var wksAll=lastWeeks(26),i1=wksAll.indexOf(f),i2=wksAll.indexOf(t),nW=(i1>=0&&i2>=i1)?(i2-i1+1):Object.keys(wkset).length||1;
     CMPRES={sku:sk,from:f,to:t,nWeeks:nW,rows:Object.keys(by).filter(function(s){return s!=="13";}).map(function(s){return {store:s,qty:by[s]};})};
     render();});}
-function viewQuery(){var store=ST.storeId,weeks={"上週":1,"近4週":4,"近8週":8}[ST.qperiod]||4;
-  var html='<div class="note">門市：'+storeName(store)+'　·　期間用量（週平均）。資料來自每日 POS×BOM 預聚合。</div>';
-  html+='<div style="margin-bottom:6px"><span class="seg">'+["品項用量","容器用量","跨店比較","期間總量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
-  html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
+function viewPeriodStats(){
+  if(!ST.totFrom)ST.totFrom=ymNow(-1);
+  if(!ST.totTo)ST.totTo=ymNow(-1);
+  var scopeLbl=(ST.totScope==="本店"?storeName(ST.storeId):"12 店合計");
+  var h='<div class="note">期間銷售與食材需求總覽（月粒度，資料自 2024-12）。選月區間＋範圍按「查詢」，下方三塊同時更新：① 賣了哪些商品 ② 用掉哪些食材 ③ 指定食材查詢。器具/模具非消耗品不列入食材需求。</div>';
+  h+='<div class="card"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+    +'<input class="sm" type="month" id="totFrom" min="2024-12" value="'+(ST.totFrom||"")+'">〜<input class="sm" type="month" id="totTo" min="2024-12" value="'+(ST.totTo||"")+'">'
+    +'<span class="seg">'+["全公司","本店"].map(function(x){return '<div class="'+((ST.totScope||"全公司")===x?"on":"")+'" data-totscope="'+x+'">'+x+'</div>';}).join('')+'</span>'
+    +'<button class="btn" id="psRun">查詢</button></div>'
+    +'<div class="muted" style="margin-top:4px;font-size:12px">'+scopeLbl+'　·　'+(ST.totFrom||"")+' 〜 '+(ST.totTo||"")+'</div></div>';
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">📈 <b>期間銷售統計</b>　商品 → 銷售總數（POS 原始銷量）</div>';
+  if(SALESRES==="loading")h+='<div class="note">統計中…</div>';
+  else if(!SALESRES)h+='<div class="note">按上方「查詢」載入。</div>';
+  else{ var sl=SALESRES.rows,sq=(ST.salesQ||"").trim();if(sq)sl=sl.filter(function(r){return r.name.indexOf(sq)>=0;});
+    var stot=0;sl.forEach(function(r){stot+=r.qty;});
+    h+='<div style="margin-bottom:8px"><input class="sm" id="salesQ" style="width:100%;max-width:340px" placeholder="🔍 過濾商品名…" value="'+(ST.salesQ||"").replace(/"/g,"&quot;")+'"></div>';
+    h+='<div class="note">'+sl.length+' 項商品　·　銷售合計 <b>'+fmt(stot)+'</b> 份</div>';
+    var sShown=ST.salesAll?sl:sl.slice(0,50);
+    h+='<div style="overflow-x:auto"><table><tr><th>#</th><th>商品名稱</th><th class="right">銷售總數</th><th class="right">佔比</th></tr>'
+      +sShown.map(function(r,i){return '<tr><td>'+(i+1)+'</td><td><b>'+r.name+'</b></td><td class="right"><b>'+fmt(r.qty)+'</b></td><td class="right">'+(stot?Math.round(r.qty/stot*100):0)+'%</td></tr>';}).join('')
+      +(sl.length?'':'<tr><td colspan="4" class="muted">此期間無銷售資料（若全空，代表 agg_sales_month 尚未重算或 POS 無此區間）</td></tr>')
+      +'</table></div>'+(sl.length>50&&!ST.salesAll?'<div style="text-align:center;margin-top:6px"><span class="why" id="salesAll">展開全部 '+sl.length+' 項 ▾</span></div>':'');
+  }
+  h+='</div>';
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🧺 <b>期間食材需求</b>　物料 → 總需求量／換算採購（POS×BOM 理論耗用含耗損）</div>';
+  if(RANKRES==="loading")h+='<div class="note">統計中…</div>';
+  else if(!RANKRES)h+='<div class="note">按上方「查詢」載入。</div>';
+  else{ var list=RANKRES.rows.map(function(r){return {r:r,s:SKU[r.id]};}).filter(function(x){return x.s;});
+    if(ST.totCat&&ST.totCat!=="全部")list=list.filter(function(x){return x.s.cat===ST.totCat;});
+    var q=(ST.totQ||"").trim();if(q)list=list.filter(function(x){return x.s.name.indexOf(q)>=0||String(x.s.vendor||"").indexOf(q)>=0;});
+    var sumCost=0;list.forEach(function(x){if(x.s.price&&x.s.packQty>0)x.cost=x.r.qty/x.s.packQty*x.s.price;else if(x.s.price)x.cost=x.r.qty*x.s.price;else x.cost=0;sumCost+=x.cost;});
+    h+='<div class="chips">'+["全部","食材","耗材"].map(function(c){return '<div class="chip '+((ST.totCat||"全部")===c?"on":"")+'" data-totcat="'+c+'">'+c+'</div>';}).join('')+'</div>';
+    h+='<div style="margin-bottom:8px"><input class="sm" id="totQ" style="width:100%;max-width:340px" placeholder="🔍 過濾品名或廠商…" value="'+(ST.totQ||"").replace(/"/g,"&quot;")+'"></div>';
+    h+='<div class="note">'+list.length+' 項有用量　·　估算成本合計 <b>$'+fmt(Math.round(sumCost))+'</b>　·　點列看 12 店分布</div>';
+    var shown=ST.totAll?list:list.slice(0,50);
+    h+='<div style="overflow-x:auto"><table><tr><th>#</th><th>物料項目</th><th class="right">總需求量</th><th class="right">換算採購</th><th class="right">估算成本</th></tr>'
+      +shown.map(function(x,i){var s=x.s;return '<tr data-drill="'+x.r.id+'" style="cursor:pointer"><td>'+(i+1)+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b></td>'
+        +'<td class="right"><b>'+fmt(Math.round(x.r.qty))+'</b> '+s.useUnit+'</td>'
+        +'<td class="right">'+(s.packQty>0?dec(x.r.qty/s.packQty)+' '+s.buyUnit:'—')+'</td>'
+        +'<td class="right">'+(x.cost?'$'+fmt(Math.round(x.cost)):'—')+'</td></tr>';}).join('')
+      +(list.length?'':'<tr><td colspan="5" class="muted">此期間無用量（若連麵粉都是 0，代表 agg_usage_month 尚未重算）</td></tr>')
+      +'</table></div>'+(list.length>50&&!ST.totAll?'<div style="text-align:center;margin-top:6px"><span class="why" id="totAll">展開全部 '+list.length+' 項 ▾</span></div>':'');
+  }
+  h+='</div>';
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🔎 <b>特定食材工具查詢</b>　選一項看該區間 12 店需求分布</div>';
+  var opts=SKUS.slice().sort(function(a,b){return (a.cat+a.name)<(b.cat+b.name)?-1:1;}).map(function(s){return '<option value="'+s.id+'"'+(s.id===ST.totSku?' selected':'')+'>'+s.cat+'｜'+s.name+'</option>';}).join('');
+  h+='<select class="sm" id="pickSku" style="max-width:260px"><option value="">— 選物料項目 —</option>'+opts+'</select>';
+  if(TOTRES==="loading")h+='<div class="note">載入品項明細…</div>';
+  else if(TOTRES&&SKU[TOTRES.sku]){var s2=SKU[TOTRES.sku];var packs=s2.packQty>0?TOTRES.total/s2.packQty:null;
+    h+='<div style="margin-top:8px"><div class="summary"><div class="stat"><div class="n">'+fmt(Math.round(TOTRES.total))+'</div><div class="l">總需求量（'+s2.useUnit+'）</div></div>'
+      +(packs!=null?'<div class="stat"><div class="n">'+dec(packs)+'</div><div class="l">約合 '+s2.buyUnit+'</div></div>':'')+'</div>'
+      +'<div style="overflow-x:auto"><table><tr><th>店</th><th class="right">需求量（'+s2.useUnit+'）</th><th class="right">佔比</th></tr>'
+      +TOTRES.rows.map(function(r){return '<tr><td>'+storeName(r.store)+'</td><td class="right">'+fmt(Math.round(r.qty))+'</td><td class="right">'+(TOTRES.total?Math.round(r.qty/TOTRES.total*100):0)+'%</td></tr>';}).join('')
+      +'</table><table style="margin-top:8px"><tr><th>月份</th><th class="right">需求量（'+s2.useUnit+'）</th></tr>'
+      +TOTRES.months.map(function(m){return '<tr><td>'+m.mo+'</td><td class="right">'+fmt(Math.round(m.qty))+'</td></tr>';}).join('')+'</table></div></div>';}
+  else h+='<div class="note" style="margin-top:6px">從上方下拉挑一項，或點「期間食材需求」表任一列。</div>';
+  h+='</div>';
+  return h;}
+function viewQuery(){var store=ST.storeId;
+  var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量","跨店比較","容器用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
+  if(ST.qmode==="期間統計")return html+viewPeriodStats();
   if(ST.qmode==="跨店比較")return html+viewCompare();
-  if(ST.qmode==="期間總量")return html+viewTotal();
-  if(ST.qmode==="容器用量"){var cs=CONTAINER[store]||{};html+='<div class="card"><table><tr><th>容器</th><th class="right">週平均</th></tr>';
+  if(ST.qmode==="容器用量"){var cs=CONTAINER[store]||{};html+='<div class="note">門市：'+storeName(store)+'　·　容器近 4 週平均使用次數。</div><div class="card"><table><tr><th>容器</th><th class="right">週平均</th></tr>';
     Object.keys(cs).forEach(function(t){html+='<tr><td><b>'+t+'</b></td><td class="right"><b>'+fmt(cs[t].avg4)+'</b> 次/週</td></tr>';});if(!Object.keys(cs).length)html+='<tr><td colspan="2" class="muted">無資料</td></tr>';html+='</table></div>';return html;}
+  html+='<div class="note">門市：'+storeName(store)+'　·　本店期間用量（週平均）。資料來自每日 POS×BOM 預聚合。</div>';
+  html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
   html+=catChips();var rows=SKUS.filter(function(s){return ST.cat==="全部"||s.cat===ST.cat;}).map(function(s){var a=aggOf(store,s);return {s:s,avg:a.avg4,wk:a.week};}).filter(function(x){return x.avg>0||x.wk>0;}).sort(function(a,b){return b.avg-a.avg;});
   html+='<div class="card"><table><tr><th>品項</th><th>類別</th><th class="right">週平均</th></tr>';
   rows.forEach(function(x){var s=x.s,v=ST.qperiod==="上週"?x.wk:x.avg;html+='<tr><td><b>'+s.name+'</b>'+(statusOf(store,s)==="已停售"?' <span class="muted">(已停售)</span>':'')+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td class="right"><b>'+dec(v/s.packQty)+'</b> '+s.buyUnit+'/週<div class="muted" style="font-size:11px">'+fmt(v)+' '+s.useUnit+'</div></td></tr>';});
@@ -571,6 +601,10 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-totcat]'),function(el){el.onclick=function(){ST.totCat=el.dataset.totcat;render();};});
   var tq2=$("#totQ");if(tq2){tq2.oninput=function(){ST.totQ=tq2.value;ST.totQF=true;render();};if(ST.totQF){tq2.focus();var L2=tq2.value.length;try{tq2.setSelectionRange(L2,L2);}catch(e){}ST.totQF=false;}}
   var ta=$("#totAll");if(ta)ta.onclick=function(){ST.totAll=true;render();};
+  var psr=$("#psRun");if(psr)psr.onclick=runPeriod;
+  var sqx=$("#salesQ");if(sqx){sqx.oninput=function(){ST.salesQ=sqx.value;ST.salesQF=true;render();};if(ST.salesQF){sqx.focus();var Ls=sqx.value.length;try{sqx.setSelectionRange(Ls,Ls);}catch(e){}ST.salesQF=false;}}
+  var sal=$("#salesAll");if(sal)sal.onclick=function(){ST.salesAll=true;render();};
+  var pk=$("#pickSku");if(pk)pk.onchange=function(){ST.totSku=pk.value;if(pk.value)runTotal(pk.value);else render();};
   Array.prototype.forEach.call(document.querySelectorAll('[data-drill]'),function(el){el.onclick=function(){ST.totSku=el.dataset.drill;runTotal(el.dataset.drill);};});
   var qb=$("#qbox");if(qb){qb.oninput=function(){ST.q=qb.value;ST.qFocus=true;render();};if(ST.qFocus){qb.focus();var L=qb.value.length;try{qb.setSelectionRange(L,L);}catch(e){}ST.qFocus=false;}}
   var ba=$("#bkAdd");if(ba)ba.onclick=function(){var d=$("#bkDate").value,ds=$("#bkDessert").value,q=+$("#bkQty").value,no=$("#bkNote").value||"";
