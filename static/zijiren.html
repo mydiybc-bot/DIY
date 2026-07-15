@@ -188,7 +188,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
       <ol>
         <li>日常無需操作，GAS 每日重算聚合表</li>
         <li><b>每月 1 日月度 SOP：</b>① 後台匯出<b>上月新增名單</b>（分 2 段）→ 貼 188uu「自己人原始資料_UID」最底下 append（不覆蓋、欄位對齊 A–G）② 後台匯出<b>「自己人統計」快照</b> → 貼 1hZ8「自己人各級別人數統計」，並把 <b>A2 改成匯出當天日期</b> ③ 按試算表上方「🔄 更新自己人」（或等當晚 03:00 自動）④ 3 分鐘後重整本頁驗收</li>
-        <li>快照表沒更新時，「現有會員人數」與回頭客比例分母會停在舊值，與後台即時數有落差屬正常</li>
+        <li>快照表沒更新時，「現有會員人數」卡會停在舊值、與後台即時數有落差屬正常（回頭客比例改用活躍會員分母，不受此影響）</li>
         <li>回頭客資料若暫時取不到，頁面會自動退回 365 天視圖；持續異常交 Cowork 檢查</li>
       </ol>
     </div>
@@ -236,7 +236,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
         <div class="legend" id="freqLegend"></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店現有會員數</span></div>
+        <div class="chart-title">回頭客比例(各店) & 平均消費次數 <span class="badge">分母 = 該店活躍會員(365天有消費)</span></div>
         <div class="tabs">
           <button class="tab active" id="tab-repeat" onclick="switchLoyalty('repeat',this)">回頭客比例 (%)</button>
           <button class="tab" id="tab-avg" onclick="switchLoyalty('avg',this)">平均消費次數</button>
@@ -523,10 +523,14 @@ async function updateRepeatCards(startYM, endYM, denom, periodLabel, fallback) {
     const r = await jsonp(REPEAT_ENDPOINT + '?start=' + startYM + '&end=' + endYM);
     if (myId !== _repeatReqId) return; // 已有更新的請求，丟棄過時結果
     if (!r || !r.ok) throw new Error((r && r.error) || 'bad response');
-    const rate = denom > 0 ? Math.round(r.repeatMembers / denom * 100) : 0;
+    // 分母改用「期間活躍會員」(endpoint 依期間回傳，含西門，與分子同期間同母體)；
+    // endpoint 未回傳 activeMembers 時退回快照 denom（不破版，並在字幕標示）
+    const active = (r.activeMembers != null) ? r.activeMembers : denom;
+    const usingActive = (r.activeMembers != null);
+    const rate = active > 0 ? Math.round(r.repeatMembers / active * 100) : 0;
     const pct  = r.totalVisits > 0 ? Math.round(r.repeatVisits / r.totalVisits * 100) : 0;
     _setText('kpiRepeatRate', rate + '%');
-    _setText('kpiRepeatRateSub', periodLabel + '｜消費 ≥2 次 (' + r.repeatMembers.toLocaleString() + ' / 現有會員 ' + denom.toLocaleString() + ')');
+    _setText('kpiRepeatRateSub', periodLabel + '｜消費 ≥2 次 (' + r.repeatMembers.toLocaleString() + (usingActive ? ' / 活躍會員 ' : ' / 現有會員 ') + active.toLocaleString() + ')');
     _setText('kpiRepeatVisits', r.repeatVisits.toLocaleString());
     _setText('kpiRepeatVisitsSub', '≥2 次客群貢獻的消費次數｜以次數代替金額(資料源無金額欄)');
     _setText('kpiRepeatPct', pct + '%');
@@ -805,9 +809,12 @@ function processFromCache(cache, fromIdx, toIdx) {
     const uniqueConsumers = storeActiveStats[s] ? storeActiveStats[s].activeConsumers365 : 0;
 
     // 回頭客統計（365 天固定窗口，GAS 計算）
-    const activeStats = storeActiveStats[s] || { active: 0, repeated: 0 };
-    const repeatRate  = activeStats.active > 0 ? Math.round(activeStats.repeated / activeStats.active * 100) : 0;
-    const repeatInfo  = { all: activeStats.active, repeated: activeStats.repeated };
+    const activeStats = storeActiveStats[s] || { active: 0, activeConsumers365: 0, repeated: 0 };
+    // 分母改用「該店 365 天活躍會員」(activeConsumers365)，與分子(repeated=365天≥2次)同母體；
+    // 原用該店現有會員快照(active)當分母會被招募人數稀釋、招募越多比例越低
+    const repeatDenom = activeStats.activeConsumers365 || 0;
+    const repeatRate  = repeatDenom > 0 ? Math.round(activeStats.repeated / repeatDenom * 100) : 0;
+    const repeatInfo  = { all: repeatDenom, repeated: activeStats.repeated };
 
     // 跨店消費：從 aggCross 矩陣計算（加入店該店總消費 vs 跨到其他店次數）
     const crossData = crossJoin[s] || { total: 0, cross: 0 };
