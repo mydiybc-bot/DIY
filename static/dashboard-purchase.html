@@ -91,6 +91,7 @@
 <script>
 /* ===== 設定 ===== */
 var SHEET_ID='1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
+var MONTH_SHEET_ID='19tG-AMYtiZPTYQcz85TGiGS2G4M5U1gZw9Mab2UFFU0'; // agg_usage_month 獨立檔（BOM 本已近儲存格上限）
 var GAS_URL='https://script.google.com/macros/s/AKfycbzOzNZ3L9cYrdFyHkopMQ_5HecXKxyo8_fL9prmSjxuOEmXqJT3aMsLHcyA4vjcO-oX/exec';var DEFAULT_LEAD=3, API_TOKEN='dbc-p-Xq7mKe2Ta9Rw';   // 已填入
 var FWD_DAYS=14, TODAY=(typeof window!=="undefined"&&window.__TODAY__)?new Date(window.__TODAY__):new Date();
 
@@ -120,8 +121,8 @@ function gviz(sheetName){
   }).catch(function(e){console.warn('gviz '+sheetName+' 失敗',e);return [];});
   return Promise.race([p, new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
 }
-function gvizQ(sheetName,tq){
-  var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName)+'&tq='+encodeURIComponent(tq);
+function gvizQ(sheetName,tq,ssid){
+  var url='https://docs.google.com/spreadsheets/d/'+(ssid||SHEET_ID)+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName)+'&tq='+encodeURIComponent(tq);
   var p=fetch(url).then(function(r){return r.text();}).then(function(t){
     var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
     var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
@@ -411,7 +412,7 @@ var TOTRES=null,RANKRES=null;
 function runRank(){if(!ST.totFrom||!ST.totTo||ST.totFrom>ST.totTo){toast("請選起迄月份");return;}
   RANKRES="loading";TOTRES=null;render();
   var tq="select B,sum(D) where C>='"+ST.totFrom+"' and C<='"+ST.totTo+"'"+(ST.totScope==="本店"?" and A='"+ST.storeId+"'":"")+" group by B";
-  gvizQ("agg_usage_month",tq).then(function(rs){
+  gvizQ("agg_usage_month",tq,MONTH_SHEET_ID).then(function(rs){
     var rows=[];rs.forEach(function(r){var id=r["sku_id"];if(id==null)return;var q=null;
       Object.keys(r).forEach(function(k){if(k!=="sku_id"&&q==null&&r[k]!=null&&!isNaN(+r[k]))q=+r[k];});
       if(q&&q>0)rows.push({id:String(id),qty:q});});
@@ -419,7 +420,7 @@ function runRank(){if(!ST.totFrom||!ST.totTo||ST.totFrom>ST.totTo){toast("請選
     RANKRES={from:ST.totFrom,to:ST.totTo,scope:ST.totScope||"全公司",rows:rows};render();});}
 function runTotal(sk){if(!sk){toast("請先選品項");return;}
   TOTRES="loading";render();
-  gvizQ("agg_usage_month","select A,C,D where B='"+sk+"'").then(function(rs){
+  gvizQ("agg_usage_month","select A,C,D where B='"+sk+"'",MONTH_SHEET_ID).then(function(rs){
     var f=ST.totFrom,t=ST.totTo,by={},byMo={},total=0;
     rs.forEach(function(r){var mo=String(r["月"]||"");if(mo>=f&&mo<=t){var st=String(r["店號"]);if(st==="13")return;var q=+r["用量"]||0;by[st]=(by[st]||0)+q;byMo[mo]=(byMo[mo]||0)+q;total+=q;}});
     TOTRES={sku:sk,from:f,to:t,total:total,rows:Object.keys(by).sort(function(a,b){return by[b]-by[a];}).map(function(s2){return {store:s2,qty:by[s2]};}),months:Object.keys(byMo).sort().map(function(m){return {mo:m,qty:byMo[m]};})};
