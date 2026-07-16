@@ -483,16 +483,19 @@ _starChart = new Chart(ctx, { type:'doughnut', data:{ labels:['★1','★2','★
 
 const MONTHLY_REVIEW_TARGET = 15;  // 各店每月「有效評論」目標則數（單月固定）
 
-// 有效評論（真實評論）判定 v3：必須 5 星、清理翻譯後非空白，且「真實提到服務 或 有人名」。
-// 服務關鍵字只收「員工的服務行為」，不含場地/流程字（環境/空間/優惠/步驟等）；人名從寬。純泛泛短評不算。
-const SERVICE_KW = ['服務','店員','員工','老闆','店長','小幫手','工作人員','人員','師傅','同仁','店家','櫃檯','服務員','親切','熱心','熱情','幫忙','幫助','協助','支援','耐心','細心','貼心','用心','教學','教導','講解','指導','解說','引導','示範','態度','專業','招待','體驗','nice','friendly','staff','service','patient','helpful','kind','experience'];
+// 有效評論判定（統一標準）：必須 5 星（1–4 星一律不算）、清理後非空白，且提到「與人有關的服務內容」。
+// 與人有關＝服務動作/形容詞(親切/熱情/幫忙…)、人物指涉(店員/夥伴名)、或「人很好」型；繁簡通吃。
+// 與人無關的活動/產品/場地(體驗/好吃/環境/好玩)一律不算。
+const SERVICE_KW = ['服務','服务','店員','店员','員工','员工','老闆','老板','店長','店长','小幫手','小帮手','工作人員','工作人员','人員','人员','師傅','师傅','同仁','店家','櫃檯','柜台','服務員','服务员','小姐','小哥','親切','亲切','熱心','热心','熱情','热情','熱忱','热忱','耐心','細心','细心','貼心','贴心','用心','友善','專業','专业','態度','态度','周到','大方','幫忙','帮忙','幫助','帮助','協助','协助','支援','教學','教学','教導','教导','講解','讲解','指導','指导','解說','解说','引導','引导','示範','示范','招待','人很好','人都很好','人超好','人真好','人蠻好','人满好','人不錯','人不错','nice','friendly','staff','service','patient','helpful','kind'];
 // 大寫英文詞中「不是人名」的常見字，需排除（其餘大寫英文一律從寬視為人名）
 const NAME_STOP = new Set(['THE','AND','THIS','THAT','THEY','WAS','WERE','ARE','OUR','YOU','YOUR','HER','HIS','ITS','FOR','HAD','HAS','HAVE','VERY','GOOD','NICE','GREAT','FUN','BUT','ALL','CAN','WILL','SHE','HIM','NOT','AMAZING','AWESOME','REALLY','SUPER','LOVE','LOVED','YES','WOW','THANK','THANKS','GOOGLE','ORIGINAL','TRANSLATED','WOULD','COULD','SHOULD','HERE','THERE','WHEN','WHAT','TIME','MADE','MAKE','RECOMMEND','HIGHLY','DEFINITELY','EXPERIENCE','STAFF','SERVICE','ALSO','EVEN','JUST','ONLY','PLACE','CAKE','DIY','SKM','WITH','FROM','GOT','AGAIN','BEEN','THEM','WHO','HOW','OUT']);
 function validContent(r){ return cleanGoogleTranslation(String(r.text||'')).trim(); }   // 5星非空白判定用清理後內容
 function hasPersonName(c){
-  if (/謝謝|感謝|多謝|多虧|感恩/.test(c)) return true;                       // 答謝某人＝有提到人
-  const toks = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                  // 大寫英文名（從寬）
-  return toks.some(t => !NAME_STOP.has(t.toUpperCase()));
+  if (/謝謝|谢谢|感謝|感谢|多謝|多谢|多虧|多亏|感恩/.test(c)) return true;   // 答謝某人＝有提到人
+  const en = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                    // 大寫英文名（從寬）
+  if (en.some(t => !NAME_STOP.has(t.toUpperCase()))) return true;
+  const dup = c.match(/([\u4e00-\u9fff])\1/g) || [];                        // 中文疊字名（與夥伴表同口徑）
+  return dup.some(w => !DUP_NAME_STOP.has(w));
 }
 function isValidReview(r){
   if (r.stars !== 5) return false;
@@ -603,7 +606,7 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 // ===== 5 星口碑分析：關鍵字 & 優秀夥伴（吃過濾後的 5 星評論，跟門市/期間連動）=====
 const ANALYSIS_KW = ['蛋糕','餅乾','塔','派','服務','親切','熱心','熱情','幫忙','協助','幫助','耐心','細心','貼心','用心','態度','專業','友善','主動','鼓勵','招待','教學','講解','指導','示範','體驗','平板','步驟','簡單','有趣','好玩','輕鬆','環境','乾淨','舒適','空間','氣氛','位置','好吃','漂亮','可愛','生日','拍照','優惠','推薦','成就感','回憶','驚喜','值得','開心'];
 const EN_NAME_STOP = new Set('The And This That They Was Were Are Our You Your Her His Its For Had Has Have Very Good Nice Great Fun But All Can Will She Him Not Amazing Awesome Really Super Love Loved Yes Wow Thank Thanks Google Original Translated Would Could Should Here There When What Time Made Make Recommend Highly Definitely Experience Staff Service Also Even Just Only Place Cake Diy With From Got Again Been Them Who How Out Cute Delicious Best Kind Patient Friendly Happy Birthday Dessert Desserts Recipe Chinese English Everything Both One Two Store Shop Try Went Come Came Take Took Get Feel Felt Well More Most Much Many Some Any Their'.split(' '));
-const DUP_NAME_STOP = new Set(['謝謝','姐姐','姊姊','哥哥','弟弟','妹妹','爸爸','媽媽','叔叔','爺爺','奶奶','婆婆','公公','推推','好好','讚讚','棒棒','滿滿','哈哈','嘻嘻','呵呵','嘿嘿','啦啦','喔喔','哦哦','嗯嗯','會會','慢慢','剛剛','常常','天天','日日','人人','個個','種種','多多','快快','微微','漸漸','默默','偷偷','悄悄','紛紛','匆匆','輕輕','深深','遠遠','高高','長長','大大','小小','少少','早早','晚晚','久久','團團','整整','樣樣','件件','處處','時時','每每','再再','一一','看看','試試','問問','想想','做做','玩玩','走走','坐坐','聊聊','笑笑','等等','通通','統統','稍稍','明明','白白','空空','緩緩','徐徐','悠悠','款款','聲聲','步步','層層','片片','點點','絲絲','陣陣','串串','包包','盒盒','娃娃','毛毛','乖乖','呀呀','耶耶','蹦蹦','跳跳','體體']);
+const DUP_NAME_STOP = new Set(['謝謝','姐姐','姊姊','哥哥','弟弟','妹妹','爸爸','媽媽','叔叔','爺爺','奶奶','婆婆','公公','推推','好好','讚讚','棒棒','滿滿','哈哈','嘻嘻','呵呵','嘿嘿','啦啦','喔喔','哦哦','嗯嗯','會會','慢慢','剛剛','常常','天天','日日','人人','個個','種種','多多','快快','微微','漸漸','默默','偷偷','悄悄','紛紛','匆匆','輕輕','深深','遠遠','高高','長長','大大','小小','少少','早早','晚晚','久久','團團','整整','樣樣','件件','處處','時時','每每','再再','一一','看看','試試','問問','想想','做做','玩玩','走走','坐坐','聊聊','笑笑','等等','通通','統統','稍稍','明明','白白','空空','緩緩','徐徐','悠悠','款款','聲聲','步步','層層','片片','點點','絲絲','陣陣','串串','包包','盒盒','娃娃','毛毛','乖乖','呀呀','耶耶','蹦蹦','跳跳','體體','谢谢','赞赞','满满','刚刚','种种','会会','个个','长长','远远','点点','层层','处处','时时','样样','试试','问问','团团','声声','纷纷','轻轻','渐渐','谈谈','缓缓','静静']);
 function rankMap(m){ return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
 function countKeywords(r5){
   const c = {};
