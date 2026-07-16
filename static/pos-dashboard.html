@@ -1850,11 +1850,18 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
     return true;
   };
   // v14: 4人同行$500 為 POS 置換型，真實折扣 = 帳面折扣 − $500券佔位營收(placeholderRev)
+  // v20: 加購餅乾重分類（經營者裁定 2026-07-16）：這是把「陪同客」轉化為消費者的推銷讓利
+  //      （夥伴推銷陪同者做一份便宜餅乾），屬真實行銷讓利 → 前端把 加價購 併入 行銷折扣。
+  //      後端 GAS payload 的 category 仍為「加價購」，下次動 GAS 時再正名（categoryRaw 保留原值）。
   const fDBP = useMemo(()=>dbp.filter(filt).map(m=>({
     ...m,
+    categoryRaw: m.category,
+    category: m.category==='加價購' ? '行銷折扣' : m.category,
     discountRaw: m.discount,
     discount: (m.discount||0) - (m.placeholderRev||0)
   })),[dbp, dateStart, dateEnd, selRegion, selStores]);
+  // 加購餅乾獨立小計（KPI 卡沿用「獨立看」需求）
+  const cookieTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.categoryRaw==='加價購'?(m.discount||0):0),0),[fDBP]);
   const phTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.placeholderRev||0),0),[fDBP]);
   const fMBS = useMemo(()=>mbs.filter(filt),[mbs, dateStart, dateEnd, selRegion, selStores]);
 
@@ -1951,16 +1958,16 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
           <div className="kpi-sub">含訂金等，不應算讓利</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label">加價購</div>
-          <div className="kpi-value" style={{color:'#06b6d4'}}>{fmt.currency(catTotals['加價購']||0)}</div>
-          <div className="kpi-sub">加購餅乾，獨立看</div>
+          <div className="kpi-label">加購餅乾讓利</div>
+          <div className="kpi-value" style={{color:'#06b6d4'}}>{fmt.currency(cookieTotal)}</div>
+          <div className="kpi-sub">陪同轉化，已計入行銷折扣</div>
         </div>
       </div>
 
       {/* 大類占比 */}
       <div className="chart-card full-width">
         <div className="chart-title">折扣結構・大類占比</div>
-        <div className="chart-subtitle">真正的行銷讓利 vs 加價購 vs 非行銷（訂金/補償/手動）vs 其他</div>
+        <div className="chart-subtitle">真正的行銷讓利（含加購餅乾）vs 非行銷（訂金/補償/手動）vs 其他</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={110}>
             <BarChart data={catBarData} layout="vertical" margin={{top:5,right:20,bottom:5,left:20}}>
@@ -1969,7 +1976,6 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
               <Legend wrapperStyle={{fontSize:11}}/>
               <Bar dataKey="行銷折扣" stackId="c" fill={CAT_COLORS['行銷折扣']}/>
-              <Bar dataKey="加價購" stackId="c" fill={CAT_COLORS['加價購']}/>
               <Bar dataKey="非行銷折扣" stackId="c" fill={CAT_COLORS['非行銷折扣']}/>
               <Bar dataKey="其他" stackId="c" fill={CAT_COLORS['其他']} radius={[0,4,4,0]}/>
             </BarChart>
@@ -1978,10 +1984,9 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
         {/* 圖例白話註解：讓使用者一眼看懂四大類（刻意不寫死金額，隨期間/分店篩選變動仍正確） */}
         <div style={{marginTop:6,fontSize:12,color:'#6F4E45',lineHeight:1.6}}>
           <div style={{marginBottom:5}}>
-            ↑ 這條 = 肚肚<b>原始折扣資料的全部</b>拆解；<b style={{color:'#C4412F'}}>只有「行銷折扣」是真讓利</b>，其餘三塊都不該算折扣：
+            ↑ 這條 = 肚肚<b>原始折扣資料的全部</b>拆解；<b style={{color:'#C4412F'}}>只有「行銷折扣」是真讓利</b>，其餘兩塊都不該算折扣：
           </div>
-          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>行銷折扣</b>：真正的行銷讓利（券／優惠）—— <b>只有這塊算進上方「行銷折扣率」</b></div>
-          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['加價購'],marginRight:6,verticalAlign:'middle'}}></span><b>加價購</b>：加購餅乾，客人加價買的品項，<b>不是折扣</b>（肚肚用加購券機制記進折扣欄，才會出現在這）</div>
+          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>行銷折扣</b>：真正的行銷讓利（券／優惠）—— <b>只有這塊算進上方「行銷折扣率」</b>。含<b>加購餅乾</b>＝把陪同客轉化為消費者的推銷讓利（2026-07 起重分類，原列「加價購」）</div>
           <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['非行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>非行銷折扣</b>：訂金／補償／手動調整，<b>不算讓利</b>（多為預收款記錯欄）</div>
           <div><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['其他'],marginRight:6,verticalAlign:'middle'}}></span><b>其他</b>：分類規則沒對到的零星券，金額通常極小</div>
         </div>
