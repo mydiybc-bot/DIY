@@ -2093,6 +2093,11 @@ function ProgramRankTooltip({active, payload}){
       <div>折扣金額：{fmt.currency(p.discount)}</div>
       <div>使用次數：{fmt.number(uses)}</div>
       {uses > 0 && <div>平均讓利：{fmt.currency(Math.round(avg))} / 次</div>}
+      {((p.revGross||0) > 0 || (p.revActual||0) > 0) && <div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed #F0D9D5'}}>
+        帶動營業額（毛額）：{fmt.currency(Math.round(p.revGross||0))}<br/>
+        帶動營業額（實付）：{fmt.currency(Math.round(p.revActual||0))}
+        <div style={{color:'#6F4E45',marginTop:2}}>※用券交易之整筆金額；多券交易會重複歸屬，各方案不可加總</div>
+      </div>}
       {orig && <div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed #F0D9D5',color:'#C4412F'}}>
         反推原價 ≈ {fmt.currency(Math.round(orig))}<br/>
         客人實付 ≈ {fmt.currency(Math.round(orig - avg))}
@@ -2117,10 +2122,15 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
   // v14: 4人同行$500 為 POS 置換型，真實折扣 = 帳面折扣 − $500券佔位營收(placeholderRev)
   // v21: 後端 v19 已於 2026-07-22 源頭正名（classifyVoucher 加購餅乾 → 行銷折扣），
   //      移除 v20 前端 remap；「加購餅乾讓利」小計改以 voucher==='加購餅乾' 判定。
+  // v22: 後端 v20 新增 revGross/revActual（方案帶動營業額，serial_no 去重）。
+  //      毛額比照 discount 扣 placeholderRev（4人同行$500 佔位商品）；實付本來就是真收款、不扣。
+  //      後端未升級 v20 時欄位為 undefined → ||0 保護，tooltip 自動隱藏該區塊。
   const fDBP = useMemo(()=>dbp.filter(filt).map(m=>({
     ...m,
     discountRaw: m.discount,
-    discount: (m.discount||0) - (m.placeholderRev||0)
+    discount: (m.discount||0) - (m.placeholderRev||0),
+    revGross: (m.revGross||0) - (m.placeholderRev||0),
+    revActual: (m.revActual||0)
   })),[dbp, dateStart, dateEnd, selRegion, selStores]);
   // 加購餅乾獨立小計（KPI 卡沿用「獨立看」需求）
   const cookieTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.voucher==='加購餅乾'?(m.discount||0):0),0),[fDBP]);
@@ -2145,9 +2155,11 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
     const byV={};
     fDBP.forEach(m=>{
       if(m.category!=='行銷折扣') return;
-      if(!byV[m.voucher]) byV[m.voucher]={voucher:m.voucher,discount:0,uses:0,lastYM:''};
+      if(!byV[m.voucher]) byV[m.voucher]={voucher:m.voucher,discount:0,uses:0,revGross:0,revActual:0,lastYM:''};
       byV[m.voucher].discount+=(m.discount||0);
       byV[m.voucher].uses+=(m.uses||0);
+      byV[m.voucher].revGross+=(m.revGross||0);
+      byV[m.voucher].revActual+=(m.revActual||0);
       if(m.yearMonth>byV[m.voucher].lastYM) byV[m.voucher].lastYM=m.yearMonth;
     });
     return Object.values(byV).sort((a,b)=>b.discount-a.discount);
@@ -2257,7 +2269,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* 行銷折扣方案排行 */}
       <div className="chart-card full-width">
         <div className="chart-title">行銷折扣方案排行・成本</div>
-        <div className="chart-subtitle">前 15 大方案（手打變體已收斂）。4人同行$500 已扣除 $500券佔位營收=真實讓利。游標懸停看次數／平均讓利；「N折」方案自動反推原價與實付</div>
+        <div className="chart-subtitle">前 15 大方案（手打變體已收斂）。4人同行$500 已扣除 $500券佔位營收=真實讓利。游標懸停看次數／平均讓利／帶動營業額（毛額與實付）；「N折」方案自動反推原價與實付</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={480}>
             <BarChart data={programTop} layout="vertical" margin={{left:10,right:30}}>
