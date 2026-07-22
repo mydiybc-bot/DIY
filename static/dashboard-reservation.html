@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>訂位分析 | 自己做烘焙聚樂部</title>
+<style>
+:root {
+  --primary: #C4412F; --primary-light: #E87060; --primary-dark: #8B2D1F;
+  --accent: #F4A620; --accent-light: #FDD99B;
+  --green: #52B788; --blue: #4A9BB8;
+  /* reservation 專屬色：紫 */
+  --purple: #6A4FA0; --purple-light: #9B85C4; --purple-dark: #4A3574;
+  --bg: #FFF8F6; --card: #FFFFFF; --text: #2D1A14; --muted: #6F4E45;
+  --border: #F0D9D5; --hover: #FFF0ED;
+  --flag-red: #D9594C; --flag-orange: #E8924D; --flag-yellow: #E8B84D;
+  --good-green: #52B788;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* HEADER */
+.header { background: linear-gradient(135deg, var(--purple-dark), var(--purple), var(--purple-light)); color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(74,53,116,.3); flex-wrap: wrap; gap: 10px; }
+.header-left h1 { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
+.header-left p { font-size: 12px; opacity: .85; margin-top: 3px; }
+.header-back { background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.3); border-radius: 20px; padding: 7px 16px; font-size: 13px; font-weight: 600; color: white; cursor: pointer; text-decoration: none; transition: background .15s; }
+.header-back:hover { background: rgba(255,255,255,.28); }
+
+/* CONTAINER */
+.container { max-width: 1280px; margin: 0 auto; padding: 24px 28px 60px; }
+
+/* 資料狀態列 */
+.dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+.dsb b{font-weight:800;white-space:nowrap}
+.dsb-auto{background:#EFF7EF;border-color:#C9E3CA;color:#2F5D33}
+.dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+.dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#4A3A30;font-size:13px}
+.dsb-sop.open{display:block}
+.dsb-sop ol{margin:0;padding-left:20px}
+.dsb-sop li{margin:3px 0}
+@media(max-width:600px){.dsb-info{margin-left:0}}
+
+/* CONTROLS */
+.controls-row { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:20px; }
+.controls-row label { font-size:13px; color:var(--muted); font-weight:700; }
+.month-sel { font-family:inherit; font-size:14px; padding:9px 14px; border:1.5px solid var(--border); border-radius:10px; background:white; color:var(--text); cursor:pointer; outline:none; font-weight:700; }
+.month-sel:hover, .month-sel:focus { border-color:var(--purple); }
+.refresh-btn { background:var(--purple); color:white; border:0; padding:9px 18px; border-radius:10px; font-family:inherit; font-weight:700; font-size:13px; cursor:pointer; transition:background .15s; }
+.refresh-btn:hover { background:var(--purple-dark); }
+.refresh-btn:disabled { background:#C8BEDD; cursor:not-allowed; }
+
+/* KPI ROW */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 22px; }
+.kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; position: relative; overflow: hidden; }
+.kpi-card::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--purple); }
+.kpi-card .label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .3px; margin-bottom: 6px; }
+.kpi-card .val   { font-size: 22px; font-weight: 800; color: var(--purple-dark); line-height: 1.1; }
+.kpi-card .sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.kpi-card.alert::before { background: var(--flag-red); }
+.kpi-card.alert .val { color: var(--flag-red); }
+
+/* SECTION */
+.section { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; margin-bottom: 22px; }
+.section-title { font-size: 14px; font-weight: 800; color: var(--purple-dark); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.section-title .badge { background: var(--bg); border: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 12px; }
+
+/* SVG chart wrap */
+.svg-wrap { width:100%; overflow-x:auto; }
+
+/* HEATMAP / matrix */
+.heat-wrap { overflow-x: auto; }
+.heat-table { border-collapse: collapse; width: 100%; min-width: 640px; }
+.heat-table th, .heat-table td { padding: 8px 6px; text-align: center; font-size: 12px; }
+.heat-table th { background: var(--bg); color: var(--purple-dark); font-weight: 700; border-bottom: 2px solid var(--border); white-space:nowrap; }
+.heat-table th.row-head, .heat-table td.row-head { text-align:left; font-weight:700; padding-left:12px; min-width:64px; position:sticky; left:0; background:white; z-index:2; white-space:nowrap; }
+.heat-table th.row-head { background:var(--bg); z-index:3; }
+.heat-cell { border-radius: 6px; padding: 8px 4px; font-weight: 700; font-size:12px; cursor:default; }
+
+/* 分店比較表 */
+.cmp-wrap { overflow-x:auto; }
+.cmp-table { width:100%; border-collapse:collapse; min-width:640px; font-size:13px; }
+.cmp-table th { background:var(--bg); color:var(--purple-dark); font-weight:700; padding:9px 10px; border-bottom:2px solid var(--border); text-align:left; font-size:12px; white-space:nowrap; cursor:pointer; user-select:none; }
+.cmp-table th:hover { background:var(--hover); }
+.cmp-table th .arrow { font-size:11px; color:var(--muted); margin-left:3px; }
+.cmp-table td { padding:8px 10px; border-bottom:1px solid var(--border); }
+.cmp-table tr:hover { background:var(--hover); }
+.cmp-table .num { text-align:right; font-variant-numeric:tabular-nums; }
+.cmp-table .cancel-hi { color:var(--flag-red); font-weight:800; }
+.cmp-table .cancel-mid { color:#B26A1C; font-weight:800; }
+.cmp-table .store-warn { color:var(--muted); font-size:11px; font-style:italic; }
+
+/* 目的長條圖 */
+.purpose-row { display:flex; align-items:center; gap:10px; margin-bottom:9px; font-size:13px; flex-wrap:wrap; }
+.purpose-label { width:100px; flex-shrink:0; color:var(--text); font-weight:600; text-align:right; }
+.purpose-track { flex:1; min-width:80px; height:20px; background:var(--bg); border-radius:5px; overflow:hidden; position:relative; }
+.purpose-fill { height:100%; background:var(--purple); border-radius:5px; transition:width .3s; }
+.purpose-val { width:150px; flex-shrink:0; color:var(--muted); font-size:12px; }
+.purpose-val b { color:var(--purple-dark); }
+
+/* 壓力矩陣 */
+.pressure-summary { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+.pressure-sum-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:8px 14px; font-size:12px; min-width:100px; }
+.pressure-sum-card .nm { color:var(--muted); font-weight:700; white-space:nowrap; }
+.pressure-sum-card .vv { color:var(--purple-dark); font-weight:800; font-size:15px; margin-top:2px; }
+
+/* 回訪分析 */
+.revisit-row { display:flex; flex-wrap:wrap; gap:16px; }
+.revisit-card { background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:16px 20px; flex:1; min-width:180px; }
+.revisit-card .lbl { font-size:12px; color:var(--muted); font-weight:700; margin-bottom:6px; }
+.revisit-card .vv { font-size:26px; font-weight:800; color:var(--purple-dark); }
+
+/* LOADING / ERROR */
+.loading { text-align: center; padding: 80px 20px; color: var(--muted); }
+.spin { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--purple); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.err-msg { background: #FBE6E3; border: 1px solid #F2BBB3; color: #B23A2C; padding: 14px 18px; border-radius: 12px; margin: 16px 0; font-size: 13px; }
+.empty-note { text-align:center; padding:30px; color:var(--muted); font-size:13px; }
+
+/* FOOTER */
+.footer { text-align: center; padding: 20px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>📅 訂位分析儀表板</h1>
+    <p>訂位量 × 取消率 × 出席率 ｜ 12 間門市</p>
+  </div>
+  <a class="header-back" href="hub.html">⬅ 回首頁</a>
+</div>
+
+<div class="container">
+
+  <div class="dsb dsb-auto">
+    <b>🟢 自動更新・每日</b>
+    <span>GAS 每日 05:00 自動抓取，無需操作</span>
+    <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 詳細說明</button>
+    <div class="dsb-sop" id="dsbSop">
+      <ol>
+        <li>每日 05:00 自動回看前 3 天（D-3～D-1）訂位狀態並更新，未來 15 天（今天～+14 天）每日全量重建</li>
+        <li>資料不含姓名／電話／Email／備註；LINE 會員識別碼僅用於「回訪會員」內部去重計算，不對外顯示</li>
+        <li>資料異常請通知 Cowork 檢查管線執行紀錄</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="controls-row">
+    <label>📅 月份</label>
+    <select id="monthSel" class="month-sel"><option>載入中…</option></select>
+    <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">🔄 重新整理</button>
+  </div>
+
+  <div id="loadingBox" class="loading">
+    <div class="spin"></div>
+    <div style="margin-top:14px;font-size:13px;">載入訂位資料中…</div>
+  </div>
+
+  <div id="errorBox"></div>
+
+  <div id="mainContent" style="display:none;">
+
+    <!-- 1. KPI -->
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <!-- 2. 每日趨勢 -->
+    <div class="section">
+      <div class="section-title">📈 每日訂位趨勢 <span class="badge">有效／已取消，滑鼠移入看明細</span></div>
+      <div class="svg-wrap" id="dailyTrendBox"></div>
+    </div>
+
+    <!-- 3. 星期×時段熱力矩陣 -->
+    <div class="section">
+      <div class="section-title">🌡️ 星期 × 時段熱力矩陣 <span class="badge">著色 = 有效訂位數</span></div>
+      <div class="heat-wrap"><table class="heat-table" id="weekSlotTable"></table></div>
+    </div>
+
+    <!-- 4. 分店比較表 -->
+    <div class="section">
+      <div class="section-title">🏪 分店比較 <span class="badge">點欄名可排序・取消率 &gt;30% 紅字 &gt;25% 橘字</span></div>
+      <div class="cmp-wrap"><table class="cmp-table" id="storeCmpTable"></table></div>
+    </div>
+
+    <!-- 5. 目的結構 -->
+    <div class="section">
+      <div class="section-title">🎯 訂位目的結構 <span class="badge">依有效訂位人數排序・數值為該目的取消率</span></div>
+      <div id="purposeBox"></div>
+    </div>
+
+    <!-- 6. 未來14天訂位壓力 -->
+    <div class="section">
+      <div class="section-title">🔥 未來 14 天訂位壓力 <span class="badge">單格 &gt; 該店本月日均 ×1.5 標紅</span></div>
+      <div class="pressure-summary" id="pressureSummary"></div>
+      <div class="heat-wrap"><table class="heat-table" id="pressureTable"></table></div>
+    </div>
+
+    <!-- 7. 回訪分析 -->
+    <div class="section">
+      <div class="section-title">👥 回訪分析 <span class="badge">v1・同月同會員 ≥2 筆有效訂位</span></div>
+      <div class="revisit-row" id="revisitBox"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<div class="footer">資料來源：DIYBC 訂位系統 ｜ GAS 每日自動抓取</div>
+
+<script>
+// ============ 設定 ============
+const API_BASE = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
+
+// 訂位系統實際門市字串 → 店號對照（沿用既有 STORE_SEQ 慣例：陣列 index+1＝店號，未對應 fallback 原樣顯示＋console.warn）
+// ✅ 已從實際 API 資料確認；⚠️ 尚未在樣本中出現，依既有命名規律推定，待後續資料驗證
+const RESV_STORE_SEQ = [
+  '台中精明店',         // 1 ⚠️
+  '台中草悟道店',       // 2 ✅
+  '台北南京店',         // 3 ✅
+  '台北士林店',         // 4 ✅
+  '台南Focus店',        // 5 ✅
+  '新竹文化店',         // 6 ✅
+  '新北板橋店',         // 7 ✅
+  '新北新店店',         // 8 ⚠️
+  '桃園中壢店',         // 9 ✅
+  '桃園藝文店',         // 10 ⚠️
+  '台北遠百信義A13店',  // 11 ✅
+  '高雄SKM Park店'      // 12 ✅
+];
+function storeNumOf(name) {
+  const i = RESV_STORE_SEQ.indexOf(name);
+  if (i < 0) { console.warn('[訂位儀表板] 門市名稱未對應店號，原樣顯示：' + name); return null; }
+  return i + 1;
+}
+function storeSeqCmp(a, b) {
+  const ia = RESV_STORE_SEQ.indexOf(a), ib = RESV_STORE_SEQ.indexOf(b);
+  return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b);
+}
+
+// ============ JSONP ============
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'resv_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const script = document.createElement('script');
+    let done = false;
+    window[cbName] = (data) => {
+      if (done) return; done = true;
+      delete window[cbName];
+      try { document.head.removeChild(script); } catch (e) {}
+      resolve(data);
+    };
+    script.onerror = () => {
+      if (done) return; done = true;
+      delete window[cbName];
+      try { document.head.removeChild(script); } catch (e) {}
+      reject(new Error('JSONP 讀取失敗'));
+    };
+    script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cbName;
+    document.head.appendChild(script);
+  });
+}
+
+// ============ 全局狀態 ============
+let MONTHS = [];          // [{ym,rows}]
+let CUR = { cols: [], rows: [], idx: {} };            // 目前選中月份資料
+let FUTURE = { cols: [], rows: [], idx: {} };         // fn=future 資料
+let CUR_MONTH_BASE = { cols: [], rows: [], idx: {} }; // 實際「本月」歷史資料（供未來壓力基準用，與下拉選單月份脫鉤）
+let selectedYm = '';
+
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function curYm() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function next15Dates() {
+  const out = [];
+  const now = new Date();
+  for (let i = 0; i < 15; i++) {
+    const dd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    out.push(dd.getFullYear() + '-' + String(dd.getMonth() + 1).padStart(2, '0') + '-' + String(dd.getDate()).padStart(2, '0'));
+  }
+  return out;
+}
+function buildIdx(cols) {
+  const idx = {};
+  cols.forEach((c, i) => idx[c] = i);
+  return idx;
+}
+
+// ============ 初始載入 ============
+async function init() {
+  try {
+    const res = await jsonp(API_BASE);
+    MONTHS = (res && res.months) ? res.months.slice().sort((a, b) => b.ym.localeCompare(a.ym)) : [];
+    const sel = document.getElementById('monthSel');
+    if (MONTHS.length === 0) {
+      sel.innerHTML = '<option>無可用月份</option>';
+      document.getElementById('loadingBox').style.display = 'none';
+      showError('目前沒有任何月份資料');
+      return;
+    }
+    sel.innerHTML = MONTHS.map(m => '<option value="' + m.ym + '">' + m.ym + '（' + m.rows + ' 筆）</option>').join('');
+    selectedYm = MONTHS.some(m => m.ym === curYm()) ? curYm() : MONTHS[0].ym;
+    sel.value = selectedYm;
+    sel.addEventListener('change', () => { selectedYm = sel.value; loadAndRender(); });
+    await loadAndRender();
+  } catch (e) {
+    document.getElementById('loadingBox').style.display = 'none';
+    showError('API 連線失敗：' + e.message);
+  }
+}
+
+async function loadAndRender() {
+  document.getElementById('loadingBox').style.display = 'block';
+  document.getElementById('mainContent').style.display = 'none';
+  document.getElementById('errorBox').innerHTML = '';
+  try {
+    const tasks = [jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(selectedYm)), jsonp(API_BASE + '?fn=future')];
+    if (selectedYm !== curYm()) tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(curYm())));
+    const results = await Promise.all(tasks);
+    const monthRes = results[0], futureRes = results[1];
+    const curMonthRes = (results.length > 2) ? results[2] : monthRes;
+
+    CUR = { cols: monthRes.cols || [], rows: monthRes.rows || [], idx: buildIdx(monthRes.cols || []) };
+    FUTURE = { cols: futureRes.cols || [], rows: futureRes.rows || [], idx: buildIdx(futureRes.cols || []) };
+    CUR_MONTH_BASE = { cols: curMonthRes.cols || [], rows: curMonthRes.rows || [], idx: buildIdx(curMonthRes.cols || []) };
+
+    renderAll();
+    document.getElementById('loadingBox').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+  } catch (e) {
+    document.getElementById('loadingBox').style.display = 'none';
+    showError('資料載入失敗：' + e.message);
+  }
+}
+
+function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  loadAndRender().finally(() => { btn.disabled = false; });
+}
+
+function showError(msg) {
+  document.getElementById('errorBox').innerHTML = '<div class="err-msg">⚠️ ' + msg + '</div>';
+}
+
+function renderAll() {
+  renderKPI();
+  renderDailyTrend();
+  renderWeekSlotHeatmap();
+  renderStoreCompare();
+  renderPurpose();
+  renderPressure();
+  renderRevisit();
+}
+
+// ============ 共用小工具 ============
+function isValid(r, idx) { return r[idx.status] !== '已取消'; }
+function pct(n, d) { return d > 0 ? (n / d * 100) : null; }
+function fmtPct(v) { return (v === null || v === undefined || isNaN(v)) ? '—' : v.toFixed(1) + '%'; }
+
+// ============ 1. KPI（6 張）============
+function renderKPI() {
+  const rows = CUR.rows, idx = CUR.idx;
+  const valid = rows.filter(r => isValid(r, idx));
+  const cancelled = rows.filter(r => !isValid(r, idx));
+
+  const totalParty = valid.reduce((s, r) => s + (Number(r[idx.party_size]) || 0), 0);
+  const cancelRate = pct(cancelled.length, rows.length);
+
+  const today = todayStr();
+  const pastBooked = rows.filter(r => r[idx.status] === '已訂位' && r[idx.date] < today);
+  const pastBookedNoAttend = pastBooked.filter(r => Number(r[idx.attended]) === 0);
+  const noAttendRate = pct(pastBookedNoAttend.length, pastBooked.length);
+
+  const totalCompanions = valid.reduce((s, r) => s + (Number(r[idx.companions]) || 0), 0);
+  const totalRecipes = valid.reduce((s, r) => s + (Number(r[idx.recipes]) || 0), 0);
+  const companionRate = pct(totalCompanions, totalParty);
+  const recipePerPerson = totalParty > 0 ? (totalRecipes / totalParty) : null;
+
+  const cards = [
+    { label: '有效訂位', val: valid.length.toLocaleString(), sub: selectedYm + ' 共 ' + rows.length.toLocaleString() + ' 筆（含取消）' },
+    { label: '總人數', val: totalParty.toLocaleString() + ' 人', sub: '有效訂位合計人數' },
+    { label: '取消率', val: fmtPct(cancelRate), sub: cancelled.length.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' 筆', alert: cancelRate !== null && cancelRate > 30 },
+    { label: '未勾出席率', val: fmtPct(noAttendRate), sub: '過去日已訂位 ' + pastBooked.length.toLocaleString() + ' 筆中未勾', alert: noAttendRate !== null && noAttendRate > 30 },
+    { label: '陪同率', val: fmtPct(companionRate), sub: '陪同 ' + totalCompanions.toLocaleString() + ' / 人數 ' + totalParty.toLocaleString() },
+    { label: '人均食譜', val: (recipePerPerson === null ? '—' : recipePerPerson.toFixed(2) + ' 份'), sub: '食譜 ' + totalRecipes.toLocaleString() + ' / 人數 ' + totalParty.toLocaleString() }
+  ];
+  document.getElementById('kpiRow').innerHTML = cards.map(k =>
+    '<div class="kpi-card' + (k.alert ? ' alert' : '') + '">'
+    + '<div class="label">' + k.label + '</div>'
+    + '<div class="val">' + k.val + '</div>'
+    + '<div class="sub">' + k.sub + '</div>'
+    + '</div>'
+  ).join('');
+}
+
+// ============ 2. 每日趨勢（堆疊柱狀 SVG）============
+function renderDailyTrend() {
+  const rows = CUR.rows, idx = CUR.idx;
+  const byDate = {};
+  rows.forEach(r => {
+    const d = r[idx.date];
+    if (!byDate[d]) byDate[d] = { valid: 0, cancelled: 0 };
+    if (isValid(r, idx)) byDate[d].valid++; else byDate[d].cancelled++;
+  });
+  const dates = Object.keys(byDate).sort();
+  const box = document.getElementById('dailyTrendBox');
+  if (dates.length === 0) { box.innerHTML = '<div class="empty-note">本月無資料</div>'; return; }
+
+  const n = dates.length;
+  const colW = Math.max(22, Math.min(34, Math.floor(900 / n)));
+  const padL = 44, padR = 14, padT = 14, padB = 34;
+  const plotW = n * colW, plotH = 180;
+  const W = padL + plotW + padR, H = padT + plotH + padB;
+  const maxTotal = Math.max(1, ...dates.map(d => byDate[d].valid + byDate[d].cancelled));
+  const y = v => padT + plotH - (v / maxTotal) * plotH;
+  const cx = i => padL + i * colW + colW / 2;
+  const barW = Math.max(10, colW - 8);
+
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="xMinYMid meet" style="max-width:' + Math.max(W, 340) + 'px;font-family:inherit;display:block;">';
+  for (let g = 0; g <= 4; g++) {
+    const gy = padT + plotH - (g / 4) * plotH;
+    s += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (padL + plotW) + '" y2="' + gy.toFixed(1) + '" stroke="#F0D9D5" stroke-width="1"/>';
+  }
+  dates.forEach((d, i) => {
+    const v = byDate[d].valid, c = byDate[d].cancelled, total = v + c;
+    const x = cx(i) - barW / 2;
+    const yValid = y(v);
+    const hValid = (padT + plotH) - yValid;
+    const yCancel = y(total);
+    const hCancel = yValid - yCancel;
+    const day = Number(d.slice(8, 10));
+    const tip = d + '\n有效 ' + v + '\n已取消 ' + c + '\n合計 ' + total;
+    s += '<rect x="' + x.toFixed(1) + '" y="' + yValid.toFixed(1) + '" width="' + barW + '" height="' + hValid.toFixed(1) + '" fill="#6A4FA0" rx="2"><title>' + tip + '</title></rect>';
+    if (c > 0) s += '<rect x="' + x.toFixed(1) + '" y="' + yCancel.toFixed(1) + '" width="' + barW + '" height="' + hCancel.toFixed(1) + '" fill="#D9594C" rx="2"><title>' + tip + '</title></rect>';
+    if (colW >= 20) s += '<text x="' + cx(i).toFixed(1) + '" y="' + (padT + plotH + 16) + '" text-anchor="middle" font-size="11" fill="#6F4E45">' + day + '</text>';
+  });
+  s += '<text x="4" y="' + (padT + 8) + '" font-size="11" fill="#6F4E45">筆數</text>';
+  s += '</svg>';
+  s += '<div style="display:flex;gap:16px;margin-top:6px;font-size:12px;color:var(--muted);">'
+     + '<span><i style="display:inline-block;width:10px;height:10px;background:#6A4FA0;border-radius:2px;margin-right:4px;vertical-align:-1px;"></i>有效</span>'
+     + '<span><i style="display:inline-block;width:10px;height:10px;background:#D9594C;border-radius:2px;margin-right:4px;vertical-align:-1px;"></i>已取消</span>'
+     + '</div>';
+  box.innerHTML = s;
+}
+
+// ============ 3. 星期 × 時段熱力矩陣 ============
+const WD_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
+function weekdayIdx(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return (d.getDay() + 6) % 7; // 0=一...6=日
+}
+function heatColor(v, max) {
+  if (v <= 0) return '#F5F5F5';
+  const r = v / Math.max(1, max);
+  if (r < 0.2) return '#EEE6F5';
+  if (r < 0.4) return '#D9C9EC';
+  if (r < 0.6) return '#B79EDA';
+  if (r < 0.8) return '#8F6EC4';
+  return '#6A4FA0';
+}
+function renderWeekSlotHeatmap() {
+  const idx = CUR.idx;
+  const rows = CUR.rows.filter(r => isValid(r, idx));
+  const slots = [...new Set(rows.map(r => r[idx.slot]))].sort();
+  const table = document.getElementById('weekSlotTable');
+  if (slots.length === 0) { table.innerHTML = '<tr><td class="empty-note">本月無有效訂位資料</td></tr>'; return; }
+
+  const grid = {};
+  WD_NAMES.forEach((_, wi) => grid[wi] = {});
+  rows.forEach(r => {
+    const wi = weekdayIdx(r[idx.date]);
+    const sl = r[idx.slot];
+    grid[wi][sl] = (grid[wi][sl] || 0) + 1;
+  });
+  let max = 1;
+  WD_NAMES.forEach((_, wi) => slots.forEach(sl => { max = Math.max(max, grid[wi][sl] || 0); }));
+
+  let h = '<thead><tr><th class="row-head">星期＼時段</th>' + slots.map(sl => '<th>' + sl + '</th>').join('') + '</tr></thead><tbody>';
+  WD_NAMES.forEach((wn, wi) => {
+    h += '<tr><td class="row-head">' + wn + '</td>';
+    slots.forEach(sl => {
+      const v = grid[wi][sl] || 0;
+      const bg = heatColor(v, max);
+      const textColor = (v / max > 0.55) ? '#FFFFFF' : '#2D1A14';
+      h += '<td><div class="heat-cell" style="background:' + bg + ';color:' + textColor + ';" title="週' + wn + ' ' + sl + '：' + v + ' 筆有效訂位">' + (v || '') + '</div></td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody>';
+  table.innerHTML = h;
+}
+
+// ============ 4. 分店比較表 ============
+let cmpSortKey = 'storeNum', cmpSortAsc = true;
+function computeStoreCompare() {
+  const rows = CUR.rows, idx = CUR.idx;
+  const byStore = {};
+  rows.forEach(r => {
+    const st = r[idx.store];
+    if (!byStore[st]) byStore[st] = { name: st, total: 0, valid: 0, cancelled: 0, party: 0, companions: 0, recipes: 0, pastBooked: 0, pastNoAttend: 0 };
+    const b = byStore[st];
+    b.total++;
+    if (isValid(r, idx)) {
+      b.valid++;
+      b.party += Number(r[idx.party_size]) || 0;
+      b.companions += Number(r[idx.companions]) || 0;
+      b.recipes += Number(r[idx.recipes]) || 0;
+    } else {
+      b.cancelled++;
+    }
+    if (r[idx.status] === '已訂位' && r[idx.date] < todayStr()) {
+      b.pastBooked++;
+      if (Number(r[idx.attended]) === 0) b.pastNoAttend++;
+    }
+  });
+  return Object.values(byStore).map(b => Object.assign({}, b, {
+    storeNum: storeNumOf(b.name),
+    cancelRate: pct(b.cancelled, b.total),
+    noAttendRate: pct(b.pastNoAttend, b.pastBooked),
+    companionRate: pct(b.companions, b.party),
+    recipePerPerson: b.party > 0 ? (b.recipes / b.party) : null
+  }));
+}
+function renderStoreCompare() {
+  const data = computeStoreCompare();
+  data.sort((a, b) => {
+    let av, bv;
+    if (cmpSortKey === 'storeNum') { av = a.storeNum == null ? 999 : a.storeNum; bv = b.storeNum == null ? 999 : b.storeNum; }
+    else { av = a[cmpSortKey]; bv = b[cmpSortKey]; }
+    if (av === null || av === undefined) av = (typeof bv === 'string') ? '' : -Infinity;
+    if (bv === null || bv === undefined) bv = (typeof av === 'string') ? '' : -Infinity;
+    if (typeof av === 'string' || typeof bv === 'string') return cmpSortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    return cmpSortAsc ? av - bv : bv - av;
+  });
+  const cols = [
+    { key: 'storeNum', label: '店號' },
+    { key: 'name', label: '門市' },
+    { key: 'valid', label: '有效訂位' },
+    { key: 'cancelRate', label: '取消率' },
+    { key: 'noAttendRate', label: '未勾出席率' },
+    { key: 'companionRate', label: '陪同率' },
+    { key: 'recipePerPerson', label: '人均食譜' }
+  ];
+  let h = '<thead><tr>' + cols.map(c =>
+    '<th onclick="sortStoreCompare(\'' + c.key + '\')">' + c.label + (cmpSortKey === c.key ? '<span class="arrow">' + (cmpSortAsc ? '▲' : '▼') + '</span>' : '') + '</th>'
+  ).join('') + '</tr></thead><tbody>';
+  data.forEach(b => {
+    const cancelClass = (b.cancelRate !== null && b.cancelRate > 30) ? 'cancel-hi' : (b.cancelRate !== null && b.cancelRate > 25) ? 'cancel-mid' : '';
+    h += '<tr>'
+      + '<td class="num">' + (b.storeNum || '<span class="store-warn">未對應</span>') + '</td>'
+      + '<td>' + b.name + '</td>'
+      + '<td class="num">' + b.valid.toLocaleString() + '</td>'
+      + '<td class="num ' + cancelClass + '">' + fmtPct(b.cancelRate) + '</td>'
+      + '<td class="num">' + fmtPct(b.noAttendRate) + '</td>'
+      + '<td class="num">' + fmtPct(b.companionRate) + '</td>'
+      + '<td class="num">' + (b.recipePerPerson === null ? '—' : b.recipePerPerson.toFixed(2)) + '</td>'
+      + '</tr>';
+  });
+  h += '</tbody>';
+  document.getElementById('storeCmpTable').innerHTML = h;
+}
+function sortStoreCompare(key) {
+  if (cmpSortKey === key) cmpSortAsc = !cmpSortAsc; else { cmpSortKey = key; cmpSortAsc = true; }
+  renderStoreCompare();
+}
+
+// ============ 5. 目的結構（橫向條狀圖）============
+function renderPurpose() {
+  const rows = CUR.rows, idx = CUR.idx;
+  const byPurpose = {};
+  rows.forEach(r => {
+    const p = r[idx.purpose] || '（未填）';
+    if (!byPurpose[p]) byPurpose[p] = { valid: 0, total: 0, cancelled: 0 };
+    byPurpose[p].total++;
+    if (isValid(r, idx)) byPurpose[p].valid++; else byPurpose[p].cancelled++;
+  });
+  const list = Object.keys(byPurpose).map(p => Object.assign({ purpose: p }, byPurpose[p]));
+  list.forEach(x => x.cancelRate = pct(x.cancelled, x.total));
+  list.sort((a, b) => b.valid - a.valid);
+  const maxValid = Math.max(1, ...list.map(x => x.valid));
+  const box = document.getElementById('purposeBox');
+  if (list.length === 0) { box.innerHTML = '<div class="empty-note">本月無資料</div>'; return; }
+  box.innerHTML = list.map(x =>
+    '<div class="purpose-row">'
+    + '<div class="purpose-label">' + x.purpose + '</div>'
+    + '<div class="purpose-track"><div class="purpose-fill" style="width:' + (x.valid / maxValid * 100).toFixed(1) + '%;"></div></div>'
+    + '<div class="purpose-val"><b>' + x.valid.toLocaleString() + '</b> 筆・取消率 ' + fmtPct(x.cancelRate) + '</div>'
+    + '</div>'
+  ).join('');
+}
+
+// ============ 6. 未來14天訂位壓力 ============
+function renderPressure() {
+  const fIdx = FUTURE.idx;
+  const bIdx = CUR_MONTH_BASE.idx;
+  const baseRows = CUR_MONTH_BASE.rows;
+
+  // 該店本月日均：分母＝本月資料涵蓋的實際天數（全店共用同一分母），分子＝該店有效訂位數
+  const allBaseDates = new Set();
+  const validCountByStore = {};
+  baseRows.forEach(r => {
+    allBaseDates.add(r[bIdx.date]);
+    if (!isValid(r, bIdx)) return;
+    const st = r[bIdx.store];
+    validCountByStore[st] = (validCountByStore[st] || 0) + 1;
+  });
+  const dayCount = Math.max(1, allBaseDates.size);
+  const avgByStore = {};
+  Object.keys(validCountByStore).forEach(st => { avgByStore[st] = validCountByStore[st] / dayCount; });
+
+  const futureValid = FUTURE.rows.filter(r => isValid(r, fIdx));
+  const dates = next15Dates(); // 固定今天～+14天，即使某天無資料也顯示空列
+  const stores = [...new Set(futureValid.map(r => r[fIdx.store]))].sort(storeSeqCmp);
+
+  const grid = {};
+  dates.forEach(d => grid[d] = {});
+  futureValid.forEach(r => {
+    const d = r[fIdx.date], st = r[fIdx.store];
+    if (!grid[d]) return; // 理論上不會發生（future 應涵蓋在 15 天內），防呆
+    grid[d][st] = (grid[d][st] || 0) + 1;
+  });
+
+  // 上方摘要：未來3天各店合計
+  const next3 = dates.slice(0, 3);
+  const summaryBox = document.getElementById('pressureSummary');
+  if (stores.length === 0) {
+    summaryBox.innerHTML = '<div class="empty-note">未來14天無有效訂位資料</div>';
+  } else {
+    const grand3 = next3.reduce((s, d) => s + Object.values(grid[d] || {}).reduce((a, b) => a + b, 0), 0);
+    summaryBox.innerHTML = '<div class="pressure-sum-card"><div class="nm">未來3天（' + next3[0] + '~' + next3[next3.length - 1] + '）</div>'
+      + '<div class="vv">' + grand3.toLocaleString() + ' 筆</div></div>'
+      + stores.map(st => {
+          const num = storeNumOf(st);
+          const sum3 = next3.reduce((s, d) => s + (grid[d][st] || 0), 0);
+          return '<div class="pressure-sum-card"><div class="nm">' + (num ? num + ' ' : '') + st + '</div><div class="vv">' + sum3 + '</div></div>';
+        }).join('');
+  }
+
+  const table = document.getElementById('pressureTable');
+  if (stores.length === 0) { table.innerHTML = '<tr><td class="empty-note">未來14天無有效訂位資料</td></tr>'; return; }
+  let h = '<thead><tr><th class="row-head">日期＼門市</th>' + stores.map(st => {
+    const num = storeNumOf(st);
+    return '<th>' + (num ? num + ' ' : '') + st + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+  dates.forEach(d => {
+    h += '<tr><td class="row-head">' + d.slice(5) + '</td>';
+    stores.forEach(st => {
+      const v = (grid[d] && grid[d][st]) || 0;
+      const avg = avgByStore[st] || 0;
+      const isHot = avg > 0 && v > avg * 1.5;
+      const bg = isHot ? '#FBE6E3' : (v > 0 ? '#F3EEFA' : '#F8F8F8');
+      const color = isHot ? '#B23A2C' : '#2D1A14';
+      const tip = d + ' ' + st + '：' + v + ' 筆（本月日均 ' + avg.toFixed(1) + '）';
+      h += '<td><div class="heat-cell" style="background:' + bg + ';color:' + color + ';" title="' + tip + '">' + (v || '') + (isHot ? ' 🔴' : '') + '</div></td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody>';
+  table.innerHTML = h;
+}
+
+// ============ 7. 回訪分析 v1 ============
+function renderRevisit() {
+  const idx = CUR.idx;
+  const rows = CUR.rows.filter(r => isValid(r, idx));
+  const byMember = {};
+  rows.forEach(r => {
+    const uid = r[idx.line_uid];
+    if (!uid) return; // 排除空值，避免誤群聚成假會員
+    byMember[uid] = (byMember[uid] || 0) + 1;
+  });
+  const totalMembers = Object.keys(byMember).length;
+  const revisitMembers = Object.values(byMember).filter(c => c >= 2).length;
+  const revisitRate = pct(revisitMembers, totalMembers);
+  document.getElementById('revisitBox').innerHTML =
+    '<div class="revisit-card"><div class="lbl">' + selectedYm + ' 回訪會員數</div><div class="vv">' + revisitMembers.toLocaleString() + ' 人</div></div>'
+    + '<div class="revisit-card"><div class="lbl">回訪佔比（同月 ≥2 筆有效訂位）</div><div class="vv">' + fmtPct(revisitRate) + '</div></div>'
+    + '<div class="revisit-card"><div class="lbl">本月不重複會員數</div><div class="vv">' + totalMembers.toLocaleString() + ' 人</div></div>';
+}
+
+// ============ 啟動 ============
+init();
+</script>
+</body>
+</html>
