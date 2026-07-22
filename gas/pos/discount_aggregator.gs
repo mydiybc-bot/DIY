@@ -52,6 +52,19 @@
  *  5. 新增驗收函式 verifySeasonalV19()（部署前必跑，接著跑 verifyV18）
  *
  *  【口徑紅線】net／來客數／白名單完全不動；verifyV18 對照組必須一字不變。
+ *
+ * ── v20 新增（2026-07-22）★ 方案帶動營業額 ★ ──
+ *
+ *  1. queryDiscountByProgram 改多段式 SQL（v20.1）：每組 (ym×店×方案×serial) 先對
+ *     (total_amount, actual_amount) 去重複再相加 → rev_gross（毛額）／rev_actual（實付）。
+ *     實測發現同 serial 同券多列時各列可能是「不同小計」（同桌分單，97/45,086 組）、
+ *     另有 6 組跨日退款正負對——此規則三情境全對且結果決定性
+ *  2. discountByProgram 每列新增 revGross / revActual 欄位
+ *     - 多券交易的營業額會同時歸屬到各方案 → 各方案營業額「不可跨方案加總」
+ *     - 「自己人4人同行500」毛額含 $500券佔位商品 → 前端比照 discount 扣 placeholderRev
+ *  3. uses / txns / discount 口徑與 v19 完全相同（verifyV20 逐方案比對把關）
+ *  4. 快取 V19 → V20；API_VERSION v5.1 → v5.2
+ *  5. 新增驗收函式 verifyV20_dbpRevenue()（部署前必跑，全 PASS 才准部署）
  * ───────────────────────────────────────────────────────────────
  */
 
@@ -106,8 +119,8 @@ var STORE_DIM = {
 
 var PRICE_BANDS = ['0-200', '200-400', '400-600', '600-800', '800+'];
 var CACHE_TTL = 3600;
-var CACHE_KEY_PREFIX = 'POS_DASHBOARD_V19_';   // v19：seasonal 新增 detail 立方體，結構變動強制換版（前版 V18）
-var API_VERSION = 'v5.1';
+var CACHE_KEY_PREFIX = 'POS_DASHBOARD_V20_';   // v20：discountByProgram 新增 revGross/revActual，結構變動強制換版（前版 V19）
+var API_VERSION = 'v5.2';
 
 function _dim(code) {
   var c = Number(code);
@@ -491,12 +504,15 @@ function computeAggregation() {
         region: dpDim.region,
         voucher: cls.voucher,
         category: cls.category,
-        discount: 0, uses: 0, txns: 0
+        discount: 0, uses: 0, txns: 0,
+        revGross: 0, revActual: 0   // v20：方案帶動營業額（多券交易會重複歸屬，不可跨方案加總）
       };
     }
     dbpMap[dpKey].discount += (dpr.discount || 0);
     dbpMap[dpKey].uses += (dpr.uses || 0);
     dbpMap[dpKey].txns += (dpr.txns || 0);
+    dbpMap[dpKey].revGross += (dpr.rev_gross || 0);
+    dbpMap[dpKey].revActual += (dpr.rev_actual || 0);
   }
   var discountByProgramArr = Object.keys(dbpMap).map(function(k){
     var e = dbpMap[k];
@@ -743,13 +759,37 @@ function classifyVoucher(raw) {
 
 function queryDiscountByProgram() {
   var token = _getBqAccessToken_();
-  var sql = 'SELECT FORMAT_DATE("%Y-%m", sale_date) AS ym, ' +
-            'store_code, project_name, ' +
-            'COUNT(*) AS uses, ' +
-            'COUNT(DISTINCT serial_no) AS txns, ' +
-            'CAST(SUM(discount) AS INT64) AS discount ' +
+  // v20.1：帶動營業額規則 —— 實測推翻「t/a 永遠整筆重複」假設：
+  //   同 serial 同券多列時，各列可能是「不同小計」（同桌分單，97/45,086 組）；
+  //   另 6 組為跨日退款正負對。
+  //   規則：每組 (ym×店×方案×serial) 先對 (total_amount, actual_amount) 去重複再相加
+  //   → 整筆重複列只算一次、不同小計正確相加、退款正負對自動沖銷、結果決定性。
+  //   uses/txns/discount 走原路徑，與 v19 完全等值（verifyV20 把關）。
+  var sql = 'WITH rows_ AS ( ' +
+            'SELECT FORMAT_DATE("%Y-%m", sale_date) AS ym, store_code, project_name, serial_no, ' +
+            'total_amount, actual_amount, discount ' +
             'FROM `diybc-make-sync.diybc_pos.pos_discounts` ' +
-            'GROUP BY ym, store_code, project_name';
+            '), ' +
+            'agg_use AS ( ' +
+            'SELECT ym, store_code, project_name, serial_no, ' +
+            'COUNT(*) AS uses, SUM(discount) AS discount ' +
+            'FROM rows_ GROUP BY ym, store_code, project_name, serial_no ' +
+            '), ' +
+            'agg_rev AS ( ' +
+            'SELECT ym, store_code, project_name, serial_no, ' +
+            'SUM(total_amount) AS txn_gross, SUM(actual_amount) AS txn_actual ' +
+            'FROM (SELECT DISTINCT ym, store_code, project_name, serial_no, total_amount, actual_amount FROM rows_) ' +
+            'GROUP BY ym, store_code, project_name, serial_no ' +
+            ') ' +
+            'SELECT u.ym, u.store_code, u.project_name, ' +
+            'SUM(u.uses) AS uses, ' +
+            'COUNT(*) AS txns, ' +
+            'CAST(SUM(u.discount) AS INT64) AS discount, ' +
+            'CAST(SUM(r.txn_gross) AS INT64) AS rev_gross, ' +
+            'CAST(SUM(r.txn_actual) AS INT64) AS rev_actual ' +
+            'FROM agg_use u JOIN agg_rev r ' +
+            'ON u.ym = r.ym AND u.store_code = r.store_code AND u.project_name = r.project_name AND u.serial_no = r.serial_no ' +
+            'GROUP BY u.ym, u.store_code, u.project_name';
   var base = 'https://bigquery.googleapis.com/bigquery/v2/projects/' + BQ_PROJECT_ID + '/queries';
   var res = UrlFetchApp.fetch(base, {
     method: 'post', contentType: 'application/json',
@@ -771,7 +811,9 @@ function queryDiscountByProgram() {
         project_name: f[2].v,
         uses: Number(f[3].v),
         txns: Number(f[4].v),
-        discount: Number(f[5].v)
+        discount: Number(f[5].v),
+        rev_gross: Number(f[6].v),
+        rev_actual: Number(f[7].v)
       });
     }
   }
@@ -1371,4 +1413,106 @@ function verifyDailyByStore() {
   vGross -= phByDay; vDisc -= phByDay;
   Logger.log('[chk2-view] ' + D + ' view-sum net=' + Math.round(vNet) + ' gross=' + Math.round(vGross) + ' discount=' + Math.round(vDisc));
   for (var m = 0; m < rows.length; m++) { if (rows[m].date === D && rows[m].store === _dim(7).name) { Logger.log('[chk4] store7 ' + D + ' ' + JSON.stringify(rows[m])); } }
+}
+
+
+/* ============================================================
+   v20.1 驗收：方案帶動營業額 —— 部署前必跑
+   門檻（全過才准部署）：
+   [0] 異常組體檢：退款正負對組（含負值）去重加總後貢獻必須 = 0（沖銷）；
+       全正值組（同桌分單）列出去重後貢獻總額，目視合理即可
+   [1] 全域 uses / txns / discount：新 SQL vs 舊 SQL 完全相等
+   [2] 逐方案（Top 8 + 壽星69折）uses / discount 完全相等
+   ============================================================ */
+function verifyV20_dbpRevenue() {
+  var token = _getBqAccessToken_();
+  var base = 'https://bigquery.googleapis.com/bigquery/v2/projects/' + BQ_PROJECT_ID + '/queries';
+  function q(sql) {
+    var res = UrlFetchApp.fetch(base, {
+      method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + token },
+      payload: JSON.stringify({ query: sql, useLegacySql: false, timeoutMs: 60000, maxResults: 50000 }),
+      muteHttpExceptions: true
+    });
+    var d = JSON.parse(res.getContentText());
+    if (d.error) throw new Error(JSON.stringify(d.error));
+    return d.rows || [];
+  }
+  var pass = true;
+
+  // [0] 異常組體檢（金額不一致的 serial×方案 組，依 v20.1 去重規則計算貢獻）
+  var s0 = q('WITH g AS ( ' +
+    'SELECT serial_no, project_name, MIN(total_amount) AS min_t ' +
+    'FROM `diybc-make-sync.diybc_pos.pos_discounts` ' +
+    'GROUP BY serial_no, project_name ' +
+    'HAVING MIN(total_amount) != MAX(total_amount) OR MIN(actual_amount) != MAX(actual_amount) ), ' +
+    'dedup AS ( ' +
+    'SELECT DISTINCT p.serial_no, p.project_name, p.total_amount, p.actual_amount ' +
+    'FROM `diybc-make-sync.diybc_pos.pos_discounts` p ' +
+    'JOIN g ON p.serial_no = g.serial_no AND p.project_name = g.project_name ), ' +
+    'per_grp AS ( ' +
+    'SELECT d.serial_no, d.project_name, ' +
+    'SUM(d.total_amount) AS rev_t, SUM(d.actual_amount) AS rev_a, ANY_VALUE(g.min_t) AS min_t ' +
+    'FROM dedup d JOIN g ON d.serial_no = g.serial_no AND d.project_name = g.project_name ' +
+    'GROUP BY d.serial_no, d.project_name ) ' +
+    'SELECT COUNTIF(min_t < 0) AS neg_groups, ' +
+    'CAST(SUM(IF(min_t < 0, rev_t, 0)) AS INT64) AS neg_rev_t, ' +
+    'CAST(SUM(IF(min_t < 0, rev_a, 0)) AS INT64) AS neg_rev_a, ' +
+    'COUNTIF(min_t >= 0) AS pos_groups, ' +
+    'CAST(SUM(IF(min_t >= 0, rev_t, 0)) AS INT64) AS pos_rev_t, ' +
+    'CAST(SUM(IF(min_t >= 0, rev_a, 0)) AS INT64) AS pos_rev_a ' +
+    'FROM per_grp');
+  var f0 = s0[0].f;
+  var negG = Number(f0[0].v), negT = Number(f0[1].v), negA = Number(f0[2].v);
+  var posG = Number(f0[3].v), posT = Number(f0[4].v), posA = Number(f0[5].v);
+  var ok0 = (negT === 0 && negA === 0);
+  Logger.log('[0] 退款正負對組=' + negG + ' 去重後貢獻 t=' + negT + ' a=' + negA + (ok0 ? '（沖銷）→ PASS' : ' → ★FAIL★'));
+  Logger.log('[0] 分單小計組=' + posG + ' 去重後貢獻 t=' + posT + ' a=' + posA + '（目視：量級應為數十萬內）');
+  if (!ok0) pass = false;
+
+  // 新 SQL：直接跑生產函式（測到真正的程式路徑）
+  var rows = queryDiscountByProgram();
+  var nU = 0, nT = 0, nD = 0, nG = 0, nA = 0;
+  var byProgNew = {};
+  rows.forEach(function(r) {
+    nU += r.uses; nT += r.txns; nD += r.discount; nG += r.rev_gross; nA += r.rev_actual;
+    if (!byProgNew[r.project_name]) byProgNew[r.project_name] = { uses: 0, discount: 0, revG: 0, revA: 0 };
+    byProgNew[r.project_name].uses += r.uses;
+    byProgNew[r.project_name].discount += r.discount;
+    byProgNew[r.project_name].revG += r.rev_gross;
+    byProgNew[r.project_name].revA += r.rev_actual;
+  });
+
+  // [1] 舊 SQL（v19 原式）全域合計
+  var o = q('SELECT COUNT(*) AS uses, ' +
+    'COUNT(DISTINCT CONCAT(FORMAT_DATE("%Y-%m", sale_date), "|", CAST(store_code AS STRING), "|", project_name, "|", serial_no)) AS txns, ' +
+    'CAST(SUM(discount) AS INT64) AS discount ' +
+    'FROM `diybc-make-sync.diybc_pos.pos_discounts`');
+  var oU = Number(o[0].f[0].v), oT = Number(o[0].f[1].v), oD = Number(o[0].f[2].v);
+  var ok1 = (oU === nU && oT === nT && oD === nD);
+  Logger.log('[1] 全域 舊 uses=' + oU + ' txns=' + oT + ' discount=' + oD);
+  Logger.log('[1] 全域 新 uses=' + nU + ' txns=' + nT + ' discount=' + nD + (ok1 ? ' → PASS' : ' → ★FAIL★'));
+  if (!ok1) pass = false;
+  Logger.log('[1] 新增欄位全域：revGross=' + nG + ' revActual=' + nA + '（多券重複歸屬，僅供參考、不可對總營收）');
+
+  // [2] 逐方案：舊 SQL Top 8 + 壽星
+  var op = q('SELECT project_name, COUNT(*) AS uses, CAST(SUM(discount) AS INT64) AS discount ' +
+    'FROM `diybc-make-sync.diybc_pos.pos_discounts` ' +
+    'GROUP BY project_name ORDER BY discount DESC LIMIT 8');
+  for (var i = 0; i < op.length; i++) {
+    var pn = op[i].f[0].v, pu = Number(op[i].f[1].v), pd = Number(op[i].f[2].v);
+    var nn = byProgNew[pn] || { uses: -1, discount: -1, revG: 0, revA: 0 };
+    var ok2 = (pu === nn.uses && pd === nn.discount);
+    Logger.log('[2] ' + pn + ' | 舊 uses=' + pu + ' disc=' + pd +
+      ' | 新 uses=' + nn.uses + ' disc=' + nn.discount +
+      ' | revG=' + nn.revG + ' revA=' + nn.revA + (ok2 ? ' → PASS' : ' → ★FAIL★'));
+    if (!ok2) pass = false;
+  }
+  var bU = 0, bD = 0, bG = 0, bA = 0;
+  Object.keys(byProgNew).forEach(function(pn) {
+    if (pn.indexOf('壽星') >= 0) { bU += byProgNew[pn].uses; bD += byProgNew[pn].discount; bG += byProgNew[pn].revG; bA += byProgNew[pn].revA; }
+  });
+  Logger.log('[2] 壽星類合計（新）: uses=' + bU + ' disc=' + bD + ' revG=' + bG + ' revA=' + bA + '（對照儀表板 tooltip 目視）');
+
+  Logger.log(pass ? '===== verifyV20 全數 PASS，可部署 =====' : '===== ★有 FAIL，禁止部署★ =====');
 }
