@@ -299,6 +299,27 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
 .emp-note-chip { display:inline-block; font-size:12px; padding:2px 8px; border-radius:10px; background:#EEF3E8; color:#4A5A2E; white-space:nowrap; }
 .emp-note-chip .d { color:var(--muted); font-weight:600; margin-right:3px; }
 .emp-empty { padding:28px; text-align:center; color:var(--muted); font-size:13px; }
+/* 📈 月度工時 × 營收趨勢 (2026-07-21 新增) */
+.trend-ctrl-row { display:flex; flex-wrap:wrap; gap:14px 26px; align-items:center; margin-bottom:12px; }
+.trend-ctrl-block { display:flex; align-items:center; gap:8px; }
+.trend-ctrl-label { font-size:12px; font-weight:700; color:var(--olive-dark); }
+.trend-month-sel { font-family:inherit; font-size:12px; padding:5px 9px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); cursor:pointer; }
+.trend-ctrl-tilde { color:var(--muted); font-size:12px; }
+.trend-scope-note { font-size:12px; color:var(--muted); }
+.trend-legend { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12px; color:var(--muted); margin-bottom:14px; align-items:center; }
+.trend-legend span { display:inline-flex; align-items:center; gap:6px; }
+.trend-legend i { display:inline-block; }
+.trend-legend .lg-bar { width:12px; height:12px; background:var(--olive); opacity:.55; border-radius:2px; }
+.trend-legend .lg-line { width:16px; border-top:2.5px solid var(--accent); }
+.trend-legend .lg-dot { width:10px; height:10px; border-radius:50%; }
+.trend-legend .lg-dot.ok { background:var(--good-green); }
+.trend-legend .lg-dot.bad { background:var(--flag-red); }
+.trend-card { border:1px solid var(--border); border-radius:12px; padding:14px 16px 8px; margin-bottom:14px; background:var(--bg); }
+.trend-card-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px; flex-wrap:wrap; gap:4px; }
+.trend-card-title { font-size:13px; font-weight:800; color:var(--olive-dark); }
+.trend-card-sub { font-size:12px; color:var(--muted); }
+.trend-svg-wrap { width:100%; overflow-x:auto; }
+.trend-empty { padding:22px; text-align:center; color:var(--muted); font-size:13px; }
 </style>
 </head>
 <body>
@@ -485,6 +506,33 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
     <div class="section">
       <div class="section-title">🗺️ 分區比較</div>
       <div class="zone-row" id="zoneRow"></div>
+    </div>
+
+    <!-- 📈 月度工時 × 營收趨勢 (2026-07-21 新增) -->
+    <div class="section">
+      <div class="section-title">📈 月度工時 × 營收趨勢 <span class="badge">看人力有沒有配合營收</span></div>
+
+      <div class="trend-ctrl-row">
+        <div class="trend-ctrl-block">
+          <span class="trend-ctrl-label">期間</span>
+          <select id="trendFromMonth" class="trend-month-sel"></select>
+          <span class="trend-ctrl-tilde">~</span>
+          <select id="trendToMonth" class="trend-month-sel"></select>
+        </div>
+        <div class="trend-ctrl-block">
+          <span class="trend-ctrl-label">門市範圍</span>
+          <span class="trend-scope-note">跟隨上方「門市 / 區域」篩選（建議聚焦 2–3 家對照）</span>
+        </div>
+      </div>
+
+      <div class="trend-legend">
+        <span><i class="lg-bar"></i>月總工時</span>
+        <span><i class="lg-line"></i>月營收</span>
+        <span><i class="lg-dot ok"></i>rev/h 正常</span>
+        <span><i class="lg-dot bad"></i>rev/h 偏低（人力可能過剩）</span>
+      </div>
+
+      <div id="trendResult"></div>
     </div>
 
     <!-- 👤 人員月工時檢討 (2026-07-08 新增) -->
@@ -709,6 +757,7 @@ function initUI() {
   document.getElementById('dailyStore').addEventListener('change', loadDailyData);
   document.getElementById('dailyMonth').addEventListener('change', loadDailyData);
 
+  initMonthlyTrend();
   renderAll();
   initEmpMonthly();
   loadDailyData();
@@ -1746,6 +1795,7 @@ const _origRenderAll = renderAll;
 renderAll = function() {
   _origRenderAll();
   if (dailyData) renderDailyTab();
+  if (document.getElementById('trendResult')) renderMonthlyTrend();
 };
 
 // ============ 上傳班表功能 ============
@@ -2053,6 +2103,163 @@ const _empDailyCache = {};        // key: store+'_'+month -> getStoreDailyData �
 let _empLastQuery = null;         // {stores:[...], months:[...]}
 
 function _fmtH(n) { return (Math.round(n * 10) / 10).toString(); }
+
+// ============ 📈 月度工時 × 營收趨勢 (2026-07-21 新增，純前端聚合 DATA，零後端) ============
+function _trendAllMonths() {
+  const s = new Set();
+  (DATA.daily_sales || []).forEach(d => s.add(d.date.substring(0, 7)));
+  (DATA.daily_hours || []).forEach(d => s.add(d.date.substring(0, 7)));
+  return [...s].sort();
+}
+
+// 目標店：優先 selectedStores，其次 selectedZones，否則全部（與人員月工時同邏輯）
+function _trendTargetStores() {
+  let ids;
+  if (selectedStores.size > 0) ids = [...selectedStores].map(Number);
+  else if (selectedZones.size > 0) ids = DATA.stores.filter(s => selectedZones.has(getZone(s.store_id))).map(s => Number(s.store_id));
+  else ids = DATA.stores.map(s => Number(s.store_id));
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+function _trendMonthsInRange() {
+  const fromSel = document.getElementById('trendFromMonth');
+  const toSel = document.getElementById('trendToMonth');
+  if (!fromSel || !toSel || !fromSel.value || !toSel.value) return [];
+  let a = fromSel.value, b = toSel.value;
+  if (a > b) { const t = a; a = b; b = t; }   // 起訖顛倒自動交換
+  return _trendAllMonths().filter(m => m >= a && m <= b);
+}
+
+// 聚合單店在指定月清單 → [{ ym, hours, revenue, rph }]
+function _trendAggStore(storeId, months) {
+  const mset = new Set(months);
+  const hMap = {}, rMap = {};
+  months.forEach(m => { hMap[m] = 0; rMap[m] = 0; });
+  (DATA.daily_hours || []).forEach(d => {
+    if (Number(d.store_id) !== Number(storeId)) return;
+    const m = d.date.substring(0, 7);
+    if (!mset.has(m)) return;
+    hMap[m] += Number(d.hours) || 0;
+  });
+  (DATA.daily_sales || []).forEach(d => {
+    if (Number(d.store_id) !== Number(storeId)) return;
+    const m = d.date.substring(0, 7);
+    if (!mset.has(m)) return;
+    rMap[m] += Number(d.net_revenue != null ? d.net_revenue : d.revenue) || 0;
+  });
+  return months.map(m => {
+    const h = hMap[m], r = rMap[m];
+    return { ym: m, hours: h, revenue: r, rph: h > 0 ? r / h : 0 };
+  });
+}
+
+function _trendWan(v) {
+  if (v >= 10000) return (v / 10000).toFixed(v >= 1000000 ? 0 : 1) + '萬';
+  return Math.round(v).toLocaleString();
+}
+
+function initMonthlyTrend() {
+  const box = document.getElementById('trendResult');
+  const fromSel = document.getElementById('trendFromMonth');
+  const toSel = document.getElementById('trendToMonth');
+  if (!box || !fromSel || !toSel) return;
+  const months = _trendAllMonths();
+  if (months.length === 0) {
+    box.innerHTML = '<div class="trend-empty">尚無工時／營收資料</div>';
+    return;
+  }
+  const opts = months.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+  fromSel.innerHTML = opts;
+  toSel.innerHTML = opts;
+  fromSel.value = months[0];                     // 最早月
+  toSel.value = months[months.length - 1];       // 最新月
+  fromSel.addEventListener('change', renderMonthlyTrend);
+  toSel.addEventListener('change', renderMonthlyTrend);
+  renderMonthlyTrend();
+}
+
+function renderMonthlyTrend() {
+  const box = document.getElementById('trendResult');
+  if (!box) return;
+  const months = _trendMonthsInRange();
+  const stores = _trendTargetStores();
+  if (months.length === 0 || stores.length === 0) {
+    box.innerHTML = '<div class="trend-empty">目前篩選條件下沒有可顯示的資料</div>';
+    return;
+  }
+  const nameMap = {};
+  DATA.stores.forEach(s => { nameMap[Number(s.store_id)] = s.store_name; });
+
+  const cards = stores.map(sid => {
+    const series = _trendAggStore(sid, months);
+    if (!series.some(p => p.hours > 0 || p.revenue > 0)) return '';   // 該店期間無資料則略過
+    const totH = series.reduce((a, p) => a + p.hours, 0);
+    const totR = series.reduce((a, p) => a + p.revenue, 0);
+    const avgRph = totH > 0 ? Math.round(totR / totH) : 0;
+    return '<div class="trend-card">'
+      + '<div class="trend-card-head">'
+      +   '<span class="trend-card-title">' + sid + ' ' + (nameMap[sid] || '') + '</span>'
+      +   '<span class="trend-card-sub">期間合計 ' + Math.round(totH).toLocaleString() + 'h ・ $' + Math.round(totR).toLocaleString() + ' ・ 平均 rev/h $' + avgRph.toLocaleString() + '</span>'
+      + '</div>'
+      + '<div class="trend-svg-wrap">' + _trendChartSVG(series) + '</div>'
+      + '</div>';
+  }).join('');
+
+  box.innerHTML = cards || '<div class="trend-empty">所選門市在此期間無工時／營收資料</div>';
+}
+
+// 雙軸 SVG：柱=月總工時(左軸自適應)、線=月營收(右軸自適應)、X 軸下標 rev/h + 燈號
+// 每店各自 Y 軸縮放（凸顯店內月起伏）；rev/h 燈號用全公司統一閾值
+function _trendChartSVG(series) {
+  const n = series.length;
+  const colW = 82, padL = 48, padR = 54, padT = 18, padB = 50;
+  const plotW = n * colW, plotH = 148;
+  const W = padL + plotW + padR, H = padT + plotH + padB;
+  const maxH = Math.max(1, ...series.map(p => p.hours));
+  const maxR = Math.max(1, ...series.map(p => p.revenue));
+  const yH = v => padT + plotH - (v / maxH) * plotH;
+  const yR = v => padT + plotH - (v / maxR) * plotH;
+  const cx = i => padL + i * colW + colW / 2;
+  const thr = (typeof thresholds !== 'undefined' && thresholds.rph) ? thresholds.rph : 950;
+
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="xMinYMid meet" style="max-width:' + Math.max(W, 340) + 'px;font-family:inherit;display:block;">';
+  // 基線
+  s += '<line x1="' + padL + '" y1="' + (padT + plotH) + '" x2="' + (padL + plotW) + '" y2="' + (padT + plotH) + '" stroke="#F0D9D5"/>';
+  // 工時柱 + 柱頂數字
+  const barW = 32;
+  series.forEach((p, i) => {
+    const y = yH(p.hours), x = cx(i) - barW / 2, bh = Math.max(0, (padT + plotH) - y);
+    s += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW + '" height="' + bh.toFixed(1) + '" rx="3" fill="#6B5D3F" opacity="0.5"><title>' + p.ym + ' 工時 ' + Math.round(p.hours).toLocaleString() + 'h</title></rect>';
+    s += '<text x="' + cx(i).toFixed(1) + '" y="' + (y - 5).toFixed(1) + '" text-anchor="middle" font-size="12" font-weight="700" fill="#4A3F2A">' + Math.round(p.hours).toLocaleString() + '</text>';
+  });
+  // 營收折線
+  if (n >= 2) {
+    const pts = series.map((p, i) => cx(i).toFixed(1) + ',' + yR(p.revenue).toFixed(1)).join(' ');
+    s += '<polyline points="' + pts + '" fill="none" stroke="#F4A620" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+  }
+  // 營收點 + 數字
+  series.forEach((p, i) => {
+    const x = cx(i), y = yR(p.revenue);
+    s += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" fill="#F4A620"><title>' + p.ym + ' 營收 $' + Math.round(p.revenue).toLocaleString() + '</title></circle>';
+    s += '<text x="' + x.toFixed(1) + '" y="' + (y - 9).toFixed(1) + '" text-anchor="middle" font-size="12" font-weight="700" fill="#B0700F">$' + _trendWan(p.revenue) + '</text>';
+  });
+  // X 軸標籤（月份 + rev/h 燈號）
+  series.forEach((p, i) => {
+    const ok = p.rph >= thr, col = ok ? '#52B788' : '#D9594C';
+    s += '<foreignObject x="' + (padL + i * colW).toFixed(1) + '" y="' + (padT + plotH + 6) + '" width="' + colW + '" height="' + (padB - 8) + '">'
+      + '<div xmlns="http://www.w3.org/1999/xhtml" style="text-align:center;font-family:inherit;">'
+      +   '<div style="font-size:12px;color:#6F4E45;font-weight:600;">' + p.ym.substring(2) + '</div>'
+      +   '<div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:3px;font-size:12px;font-weight:700;color:' + col + ';">'
+      +     '<span style="width:8px;height:8px;border-radius:50%;background:' + col + ';"></span>$' + Math.round(p.rph).toLocaleString()
+      +   '</div>'
+      + '</div></foreignObject>';
+  });
+  // 軸註記
+  s += '<text x="' + padL + '" y="' + (padT - 5) + '" text-anchor="start" font-size="12" fill="#6B5D3F">工時 h</text>';
+  s += '<text x="' + (padL + plotW) + '" y="' + (padT - 5) + '" text-anchor="end" font-size="12" fill="#C4820F">營收</text>';
+  s += '</svg>';
+  return s;
+}
 
 function initEmpMonthly() {
   const months = [...new Set(DATA.daily_sales.map(d => d.date.substring(0, 7)))].sort().reverse();

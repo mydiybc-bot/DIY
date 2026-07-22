@@ -109,6 +109,7 @@ function computeRow(sku,p){p=p||{};var onHand=num(p.onHand),dur=sku.cat==="器�
 /* ===== 資料（bootstrap 由 gviz 載入） ===== */
 var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UNITCONV=[],CONTAINER={},DIRTY={},BOOKAGG={},DESSERTS=[],BOOKINGS=[],USAGED={},ORDERS=[],FLOWST="",EVENTS=[],NEWAGG={};
 var SKU={}; // sku_id -> sku
+var BKNEED=null,BOMROWS=null; // 期間備料結果／BOM 表快取
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
 var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
@@ -519,6 +520,19 @@ function viewQuery(){var store=ST.storeId;
   if(!rows.length)html+='<tr><td colspan="3" class="muted">無資料</td></tr>';html+='</table></div>';return html;}
 
 /* ===== 店別參數 ===== */
+function parseBookingCsv(buf){var txt="";
+  try{txt=new TextDecoder("utf-8",{fatal:false}).decode(buf);}catch(e){txt="";}
+  if((txt.match(/\uFFFD/g)||[]).length>2){try{txt=new TextDecoder("big5").decode(buf);}catch(e){}}
+  txt=txt.replace(/^\uFEFF/,"");
+  var rows=[];txt.split(/\r?\n/).forEach(function(ln){ln=ln.trim();if(!ln)return;var c=ln.split(",");
+    var ds=(c[0]||"").trim(),q=(c[1]||"").trim(),no=c.slice(2).join(",").trim();
+    rows.push({dessert:ds,qty:q,note:no});});
+  if(rows.length&&isNaN(+rows[0].qty))rows.shift(); // 表頭自動跳過
+  rows.forEach(function(r){r.qty=+r.qty;
+    if(!r.dessert)r.err="無甜點名";
+    else if(DESSERTS.indexOf(r.dessert)<0)r.err="甜點不在清單";
+    else if(!(r.qty>0))r.err="數量需>0";});
+  return rows;}
 function viewBooking(){var store=ST.storeId;
   var opts=DESSERTS.slice().sort().map(function(d){return '<option value="'+d+'">'+d+'</option>';}).join('');
   var h='<div class="note">門市：'+storeName(store)+'　·　登記未來的預約/包館甜點需求，系統會把所需原料<b>直接加進建議訂貨量</b>（每日重算生效；急件請總部立即重算）。</div>';
@@ -528,12 +542,36 @@ function viewBooking(){var store=ST.storeId;
     +'<input class="sm" type="number" id="bkQty" style="width:80px" placeholder="數量">'
     +'<input class="sm" id="bkNote" style="width:150px" placeholder="備註(公司名/場次)">'
     +'<button class="btn" id="bkAdd">新增</button></div></div>';
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">📄 CSV 批次匯入（大型活動）</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:6px">格式：每行「甜點名稱,數量,備註」（UTF-8、無表頭、備註可空）。選活動日期→選檔案→核對預覽→確認匯入。</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" type="date" id="bkCsvDate" min="'+ymd(TODAY)+'" value="'+(ST.csvDate||'')+'"><input class="sm" type="file" id="bkCsvFile" accept=".csv,text/csv"></div>';
+  if(ST.csvRows&&ST.csvRows.length){var ok=ST.csvRows.filter(function(r){return !r.err;}).length,bad=ST.csvRows.length-ok;
+    h+='<div style="margin-top:8px;overflow-x:auto"><table><tr><th>#</th><th>甜點</th><th class="right">數量</th><th>備註</th><th>狀態</th></tr>'
+      +ST.csvRows.map(function(r,i){return '<tr><td>'+(i+1)+'</td><td>'+r.dessert+'</td><td class="right">'+r.qty+'</td><td class="muted">'+r.note+'</td><td>'+(r.err?'<span style="color:#C0392B">❌ '+r.err+'</span>':'✅')+'</td></tr>';}).join('')+'</table></div>'
+      +'<div class="toolbar"><button class="btn" id="bkCsvGo"'+(ok?'':' disabled')+'>確認匯入 '+ok+' 筆</button>'+(bad?'<span class="muted" style="margin-left:8px">'+bad+' 筆有問題不匯入（甜點名需與清單完全一致）</span>':'')+'</div>';}
+  h+='</div>';
   var t0=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
   var list=BOOKINGS.filter(function(b){return b.store===String(store)&&b.status!=="取消"&&new Date(b.date)>=t0;}).sort(function(a,b){return a.date<b.date?-1:1;});
   h+='<div class="card"><table><tr><th>日期</th><th>甜點</th><th class="right">數量</th><th>備註</th><th></th></tr>';
   list.forEach(function(b){h+='<tr><td><b>'+b.date+'</b></td><td>'+b.dessert+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="muted">'+b.note+'</td><td><span class="why" data-bkdel="'+b.id+'">取消</span></td></tr>';});
   if(!list.length)h+='<tr><td colspan="5" class="muted">尚無未來預約</td></tr>';
   h+='</table></div><div class="note">超過 14 天後的預約會保留，進入 14 天窗口才計入建議量。</div>';
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🧺 期間備料需求（依預約 × BOM 展開，提前備妥食材與器具）</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" type="date" id="bnFrom" value="'+(ST.bnFrom||ymd(TODAY))+'">〜<input class="sm" type="date" id="bnTo" value="'+(ST.bnTo||ymd(new Date(TODAY.getTime()+14*864e5)))+'"><button class="btn" id="bnRun">計算備料</button></div>';
+  if(BKNEED==="loading")h+='<div class="note">計算中…</div>';
+  else if(BKNEED){
+    h+='<div class="note" style="margin-top:6px">'+BKNEED.from+' 〜 '+BKNEED.to+'　·　'+BKNEED.desserts.length+' 種甜點 共 '+fmt(BKNEED.total)+' 份'+(BKNEED.unknownDessert.length?('　·　<span style="color:#C0392B">⚠️ BOM 查無：'+BKNEED.unknownDessert.join('、')+'</span>'):'')+'</div>';
+    h+='<div style="overflow-x:auto"><table><tr><th>甜點</th><th class="right">份數</th></tr>'+BKNEED.desserts.map(function(d){return '<tr><td><b>'+d.name+'</b></td><td class="right">'+fmt(d.qty)+'</td></tr>';}).join('')+'</table></div>';
+    var CATS=["食材","耗材","器具","模具","未對應"];
+    CATS.forEach(function(cat){var rows=BKNEED.items.filter(function(x){return x.cat===cat;});if(!rows.length)return;
+      h+='<div class="vh" style="margin-top:8px"><span class="vn">'+cat+(cat==="器具"||cat==="模具"?'（同場同時使用量）':'')+'</span><span class="vl"></span><span class="muted">'+rows.length+' 項</span></div>';
+      h+='<div style="overflow-x:auto"><table><tr><th>品項</th><th class="right">需求量</th><th class="right">換算採購</th></tr>'
+        +rows.map(function(x){var pk=(x.sku&&x.sku.packQty>0&&x.unit===x.sku.useUnit)?dec(x.qty/x.sku.packQty)+' '+x.sku.buyUnit:'—';
+          return '<tr><td><b>'+x.name+'</b></td><td class="right"><b>'+fmt(Math.round(x.qty*100)/100)+'</b> '+x.unit+'</td><td class="right">'+pk+'</td></tr>';}).join('')+'</table></div>';});
+    if(BKNEED.containers.length){h+='<div class="vh" style="margin-top:8px"><span class="vn">容器（每份一組）</span><span class="vl"></span></div><div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">需求數</th></tr>'+BKNEED.containers.map(function(c){return '<tr><td><b>'+c.name+'</b></td><td class="right">'+fmt(c.qty)+'</td></tr>';}).join('')+'</table></div>';}
+    if(!BKNEED.desserts.length)h+='<div class="note">此期間無預約。</div>';
+  }else h+='<div class="note" style="margin-top:6px">選起訖日按「計算備料」；含食材、耗材、器具模具與容器需求。</div>';
+  h+='</div>';
   return h;}
 function viewParams(){var store=ST.storeId;
   var html='<div class="toolbar"><span class="own">✎ 店別參數（各店維護）</span></div>'
@@ -573,10 +611,12 @@ function viewParams(){var store=ST.storeId;
 function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
   var html='<div class="toolbar"><span class="lock">🔒 季節指數（總部）</span></div><div class="note">1.0＝年平均，>1 旺季。預測＝近期週平均 ×（備貨月 ÷ 本月）。改完按「存」寫回 dim_season。下方另可設「手動淡旺季檔」係數，供店長在建議頁臨時切換（活動/連假等，覆蓋月指數）。</div>';
   html+='<div class="card" style="overflow-x:auto"><table><tr><th>月</th>';for(var m=1;m<=12;m++)html+='<th class="right">'+m+'月'+(m==sm?'(本)':(m==tm?'(備)':''))+'</th>';html+='</tr><tr><td><b>指數</b></td>';
-  for(var k=1;k<=12;k++)html+='<td class="right" '+((k==sm||k==tm)?'style="background:#fff7e6"':'')+'>'+(ed?'<input class="sm" style="width:46px" type="number" step="0.05" data-si="'+k+'" value="'+(SIDX[k]||1)+'">':(SIDX[k]||1))+'</td>';
+  for(var k=1;k<=12;k++)html+='<td class="right" '+((k==sm||k==tm)?'style="background:#fff7e6"':'')+'>'+(ed?'<input class="sm" style="width:60px" type="number" step="0.05" data-si="'+k+'" value="'+(SIDX[k]||1)+'">':(SIDX[k]||1))+'</td>';
   html+='</tr></table></div>';
   html+='<div class="card"><div class="muted" style="margin-bottom:6px">手動淡旺季檔係數（店長臨時切換用）</div><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+'<span class="ipt-lbl">🍃 淡季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfLow" value="'+SFACT.low+'">':'<b>'+SFACT.low+'</b>')+'<span class="ipt-lbl">🔥 旺季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfHigh" value="'+SFACT.high+'">':'<b>'+SFACT.high+'</b>')+'</div></div>';
-  html+='<div class="card"><div class="muted" style="margin-bottom:6px">🎉 節慶事件層（於 BOM 本 dim_event 分頁維護；係數依「備貨覆蓋窗與事件重疊天數」按比例攤入，逾期自動失效）</div>'+(EVENTS.length?('<div style="overflow-x:auto"><table><tr><th>事件</th><th>期間</th><th class="right">係數</th><th>適用</th><th>狀態</th></tr>'+EVENTS.map(function(ev){var past=ev.to<TODAY;return '<tr><td>'+ev.name+'</td><td>'+ymd(ev.from)+' ~ '+ymd(ev.to)+'</td><td class="right">×'+ev.coef+'</td><td>'+(ev.scope||'全部')+'</td><td>'+(ev.on?(past?'⏳ 已過期':'✅ 啟用'):'⛔ 停用')+'</td></tr>';}).join('')+'</table></div>'):'<div class="note">尚未設定。到 BOM 本新增分頁 dim_event（欄位：事件名／開始日／結束日／加成係數／適用品類／啟用），存檔後重新整理本頁即生效。</div>')+'</div>';
+  html+='<div class="card"><div class="muted" style="margin-bottom:6px">🎉 節慶事件層（係數依「備貨覆蓋窗與事件重疊天數」按比例攤入，逾期自動失效）</div>'+(EVENTS.length?('<div style="overflow-x:auto"><table><tr><th>事件</th><th>期間</th><th class="right">係數</th><th>適用</th><th>狀態</th>'+(ed?'<th></th>':'')+'</tr>'+EVENTS.map(function(ev,i){var past=ev.to<TODAY;return '<tr><td>'+ev.name+'</td><td>'+ymd(ev.from)+' ~ '+ymd(ev.to)+'</td><td class="right">×'+ev.coef+'</td><td>'+(ev.scope||'全部')+'</td><td>'+(ev.on?(past?'⏳ 已過期':'✅ 啟用'):'⛔ 停用')+'</td>'+(ed?'<td><span class="why" data-evtoggle="'+i+'">'+(ev.on?'停用':'啟用')+'</span></td>':'')+'</tr>';}).join('')+'</table></div>'):'<div class="note">尚未設定節慶事件。</div>');
+  if(ed)html+='<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="evName" style="width:110px" placeholder="事件名(如中秋節)"><input class="sm" type="date" id="evFrom"><input class="sm" type="date" id="evTo"><input class="sm" type="number" step="0.05" id="evCoef" style="width:70px" placeholder="係數1.3"><select class="sm" id="evScope"><option value="全部">全部</option><option value="食材">食材</option><option value="耗材">耗材</option><option value="器具">器具</option><option value="模具">模具</option></select><button class="btn" id="evAdd">新增事件</button></div>';
+  html+='</div>';
   html+=(ed?'<div class="toolbar"><button class="btn" id="saveSeason">儲存季節指數</button></div>':'')+'<div class="note">本月 '+sm+'月（'+(SIDX[sm]||1)+'）→ 備貨 '+tm+'月（'+(SIDX[tm]||1)+'）＝×'+((SIDX[tm]||1)/(SIDX[sm]||1)).toFixed(2)+'。</div>';return html;}
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
@@ -588,9 +628,26 @@ function viewUnitConv(){var ed=ST.role==="總部";
   return html;}
 
 /* ===== 主檔（總部，唯讀；編輯走 Sheet）===== */
-function viewMaster(){var html='<div class="toolbar"><span class="lock">🔒 主檔 dim_sku（總部）</span></div><div class="note">品項定義全店共用。新增/改名/改採購單位請於 dim_sku 分頁維護；改完隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>品名</th><th>類別</th><th>廠商</th><th>採購單位</th><th>內容量</th><th>單價</th></tr>';
-  SKUS.forEach(function(s){html+='<tr><td><b>'+s.name+'</b></td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td>'+s.vendor+'</td><td>'+s.buyUnit+'</td><td>'+fmt(s.packQty)+' '+s.useUnit+'</td><td>'+fmt(s.price)+'</td></tr>';});
-  html+='</table></div><div class="muted">共 '+SKUS.length+' 項</div>';return html;}
+function viewMaster(){var ed=ST.role==="總部";
+  var html='<div class="toolbar"><span class="own">✎ 主檔 dim_sku（總部維護）</span></div>'
+  +'<div class="note">品項定義全店共用，改完按「存」即寫回、立即生效（用量重算隔日生效）。<b>品名不可在此修改</b>——品名是 BOM/POS 對應鍵，改名會使用量推算斷鏈，如需改名請聯絡系統管理。內容量＝每 1 採購單位含多少使用單位（如 1 箱 = 20000 g）。</div>';
+  if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">➕ 新增品項</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+    +'<input class="sm" id="nsId" style="width:70px" placeholder="編號F240"><input class="sm" id="nsName" style="width:130px" placeholder="品名(需與BOM一致)"><select class="sm" id="nsCat"><option>食材</option><option>耗材</option><option>器具</option><option>模具</option></select>'
+    +'<input class="sm" id="nsUse" style="width:56px" placeholder="使用單位g" value="g"><input class="sm" id="nsVendor" style="width:80px" placeholder="廠商"><input class="sm" id="nsBuy" style="width:64px" placeholder="採購單位"><input class="sm" id="nsPq" type="number" style="width:80px" placeholder="內容量"><input class="sm" id="nsPrice" type="number" style="width:70px" placeholder="單價">'
+    +'<button class="btn" id="nsAdd">新增</button></div></div>';
+  html+='<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項或廠商…" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
+  var items=SKUS.filter(function(s){return matchQ(s);});
+  html+='<div class="card" style="overflow-x:auto"><table><tr><th>品名</th><th>類別</th><th>廠商</th><th>採購單位</th><th>內容量('+'使用單位)</th><th>單價</th>'+(ed?'<th></th>':'')+'</tr>';
+  items.forEach(function(s){
+    if(!ed){html+='<tr><td><b>'+s.name+'</b></td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td>'+s.vendor+'</td><td>'+s.buyUnit+'</td><td>'+fmt(s.packQty)+' '+s.useUnit+'</td><td>'+fmt(s.price)+'</td></tr>';return;}
+    var catSel='<select class="sm" data-m="'+s.id+'" data-f="cat">'+["食材","耗材","器具","模具"].map(function(c){return '<option'+(c===s.cat?' selected':'')+'>'+c+'</option>';}).join('')+'</select>';
+    html+='<tr><td><b>'+s.name+'</b></td><td>'+catSel+'</td>'
+      +'<td><input class="tx" style="width:78px" type="text" data-m="'+s.id+'" data-f="vendor" value="'+String(s.vendor||'').replace(/"/g,'&quot;')+'"></td>'
+      +'<td><input class="tx" style="width:56px" type="text" data-m="'+s.id+'" data-f="buyUnit" value="'+String(s.buyUnit||'').replace(/"/g,'&quot;')+'"></td>'
+      +'<td><input class="sm" style="width:80px" type="number" data-m="'+s.id+'" data-f="packQty" value="'+s.packQty+'"> <span class="muted">'+s.useUnit+'</span></td>'
+      +'<td><input class="sm" style="width:70px" type="number" data-m="'+s.id+'" data-f="price" value="'+s.price+'"></td>'
+      +'<td><button class="btn sm" data-msave="'+s.id+'">存</button></td></tr>';});
+  html+='</table></div><div class="muted">共 '+items.length+' 項</div>';return html;}
 
 /* ===== 經營者總覽 ===== */
 function viewOverview(){var rowsByStore=STORES.map(function(st){var need=liveItems(st.id).map(function(s){return {s:s,r:rowFor(st.id,s)};}).filter(function(x){return x.r.packs>0;});return {st:st,need:need.length,val:need.reduce(function(a,x){return a+x.r.packs*x.s.price;},0)};});
@@ -641,6 +698,75 @@ function wire(){
     toast("已登記，建議量每日重算後生效");render();};
   Array.prototype.forEach.call(document.querySelectorAll("[data-bkdel]"),function(el){el.onclick=function(){var id=el.dataset.bkdel;
     post({type:"bookingDel",id:id});BOOKINGS.forEach(function(b){if(b.id===id)b.status="取消";});toast("已取消預約");render();};});
+  // CSV 匯入
+  var cvd=$("#bkCsvDate");if(cvd)cvd.onchange=function(){ST.csvDate=cvd.value;};
+  var cvf=$("#bkCsvFile");if(cvf)cvf.onchange=function(){var f=cvf.files&&cvf.files[0];if(!f)return;
+    var rd=new FileReader();rd.onload=function(){ST.csvRows=parseBookingCsv(rd.result);render();};
+    rd.readAsArrayBuffer(f);};
+  var cvg=$("#bkCsvGo");if(cvg)cvg.onclick=function(){var d=ST.csvDate;if(!d){toast("請先選活動日期");return;}
+    var ok=(ST.csvRows||[]).filter(function(r){return !r.err;});if(!ok.length)return;
+    cvg.disabled=true;var done=0;toast("匯入中… 0/"+ok.length);
+    (function chunk(i){ if(i>=ok.length){ST.csvRows=null;toast("已匯入 "+ok.length+" 筆預約");render();return;}
+      var batch=ok.slice(i,i+5);
+      Promise.all(batch.map(function(r){var id="BK"+Date.now()+Math.floor(Math.random()*1000);
+        BOOKINGS.push({id:id,store:String(ST.storeId),date:d,dessert:r.dessert,qty:r.qty,note:r.note,status:""});
+        return post({type:"booking",id:id,store:ST.storeId,date:d,dessert:r.dessert,qty:r.qty,note:r.note},true);})).then(function(){done+=batch.length;toast("匯入中… "+done+"/"+ok.length);chunk(i+5);});
+    })(0);};
+  // 期間備料
+  var bf=$("#bnFrom");if(bf)bf.onchange=function(){ST.bnFrom=bf.value;};
+  var bt=$("#bnTo");if(bt)bt.onchange=function(){ST.bnTo=bt.value;};
+  var br=$("#bnRun");if(br)br.onclick=function(){var f=ST.bnFrom||ymd(TODAY),t=ST.bnTo||ymd(new Date(TODAY.getTime()+14*864e5));
+    if(f>t){toast("起日不能大於迄日");return;}
+    BKNEED="loading";render();
+    (BOMROWS?Promise.resolve(BOMROWS):gvizQ("BOM表","select A,B,C,D,E").then(function(rs){BOMROWS=rs;return rs;})).then(function(rs){
+      var sel=BOOKINGS.filter(function(b){return b.store===String(ST.storeId)&&b.status!=="取消"&&b.date>=f&&b.date<=t;});
+      var byD={};sel.forEach(function(b){byD[b.dessert]=(byD[b.dessert]||0)+b.qty;});
+      var byName={};SKUS.forEach(function(sk){byName[sk.name]=sk;});
+      var bomByD={};rs.forEach(function(r){var dn=String(r["甜點名稱"]||"").trim();if(!dn)return;(bomByD[dn]=bomByD[dn]||[]).push({item:String(r["食材/器具名稱"]||"").trim(),qty:num(r["數量"]),unit:String(r["單位"]||"").trim(),cont:String(r["容器"]||"").trim()});});
+      var need={},cont={},unknown=[];
+      Object.keys(byD).forEach(function(dn){var n=byD[dn],rows=bomByD[dn];
+        if(!rows||!rows.length){unknown.push(dn);return;}
+        var cset={};rows.forEach(function(r){if(!r.item)return;
+          var k=r.item+"|"+r.unit;(need[k]=need[k]||{name:r.item,unit:r.unit,qty:0}).qty+=r.qty*n;
+          if(r.cont)cset[r.cont]=1;});
+        Object.keys(cset).forEach(function(c){cont[c]=(cont[c]||0)+n;});});
+      var items=Object.keys(need).map(function(k){var x=need[k],sk=byName[x.name];
+        return {name:x.name,unit:x.unit,qty:x.qty,sku:sk||null,cat:sk?sk.cat:"未對應"};});
+      items.sort(function(a,b){return b.qty-a.qty;});
+      BKNEED={from:f,to:t,total:sel.reduce(function(a,b){return a+b.qty;},0),
+        desserts:Object.keys(byD).map(function(d){return {name:d,qty:byD[d]};}).sort(function(a,b){return b.qty-a.qty;}),
+        items:items,unknownDessert:unknown,
+        containers:Object.keys(cont).map(function(c){return {name:c,qty:cont[c]};}).sort(function(a,b){return b.qty-a.qty;})};
+      render();});};
+  // 事件層
+  Array.prototype.forEach.call(document.querySelectorAll("[data-evtoggle]"),function(el){el.onclick=function(){var ev=EVENTS[+el.dataset.evtoggle];if(!ev)return;
+    ev.on=!ev.on;post({type:"event",name:ev.name,fields:{"啟用":ev.on?"TRUE":"FALSE"}});toast(ev.on?"已啟用":"已停用");render();};});
+  var ea=$("#evAdd");if(ea)ea.onclick=function(){var nm=($("#evName").value||"").trim(),f=$("#evFrom").value,t=$("#evTo").value,c=+$("#evCoef").value,sc2=$("#evScope").value;
+    if(!nm||!f||!t||!(c>0)){toast("請填事件名、起訖日、係數");return;}
+    if(f>t){toast("開始日不能晚於結束日");return;}
+    post({type:"event",name:nm,fields:{"開始日":f,"結束日":t,"加成係數":c,"適用品類":sc2,"啟用":"TRUE"}});
+    EVENTS.push({name:nm,from:new Date(f),to:new Date(t),coef:c,scope:sc2,on:true});
+    toast("已新增事件");render();};
+  // 主檔編輯
+  var MEDIT={};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-m]"),function(el){el.onchange=function(){var id=el.dataset.m,f2=el.dataset.f;
+    MEDIT[id]=MEDIT[id]||{};MEDIT[id][f2]=(f2==="packQty"||f2==="price")?(el.value===""?"":+el.value):el.value;};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-msave]"),function(el){el.onclick=function(){var id=el.dataset.msave,e=MEDIT[id]||{},sk=SKU[id];if(!sk)return;
+    var fields={};
+    if("cat"in e){fields["品類別"]=e.cat;sk.cat=e.cat;}
+    if("vendor"in e){fields["廠商"]=e.vendor;sk.vendor=String(e.vendor||"").trim();}
+    if("buyUnit"in e){fields["採購單位"]=e.buyUnit;sk.buyUnit=String(e.buyUnit||"").trim()||sk.buyUnit;}
+    if("packQty"in e){fields["每採購單位內容量"]=e.packQty;sk.packQty=num(e.packQty)||sk.packQty;}
+    if("price"in e){fields["單價"]=e.price;sk.price=num(e.price);}
+    if(!Object.keys(fields).length){toast("沒有變更");return;}
+    post({type:"sku",sku_id:id,fields:fields});delete MEDIT[id];toast("已存 "+sk.name);};});
+  var na=$("#nsAdd");if(na)na.onclick=function(){var id=($("#nsId").value||"").trim(),nm=($("#nsName").value||"").trim(),cat=$("#nsCat").value,uu=($("#nsUse").value||"g").trim(),vd=($("#nsVendor").value||"").trim(),bu=($("#nsBuy").value||"").trim(),pq=+$("#nsPq").value,pr=+$("#nsPrice").value;
+    if(!id||!nm){toast("編號與品名必填");return;}
+    if(SKU[id]){toast("編號已存在："+SKU[id].name);return;}
+    var dupNm=SKUS.some(function(s){return s.name===nm;});if(dupNm){toast("品名已存在");return;}
+    post({type:"sku",sku_id:id,fields:{"品名":nm,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu||uu,"每採購單位內容量":(pq>0?pq:1),"單價":(pr>0?pr:0)}});
+    var ns={id:id,name:nm,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu||uu,packQty:(pq>0?pq:1),price:(pr>0?pr:0),defZone:""};
+    SKUS.push(ns);SKU[id]=ns;toast("已新增 "+nm+"（記得到店別參數頁設定啟用店）");render();};
   Array.prototype.forEach.call(document.querySelectorAll(".why[data-why]"),function(el){el.onclick=function(){ST.exp[el.dataset.why]=!ST.exp[el.dataset.why];render();};});
   var tg=$('[data-toggleexcl]');if(tg)tg.onclick=function(){ST.showExcl=!ST.showExcl;render();};
   Array.prototype.forEach.call(document.querySelectorAll('[data-smode]'),function(el){el.onclick=function(){ST.seasonMode=el.dataset.smode;ST.season=(ST.seasonMode!=='關');render();};});
