@@ -1467,22 +1467,309 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
    TAB 5: 季節 & 活動
    ================================================================ */
 // ===========================================================
-// W5 限定甜點檔期分析 — React 前端元件 v4
+// W5 限定甜點檔期分析 — React 前端元件 v5
 // ===========================================================
 //
-// v4 變更（2026-05-11）：
-// - tab 內容大改：標題改為「限定甜點檔期分析」
-// - 拿掉所有「整檔期」、「平均日銷」、「占比」相關欄位
-// - 只剩三件套：限定甜點營收 + YoY + 天數
-// - 各店排行改用限定甜點營收（不是倍率）
-// - 資料來源改 data.seasonal.campaigns（不是 festivals）
+// v5 變更（2026-07-22，搭配後端 v19）：
+// - 全活動排行榜展開列新增三檢視切換 pill：
+//   ① 品項明細（原有）
+//   ② 品項 × 分店（各品項在 12 店的檔期總量矩陣，熱度底色）
+//   ③ 分店 × 週次（備料表：店×週矩陣，點店列展開該店 品項×週 明細）
+// - 資料源：campaign.detail（後端 v19 立方體）
+//   detail = { weekStart:'mon', weeks:[週一日期], stores:[店號], items:[品項名],
+//              qty:{ '店號': 週×品項 矩陣 } }
+// - 店名縮寫由 filters.stores 的名稱「推導」（禁止手寫店號表，地雷 4）
+// - 頭尾離群週修剪：全公司該週合計 < 檔期總量 0.3% 的頭尾週隱藏（地雷 12 防護）
+// - 檢視①②不修剪、數量與品項明細完全一致（信任錨點）
 //
 // 安裝（給 Cowork）：
-// 1. pos-dashboard.html 找 `function TabSeasonal({ data })` v3 版起點
-// 2. 從這行到該函式結束 `}`（含）整段刪除
-// 3. 把本檔案從 function TabSeasonal 開始整段貼到原位置
-// 4. L595 不需動（props 仍是 <TabSeasonal data={rawData}/>）
+// 1. pos-dashboard.html 保留「TAB 5: 季節 & 活動」banner（/* === TAB 5 === */ 三行）
+// 2. 從 banner 下一行的「// ====」分隔線（即 v4 註解區起點）刪到
+//    TAB 6 banner 之前 TabSeasonal 函式結尾的「}」（含）
+// 3. 把本檔全部內容貼到原位置
 // ===========================================================
+
+/* ── v21 helpers：店名縮寫推導 / 週標籤 / 熱度底色 ── */
+function _shortStore(name) {
+  const s = String(name || '');
+  if (s.indexOf('A13') >= 0) return '信義A13';
+  if (s.indexOf('SKM') >= 0) return '高雄SKM';
+  return s.replace(/^(台北|新北|台中|台南|新竹|桃園|高雄)/, '').replace(/店$/, '') || s;
+}
+function _weekSpanLabel(ws) {
+  const p = String(ws).split('-').map(Number);
+  const d2 = new Date(p[0], p[1] - 1, p[2] + 6);
+  return p[1] + '/' + p[2] + '~' + (d2.getMonth() + 1) + '/' + d2.getDate();
+}
+function _heatBg(v, max) {
+  if (!v || v <= 0 || !max) return 'transparent';
+  const a = 0.08 + 0.5 * Math.min(1, v / max);
+  return 'rgba(251,146,60,' + a.toFixed(2) + ')';
+}
+
+/* ── v21：檔期展開明細三檢視 ── */
+function CampaignDetailViews({ campaign, storeNameByCode }) {
+  const d = campaign.detail;
+  const [view, setView] = React.useState('items');
+  const [openStore, setOpenStore] = React.useState(null);
+  const fmtN = (n) => Math.round(n).toLocaleString();
+  const fmtM = (n) => 'NT$ ' + Math.round(n).toLocaleString();
+  const items = campaign.items || [];
+  const hasCube = !!(d && d.weeks && d.weeks.length && d.stores && d.stores.length && d.qty);
+
+  // ② 品項×分店矩陣（全週加總、不修剪 → 與品項明細數量完全一致）
+  const itemStore = React.useMemo(() => {
+    if (!hasCube) return null;
+    const nI = d.items.length;
+    const rows = d.items.map((name) => ({ name, cells: d.stores.map(() => 0), total: 0 }));
+    d.stores.forEach((sc, si) => {
+      const mat = d.qty[String(sc)] || [];
+      for (let wi = 0; wi < mat.length; wi++) {
+        const wr = mat[wi] || [];
+        for (let ii = 0; ii < nI; ii++) {
+          const v = wr[ii] || 0;
+          rows[ii].cells[si] += v;
+          rows[ii].total += v;
+        }
+      }
+    });
+    const colTot = d.stores.map((sc, si) => rows.reduce((s, r) => s + r.cells[si], 0));
+    let max = 0;
+    rows.forEach(r => r.cells.forEach(v => { if (v > max) max = v; }));
+    return { rows, colTot, max };
+  }, [d, hasCube]);
+
+  // ③ 週軸：店×週合計 + 頭尾離群週修剪（門檻＝檔期總量 0.3%，只修頭尾）
+  const wk = React.useMemo(() => {
+    if (!hasCube) return null;
+    const nW = d.weeks.length;
+    const storeWeek = d.stores.map((sc) => {
+      const mat = d.qty[String(sc)] || [];
+      return d.weeks.map((w, wi) => (mat[wi] || []).reduce((a, b) => a + b, 0));
+    });
+    const weekTot = d.weeks.map((w, wi) => storeWeek.reduce((s, row) => s + row[wi], 0));
+    const total = weekTot.reduce((a, b) => a + b, 0);
+    const thr = Math.max(1, total * 0.003);
+    let s = 0, e = nW - 1;
+    while (s < e && weekTot[s] < thr) s++;
+    while (e > s && weekTot[e] < thr) e--;
+    const idx = [];
+    for (let i = s; i <= e; i++) idx.push(i);
+    let maxCell = 0;
+    storeWeek.forEach(row => idx.forEach(i => { if (row[i] > maxCell) maxCell = row[i]; }));
+    return { idx, hidden: nW - idx.length, storeWeek, weekTot, maxCell };
+  }, [d, hasCube]);
+
+  const thBase = { padding: '6px 8px', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right' };
+  const tdBase = { padding: '6px 8px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', color: '#1f2937' };
+  const stickyTh = { ...thBase, textAlign: 'left', position: 'sticky', left: 0, background: '#fef3e2', zIndex: 2 };
+  const stickyTd = { ...tdBase, textAlign: 'left', position: 'sticky', left: 0, background: '#fff', zIndex: 1 };
+  const noteStyle = { fontSize: 12, color: '#6F4E45', marginTop: 6 };
+  const noData = <div style={{ fontSize: 12, color: '#9ca3af' }}>此檔期無分店×週次明細</div>;
+
+  const pills = [
+    { k: 'items', label: '品項明細' },
+    { k: 'matrix', label: '品項 × 分店' },
+    { k: 'weekly', label: '分店 × 週次（備料）' }
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, margin: '6px 0 10px', flexWrap: 'wrap' }}>
+        {pills.map(p => (
+          <button key={p.k} onClick={() => setView(p.k)} style={{
+            padding: '4px 12px', fontSize: 12, borderRadius: 999, cursor: 'pointer', fontWeight: 600,
+            border: view === p.k ? '1px solid #c2410c' : '1px solid #e5e7eb',
+            background: view === p.k ? '#c2410c' : 'white',
+            color: view === p.k ? 'white' : '#6b7280'
+          }}>{p.label}</button>
+        ))}
+      </div>
+
+      {/* ① 品項明細（v4 原有表格，原樣搬入） */}
+      {view === 'items' && (
+        items.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#9ca3af' }}>無品項明細資料</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: 'white', borderRadius: 6 }}>
+            <thead>
+              <tr style={{ background: '#fef3e2', borderBottom: '1px solid #fed7aa' }}>
+                <th style={{ padding: 8, textAlign: 'left', fontWeight: 600 }}>品項名稱</th>
+                <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>數量</th>
+                <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>原始單價</th>
+                <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>金額</th>
+                <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>金額%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, i) => {
+                const unitPrice = (it.originalUnitPrice != null) ? it.originalUnitPrice : (it.qty > 0 ? it.revenue / it.qty : 0);
+                return (
+                <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                  <td style={{ padding: 8, color: '#1f2937' }}>{it.product}</td>
+                  <td style={{ padding: 8, textAlign: 'right', color: '#6b7280' }}>{fmtN(it.qty)}</td>
+                  <td style={{ padding: 8, textAlign: 'right', color: '#6b7280' }}>{fmtM(unitPrice)}</td>
+                  <td style={{ padding: 8, textAlign: 'right', fontWeight: 600, color: '#7c2d12' }}>{fmtM(it.revenue)}</td>
+                  <td style={{ padding: 8, textAlign: 'right', color: '#92400e' }}>{(it.revenuePct || 0).toFixed(1)}%</td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )
+      )}
+
+      {/* ② 品項 × 分店 */}
+      {view === 'matrix' && (!hasCube || !itemStore ? noData : (
+        <div>
+          <div style={{ overflowX: 'auto', background: 'white', borderRadius: 6 }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
+              <thead>
+                <tr style={{ background: '#fef3e2', borderBottom: '1px solid #fed7aa' }}>
+                  <th style={stickyTh}>品項</th>
+                  {d.stores.map((sc) => (
+                    <th key={sc} style={thBase}>{sc} {_shortStore(storeNameByCode[sc] || ('店' + sc))}</th>
+                  ))}
+                  <th style={{ ...thBase, color: '#7c2d12' }}>合計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemStore.rows.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                    <td style={stickyTd}>{r.name}</td>
+                    {r.cells.map((v, si) => (
+                      <td key={si} style={{ ...tdBase, background: _heatBg(v, itemStore.max) }}>{v ? fmtN(v) : <span style={{ color: '#9ca3af' }}>–</span>}</td>
+                    ))}
+                    <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(r.total)}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: '#fffbeb', fontWeight: 700, borderTop: '1px solid #fed7aa' }}>
+                  <td style={{ ...stickyTd, background: '#fffbeb' }}>合計</td>
+                  {itemStore.colTot.map((v, si) => (
+                    <td key={si} style={{ ...tdBase, fontWeight: 700 }}>{fmtN(v)}</td>
+                  ))}
+                  <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(itemStore.colTot.reduce((a, b) => a + b, 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={noteStyle}>數量口徑＝SUM(數量)，含退貨負數；本表與「品項明細」數量完全一致。</div>
+        </div>
+      ))}
+
+      {/* ③ 分店 × 週次（備料）：店×週矩陣，點店列展開該店 品項×週 */}
+      {view === 'weekly' && (!hasCube || !wk ? noData : (
+        <div>
+          <div style={{ fontSize: 12, color: '#92400e', marginBottom: 6 }}>
+            點任一店展開「品項 × 週」備料明細；週為週一～週日。
+          </div>
+          <div style={{ overflowX: 'auto', background: 'white', borderRadius: 6 }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
+              <thead>
+                <tr style={{ background: '#fef3e2', borderBottom: '1px solid #fed7aa' }}>
+                  <th style={stickyTh}>分店</th>
+                  {wk.idx.map((wi, k) => (
+                    <th key={wi} style={thBase}>W{k + 1}<div style={{ fontWeight: 400, color: '#92400e' }}>{_weekSpanLabel(d.weeks[wi])}</div></th>
+                  ))}
+                  <th style={{ ...thBase, color: '#7c2d12' }}>合計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.stores.map((sc, si) => {
+                  const rowTot = wk.idx.reduce((s, wi) => s + wk.storeWeek[si][wi], 0);
+                  const isOpen = openStore === sc;
+                  return (
+                    <React.Fragment key={sc}>
+                      <tr
+                        onClick={() => setOpenStore(isOpen ? null : sc)}
+                        style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer', background: isOpen ? '#fff7ed' : 'transparent' }}
+                      >
+                        <td style={{ ...stickyTd, fontWeight: 600, background: isOpen ? '#fff7ed' : '#fff' }}>
+                          <span style={{ color: '#c2410c', marginRight: 4 }}>{isOpen ? '▼' : '▶'}</span>{sc} {_shortStore(storeNameByCode[sc] || ('店' + sc))}
+                        </td>
+                        {wk.idx.map((wi) => {
+                          const v = wk.storeWeek[si][wi];
+                          return <td key={wi} style={{ ...tdBase, background: _heatBg(v, wk.maxCell) }}>{v ? fmtN(v) : <span style={{ color: '#9ca3af' }}>–</span>}</td>;
+                        })}
+                        <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(rowTot)}</td>
+                      </tr>
+                      {isOpen && (
+                        <tr>
+                          <td colSpan={wk.idx.length + 2} style={{ padding: '8px 12px', background: '#fffbeb' }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+                              {storeNameByCode[sc] || ('店' + sc)} — 各品項每週數量（備料參考）
+                            </div>
+                            <div style={{ overflowX: 'auto', background: 'white', borderRadius: 6 }}>
+                              <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
+                                <thead>
+                                  <tr style={{ background: '#fef3e2', borderBottom: '1px solid #fed7aa' }}>
+                                    <th style={stickyTh}>品項</th>
+                                    {wk.idx.map((wi, k) => (
+                                      <th key={wi} style={thBase}>W{k + 1}<div style={{ fontWeight: 400, color: '#92400e' }}>{_weekSpanLabel(d.weeks[wi])}</div></th>
+                                    ))}
+                                    <th style={{ ...thBase, color: '#7c2d12' }}>合計</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(() => {
+                                    const mat = d.qty[String(sc)] || [];
+                                    const rows = d.items
+                                      .map((name, ii) => {
+                                        const cells = wk.idx.map(wi => (mat[wi] || [])[ii] || 0);
+                                        return { name, cells, total: cells.reduce((a, b) => a + b, 0) };
+                                      })
+                                      .filter(r => r.total !== 0);
+                                    let mx = 0;
+                                    rows.forEach(r => r.cells.forEach(v => { if (v > mx) mx = v; }));
+                                    return (
+                                      <React.Fragment>
+                                        {rows.map((r, i) => (
+                                          <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                            <td style={stickyTd}>{r.name}</td>
+                                            {r.cells.map((v, k) => (
+                                              <td key={k} style={{ ...tdBase, background: _heatBg(v, mx) }}>{v ? fmtN(v) : <span style={{ color: '#9ca3af' }}>–</span>}</td>
+                                            ))}
+                                            <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(r.total)}</td>
+                                          </tr>
+                                        ))}
+                                        <tr style={{ background: '#fffbeb', fontWeight: 700, borderTop: '1px solid #fed7aa' }}>
+                                          <td style={{ ...stickyTd, background: '#fffbeb' }}>週合計</td>
+                                          {wk.idx.map((wi) => (
+                                            <td key={wi} style={{ ...tdBase, fontWeight: 700 }}>{fmtN(wk.storeWeek[si][wi])}</td>
+                                          ))}
+                                          <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(rowTot)}</td>
+                                        </tr>
+                                      </React.Fragment>
+                                    );
+                                  })()}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div style={noteStyle}>只列該店有銷量的品項；可依去年同檔期同週水位預估下一週食材與器具。</div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                <tr style={{ background: '#fffbeb', fontWeight: 700, borderTop: '1px solid #fed7aa' }}>
+                  <td style={{ ...stickyTd, background: '#fffbeb' }}>週合計</td>
+                  {wk.idx.map((wi) => (
+                    <td key={wi} style={{ ...tdBase, fontWeight: 700 }}>{fmtN(wk.weekTot[wi])}</td>
+                  ))}
+                  <td style={{ ...tdBase, fontWeight: 700, color: '#7c2d12' }}>{fmtN(wk.idx.reduce((s, wi) => s + wk.weekTot[wi], 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {wk.hidden > 0 && (
+            <div style={noteStyle}>已隱藏 {wk.hidden} 個頭尾離群週（占檔期總量 &lt;0.3% 的雜訊交易日）；合計為顯示週加總。</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function TabSeasonal({ data }) {
   if (!data || !data.seasonal || !data.seasonal.campaigns) {
@@ -1491,6 +1778,13 @@ function TabSeasonal({ data }) {
 
   const { campaigns } = data.seasonal;
   const today = new Date().toISOString().slice(0, 10);
+
+  // v21：店號 → 店名（單一真相 filters.stores，禁止手寫店號表）
+  const storeNameByCode = React.useMemo(() => {
+    const m = {};
+    (((data.filters || {}).stores) || []).forEach(s => { m[s.storeCode] = s.name; });
+    return m;
+  }, [data]);
 
   // 依「檔期年份 → 檔期結束日」由近到遠排序（越接近現在越前面）。
   // 註：只用 dateRange.end 排序在跨年時會失準——部分檔期的 end 抓到跨年或雜訊
@@ -1529,7 +1823,7 @@ function TabSeasonal({ data }) {
   }, [selectedCampaignKey, campaigns, featured]);
   const isManualSelect = selectedCampaignKey && displayCampaign && displayCampaign.key !== (featured && featured.key);
 
-  // 全活動排行榜:點活動列展開品項明細,可同時展開多個比較
+  // 全活動排行榜:點活動列展開明細,可同時展開多個比較
   const [expandedKeys, setExpandedKeys] = React.useState(() => new Set());
   const toggleExpanded = (key) => {
     setExpandedKeys(prev => {
@@ -1695,7 +1989,7 @@ function TabSeasonal({ data }) {
         <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 12 }}>
           🏆 全活動年度排行榜
           <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8, fontWeight: 400 }}>
-            依限定甜點營收降序 · 點活動名稱看品項明細
+            依限定甜點營收降序 · 點活動展開 品項明細／品項×分店／各店週次備料
           </span>
         </h3>
 
@@ -1716,7 +2010,6 @@ function TabSeasonal({ data }) {
                 .sort((a, b) => b.revenue - a.revenue)
                 .map((c, idx) => {
                 const isExpanded = expandedKeys.has(c.key);
-                const items = c.items || [];
                 return (
                 <React.Fragment key={c.key}>
                 <tr
@@ -1751,38 +2044,10 @@ function TabSeasonal({ data }) {
                 {isExpanded && (
                   <tr style={{ background: '#fffbeb' }}>
                     <td colSpan={6} style={{ padding: '8px 16px 16px' }}>
-                      <div style={{ fontSize: 12, color: '#92400e', fontWeight: 600, margin: '6px 0 8px' }}>
-                        {c.year} {c.name} — 品項明細（共 {items.length} 項）
+                      <div style={{ fontSize: 12, color: '#92400e', fontWeight: 600, margin: '6px 0 2px' }}>
+                        {c.year} {c.name} — 檔期明細
                       </div>
-                      {items.length === 0 ? (
-                        <div style={{ fontSize: 12, color: '#9ca3af' }}>無品項明細資料</div>
-                      ) : (
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: 'white', borderRadius: 6 }}>
-                          <thead>
-                            <tr style={{ background: '#fef3e2', borderBottom: '1px solid #fed7aa' }}>
-                              <th style={{ padding: 8, textAlign: 'left', fontWeight: 600 }}>品項名稱</th>
-                              <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>數量</th>
-                              <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>原始單價</th>
-                              <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>金額</th>
-                              <th style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>金額%</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {items.map((it, i) => {
-                              const unitPrice = (it.originalUnitPrice != null) ? it.originalUnitPrice : (it.qty > 0 ? it.revenue / it.qty : 0);
-                              return (
-                              <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                                <td style={{ padding: 8, color: '#1f2937' }}>{it.product}</td>
-                                <td style={{ padding: 8, textAlign: 'right', color: '#6b7280' }}>{fmtNum(it.qty)}</td>
-                                <td style={{ padding: 8, textAlign: 'right', color: '#6b7280' }}>{fmtMoney(unitPrice)}</td>
-                                <td style={{ padding: 8, textAlign: 'right', fontWeight: 600, color: '#7c2d12' }}>{fmtMoney(it.revenue)}</td>
-                                <td style={{ padding: 8, textAlign: 'right', color: '#92400e' }}>{(it.revenuePct || 0).toFixed(1)}%</td>
-                              </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      )}
+                      <CampaignDetailViews campaign={c} storeNameByCode={storeNameByCode} />
                     </td>
                   </tr>
                 )}
@@ -1850,18 +2115,15 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
     return true;
   };
   // v14: 4人同行$500 為 POS 置換型，真實折扣 = 帳面折扣 − $500券佔位營收(placeholderRev)
-  // v20: 加購餅乾重分類（經營者裁定 2026-07-16）：這是把「陪同客」轉化為消費者的推銷讓利
-  //      （夥伴推銷陪同者做一份便宜餅乾），屬真實行銷讓利 → 前端把 加價購 併入 行銷折扣。
-  //      後端 GAS payload 的 category 仍為「加價購」，下次動 GAS 時再正名（categoryRaw 保留原值）。
+  // v21: 後端 v19 已於 2026-07-22 源頭正名（classifyVoucher 加購餅乾 → 行銷折扣），
+  //      移除 v20 前端 remap；「加購餅乾讓利」小計改以 voucher==='加購餅乾' 判定。
   const fDBP = useMemo(()=>dbp.filter(filt).map(m=>({
     ...m,
-    categoryRaw: m.category,
-    category: m.category==='加價購' ? '行銷折扣' : m.category,
     discountRaw: m.discount,
     discount: (m.discount||0) - (m.placeholderRev||0)
   })),[dbp, dateStart, dateEnd, selRegion, selStores]);
   // 加購餅乾獨立小計（KPI 卡沿用「獨立看」需求）
-  const cookieTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.categoryRaw==='加價購'?(m.discount||0):0),0),[fDBP]);
+  const cookieTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.voucher==='加購餅乾'?(m.discount||0):0),0),[fDBP]);
   const phTotal = useMemo(()=>fDBP.reduce((s,m)=>s+(m.placeholderRev||0),0),[fDBP]);
   const fMBS = useMemo(()=>mbs.filter(filt),[mbs, dateStart, dateEnd, selRegion, selStores]);
 
