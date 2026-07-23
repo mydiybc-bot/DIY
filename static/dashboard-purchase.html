@@ -111,7 +111,7 @@ var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UN
 var SKU={}; // sku_id -> sku
 var BKNEED=null,BOMROWS=null; // 期間備料結果／BOM 表快取
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anAllS:false,anAllM:false,totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,invFilter:"需關注",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
@@ -151,7 +151,7 @@ async function bootstrap(){ try {
   BOOKINGS=fB.map(function(r){return {id:String(r['預約ID']||''),store:String(r['店號']),date:(function(){var d=gvDate(r['日期']);return d?ymd(d):String(r['日期']||'').slice(0,10);})(),dessert:r['甜點']||'',qty:num(r['數量']),note:r['備註']||'',status:r['狀態']||''};}).filter(function(b){return b.id;});
   EVENTS=dEv.map(function(r){var f=gvDate(r["開始日"]),g=gvDate(r["結束日"]);return {name:r["事件名"]||"",from:f,to:g,coef:num(r["加成係數"]),scope:r["適用品類"]||"全部",on:(r["啟用"]==null||r["啟用"]==="")?true:(toBool(r["啟用"])||r["啟用"]==="是")};}).filter(function(e){return e.name&&e.from&&e.to&&e.coef>0&&e.to>=e.from;});
   NEWAGG={};dNi.forEach(function(r){var st=String(r["店號"]);if(!st||!r["sku_id"])return;((NEWAGG[st]=NEWAGG[st]||{})[r["sku_id"]]={qty:num(r["需求量"]),ev:r["事件名"]||"",excl:(r["專屬"]==="是"||r["專屬"]===true),who:r["新品清單"]||""});});
-  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim()};}).filter(function(s){return s.id&&s.name;});
+  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim(),aliases:String(r["BOM別名"]||"").split(/[;,，、]/).map(function(a){return a.trim();}).filter(Boolean)};}).filter(function(s){return s.id&&s.name;});
   SKU={};SKUS.forEach(function(s){SKU[s.id]=s;});
   AGG={};var storeSet={};
   aP.forEach(function(r){var st=String(r["店號"]);storeSet[st]=1;((AGG[st]=AGG[st]||{})[r["sku_id"]]={week:num(r["上週用量"]),avg4:num(r["近4週均"]),status:r["狀態"]||"販售中",launch:r["上市日"]||""});});
@@ -448,63 +448,106 @@ function runCompare(){var sk=ST.cmpSku;if(!sk){toast("請先選品項");return;}
     var wksAll=lastWeeks(26),i1=wksAll.indexOf(f),i2=wksAll.indexOf(t),nW=(i1>=0&&i2>=i1)?(i2-i1+1):Object.keys(wkset).length||1;
     CMPRES={sku:sk,from:f,to:t,nWeeks:nW,rows:Object.keys(by).filter(function(s){return s!=="13";}).map(function(s){return {store:s,qty:by[s]};})};
     render();});}
+var ANRES=null,ANMAP=null,ANBOM=null,ANLOAD=null;
+var AN_COUNT={"顆":1,"個":1,"支":1,"張":1,"片":1,"件":1,"對":1,"朵":1,"雙":1,"捲":1,"卷":1,"條":1,"組":1,"包":1,"罐":1,"份":1,"碗":1,"滴":1,"台":1,"杯":1,"盤":1};
+var AN_LOSS={"食材":1.05,"耗材":1.03};
+function anConv(item,unit){unit=String(unit||"").trim();
+  if(!unit||unit==="g"||unit==="ml")return 1;
+  for(var i=0;i<UNITCONV.length;i++){if(UNITCONV[i].item===item&&UNITCONV[i].unit===unit)return num(UNITCONV[i].amt)||1;}
+  for(var j=0;j<UNITCONV.length;j++){var it=UNITCONV[j].item;if((it==="（通用）"||it==="(通用)"||it==="通用")&&UNITCONV[j].unit===unit)return num(UNITCONV[j].amt)||1;}
+  return 1;}
+function loadAnalDims(){
+  if(ANMAP&&ANBOM)return Promise.resolve();
+  if(ANLOAD)return ANLOAD;
+  ANLOAD=Promise.all([
+    gvizQ("產品名稱對照表","select A,B,G,H label A 'pn', B 'cn', G 'c1', H 'c2'"),
+    gvizQ("BOM表","select A,B,C,D label A 'd', B 'm', C 'q', D 'u'")
+  ]).then(function(res){
+    ANMAP={};
+    res[0].forEach(function(r){var pn=String(r["pn"]||"").trim();if(!pn)return;
+      var cn=String(r["cn"]||"").trim()||pn;
+      ANMAP[pn]={cn:cn,c1:String(r["c1"]||"").trim(),c2:String(r["c2"]||"").trim()};});
+    ANBOM={};
+    res[1].forEach(function(r){var dn=String(r["d"]||"").trim(),m=String(r["m"]||"").trim();if(!dn||!m)return;
+      (ANBOM[dn]=ANBOM[dn]||[]).push({m:m,q:num(r["q"]),u:r["u"]});});
+    ANLOAD=null;});
+  return ANLOAD;}
+function anSkuIdx(){var idx={};SKUS.forEach(function(s){if(s.name)idx[s.name]=s;(s.aliases||[]).forEach(function(a){if(a)idx[a]=s;});});return idx;}
+function runAnal(){
+  if(!ST.anFrom||!ST.anTo||ST.anFrom>ST.anTo){toast("請選起訖日期");return;}
+  ANRES="loading";render();
+  var w="C >= date '"+ST.anFrom+"' and C <= date '"+ST.anTo+"'";
+  if(ST.anStore)w+=" and A="+(+ST.anStore);
+  if(ST.anC1)w+=" and E='"+ST.anC1+"'";
+  if(ST.anC2)w+=" and F='"+ST.anC2+"'";
+  var tq="select D, sum(H) where "+w+" group by D label D 'p', sum(H) 'q'";
+  Promise.all([loadAnalDims(),gvizQ("POS資料",tq)]).then(function(res){
+    var idx=anSkuIdx();
+    var byCanon={};
+    res[1].forEach(function(r){var pn=String(r["p"]||"").trim();if(!pn)return;var q=num(r["q"]);if(!(q>0))return;
+      var mp=ANMAP[pn]||{cn:pn,c1:"",c2:""};
+      var o=byCanon[mp.cn]||(byCanon[mp.cn]={name:mp.cn,qty:0,c1:mp.c1,c2:mp.c2});
+      o.qty+=q;});
+    var sales=Object.keys(byCanon).map(function(k){return byCanon[k];});
+    sales.sort(function(a,b){return b.qty-a.qty;});
+    var mats={},noBom=[],noSku={};
+    sales.forEach(function(sl){var lines=ANBOM[sl.name];
+      if(!lines){noBom.push(sl.name);return;}
+      lines.forEach(function(L){var s2=idx[L.m];
+        var per=L.q*anConv(L.m,L.u);
+        if(s2&&AN_LOSS[s2.cat])per=per*AN_LOSS[s2.cat];
+        var key=s2?s2.id:("?"+L.m);
+        var o=mats[key]||(mats[key]={name:s2?s2.name:L.m,cat:s2?s2.cat:"",unit:s2?s2.useUnit:String(L.u||""),qty:0,sku:s2||null});
+        o.qty+=sl.qty*per;
+        if(!s2)noSku[L.m]=1;});});
+    var matArr=Object.keys(mats).map(function(k){var m=mats[k];
+      m.cost=(m.sku&&m.sku.price&&m.sku.packQty>0&&(m.cat==="食材"||m.cat==="耗材"))?m.qty/m.sku.packQty*m.sku.price:0;
+      return m;});
+    matArr.sort(function(a,b){return b.qty-a.qty;});
+    ANRES={from:ST.anFrom,to:ST.anTo,store:ST.anStore,c1:ST.anC1,c2:ST.anC2,sales:sales,mats:matArr,noBom:noBom,noSku:Object.keys(noSku)};
+    render();});}
+function anCatOpts(){
+  var c1s={},c2s={};
+  Object.keys(ANMAP||{}).forEach(function(pn){var m=ANMAP[pn];
+    if(m.c1)c1s[m.c1]=1;
+    if(m.c2&&m.c2!=="無"&&(!ST.anC1||m.c1===ST.anC1))c2s[m.c2]=1;});
+  return {c1:Object.keys(c1s).sort(),c2:Object.keys(c2s).sort()};}
 function viewPeriodStats(){
-  if(!ST.totFrom)ST.totFrom=ymNow(-1);
-  if(!ST.totTo)ST.totTo=ymNow(-1);
-  var scopeLbl=(ST.totScope==="本店"?storeName(ST.storeId):"12 店合計");
-  var h='<div class="note">期間銷售與食材需求總覽（月粒度，資料自 2024-12）。選月區間＋範圍按「查詢」，下方三塊同時更新：① 賣了哪些商品 ② 用掉哪些食材 ③ 指定食材查詢。器具/模具非消耗品不列入食材需求。</div>';
-  h+='<div class="card"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
-    +'<input class="sm" type="month" id="totFrom" min="2024-12" value="'+(ST.totFrom||"")+'">〜<input class="sm" type="month" id="totTo" min="2024-12" value="'+(ST.totTo||"")+'">'
-    +'<span class="seg">'+["全公司","本店"].map(function(x){return '<div class="'+((ST.totScope||"全公司")===x?"on":"")+'" data-totscope="'+x+'">'+x+'</div>';}).join('')+'</span>'
-    +'<button class="btn" id="psRun">查詢</button></div>'
-    +'<div class="muted" style="margin-top:4px;font-size:12px">'+scopeLbl+'　·　'+(ST.totFrom||"")+' 〜 '+(ST.totTo||"")+'</div></div>';
-  h+='<div class="card"><div class="muted" style="margin-bottom:6px">📈 <b>期間銷售統計</b>　商品 → 銷售總數（POS 原始銷量）</div>';
-  if(SALESRES==="loading")h+='<div class="note">統計中…</div>';
-  else if(!SALESRES)h+='<div class="note">按上方「查詢」載入。</div>';
-  else{ var sl=SALESRES.rows,sq=(ST.salesQ||"").trim();if(sq)sl=sl.filter(function(r){return r.name.indexOf(sq)>=0;});
-    var stot=0;sl.forEach(function(r){stot+=r.qty;});
-    h+='<div style="margin-bottom:8px"><input class="sm" id="salesQ" style="width:100%;max-width:340px" placeholder="🔍 過濾商品名…" value="'+(ST.salesQ||"").replace(/"/g,"&quot;")+'"></div>';
-    h+='<div class="note">'+sl.length+' 項商品　·　銷售合計 <b>'+fmt(stot)+'</b> 份</div>';
-    var sShown=ST.salesAll?sl:sl.slice(0,50);
-    h+='<div style="overflow-x:auto"><table><tr><th>#</th><th>商品名稱</th><th class="right">銷售總數</th><th class="right">佔比</th></tr>'
-      +sShown.map(function(r,i){return '<tr><td>'+(i+1)+'</td><td><b>'+r.name+'</b></td><td class="right"><b>'+fmt(r.qty)+'</b></td><td class="right">'+(stot?Math.round(r.qty/stot*100):0)+'%</td></tr>';}).join('')
-      +(sl.length?'':'<tr><td colspan="4" class="muted">此期間無銷售資料（若全空，代表 agg_sales_month 尚未重算或 POS 無此區間）</td></tr>')
-      +'</table></div>'+(sl.length>50&&!ST.salesAll?'<div style="text-align:center;margin-top:6px"><span class="why" id="salesAll">展開全部 '+sl.length+' 項 ▾</span></div>':'');
-  }
-  h+='</div>';
-  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🧺 <b>期間食材需求</b>　物料 → 總需求量／換算採購（POS×BOM 理論耗用含耗損）</div>';
-  if(RANKRES==="loading")h+='<div class="note">統計中…</div>';
-  else if(!RANKRES)h+='<div class="note">按上方「查詢」載入。</div>';
-  else{ var list=RANKRES.rows.map(function(r){return {r:r,s:SKU[r.id]};}).filter(function(x){return x.s;});
-    if(ST.totCat&&ST.totCat!=="全部")list=list.filter(function(x){return x.s.cat===ST.totCat;});
-    var q=(ST.totQ||"").trim();if(q)list=list.filter(function(x){return x.s.name.indexOf(q)>=0||String(x.s.vendor||"").indexOf(q)>=0;});
-    var sumCost=0;list.forEach(function(x){if(x.s.price&&x.s.packQty>0)x.cost=x.r.qty/x.s.packQty*x.s.price;else if(x.s.price)x.cost=x.r.qty*x.s.price;else x.cost=0;sumCost+=x.cost;});
-    h+='<div class="chips">'+["全部","食材","耗材"].map(function(c){return '<div class="chip '+((ST.totCat||"全部")===c?"on":"")+'" data-totcat="'+c+'">'+c+'</div>';}).join('')+'</div>';
-    h+='<div style="margin-bottom:8px"><input class="sm" id="totQ" style="width:100%;max-width:340px" placeholder="🔍 過濾品名或廠商…" value="'+(ST.totQ||"").replace(/"/g,"&quot;")+'"></div>';
-    h+='<div class="note">'+list.length+' 項有用量　·　估算成本合計 <b>$'+fmt(Math.round(sumCost))+'</b>　·　點列看 12 店分布</div>';
-    var shown=ST.totAll?list:list.slice(0,50);
-    h+='<div style="overflow-x:auto"><table><tr><th>#</th><th>物料項目</th><th class="right">總需求量</th><th class="right">換算採購</th><th class="right">估算成本</th></tr>'
-      +shown.map(function(x,i){var s=x.s;return '<tr data-drill="'+x.r.id+'" style="cursor:pointer"><td>'+(i+1)+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b></td>'
-        +'<td class="right"><b>'+fmt(Math.round(x.r.qty))+'</b> '+s.useUnit+'</td>'
-        +'<td class="right">'+(s.packQty>0?dec(x.r.qty/s.packQty)+' '+s.buyUnit:'—')+'</td>'
-        +'<td class="right">'+(x.cost?'$'+fmt(Math.round(x.cost)):'—')+'</td></tr>';}).join('')
-      +(list.length?'':'<tr><td colspan="5" class="muted">此期間無用量（若連麵粉都是 0，代表 agg_usage_month 尚未重算）</td></tr>')
-      +'</table></div>'+(list.length>50&&!ST.totAll?'<div style="text-align:center;margin-top:6px"><span class="why" id="totAll">展開全部 '+list.length+' 項 ▾</span></div>':'');
-  }
-  h+='</div>';
-  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🔎 <b>特定食材工具查詢</b>　選一項看該區間 12 店需求分布</div>';
-  var opts=SKUS.slice().sort(function(a,b){return (a.cat+a.name)<(b.cat+b.name)?-1:1;}).map(function(s){return '<option value="'+s.id+'"'+(s.id===ST.totSku?' selected':'')+'>'+s.cat+'｜'+s.name+'</option>';}).join('');
-  h+='<select class="sm" id="pickSku" style="max-width:260px"><option value="">— 選物料項目 —</option>'+opts+'</select>';
-  if(TOTRES==="loading")h+='<div class="note">載入品項明細…</div>';
-  else if(TOTRES&&SKU[TOTRES.sku]){var s2=SKU[TOTRES.sku];var packs=s2.packQty>0?TOTRES.total/s2.packQty:null;
-    h+='<div style="margin-top:8px"><div class="summary"><div class="stat"><div class="n">'+fmt(Math.round(TOTRES.total))+'</div><div class="l">總需求量（'+s2.useUnit+'）</div></div>'
-      +(packs!=null?'<div class="stat"><div class="n">'+dec(packs)+'</div><div class="l">約合 '+s2.buyUnit+'</div></div>':'')+'</div>'
-      +'<div style="overflow-x:auto"><table><tr><th>店</th><th class="right">需求量（'+s2.useUnit+'）</th><th class="right">佔比</th></tr>'
-      +TOTRES.rows.map(function(r){return '<tr><td>'+storeName(r.store)+'</td><td class="right">'+fmt(Math.round(r.qty))+'</td><td class="right">'+(TOTRES.total?Math.round(r.qty/TOTRES.total*100):0)+'%</td></tr>';}).join('')
-      +'</table><table style="margin-top:8px"><tr><th>月份</th><th class="right">需求量（'+s2.useUnit+'）</th></tr>'
-      +TOTRES.months.map(function(m){return '<tr><td>'+m.mo+'</td><td class="right">'+fmt(Math.round(m.qty))+'</td></tr>';}).join('')+'</table></div></div>';}
-  else h+='<div class="note" style="margin-top:6px">從上方下拉挑一項，或點「期間食材需求」表任一列。</div>';
-  h+='</div>';
+  if(!ST.anFrom){var d0=new Date(TODAY.getTime()-29*864e5);ST.anFrom=ymd(d0);ST.anTo=ymd(TODAY);}
+  if(!ANMAP&&!ANLOAD){loadAnalDims().then(function(){render();});}
+  var cats=ANMAP?anCatOpts():{c1:[],c2:[]};
+  var stOpts='<option value="">全部分店</option>'+STORES.map(function(s2){return '<option value="'+s2.id+'" '+(ST.anStore===s2.id?'selected':'')+'>'+s2.name+'</option>';}).join('');
+  var h='<div class="card"><div class="muted" style="margin-bottom:6px">期間分析（日粒度、任意區間；同時看「甜點賣了多少」與「食材工具要多少」。用量含耗損；器具/模具以使用次數計）</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+    +'<span class="ipt-lbl">開始</span><input class="sm" type="date" id="anFrom" value="'+ST.anFrom+'">'
+    +'<span class="ipt-lbl">結束</span><input class="sm" type="date" id="anTo" value="'+ST.anTo+'">'
+    +'<select class="sm" id="anStore" style="max-width:150px">'+stOpts+'</select>'
+    +'<select class="sm" id="anC1" style="max-width:140px"><option value="">全部主類別</option>'+cats.c1.map(function(c){return '<option '+(ST.anC1===c?'selected':'')+'>'+c+'</option>';}).join('')+'</select>'
+    +'<select class="sm" id="anC2" style="max-width:170px"><option value="">全部次類別</option>'+cats.c2.map(function(c){return '<option '+(ST.anC2===c?'selected':'')+'>'+c+'</option>';}).join('')+'</select>'
+    +'<button class="btn sm" id="anRun">查詢</button></div>'
+    +(!ANMAP?'<div class="muted" style="margin-top:4px">類別清單載入中…</div>':'')+'</div>';
+  if(ANRES==="loading")return h+'<div class="note">統計中…（直查 POS 明細，約 2〜8 秒）</div>';
+  if(!ANRES)return h+'<div class="note">例：5/1〜5/30＋次類別「2026 夏季限定」→ 檔期賣了什麼、用了什麼一次看。</div>';
+  var totQty=0;ANRES.sales.forEach(function(s2){totQty+=s2.qty;});
+  var totCost=0;ANRES.mats.forEach(function(m){totCost+=m.cost||0;});
+  h+='<div class="note">'+ANRES.from+' 〜 '+ANRES.to+'　·　'+(ANRES.store?storeName(ANRES.store):'全部分店')+(ANRES.c1?'　·　'+ANRES.c1:'')+(ANRES.c2?'／'+ANRES.c2:'')
+    +'　·　甜點 '+ANRES.sales.length+' 款共 <b>'+fmt(Math.round(totQty))+'</b> 個　·　物料 '+ANRES.mats.length+' 項　·　食耗材估算成本 <b>$'+fmt(Math.round(totCost))+'</b></div>';
+  var sShown=ST.anAllS?ANRES.sales:ANRES.sales.slice(0,20);
+  h+='<div class="card"><div class="muted" style="margin-bottom:4px">🍰 期間銷售統計（多 → 少）</div><div style="overflow-x:auto"><table><tr><th>#</th><th>商品名稱</th><th>次類別</th><th class="right">銷售總數</th></tr>';
+  sShown.forEach(function(s2,i){h+='<tr><td>'+(i+1)+'</td><td><b>'+s2.name+'</b></td><td class="muted">'+(s2.c2&&s2.c2!=="無"?s2.c2:(s2.c1||''))+'</td><td class="right"><b>'+fmt(s2.qty)+'</b></td></tr>';});
+  if(!sShown.length)h+='<tr><td colspan="4" class="muted">此區間無銷售</td></tr>';
+  h+='</table></div>'+(ANRES.sales.length>20&&!ST.anAllS?'<div style="text-align:center;margin-top:6px"><span class="why" id="anAllS">展開全部 '+ANRES.sales.length+' 款 ▾</span></div>':'')+'</div>';
+  var q=(ST.anQ||"").trim();
+  var mList=q?ANRES.mats.filter(function(m){return m.name.indexOf(q)>=0;}):ANRES.mats;
+  var mShown=ST.anAllM?mList:mList.slice(0,50);
+  h+='<div class="card"><div class="muted" style="margin-bottom:4px">🧺 期間食材工具統計（多 → 少，含器具/模具）</div>'
+    +'<div style="margin-bottom:6px"><input class="sm" id="anQ" style="width:100%;max-width:320px" placeholder="🔍 特定食材工具查詢…" value="'+(ST.anQ||'').replace(/"/g,'&quot;')+'"></div>'
+    +'<div style="overflow-x:auto"><table><tr><th>物料項目</th><th class="right">總需求量</th><th>單位</th><th class="right">估算成本</th></tr>';
+  mShown.forEach(function(m){h+='<tr><td>'+(m.cat?'<span class="badge b-'+m.cat+'">'+m.cat+'</span>':'')+'<b>'+m.name+'</b></td><td class="right"><b>'+fmt(Math.round(m.qty))+'</b></td><td>'+m.unit+'</td><td class="right">'+(m.cost?'$'+fmt(Math.round(m.cost)):'—')+'</td></tr>';});
+  if(!mShown.length)h+='<tr><td colspan="4" class="muted">'+(q?'找不到「'+q+'」':'無資料')+'</td></tr>';
+  h+='</table></div>'+(mList.length>50&&!ST.anAllM?'<div style="text-align:center;margin-top:6px"><span class="why" id="anAllM">展開全部 '+mList.length+' 項 ▾</span></div>':'')+'</div>';
+  if(ANRES.noBom.length)h+='<div class="note">ℹ️ '+ANRES.noBom.length+' 款商品無 BOM（加價購/材料包等），已計入銷售、不展開物料：'+ANRES.noBom.slice(0,5).join('、')+(ANRES.noBom.length>5?'…':'')+'</div>';
+  if(ANRES.noSku.length)h+='<div class="note">⚠️ '+ANRES.noSku.length+' 項用料對不上主檔（以 BOM 名稱列出）：'+ANRES.noSku.slice(0,5).join('、')+(ANRES.noSku.length>5?'…':'')+'</div>';
   return h;}
 function viewQuery(){var store=ST.storeId;
   var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量","跨店比較","容器用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
@@ -677,6 +720,15 @@ function wire(){
   var cf=$("#cmpFrom");if(cf)cf.onchange=function(){ST.cmpFrom=cf.value;};
   var ct=$("#cmpTo");if(ct)ct.onchange=function(){ST.cmpTo=ct.value;};
   var cr=$("#cmpRun");if(cr)cr.onclick=runCompare;
+  var af=$("#anFrom");if(af)af.onchange=function(){ST.anFrom=af.value;};
+  var at2=$("#anTo");if(at2)at2.onchange=function(){ST.anTo=at2.value;};
+  var asel=$("#anStore");if(asel)asel.onchange=function(){ST.anStore=asel.value;};
+  var ac1=$("#anC1");if(ac1)ac1.onchange=function(){ST.anC1=ac1.value;ST.anC2="";render();};
+  var ac2=$("#anC2");if(ac2)ac2.onchange=function(){ST.anC2=ac2.value;};
+  var ar2=$("#anRun");if(ar2)ar2.onclick=runAnal;
+  var aq=$("#anQ");if(aq){aq.oninput=function(){ST.anQ=aq.value;ST.anQF=true;render();};if(ST.anQF){aq.focus();var L3=aq.value.length;try{aq.setSelectionRange(L3,L3);}catch(e){}ST.anQF=false;}}
+  var aas=$("#anAllS");if(aas)aas.onclick=function(){ST.anAllS=true;render();};
+  var aam=$("#anAllM");if(aam)aam.onclick=function(){ST.anAllM=true;render();};
   var tf=$("#totFrom");if(tf)tf.onchange=function(){ST.totFrom=tf.value;};
   var tt=$("#totTo");if(tt)tt.onchange=function(){ST.totTo=tt.value;};
   var tr=$("#totRun");if(tr)tr.onclick=runRank;
