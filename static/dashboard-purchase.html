@@ -8,6 +8,8 @@
 <title>自己做 · 採購系統</title>
 <!-- 2026-07-25 全站字級下限修正：9 處 11px→12px（.badge/.pill/.tagnew/.lock/.own/header 更新時間/兩個檔期徽章/建議採購表副行）。無其他改動。 -->
 <!-- 2026-07-27 盤點體驗改版（純前端）：①移除 需關注/接近/久未盤 快篩與燈號/推估/未盤點估算標籤（estOnHand/invLight/invTag 保留備用）②搜尋拆二：品項 datalist 可點選＋廠商下拉，AND 疊加 ③盤點 session：延續/新的一週彈窗、localStorage invSession_/invDraft_（草稿防遺失，不動 Sheet 歷史）、進度條、本次未盤快篩、下一個未盤浮動鈕 ④分區可收合(invZC_)、控制列 sticky、輸入框 44px/16px 防 iOS 縮放 ⑤儲存盤點後清草稿並跳訂貨單。 -->
+<!-- 2026-07-27 店長自助調整基準值：盤點頁/訂貨單頁每列「⚙ 調整」→ 對話框輸入本店實際週用量（採購單位），永久寫回 dim_store_par。寫哪欄依品項型態自動判定：POS推算品項→權數(=目標÷POS推算)、備品→手動週用量、器具模具→標配數量。同時 post type:'plog' 寫軌跡（需 GAS 端 handler，未部署時靜默忽略）。新增總部/經營者「🧾 參數軌跡」分頁讀 fact_param_log，變動≥20%橘、≥50%紅。依經營者決策：不設上下限護欄。 -->
+<!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <style>
   :root{--blue:#2E7D32;--blue2:#3a8f3f;--bg:#f4f6f9;--card:#fff;--line:#e3e8ef;--ink:#1f2937;--mut:#6b7280;
         --food:#2e7d32;--cons:#b8860b;--tool:#6a1b9a;--mold:#c62828;--new:#0d6e6e;}
@@ -125,7 +127,7 @@ var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UN
 var SKU={}; // sku_id -> sku
 var BKNEED=null,BOMROWS=null; // 期間備料結果／BOM 表快取
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anAllS:false,anAllM:false,totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anAllS:false,anAllM:false,totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",adjSku:"",adjVal:"",adjNote:"",exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
@@ -306,6 +308,66 @@ function upcomingBk(st){var t=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODA
 function dispName(st,s){var n=pOf(st,s).custName;return n||s.name;}
 function vendorOf(st,s){var v=pOf(st,s).custVendor;return v||s.vendor;}
 function origSub(st,s){return pOf(st,s).custName?('　<span style="color:#94a3b8">原名:'+s.name+'</span>'):'';}
+function packSpec(s){return (!isDur(s)&&num(s.packQty)>0)?('<span style="color:#0369a1;font-weight:600">'+fmt(s.packQty)+' '+s.useUnit+'／'+s.buyUnit+'</span>'):'';}
+/* ===== 2026-07-27 店長自助調整基準值（永久寫回 dim_store_par ＋ 軌跡） ===== */
+function posBase(st,s){return periodWeekly(st,s);}            // POS 推算週用量（使用單位，未含季節/檔期）
+function hasPOS(st,s){return posBase(st,s)>0;}
+function pqOf(s){var q=num(s.packQty);return q>0?q:1;}
+function adjUnit(s){return isDur(s)?s.useUnit:(num(s.packQty)>0?s.buyUnit:s.useUnit);}
+function adjToUse(s,v){return isDur(s)?num(v):num(v)*(num(s.packQty)>0?pqOf(s):1);}
+function adjCurrent(st,s){ // 目前基準值，以 adjUnit 表示
+  if(isDur(s))return num(pOf(st,s).par);
+  var w=num(pOf(st,s).weight)||1,base=hasPOS(st,s)?posBase(st,s)*w:manualOf(st,s);
+  return base/(num(s.packQty)>0?pqOf(s):1);}
+function adjPreview(st,s,tgtDisp){ // 以目標值試算，回傳 {rp,packs}
+  var b=bundle(st,s),tu=adjToUse(s,tgtDisp);
+  if(isDur(s)){b.par=tu;}
+  else if(hasPOS(st,s)){b.weight=posBase(st,s)>0?(tu/posBase(st,s)):1;}
+  else{b.forecastWeekly=tu*demandAdj(st,s).adj;}
+  var r=computeRow(s,b);
+  return {rp:r.reorderPoint,packs:r.packs,weight:b.weight};}
+function adjPlan(st,s,tgtDisp){ // 決定要寫哪個欄位
+  var tu=adjToUse(s,tgtDisp);
+  if(isDur(s))return {key:"par",label:"標配數量",from:num(pOf(st,s).par),to:tu};
+  if(hasPOS(st,s)){var nw=posBase(st,s)>0?Math.round(tu/posBase(st,s)*1000)/1000:1;
+    return {key:"weight",label:"權數",from:(num(pOf(st,s).weight)||1),to:nw};}
+  return {key:"manualWeekly",label:"手動週用量",from:manualOf(st,s),to:tu};}
+function adjModal(store){
+  var s=SKU[ST.adjSku];if(!s)return "";
+  var u=adjUnit(s),cur=adjCurrent(store,s),r0=rowFor(store,s),pq=pqOf(s);
+  var srcTxt=isDur(s)?"標配設定":(hasPOS(store,s)?("POS 自動推算 × 權數 "+((num(pOf(store,s).weight)||1))):"手動設定（無 POS 推算）");
+  var val=(ST.adjVal===""?dec(cur):ST.adjVal);
+  var rp0=isDur(s)?null:(r0.reorderPoint/(num(s.packQty)>0?pq:1));
+  return '<div class="modal-bg"><div class="modal">'
+    +'<div style="font-size:16px;font-weight:800;margin-bottom:2px">⚙ 調整基準值</div>'
+    +'<div class="muted" style="margin-bottom:8px">'+dispName(store,s)+'　·　'+storeName(store)+(packSpec(s)?'<br>📦 規格：1 '+s.buyUnit+' = '+fmt(s.packQty)+' '+s.useUnit:'')+'</div>'
+    +'<div class="card" style="padding:8px 10px;margin:0 0 10px"><div class="sub">目前基準：<b>'+dec(cur)+' '+u+'</b>／'+(isDur(s)?'標配':'週')+'　（'+srcTxt+'）</div>'
+    +(isDur(s)?'':'<div class="sub">目前訂貨點 '+dec(rp0)+' '+u+'　·　目前建議 <b>'+r0.packs+' '+s.buyUnit+'</b></div>')+'</div>'
+    +'<div style="margin-bottom:6px"><span class="ipt-lbl">'+(isDur(s)?'本店應備標配':'本店實際一週約用')+'</span>'
+    +'<input class="sm" id="adjVal" type="text" inputmode="decimal" style="width:90px;font-size:16px;min-height:40px" value="'+escA(val)+'"> <span class="muted">'+u+'</span></div>'
+    +'<div id="adjPrev" class="sub" style="margin-bottom:8px">'+adjPrevTxt(store,s,val)+'</div>'
+    +'<div style="margin-bottom:10px"><span class="ipt-lbl">調整原因（選填，會留存軌跡）</span>'
+    +'<input class="sm" id="adjNote" type="text" style="width:100%;min-height:38px" placeholder="例：常缺料／實際用量比系統多" value="'+escA(ST.adjNote||"")+'"></div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost" id="adjCancel">取消</button><button class="btn" id="adjSave">儲存並永久生效</button></div>'
+    +'</div></div>';}
+function adjPrevTxt(store,s,val){
+  if(val===""||isNaN(+val))return '<span class="muted">請輸入數字</span>';
+  var pl=adjPlan(store,s,+val),pv=adjPreview(store,s,+val),u=adjUnit(s),pq=pqOf(s);
+  var t='→ 將寫入 <b>'+pl.label+'</b>：'+dec(pl.from)+' → <b style="color:#2E7D32">'+dec(pl.to)+'</b>';
+  if(!isDur(s))t+='<br>→ 新訂貨點 <b>'+dec(pv.rp/(num(s.packQty)>0?pq:1))+' '+u+'</b>　·　本次建議 <b style="color:#C0392B">'+pv.packs+' '+s.buyUnit+'</b>';
+  else t+='<br>→ 本次建議 <b style="color:#C0392B">'+pv.packs+' '+s.useUnit+'</b>';
+  return t;}
+function adjSave(store){
+  var s=SKU[ST.adjSku];if(!s)return;
+  var el=$("#adjVal"),v=el?el.value:"";if(v===""||isNaN(+v)||+v<0){toast("請輸入有效數字");return;}
+  var nt=($("#adjNote")&&$("#adjNote").value||"").trim();
+  var pl=adjPlan(store,s,+v),f={};f[pl.label]=pl.to;
+  post({type:"param",store:store,sku_id:s.id,fields:f});
+  post({type:"plog",store:store,sku_id:s.id,sku_name:s.name,field:pl.label,
+        from:pl.from,to:pl.to,role:ST.role,note:nt,ts:new Date().toISOString()},true);
+  var pp=(PARAM[store]=PARAM[store]||{});pp[s.id]=pp[s.id]||{};pp[s.id][pl.key]=pl.to;   // 本機即時生效
+  ST.adjSku="";ST.adjVal="";ST.adjNote="";toast("已更新 "+pl.label+"，下次起持續生效");render();}
+function adjLink(id){return '<span class="why" data-adj="'+id+'" style="margin-left:6px">⚙ 調整</span>';}
 function matchQ(s){var st=ST.storeId;
   if(ST.vq&&String(vendorOf(st,s)||"").trim()!==ST.vq)return false;
   if(!ST.q)return true;var q=ST.q.trim();if(!q)return true;
@@ -322,14 +384,14 @@ function post(payload,silent){ if(!GAS_URL||GAS_URL.indexOf("__")===0){if(!silen
   payload.token=API_TOKEN;return fetch(GAS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)}).then(function(){if(!silent)toast("已送出");}).catch(function(){if(!silent)toast("送出失敗");}); }
 
 /* ===== 框架 ===== */
-var TABS_BY_ROLE={"店長":["盤點","訂貨單","查詢","預約","店別參數"],"總部":["建議","季節","單位對照","主檔","店別參數","預約","總覽"],"經營者":["總覽","查詢","建議"]};
-function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點","查詢":"🔎 查詢","訂貨單":"📑 訂貨單","主檔":"🗂 主檔","季節":"📈 季節","單位對照":"📐 單位對照","店別參數":"⚙️ 店別參數","預約":"🎉 預約包館","總覽":"📊 總覽"}[t];}
+var TABS_BY_ROLE={"店長":["盤點","訂貨單","查詢","預約","店別參數"],"總部":["建議","季節","單位對照","主檔","店別參數","預約","總覽","軌跡"],"經營者":["總覽","查詢","建議","軌跡"]};
+function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點","查詢":"🔎 查詢","訂貨單":"📑 訂貨單","主檔":"🗂 主檔","季節":"📈 季節","單位對照":"📐 單位對照","店別參數":"⚙️ 店別參數","預約":"🎉 預約包館","總覽":"📊 總覽","軌跡":"🧾 參數軌跡"}[t];}
 function renderTabs(){var list=TABS_BY_ROLE[ST.role];if(list.indexOf(ST.tab)<0)ST.tab=list[0];
   $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+'</div>';}).join("");
   Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(el){el.onclick=function(){ST.tab=el.dataset.tab;render();};});}
 function render(){renderTabs();
-  $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節")?"none":"block";
-  $("#view").innerHTML=({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview}[ST.tab])();wire();}
+  $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡")?"none":"block";
+  $("#view").innerHTML=({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog}[ST.tab])();wire();}
 function catChips(){return '<div class="chips">'+["全部","食材","耗材","器具","模具"].map(function(c){return '<div class="chip '+(c==ST.cat?"on":"")+'" data-cat="'+c+'">'+c+'</div>';}).join("")+'</div>';}
 function periodSeg(){return '<div style="margin-bottom:8px"><span class="ipt-lbl">用量基準：</span><span class="seg">'+["上週","近4週"].map(function(p){return '<div class="'+(p==ST.period?"on":"")+'" data-period="'+p+'">'+PLABEL[p]+'</div>';}).join("")+'</span></div>';}
 function needSeg(){return '<span class="seg">'+[["1","只看需採購"],["0","全部"]].map(function(p){return '<div class="'+((ST.needOnly?"1":"0")===p[0]?"on":"")+'" data-need="'+p[0]+'">'+p[1]+'</div>';}).join("")+'</span>';}
@@ -368,7 +430,7 @@ function suggestRow(s,r){var store=ST.storeId,z=r.packs<=0,dur=isDur(s),iv=ivOf(
   var big=dur?r.suggested:r.packs,unit=dur?s.useUnit:s.buyUnit;
   var usageTxt=dur?('標配 '+fmt(parOf(store,s))):(up?'新品（無歷史）':(isManual(store,s)?('手動週用量 '+dec(manualOf(store,s))+' '+s.useUnit):(periodLabel()+' '+dec(periodWeekly(store,s)/s.packQty)+' '+s.buyUnit)));
   var upTag=up?(function(){var u=upInfo(store,s);return '<span class="tagnew">🆕 '+(u?u.days+'天後上市':'即將上市')+'</span>';})():'';
-  var h='<div class="row"><div class="nm"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+upTag+'<div class="sub">現有 '+dec(num(iv.onHand))+' '+(dur?s.useUnit:s.buyUnit)+'　·　'+usageTxt+'</div></div>'
+  var h='<div class="row"><div class="nm"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+upTag+'<div class="sub">現有 '+dec(num(iv.onHand))+' '+(dur?s.useUnit:s.buyUnit)+(packSpec(s)?'　📦 '+packSpec(s):'')+'　·　'+usageTxt+'</div></div>'
     +'<div class="sug"><div class="big'+(z?' zero':'')+'">'+(z?'—':big)+'</div><div class="u">'+(z?'庫存足':('建議 '+unit))+'</div><div class="why" data-why="'+s.id+'">'+(ST.exp[s.id]?'收合 ▲':'為什麼 ▾')+'</div></div></div>';
   if(ST.exp[s.id])h+=reasonBox(s,r,up);return h;}
 function reasonBox(s,r,up){var b=r.basis,pq=s.packQty;
@@ -411,17 +473,20 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
     gp.items.forEach(function(o){var s=o.s,iv=ivOf(store,s),dur=isDur(s),r=rowFor(store,s);
       var rpP=s.packQty>0?dec(r.reorderPoint/s.packQty):dec(r.reorderPoint);
       var ref=dur?('標配 '+fmt(parOf(store,s))+' '+s.useUnit):('訂貨點 '+rpP+' '+(s.packQty>0?s.buyUnit:s.useUnit));
+      var psp=packSpec(s);if(psp)ref+='　📦 '+psp;
+      ref+=adjLink(s.id);
       var seen=(((DIRTY[store]||{})[s.id])||countedNow(store,s));
       var sug=seen?('<div class="sub" style="color:'+(r.packs>0?'#C0392B':'#2E7D32')+';font-weight:600">'+(r.packs>0?('建議 '+r.packs+' '+s.buyUnit):'庫存足')+'</div>'):'';
       var vOn=(seen&&iv.onHand!=null)?iv.onHand:"";
       var vBr=(seen&&iv.breakage!=null)?iv.breakage:"";
-      html+='<div class="row"><div><span class="tag t'+({食材:1,耗材:2,器具:3,模具:4})[s.cat]+'">'+s.cat+'</span><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span><input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="0">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+vBr+'" placeholder="0"></div>':'')+'</div></div>';});
+      html+='<div class="row"><div><span class="tag t'+({食材:1,耗材:2,器具:3,模具:4})[s.cat]+'">'+s.cat+'</span><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'+((!dur&&s.packQty>0)?'<div class="ipt-lbl" style="color:#0369a1">1 '+s.buyUnit+'='+fmt(s.packQty)+s.useUnit+'</div>':'')+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="0">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+vBr+'" placeholder="0"></div>':'')+'</div></div>';});
     html+='</div>';}
     html+='</div>';});
   html+='</div>';
   html+='<div class="toolbar"><button class="btn" id="saveCount">儲存盤點'+(dn?('（'+dn+' 筆）'):'')+'</button></div>';
   if(ss!=null&&nUn>0)html+='<div class="fabtn" id="nextUn">⬇ 下一個未盤</div>';
   if(ss==null)html+=sessModal();
+  if(ST.adjSku)html+=adjModal(store);
   return html;}
 function zonesOrderedZ(store,items){var by={};items.forEach(function(s){var z=zoneOf(store,s);(by[z]=by[z]||[]).push({s:s,ord:num(pOf(store,s).ord)||999});});
   var names=Object.keys(by).sort(function(a,b){var ia=ZONE_ORDER.indexOf(a),ib=ZONE_ORDER.indexOf(b);ia=ia<0?99:ia;ib=ib<0?99:ib;return ia-ib||(a<b?-1:1);});
@@ -434,12 +499,27 @@ function viewOrder(){var store=ST.storeId,need=liveItems(store).map(function(s){
   var html=seasonStrip()+'<div class="note">門市：'+storeName(store)+'　·　可調量/取消勾選，再複製給廠商。</div>';
   Object.keys(byV).sort().forEach(function(vd){html+='<div class="vh"><span class="vn">'+(vd||"未指定廠商")+'</span><span class="vl"></span></div><div class="card" style="padding:4px 12px">';
     byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,off=ST.orderOff[s.id],unit=dur?s.useUnit:s.buyUnit;if(!off)total+=qty*s.price;
-      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">建議 '+def+' '+unit+(!dur&&s.packQty>0?'（'+fmt(s.packQty)+' '+s.useUnit+'/'+s.buyUnit+'）':'')+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
+      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">建議 '+def+' '+unit+(!dur&&s.packQty>0?'（'+fmt(s.packQty)+' '+s.useUnit+'/'+s.buyUnit+'）':'')+adjLink(s.id)+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
     html+='</div>';});
-  html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>';return html;}
+  html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>'+(ST.adjSku?adjModal(store):'');return html;}
 function orderText(store){var need=liveItems(store).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0&&!ST.orderOff[x.s.id];});
   var byV={};need.forEach(function(x){var vd=vendorOf(store,x.s);(byV[vd]=byV[vd]||[]).push(x);});var lines=["【"+storeName(store)+" 訂貨單】 "+new Date().toLocaleDateString("zh-TW")];
   Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def;lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&s.packQty>0)?("（"+fmt(s.packQty)+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
+
+/* ===== 參數軌跡（總部／經營者）：讀 fact_param_log ===== */
+var PLOG=null,PLOGST=0;
+function viewPlog(){
+  if(PLOG===null&&!PLOGST){PLOGST=1;gviz("fact_param_log").then(function(rows){PLOG=rows||[];PLOGST=0;render();});}
+  var h='<div class="note">店長在盤點／訂貨單頁「⚙ 調整」所做的<b>永久基準值變更</b>都記錄在此，時間新到舊。未設上下限，請定期檢視異常調幅（變動 ≥50% 標紅）。</div>';
+  if(PLOG===null)return h+'<div class="loading">載入軌跡中…</div>';
+  if(!PLOG.length)return h+'<div class="card">目前沒有軌跡資料。<div class="muted" style="margin-top:6px">若店長已調整過仍空白，代表 GAS 端 plog 寫入尚未部署。</div></div>';
+  var rows=PLOG.slice().sort(function(a,b){return String(b["時間"]||"")<String(a["時間"]||"")?-1:1;}).slice(0,300);
+  h+='<div class="card" style="overflow-x:auto"><table><tr><th>時間</th><th>店</th><th>品項</th><th>欄位</th><th class="right">原值</th><th class="right">新值</th><th class="right">變動</th><th>原因</th></tr>';
+  rows.forEach(function(r){
+    var f=num(r["原值"]),t2=num(r["新值"]),pct=f>0?Math.round((t2/f-1)*100):null;
+    var col=pct==null?"#666":(Math.abs(pct)>=50?"#C0392B":(Math.abs(pct)>=20?"#B45309":"#2E7D32"));
+    h+='<tr><td class="muted">'+String(r["時間"]||"").replace("T"," ").slice(0,16)+'</td><td>'+storeName(String(r["店號"]||""))+'</td><td><b>'+(r["品項"]||"")+'</b></td><td>'+(r["欄位"]||"")+'</td><td class="right">'+dec(f)+'</td><td class="right"><b>'+dec(t2)+'</b></td><td class="right" style="color:'+col+';font-weight:700">'+(pct==null?"—":(pct>0?"+":"")+pct+"%")+'</td><td class="muted">'+(r["備註"]||"")+'</td></tr>';});
+  h+='</table></div><div class="muted">顯示最近 '+rows.length+' 筆</div>';return h;}
 
 /* ===== 查詢 ===== */
 function viewCompare(){
@@ -821,6 +901,11 @@ function wire(){
     if(!confirm(msg))return;setSess(ST.storeId,Date.now());clearDraft(ST.storeId);
     if(dnn>0){location.reload();}else{DIRTY[ST.storeId]={};render();}};
   Array.prototype.forEach.call(document.querySelectorAll("[data-zc]"),function(el){el.onclick=function(){var z=el.dataset.zc;ZC[z]=!ZC[z];lsSet("invZC_"+ST.storeId,JSON.stringify(ZC));render();};});
+  // 調整基準值
+  Array.prototype.forEach.call(document.querySelectorAll("[data-adj]"),function(el){el.onclick=function(){ST.adjSku=el.dataset.adj;ST.adjVal="";ST.adjNote="";render();};});
+  var av=$("#adjVal");if(av){av.oninput=function(){var s2=SKU[ST.adjSku];if(s2)$("#adjPrev").innerHTML=adjPrevTxt(ST.storeId,s2,av.value);};av.focus();av.select();}
+  var ac=$("#adjCancel");if(ac)ac.onclick=function(){ST.adjSku="";ST.adjVal="";ST.adjNote="";render();};
+  var as2=$("#adjSave");if(as2)as2.onclick=function(){adjSave(ST.storeId);};
   var nu=$("#nextUn");if(nu)nu.onclick=function(){var els=document.querySelectorAll('input[data-inv][data-f="onHand"]');
     for(var i=0;i<els.length;i++){if(els[i].value===""){try{els[i].scrollIntoView({block:"center",behavior:"smooth"});}catch(e){els[i].scrollIntoView();}els[i].focus();return;}}
     toast("畫面上都盤完了 🎉（收合的分區請先展開）");};
