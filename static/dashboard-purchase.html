@@ -13,6 +13,8 @@
 <!-- 2026-07-27 店別參數頁調整：①「啟用」核取方塊改為勾選即 post 存檔（原本只改本機狀態，未按「存」會靜默丟失，且該品項已從盤點頁消失造成誤判）②店品名／順序兩欄改為僅總部可見（店長端隱藏，資料與邏輯保留）③店廠商欄加 placeholder 顯示總部主檔廠商，店長只在改用別家盤商時才需填寫。 -->
 <!-- 2026-07-27 盤點/訂貨單兩項修正：①「儲存盤點」改為固定底部操作列（.savebar），隨時可按，並即時顯示待送出筆數與本次進度；原畫面最底 toolbar 移除，加 .padbot 佔位避免遮擋。②訂貨單只列「本輪已盤點」的品項（countedForOrder：無盤點紀錄→排除；已開啟盤點輪次→需本輪盤過），未盤不再被當成庫存 0 而全數建議採購；頁首顯示「N 項本輪未盤點，未列入」提示，orderText 同步過濾。 -->
 <!-- 2026-07-27 參數寫入回讀驗證（修 Cowork 二次驗收發現：同一靜默失敗缺陷存在於 param 寫入路徑）：新增 postParam() 為寫參數唯一入口，送出後回讀 dim_store_par 逐欄比對（2/4/6 秒三次重試），不符即推進 ST.writeWarn，由 render() 於所有分頁頂端顯示紅色橫幅提示「數值是暫時的，重新整理會恢復原值，請重做一次」。涵蓋 ⚙調整基準值、店別參數「存」、啟用勾選三處。fetchInvRows 一般化為 fetchFresh(sheetName)。註：post() 全域改為可讀回應需 GAS 端配合重新部署，未納入本批。 -->
+<!-- 2026-07-27 寫入狀態回饋：原本只有失敗會提示、成功靜默，且 post() 的「已送出」語意誤導。改為 postParam 改用 silent post，並以 PSTATE 追蹤逐欄確認結果；店別參數「存」鈕三段式（存／確認中…／✓已存綠／⚠重試紅），完成時 toast 明確報「已確認寫入」或「有 N 項未寫入」；⚙調整與啟用勾選同樣給成功回饋；編輯欄位即清除舊狀態。 -->
+<!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <style>
   :root{--blue:#2E7D32;--blue2:#3a8f3f;--bg:#f4f6f9;--card:#fff;--line:#e3e8ef;--ink:#1f2937;--mut:#6b7280;
@@ -332,7 +334,7 @@ function fetchFresh(sheetName){
 function fetchInvRows(){return fetchFresh('fact_inventory');}
 /* 參數寫入回讀：post() 為 no-cors，成功與否無法從回應判斷，必須回讀 dim_store_par 確認。
    失敗時不靜默——推進 ST.writeWarn，由 render() 統一顯示紅色橫幅。 */
-function verifyParam(store,skuId,label,expected,attempt){
+function verifyParam(store,skuId,label,expected,attempt,cb){
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)];
   setTimeout(function(){
     fetchFresh('dim_store_par').then(function(rows){
@@ -343,12 +345,12 @@ function verifyParam(store,skuId,label,expected,attempt){
         if(label==="使用中")ok=(toBool(cur)===toBool(expected));
         else if(label==="盤點分區"||label==="店品名"||label==="店廠商")ok=(String(cur==null?"":cur).trim()===String(expected==null?"":expected).trim());
         else ok=(Math.abs(num(cur)-num(expected))<1e-6);}
-      if(ok){pruneWarn(store,skuId,label);render();return;}
-      if(attempt<VERIFY_DELAYS.length-1){verifyParam(store,skuId,label,expected,attempt+1);return;}
-      pushWarn(store,skuId,label,expected);render();
+      if(ok){pruneWarn(store,skuId,label);if(cb)cb(true);render();return;}
+      if(attempt<VERIFY_DELAYS.length-1){verifyParam(store,skuId,label,expected,attempt+1,cb);return;}
+      pushWarn(store,skuId,label,expected);if(cb)cb(false);render();
     }).catch(function(){
-      if(attempt<VERIFY_DELAYS.length-1){verifyParam(store,skuId,label,expected,attempt+1);return;}
-      pushWarn(store,skuId,label,expected);render();});
+      if(attempt<VERIFY_DELAYS.length-1){verifyParam(store,skuId,label,expected,attempt+1,cb);return;}
+      pushWarn(store,skuId,label,expected);if(cb)cb(false);render();});
   },d);}
 function warnKey(store,skuId,label){return store+"|"+skuId+"|"+label;}
 function pushWarn(store,skuId,label,expected){
@@ -358,9 +360,40 @@ function pushWarn(store,skuId,label,expected){
 function pruneWarn(store,skuId,label){
   if(!ST.writeWarn||!ST.writeWarn.length)return;var k=warnKey(store,skuId,label);
   ST.writeWarn=ST.writeWarn.filter(function(w){return w.k!==k;});}
-function postParam(store,skuId,fields){        // 寫參數的唯一入口：送出＋逐欄回讀驗證
-  post({type:"param",store:store,sku_id:skuId,fields:fields});
-  Object.keys(fields).forEach(function(lb){verifyParam(store,skuId,lb,fields[lb],0);});}
+var PSTATE={};   // sku_id -> {pending,fail,done} 寫入確認狀態（供按鈕即時顯示）
+function postParam(store,skuId,fields,cb){     // 寫參數的唯一入口：送出＋逐欄回讀驗證
+  var keys=Object.keys(fields);if(!keys.length)return;
+  post({type:"param",store:store,sku_id:skuId,fields:fields},true);   // silent：送出≠寫入，不報「已送出」
+  PSTATE[skuId]={pending:keys.length,fail:0,done:false};
+  keys.forEach(function(lb){verifyParam(store,skuId,lb,fields[lb],0,function(ok){
+    var st=PSTATE[skuId];if(!st)return;
+    st.pending--;if(!ok)st.fail++;
+    if(st.pending<=0){st.done=true;if(cb)cb(st.fail===0,st.fail);}
+  });});}
+function savePRow(id){
+  var e=EDIT[id]||{},fields={};
+  if("zone"in e)fields["盤點分區"]=e.zone;if("ord"in e)fields["盤點順序"]=e.ord;if("par"in e)fields["標配數量"]=e.par;
+  if("weight"in e)fields["權數"]=e.weight;if("leadDays"in e)fields["交期天"]=e.leadDays;
+  if("manualWeekly"in e)fields["手動週用量"]=e.manualWeekly;if("safety"in e)fields["安全庫存"]=e.safety;
+  if("使用中"in e)fields["使用中"]=e["使用中"];if("custName"in e)fields["店品名"]=e.custName;if("custVendor"in e)fields["店廠商"]=e.custVendor;
+  if(!Object.keys(fields).length){toast("這一列沒有變更");return;}
+  toast("確認寫入中…");
+  postParam(ST.storeId,id,fields,function(ok,nf){
+    toast(ok?((SKU[id]?SKU[id].name:"品項")+" 已確認寫入"):("⚠ "+(SKU[id]?SKU[id].name:"品項")+" 有 "+nf+" 項未寫入，請按「重試」"));});
+  var pp=(PARAM[ST.storeId]=PARAM[ST.storeId]||{});pp[id]=pp[id]||{};
+  if("custName"in e)pp[id].custName=String(e.custName||"").trim();
+  if("custVendor"in e)pp[id].custVendor=String(e.custVendor||"").trim();
+  refreshPstBtn(id);}                            // 立即顯示「確認中…」，不整頁重繪以免捲動跳位
+function refreshPstBtn(id){
+  var sp=document.querySelector('[data-pst="'+id+'"]');if(!sp)return;
+  sp.innerHTML=pstBtn(id);
+  var b=sp.querySelector("[data-psave]");if(b)b.onclick=function(){savePRow(id);};}
+function pstBtn(id){                            // 「存」鈕三段式狀態
+  var st=PSTATE[id];
+  if(!st)return '<button class="btn sm" data-psave="'+id+'">存</button>';
+  if(!st.done)return '<button class="btn sm" disabled style="opacity:.55">確認中…</button>';
+  if(st.fail)return '<button class="btn sm" data-psave="'+id+'" style="background:#C0392B">⚠ 重試</button>';
+  return '<button class="btn sm" data-psave="'+id+'" style="background:#2E7D32">✓ 已存</button>';}
 function writeWarnBanner(){
   if(!ST.writeWarn||!ST.writeWarn.length)return "";
   var items=ST.writeWarn.slice(0,8).map(function(w){return w.name+'（'+w.label+'→'+w.val+'）';}).join("、");
@@ -444,11 +477,12 @@ function adjSave(store){
   var el=$("#adjVal"),v=el?el.value:"";if(v===""||isNaN(+v)||+v<0){toast("請輸入有效數字");return;}
   var nt=($("#adjNote")&&$("#adjNote").value||"").trim();
   var pl=adjPlan(store,s,+v),f={};f[pl.label]=pl.to;
-  postParam(store,s.id,f);
+  postParam(store,s.id,f,function(ok){
+    toast(ok?("✅ "+s.name+" "+pl.label+" 已確認："+dec(pl.from)+" → "+dec(pl.to)):("⚠ "+s.name+" 調整未寫入，請再試一次"));});
   post({type:"plog",store:store,sku_id:s.id,sku_name:s.name,field:pl.label,
         from:pl.from,to:pl.to,role:ST.role,note:nt,ts:new Date().toISOString()},true);
   var pp=(PARAM[store]=PARAM[store]||{});pp[s.id]=pp[s.id]||{};pp[s.id][pl.key]=pl.to;   // 本機即時生效
-  ST.adjSku="";ST.adjVal="";ST.adjNote="";toast("已送出 "+pl.label+"，確認寫入中…");render();}
+  ST.adjSku="";ST.adjVal="";ST.adjNote="";toast("確認寫入中…");render();}
 function adjLink(id){return '<span class="why" data-adj="'+id+'" style="margin-left:6px">⚙ 調整</span>';}
 function matchQ(s){var st=ST.storeId;
   if(ST.vq&&String(vendorOf(st,s)||"").trim()!==ST.vq)return false;
@@ -473,7 +507,9 @@ function renderTabs(){var list=TABS_BY_ROLE[ST.role];if(list.indexOf(ST.tab)<0)S
   Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(el){el.onclick=function(){ST.tab=el.dataset.tab;render();};});}
 function render(){renderTabs();
   $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡")?"none":"block";
-  $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog}[ST.tab])();wire();}
+  var __sy=(window.pageYOffset||document.documentElement.scrollTop||0);
+  $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog}[ST.tab])();wire();
+  if(__sy>0)try{window.scrollTo(0,__sy);}catch(e){}}
 function catChips(){return '<div class="chips">'+["全部","食材","耗材","器具","模具"].map(function(c){return '<div class="chip '+(c==ST.cat?"on":"")+'" data-cat="'+c+'">'+c+'</div>';}).join("")+'</div>';}
 function periodSeg(){return '<div style="margin-bottom:8px"><span class="ipt-lbl">用量基準：</span><span class="seg">'+["上週","近4週"].map(function(p){return '<div class="'+(p==ST.period?"on":"")+'" data-period="'+p+'">'+PLABEL[p]+'</div>';}).join("")+'</span></div>';}
 function needSeg(){return '<span class="seg">'+[["1","只看需採購"],["0","全部"]].map(function(p){return '<div class="'+((ST.needOnly?"1":"0")===p[0]?"on":"")+'" data-need="'+p[0]+'">'+p[1]+'</div>';}).join("")+'</span>';}
@@ -889,7 +925,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
       +'<td>'+c4+'</td>'
       +'<td>'+(dur?'—':'<span title="額外緩衝量（'+s.useUnit+'），可留 0">'+inN("p",s.id,"safety",sp.safety||0,48)+'</span>')+'</td>'
       +'<td><input type="checkbox" class="ck" data-puse="'+s.id+'" title="取消勾選＝本店不使用此品項，不出現在盤點與建議" '+(usedOf(store,s)?"checked":"")+'></td>'
-      +'<td><button class="btn sm" data-psave="'+s.id+'">存</button></td></tr>';});
+      +'<td><span data-pst="'+s.id+'">'+pstBtn(s.id)+'</span></td></tr>';});
   html+='</table></div><div class="muted">共 '+items.length+' 項</div>';return html;}
 
 /* ===== 季節 ===== */
@@ -1094,13 +1130,14 @@ function wire(){
       Promise.all(batch.map(function(id){return post({type:"inv",store:store,sku_id:id,onHand:iv[id]?iv[id].onHand:null,breakage:iv[id]?iv[id].breakage:null,user:ST.role},true);})).then(function(){done+=batch.length;toast("送出中… "+done+"/"+ids.length);chunk(i+5);});
     })(0);};
   // 店別參數
-  Array.prototype.forEach.call(document.querySelectorAll("[data-p]"),function(el){el.onchange=function(){var id=el.dataset.p,f=el.dataset.f;var isTxt=(f==="zone"||f==="custName"||f==="custVendor");var v=isTxt?el.value:(el.value===""?"":+el.value);EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-p]"),function(el){el.onchange=function(){var id=el.dataset.p,f=el.dataset.f;var isTxt=(f==="zone"||f==="custName"||f==="custVendor");var v=isTxt?el.value:(el.value===""?"":+el.value);EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id]){delete PSTATE[id];refreshPstBtn(id);}PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-puse]"),function(el){el.onchange=function(){var id=el.dataset.puse,on=el.checked;
     PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id].used=on;
     if(EDIT[id])delete EDIT[id]["使用中"];            // 已即時送出，不重複附在「存」裡
-    postParam(ST.storeId,id,{"使用中":on?"TRUE":"FALSE"});
-    toast((SKU[id]?SKU[id].name:"品項")+(on?" 已啟用":" 已停用")+"（確認中…）");};});
-  Array.prototype.forEach.call(document.querySelectorAll("[data-psave]"),function(el){el.onclick=function(){var id=el.dataset.psave,e=EDIT[id]||{};var fields={};if("zone"in e)fields["盤點分區"]=e.zone;if("ord"in e)fields["盤點順序"]=e.ord;if("par"in e)fields["標配數量"]=e.par;if("weight"in e)fields["權數"]=e.weight;if("leadDays"in e)fields["交期天"]=e.leadDays;if("manualWeekly"in e)fields["手動週用量"]=e.manualWeekly;if("safety"in e)fields["安全庫存"]=e.safety;if("使用中"in e)fields["使用中"]=e["使用中"];if("custName"in e)fields["店品名"]=e.custName;if("custVendor"in e)fields["店廠商"]=e.custVendor;postParam(ST.storeId,id,fields);var pp=(PARAM[ST.storeId]=PARAM[ST.storeId]||{});pp[id]=pp[id]||{};if("custName"in e)pp[id].custName=String(e.custName||"").trim();if("custVendor"in e)pp[id].custVendor=String(e.custVendor||"").trim();};});
+    toast((SKU[id]?SKU[id].name:"品項")+(on?" 啟用":" 停用")+"，確認中…");
+    postParam(ST.storeId,id,{"使用中":on?"TRUE":"FALSE"},function(ok){
+      toast(ok?((SKU[id]?SKU[id].name:"品項")+(on?" 已啟用":" 已停用")+"（已確認）"):("⚠ "+(SKU[id]?SKU[id].name:"品項")+" 設定未寫入，請再操作一次"));});};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-psave]"),function(el){el.onclick=function(){savePRow(el.dataset.psave);};});
   // 季節
   Array.prototype.forEach.call(document.querySelectorAll("[data-si]"),function(el){el.onchange=function(){SIDX[+el.dataset.si]=+el.value;};});
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});var lo=$("#sfLow"),hi=$("#sfHigh");if(lo&&+lo.value>0){SFACT.low=+lo.value;post({type:"season",month:"淡季係數",idx:SFACT.low});}if(hi&&+hi.value>0){SFACT.high=+hi.value;post({type:"season",month:"旺季係數",idx:SFACT.high});}toast("已送出季節指數與淡旺季係數");};
