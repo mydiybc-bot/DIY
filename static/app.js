@@ -260,7 +260,7 @@ function buildCoachSpeechText(message, { autoListen = false, meta = null } = {})
         spokenParts.push(coaching);
       }
       if (meta.revealed) {
-        spokenParts.push("參考答案已顯示在畫面上，可以照這個方向再說一次，真的卡住也可以說「跳過這題」。");
+        spokenParts.push("為使練習流暢，參考答案只顯示文字、不會唸出來。請看螢幕，照這個方向再說一次；真的卡住也可以說「跳過這題」。");
       }
       if (!coaching) {
         spokenParts.push("請再回答一次。");
