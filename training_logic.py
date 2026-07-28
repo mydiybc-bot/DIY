@@ -95,6 +95,10 @@ SKIP_PHRASES = (
     "跳過",
 )
 
+# 公布參考答案時，畫面上先加這句說明:答案只顯示文字、不朗讀,避免員工以為系統壞掉。
+# (前端朗讀是用結構化欄位另外組句,這行不會被唸出來)
+ANSWER_TEXT_ONLY_NOTE = "（為使練習流暢，針對標準答案系統只提供文字，不出聲）"
+
 
 def build_catalog(sections: list[dict]) -> dict[str, dict]:
     return {section["id"]: deepcopy(section) for section in sections}
@@ -549,6 +553,7 @@ def respond(session: dict, answer: str) -> dict:
             parts.append(retry_prompt)
         if session["attempts"] >= rules["max_attempts_before_answer"]:
             revealed = True
+            parts.append(ANSWER_TEXT_ONLY_NOTE)
             parts.append(rules["reference_answer_intro"] + question["answer"])
             parts.append(rules["answer_reveal_prompt"])
             parts.append("如果真的卡住，也可以直接說「跳過這題」，先往下一題。")
