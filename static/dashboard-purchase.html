@@ -100,6 +100,34 @@
     .wrap{max-width:1260px}
     .group .card{column-count:3}
   }
+
+/* ===== 2026-07-29 店別參數卡片化 + 調整基準值拆解式 ===== */
+.pcard{border:1px solid var(--line);border-radius:10px;padding:7px 9px;margin-bottom:6px;background:var(--card)}
+.pc-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;line-height:1.3}
+.pc-top b{font-size:14px}
+.pc-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.pc-grid{display:flex;flex-wrap:wrap;gap:5px 12px;align-items:center}
+.pf{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--mut);white-space:nowrap}
+.pf b{font-size:12px;color:var(--mut);font-weight:600}
+.pf .hq{color:#9aa0a6;font-size:12px}
+.pf .auto{color:#2E7D32;font-weight:600;font-size:12px}
+.pf .need{color:#C0392B;font-weight:700;font-size:12px}
+.pf .warn2{color:#B45309;font-size:12px}
+.pdet{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:6px 10px;margin-bottom:8px}
+.pdet>summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--blue);list-style:none}
+.pdet>summary::-webkit-details-marker{display:none}
+.pdet>summary::before{content:"\25B8 ";color:var(--mut)}
+.pdet[open]>summary::before{content:"\25BE "}
+.pdet .note{margin:6px 0 2px}
+.abk{width:100%;border-collapse:collapse;font-size:13px;margin:2px 0 8px}
+.abk td{padding:4px 2px;border:0;vertical-align:middle}
+.abk td.k{color:var(--mut);width:64px;font-size:12px}
+.abk td.v{font-weight:700}
+.abk td.n{color:var(--mut);font-size:12px}
+.abk tr.sum td{border-top:1px solid var(--line);padding-top:7px}
+.abk input{font-size:15px;font-weight:700;text-align:center}
+.alock{color:var(--mut);font-size:12px}
+
 </style>
 </head>
 <body>
@@ -444,58 +472,100 @@ function normCustPackQty(v){var t=String(v==null?"":v).trim();
   return {val:n,big:n>100000};}
 function adjUnit(st,s){return isDur(s)?s.useUnit:(pqEff(st,s)>0?s.buyUnit:s.useUnit);}
 function adjToUse(st,s,v){return isDur(s)?num(v):num(v)*(pqEff(st,s)>0?pqOf(st,s):1);}
+function adjField(st,s){ // 這個品項「可調的那一格」是什麼
+  var pq=pqOf(st,s),cv=(pqEff(st,s)>0?pq:1);
+  if(isDur(s))return {key:"par",label:"標配數量",unit:s.useUnit,cur:num(pOf(st,s).par),
+    hint:"本店應備數量。盤點低於標配就補到標配。",step:"1"};
+  if(hasPOS(st,s))return {key:"weight",label:"權數",unit:"倍",cur:(num(pOf(st,s).weight)||1),
+    hint:"1＝照系統推算。本店報廢/教學/試作較多就調高，例如 1.2＝多兩成。",step:"0.05"};
+  return {key:"manualWeekly",label:"手動週用量",unit:(pqEff(st,s)>0?s.buyUnit:s.useUnit),
+    cur:manualOf(st,s)/cv,hint:"此品項沒有 POS 推算（備品），週用量請在這裡設定。",step:"0.1"};}
 function adjCurrent(st,s){ // 目前基準值，以 adjUnit 表示
   if(isDur(s))return num(pOf(st,s).par);
   var w=num(pOf(st,s).weight)||1,base=hasPOS(st,s)?posBase(st,s)*w:manualOf(st,s);
   return base/(pqEff(st,s)>0?pqOf(st,s):1);}
-function adjPreview(st,s,tgtDisp){ // 以目標值試算，回傳 {rp,packs}
-  var b=bundle(st,s),tu=adjToUse(st,s,tgtDisp);
-  if(isDur(s)){b.par=tu;}
-  else if(hasPOS(st,s)){b.weight=posBase(st,s)>0?(tu/posBase(st,s)):1;}
-  else{b.forecastWeekly=tu*demandAdj(st,s).adj;}
+function adjPreview(st,s,fv){ // 以欄位新值試算，回傳 {rp,packs,suggested}
+  var b=bundle(st,s),f=adjField(st,s),cv=(pqEff(st,s)>0?pqOf(st,s):1),x=num(fv);
+  if(f.key==="par")b.par=x;
+  else if(f.key==="weight")b.weight=x;
+  else b.forecastWeekly=x*cv*demandAdj(st,s).adj;
   var r=computeRow(s,b);
-  return {rp:r.reorderPoint,packs:r.packs,weight:b.weight};}
-function adjPlan(st,s,tgtDisp){ // 決定要寫哪個欄位
-  var tu=adjToUse(st,s,tgtDisp);
-  if(isDur(s))return {key:"par",label:"標配數量",from:num(pOf(st,s).par),to:tu};
-  if(hasPOS(st,s)){var nw=posBase(st,s)>0?Math.round(tu/posBase(st,s)*1000)/1000:1;
-    return {key:"weight",label:"權數",from:(num(pOf(st,s).weight)||1),to:nw};}
-  return {key:"manualWeekly",label:"手動週用量",from:manualOf(st,s),to:tu};}
+  return {rp:r.reorderPoint,packs:r.packs,suggested:r.suggested};}
+function adjPlan(st,s,fv){ // fv＝使用者填的「欄位值」（權數／標配／手動週用量-採購單位）
+  var f=adjField(st,s),cv=(pqEff(st,s)>0?pqOf(st,s):1),x=num(fv);
+  if(f.key==="par")return {key:"par",label:"標配數量",from:num(pOf(st,s).par),to:x};
+  if(f.key==="weight")return {key:"weight",label:"權數",from:(num(pOf(st,s).weight)||1),to:Math.round(x*1000)/1000};
+  return {key:"manualWeekly",label:"手動週用量",from:manualOf(st,s),to:Math.round(x*cv*1000)/1000};}
 function adjModal(store){
   var s=SKU[ST.adjSku];if(!s)return "";
-  var u=adjUnit(store,s),cur=adjCurrent(store,s),r0=rowFor(store,s),pq=pqOf(store,s);
-  var srcTxt=isDur(s)?"標配設定":(hasPOS(store,s)?("POS 自動推算 × 權數 "+((num(pOf(store,s).weight)||1))):"手動設定（無 POS 推算）");
-  var val=(ST.adjVal===""?dec(cur):ST.adjVal);
-  var rp0=isDur(s)?null:(r0.reorderPoint/(pqEff(store,s)>0?pq:1));
+  var f=adjField(store,s),pq=pqOf(store,s),r0=rowFor(store,s);
+  var src=isDur(s)?"標配路徑":(hasPOS(store,s)?"POS 自動推算 × 權數":"手動設定（此品項無 POS 推算）");
   return '<div class="modal-bg"><div class="modal">'
-    +'<div style="font-size:16px;font-weight:800;margin-bottom:2px">⚙ 調整基準值</div>'
-    +'<div class="muted" style="margin-bottom:8px">'+dispName(store,s)+'　·　'+storeName(store)+(packSpec(store,s)?'<br>📦 規格：1 '+s.buyUnit+' = '+fmt(pq)+' '+s.useUnit+(pqCust(store,s)?'（本店設定）':''):'')+'</div>'
-    +'<div class="card" style="padding:8px 10px;margin:0 0 10px"><div class="sub">目前基準：<b>'+dec(cur)+' '+u+'</b>／'+(isDur(s)?'標配':'週')+'　（'+srcTxt+'）</div>'
-    +(isDur(s)?'':'<div class="sub">目前訂貨點 '+dec(rp0)+' '+u+'　·　目前建議 <b>'+r0.packs+' '+s.buyUnit+'</b></div>')+'</div>'
-    +'<div style="margin-bottom:6px"><span class="ipt-lbl">'+(isDur(s)?'本店應備標配':'本店實際一週約用')+'</span>'
-    +'<input class="sm" id="adjVal" type="text" inputmode="decimal" style="width:90px;font-size:16px;min-height:40px" value="'+escA(val)+'"> <span class="muted">'+u+'</span></div>'
-    +'<div id="adjPrev" class="sub" style="margin-bottom:8px">'+adjPrevTxt(store,s,val)+'</div>'
-    +'<div style="margin-bottom:10px"><span class="ipt-lbl">調整原因（選填，會留存軌跡）</span>'
-    +'<input class="sm" id="adjNote" type="text" style="width:100%;min-height:38px" placeholder="例：常缺料／實際用量比系統多" value="'+escA(ST.adjNote||"")+'"></div>'
-    +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost" id="adjCancel">取消</button><button class="btn" id="adjSave">儲存並永久生效</button></div>'
+    +'<div style="font-size:16px;font-weight:800;margin-bottom:2px">⚙ 為什麼建議 '+r0.packs+' '+(isDur(s)?s.useUnit:s.buyUnit)+'？</div>'
+    +'<div class="muted" style="margin-bottom:8px">'+dispName(store,s)+'　·　'+storeName(store)
+      +(packSpec(store,s)?'<br>📦 規格：1 '+s.buyUnit+' = '+fmt(pq)+' '+s.useUnit+(pqCust(store,s)?'（本店設定）':''):'')
+      +'<br>計算來源：'+src+'</div>'
+    +'<div class="card" style="padding:8px 10px;margin:0 0 8px">'+adjBreak(store,s,null)+'</div>'
+    +'<div id="adjPrev" class="card" style="padding:8px 10px;margin:0 0 10px;background:#F3F8F3">'
+      +adjPrevTxt(store,s,(ST.adjVal===""?dec(f.cur):ST.adjVal))+'</div>'
+    +'<div style="margin-bottom:6px"><span class="ipt-lbl">調整原因（選填，會留存軌跡）</span>'
+    +'<input class="tx" id="adjNote" type="text" style="width:100%" placeholder="例：常缺料 / 報廢較多 / 有教學用途" value="'+escA(ST.adjNote||"")+'"></div>'
+    +'<div class="toolbar" style="justify-content:flex-end;gap:8px;margin-top:6px">'
+    +'<button class="btn ghost" id="adjCancel">取消</button>'
+    +'<button class="btn" id="adjSave">儲存並永久生效</button></div>'
     +'</div></div>';}
-function adjPrevTxt(store,s,val){
-  if(val===""||isNaN(+val))return '<span class="muted">請輸入數字</span>';
-  var pl=adjPlan(store,s,+val),pv=adjPreview(store,s,+val),u=adjUnit(store,s),pq=pqOf(store,s);
-  var t='→ 將寫入 <b>'+pl.label+'</b>：'+dec(pl.from)+' → <b style="color:#2E7D32">'+dec(pl.to)+'</b>';
-  if(!isDur(s))t+='<br>→ 新訂貨點 <b>'+dec(pv.rp/(pqEff(store,s)>0?pq:1))+' '+u+'</b>　·　本次建議 <b style="color:#C0392B">'+pv.packs+' '+s.buyUnit+'</b>';
-  else t+='<br>→ 本次建議 <b style="color:#C0392B">'+pv.packs+' '+s.useUnit+'</b>';
+function adjBreak(st,s,fv){ // 訂貨點拆解表；fv 為 null 時用現值
+  var f=adjField(st,s),pq=pqOf(st,s),cv=(pqEff(st,s)>0?pq:1),u=(pqEff(st,s)>0?s.buyUnit:s.useUnit);
+  var val=(fv===null||fv===""||isNaN(+fv))?f.cur:+fv;
+  var iv='<input class="sm" id="adjVal" type="text" inputmode="decimal" style="width:78px" value="'+
+         (ST.adjVal===""?dec(f.cur):ST.adjVal)+'">';
+  var rows='';
+  if(f.key==="par"){
+    rows+='<tr><td class="k">標配</td><td class="v">'+iv+' '+s.useUnit+'</td><td class="n">'+f.hint+'</td></tr>';
+  }else{
+    var sp=pOf(st,s), base=posBase(st,s), da=demandAdj(st,s), sf=num(sp.safety);
+    var lead=(sp.leadDays==null?DEFAULT_LEAD:num(sp.leadDays)), ocw=(num(sp.orderCycleWeeks)||1);
+    var cw=ocw+lead/7;
+    if(f.key==="weight"){
+      rows+='<tr><td class="k">週用量</td><td class="v">'+dec(base/cv)+' '+u+'</td><td class="n"><span class="alock">🔒 POS×配方自動推算 · 不可調</span></td></tr>';
+      rows+='<tr><td class="k">× 權數</td><td class="v">'+iv+'</td><td class="n">'+f.hint+'</td></tr>';
+    }else{
+      rows+='<tr><td class="k">週用量</td><td class="v">'+iv+' '+u+'</td><td class="n">'+f.hint+'</td></tr>';
+    }
+    if(da.adj&&Math.abs(da.adj-1)>0.001)
+      rows+='<tr><td class="k">× 季節</td><td class="v">'+da.adj.toFixed(2)+'</td><td class="n">'+
+            (da.hit&&da.hit.ev&&da.hit.ev.name?('檔期：'+da.hit.ev.name):'系統自動（季節指數）')+'</td></tr>';
+    rows+='<tr><td class="k">× 覆蓋</td><td class="v">'+cw.toFixed(2)+' 週</td><td class="n">訂貨週期 '+
+          dec(ocw)+' 週 ＋ 交期 '+dec(lead)+' 天</td></tr>';
+    if(sf>0)rows+='<tr><td class="k">＋ 安全</td><td class="v">'+dec(sf/cv)+' '+u+'</td><td class="n">額外緩衝</td></tr>';
+  }
+  return '<table class="abk">'+rows+'</table>';}
+function adjPrevTxt(store,s,fv){
+  var f=adjField(store,s),cv=(pqEff(store,s)>0?pqOf(store,s):1),u=(pqEff(store,s)>0?s.buyUnit:s.useUnit);
+  var r0=rowFor(store,s),b0=bundle(store,s),oh=num(b0.onHand)/cv;
+  if(fv===""||isNaN(+fv))return '<span class="muted">請輸入數字</span>';
+  var pv=adjPreview(store,s,+fv),pl=adjPlan(store,s,+fv);
+  var t='<table class="abk"><tr class="sum"><td class="k">訂貨點</td><td class="v">'+
+        (isDur(s)?dec(pv.suggested+oh)+' '+s.useUnit:dec(pv.rp/cv)+' '+u)+
+        '</td><td class="n">− 現有 '+dec(oh)+' '+(isDur(s)?s.useUnit:u)+'</td></tr>'+
+        '<tr><td class="k">建議</td><td class="v" style="color:#C0392B;font-size:16px">'+pv.packs+' '+(isDur(s)?s.useUnit:s.buyUnit)+'</td>'+
+        '<td class="n">原本 '+r0.packs+' '+(isDur(s)?s.useUnit:s.buyUnit)+'</td></tr></table>';
+  if(Math.abs(pl.to-pl.from)>0.0001)
+    t+='<div class="sub">→ 將寫入 <b>'+pl.label+'</b>：'+dec(pl.from)+' → <b style="color:#2E7D32">'+dec(pl.to)+'</b></div>';
+  else t+='<div class="sub muted">（未變更）</div>';
   return t;}
 function adjSave(store){
   var s=SKU[ST.adjSku];if(!s)return;
   var el=$("#adjVal"),v=el?el.value:"";if(v===""||isNaN(+v)||+v<0){toast("請輸入有效數字");return;}
+  var f=adjField(store,s);
+  if(f.key==="weight"&&+v<=0){toast("權數必須大於 0");return;}
   var nt=($("#adjNote")&&$("#adjNote").value||"").trim();
-  var pl=adjPlan(store,s,+v),f={};f[pl.label]=pl.to;
-  postParam(store,s.id,f,function(ok){
+  var pl=adjPlan(store,s,+v),fl={};fl[pl.label]=pl.to;
+  postParam(store,s.id,fl,function(ok){
     toast(ok?("✅ "+s.name+" "+pl.label+" 已確認："+dec(pl.from)+" → "+dec(pl.to)):("⚠ "+s.name+" 調整未寫入，請再試一次"));});
   post({type:"plog",store:store,sku_id:s.id,sku_name:s.name,field:pl.label,
         from:pl.from,to:pl.to,role:ST.role,note:nt,ts:new Date().toISOString()},true);
-  var pp=(PARAM[store]=PARAM[store]||{});pp[s.id]=pp[s.id]||{};pp[s.id][pl.key]=pl.to;   // 本機即時生效
+  var pp=(PARAM[store]=PARAM[store]||{});pp[s.id]=pp[s.id]||{};pp[s.id][pl.key]=pl.to;
   ST.adjSku="";ST.adjVal="";ST.adjNote="";toast("確認寫入中…");render();}
 function adjLink(id){return '<span class="why" data-adj="'+id+'" style="margin-left:6px">⚙ 調整</span>';}
 function matchQ(s){var st=ST.storeId;
@@ -911,43 +981,49 @@ function viewBooking(){var store=ST.storeId;
   return h;}
 function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   var html='<div class="toolbar"><span class="own">✎ 店別參數（各店維護）</span></div>'
-  +'<div class="note">門市：'+storeName(store)+'　·　<b>填寫規則：</b>'
-  +'<br>① <b>有銷售推算</b>的品項（食譜內）：週用量由 POS 自動計算（表內綠字顯示），只需視情況調「權」數與「交」期天數，<b>「週用」免填、填了也不生效</b>。'
-  +'<br>② <b>備品</b>（無銷售推算，如蠟燭、插牌）：<b>必填「週用」</b>＝每週大約用量（紅字提醒），0＝不會產生補貨建議；權數/交期同樣適用。'
+  +'<details class="pdet"><summary>📖 填寫說明（點開）</summary><div class="note" style="margin-top:6px">'
+  +'門市：'+storeName(store)
+  +'<br>① <b>有銷售推算</b>的品項：週用量由 POS 自動計算（綠字），只需視情況調「權」與「交」，<b>「週用」免填、填了也不生效</b>。'
+  +'<br>② <b>備品</b>（無銷售推算，如蠟燭、插牌）：<b>必填「週用」</b>＝每週大約用量（紅字提醒），0＝不會產生補貨建議。'
   +'<br>③ <b>器具/模具</b>：只填「標配」＝本店應備數量，盤點低於標配就補。'
-  +'<br>「安全」＝額外緩衝量，可留 0。<b>「啟用」勾選即自動存檔，不必再按「存」</b>；取消勾選＝本店不使用，不出現在盤點與建議。<b>「店廠商」淺字＝目前總部主檔的廠商</b>，只有本店改用別家盤商時才需要填，平常留空即可。「分區」決定盤點頁排序，空白＝用系統預設（欄內淺字顯示），可下拉選或自行輸入。<b>店品名/店廠商</b>：本店叫法與在地盤商，空白＝用總部主檔；改完全站顯示與訂貨單分組跟著變。'
-  +'<br>④ <b>「內容量」＝本店每 1 採購單位含多少使用單位</b>（如砂糖 1 包 20000 g）。淺字＝總部主檔值，<b>只有本店包裝規格與總部不同時才需要填</b>，清空＝回歸總部主檔。<span style="color:#B45309">⚠️ 改內容量會重新換算現有庫存克數與訂貨點</span>（盤點以採購單位記錄，同樣「2.8 罐」在新規格下代表的克數不同，建議量隨之改變——這是修正，不是故障）。改完按「存」寫回。</div>'
+  +'<br>④ <b>「安全」</b>＝額外緩衝量，可留 0。<b>「啟用」勾選即自動存檔</b>；取消勾選＝本店不使用，不出現在盤點與建議。'
+  +'<br>⑤ <b>「廠商」「分區」「內容量」淺字＝總部主檔值</b>，只有本店與總部不同時才填，清空＝回歸總部主檔。'
+  +'<br><span style="color:#B45309">⚠️ 改內容量會重新換算現有庫存克數與訂貨點</span>（同樣「2.8 罐」在新規格下代表的克數不同，建議量隨之改變——這是修正，不是故障）。改完按該張卡片的「存」。'
+  +'</div></details>'
   +catChips()
   +'<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項或廠商…" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
   var items=SKUS.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
   html+='<datalist id="zoneDL">'+ZONE_ORDER.filter(function(z){return z!=="其他";}).map(function(z){return '<option value="'+z+'">';}).join('')+'</datalist>';
-  html+='<div class="card" style="overflow-x:auto"><table><tr><th>品項</th>'+(isHQ?'<th>店品名</th>':'')+'<th>店廠商</th><th>內容量</th><th>分區</th>'+(isHQ?'<th>順序</th>':'')+'<th>補貨參數</th><th>安全</th><th>啟用</th><th></th></tr>';
-  items.forEach(function(s){var sp=pOf(store,s),dur=isDur(s),c4;
-    if(dur){c4='<span class="ipt-lbl">標配</span>'+inN("p",s.id,"par",sp.par||0,52);}
-    else{var a=aggOf(store,s),hasPOS=(a.avg4>0||a.week>0);
-      c4='<span class="ipt-lbl">權</span>'+inN("p",s.id,"weight",sp.weight||1,42)
-        +'<span class="ipt-lbl">交</span>'+inN("p",s.id,"leadDays",(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),40);
-      if(hasPOS){c4+='<span class="ipt-lbl" style="color:#2E7D32;font-weight:600" title="此品項有 POS 銷售推算，週用量自動計算，免填手動週用量">週用(自動) ≈'+fmt(a.avg4||a.week)+' '+s.useUnit+'</span>';
-        if(num(sp.manualWeekly)>0)c4+='<span class="ipt-lbl" style="color:#B45309" title="有 POS 推算時手動週用量不生效，建議清為 0 或留白">⚠️手動'+dec(sp.manualWeekly)+'不生效</span>'+inN("p",s.id,"manualWeekly",sp.manualWeekly,46);}
-      else{var mw=num(sp.manualWeekly);
-        c4+='<span class="ipt-lbl"'+(mw>0?'':' style="color:#C0392B;font-weight:700"')+' title="此品項無 POS 銷售推算（備品），請填每週大約用量；0＝不會產生補貨建議">週用'+(mw>0?'':'(必填)')+'</span>'+inN("p",s.id,"manualWeekly",mw,46);}}
+  items.forEach(function(s){
+    var sp=pOf(store,s),dur=isDur(s);
     var pqOwn=num(sp.custPackQty)>0?num(sp.custPackQty):"",pqHQ=num(s.packQty);
-    var pqCell=isDur(s)?'<span class="muted">—</span>'
-      :('<input class="sm" style="width:74px" type="number" step="0.1" min="0" data-p="'+s.id+'" data-f="custPackQty" value="'+pqOwn+'" placeholder="'+(pqHQ>0?fmt(pqHQ):'')+'" title="每 1 '+(s.buyUnit||'採購單位')+' 含多少 '+(s.useUnit||'g')+'。淺字＝總部主檔（'+(pqHQ>0?fmt(pqHQ)+' '+s.useUnit:'未設定')+'）；只有本店包裝規格與總部不同時才填，清空＝回歸總部主檔。改內容量會重新換算現有庫存克數與訂貨點。">'
-         +'<div class="ipt-lbl" style="color:#B45309;max-width:120px;line-height:1.35">'+(pqOwn!==""?'本店規格：改內容量會重新換算現有庫存克數與訂貨點':'空白＝用總部主檔')+'</div>');
     var zEff=zoneOf(store,s),zOwn=(sp.zone&&sp.zone!=="未分區")?sp.zone:"";
-    var zIn='<input class="tx" style="width:74px" type="text" list="zoneDL" data-p="'+s.id+'" data-f="zone" value="'+zOwn+'" placeholder="'+zEff+'" title="空白＝用系統預設分區（'+zEff+'）；可下拉選或自行輸入">';
-    html+='<tr data-prow="'+s.id+'"><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b></td>'
-      +(isHQ?('<td>'+inT("p",s.id,"custName",sp.custName||"",84)+'</td>'):'')
-      +'<td>'+inT("p",s.id,"custVendor",sp.custVendor||"",78,(s.vendor||"未指定"),"目前廠商："+(s.vendor||"未指定")+"（總部主檔）。只有本店改用別家盤商時才需填寫，空白＝沿用總部主檔。")+'</td>'
-      +'<td>'+pqCell+'</td>'
-      +'<td>'+zIn+'</td>'
-      +(isHQ?('<td>'+inN("p",s.id,"ord",sp.ord||"",42)+'</td>'):'')
-      +'<td>'+c4+'</td>'
-      +'<td>'+(dur?'—':'<span title="額外緩衝量（'+s.useUnit+'），可留 0">'+inN("p",s.id,"safety",sp.safety||0,48)+'</span>')+'</td>'
-      +'<td><input type="checkbox" class="ck" data-puse="'+s.id+'" title="取消勾選＝本店不使用此品項，不出現在盤點與建議" '+(usedOf(store,s)?"checked":"")+'></td>'
-      +'<td><span data-pst="'+s.id+'">'+pstBtn(s.id)+'</span></td></tr>';});
-  html+='</table></div><div class="muted">共 '+items.length+' 項</div>';return html;}
+    var g=[];
+    g.push('<span class="pf"><b>廠商</b>'+inT("p",s.id,"custVendor",sp.custVendor||"",76,(s.vendor||"未指定"),"淺字＝總部主檔（"+(s.vendor||"未指定")+"）。只有本店改用別家盤商時才填。")+'</span>');
+    g.push('<span class="pf"><b>分區</b><input class="tx" style="width:72px" type="text" list="zoneDL" data-p="'+s.id+'" data-f="zone" value="'+zOwn+'" placeholder="'+zEff+'" title="空白＝用系統預設分區（'+zEff+'）"></span>');
+    if(!dur)g.push('<span class="pf"><b>內容量</b><input class="sm" style="width:64px" type="number" step="0.1" min="0" data-p="'+s.id+'" data-f="custPackQty" value="'+pqOwn+'" placeholder="'+(pqHQ>0?fmt(pqHQ):'')+'" title="每 1 '+(s.buyUnit||'採購單位')+' 含多少 '+(s.useUnit||'g')+'。淺字＝總部主檔。改內容量會重新換算現有庫存克數與訂貨點。">'
+      +(pqOwn!==""?'<span class="warn2">本店</span>':'<span class="hq">'+(pqHQ>0?fmt(pqHQ)+' '+s.useUnit:'')+'</span>')+'</span>');
+    if(isHQ){
+      g.push('<span class="pf"><b>店品名</b>'+inT("p",s.id,"custName",sp.custName||"",80)+'</span>');
+      g.push('<span class="pf"><b>順序</b>'+inN("p",s.id,"ord",sp.ord||"",40)+'</span>');}
+    if(dur){
+      g.push('<span class="pf"><b>標配</b>'+inN("p",s.id,"par",sp.par||0,50)+' '+s.useUnit+'</span>');
+    }else{
+      var a=aggOf(store,s),auto=(a.avg4>0||a.week>0),mw=num(sp.manualWeekly);
+      g.push('<span class="pf"><b>權</b>'+inN("p",s.id,"weight",sp.weight||1,42)+'</span>');
+      g.push('<span class="pf"><b>交</b>'+inN("p",s.id,"leadDays",(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),38)+'天</span>');
+      if(auto){
+        g.push('<span class="pf"><span class="auto" title="有 POS 銷售推算，週用量自動計算，免填">週用(自動) ≈'+fmt(a.avg4||a.week)+' '+s.useUnit+'</span></span>');
+        if(mw>0)g.push('<span class="pf"><span class="warn2" title="有 POS 推算時手動週用量不生效，建議清為 0">⚠️手動'+dec(mw)+'不生效</span>'+inN("p",s.id,"manualWeekly",mw,44)+'</span>');
+      }else{
+        g.push('<span class="pf"><span'+(mw>0?' class="pf"':' class="need"')+' title="此品項無 POS 推算（備品），請填每週大約用量；0＝不會產生補貨建議">週用'+(mw>0?'':'(必填)')+'</span>'+inN("p",s.id,"manualWeekly",mw,44)+' '+s.useUnit+'</span>');}
+      g.push('<span class="pf"><b>安全</b>'+inN("p",s.id,"safety",sp.safety||0,44)+'</span>');}
+    html+='<div class="pcard" data-prow="'+s.id+'">'
+      +'<div class="pc-top"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b>'
+      +'<span class="pc-right"><span class="pf"><b>啟用</b><input type="checkbox" class="ck" data-puse="'+s.id+'" title="取消勾選＝本店不使用此品項，不出現在盤點與建議" '+(usedOf(store,s)?"checked":"")+'></span>'
+      +'<span data-pst="'+s.id+'">'+pstBtn(s.id)+'</span></span></div>'
+      +'<div class="pc-grid">'+g.join('')+'</div></div>';});
+  html+='<div class="muted">共 '+items.length+' 項</div>';return html;}
 
 /* ===== 季節 ===== */
 function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
