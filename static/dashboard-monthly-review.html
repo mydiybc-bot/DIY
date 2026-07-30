@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>月會模式｜自己做烘焙聚樂部</title>
+<!-- 2026-07-30 口徑修正：客單價改讀 monthlyByStore.revenue_net/headcount（淨營收÷來客，與 pos-dashboard v25 一致）；舊版誤用 monthly[].revenue（毛額）致客單價虛高 -->
 <style>
 :root{
   --bg:#FFF8F6; --card:#FFFFFF; --text:#2D1A14; --muted:#6F4E45; --border:#EAD9D4;
@@ -168,7 +169,7 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
 
 <div class="foot">
   口徑：毛利率＝(營收−食材成本)÷營收｜人事費率＝人事成本÷營收（同 P&L 頁，排除 C008/C009）｜店損益＝P&L 本期淨利（含營業外淨額）｜
-  達成率實際數以 P&L 營收為準，預算取自 2026 預算表｜來客/客單＝POS 口徑（客單＝營收÷來客）｜rev/h＝排班週資料歸月（以週起日月份計）淨營收÷總工時｜
+  達成率實際數以 P&L 營收為準，預算取自 2026 預算表｜來客/客單＝POS 口徑（客單＝淨營收÷來客，已扣折扣，與 POS 儀表板一致）｜rev/h＝排班週資料歸月（以週起日月份計）淨營收÷總工時｜
   新增會員月目標＝2026 年度目標÷12｜回頭客％為 365 天滾動口徑（非當月）｜負評率＝當月 ≤4 星評論占比（同評論頁）｜資料來源：各儀表板既有端點即時查詢
 </div>
 
@@ -362,15 +363,17 @@ function compute(wYm, year, lyYm){
   /* 預算 lookup */
   const bud={};
   if(RAW.budget&&RAW.budget.stores){ RAW.budget.stores.forEach(s=>{ bud[Number(s.id)]={}; (s.monthly||[]).forEach(m=>{ bud[Number(s.id)][m.month]=Number(m.budget)||0; }); }); }
-  /* POS 月聚合（口徑同 pos-dashboard：revenue/headcount 直加） */
+  /* POS 月聚合（2026-07-30 口徑修正：改讀 monthlyByStore 的 revenue_net/headcount，
+     客單價＝淨營收÷來客，與 pos-dashboard v25 全站定義一致；
+     舊版誤讀 monthly[] 的 revenue＝單價×數量毛額，客單價虛高） */
   const posAgg={};
-  if(RAW.pos&&RAW.pos.monthly){
-    RAW.pos.monthly.forEach(m=>{
+  if(RAW.pos&&RAW.pos.monthlyByStore){
+    RAW.pos.monthlyByStore.forEach(m=>{
       if(m.yearMonth!==wYm && m.yearMonth!==wLy) return;
-      const sid=nameToId(m.store); if(!sid) return;
+      const sid=Number(m.storeCode); if(!sid) return;
       const key=sid+'|'+m.yearMonth;
       if(!posAgg[key]) posAgg[key]={rev:0,hc:0};
-      posAgg[key].rev+=Number(m.revenue)||0; posAgg[key].hc+=Number(m.headcount)||0;
+      posAgg[key].rev+=Number(m.revenue_net)||0; posAgg[key].hc+=Number(m.headcount)||0;
     });
   }
   /* 排班 月聚合（週起日歸月） */
@@ -449,7 +452,7 @@ function compute(wYm, year, lyYm){
     /* POS */
     const pc=posAgg[sid+'|'+wYm], py=posAgg[sid+'|'+wLy];
     if(pc&&pc.hc>0){
-      o.ticket={v:pc.rev/pc.hc, tip:'營收 '+wan(pc.rev)+'｜來客 '+fmtN(pc.hc)+(py&&py.hc>0?'｜客單YoY '+sign1((pc.rev/pc.hc-py.rev/py.hc)/(py.rev/py.hc)*100)+'%':'')};
+      o.ticket={v:pc.rev/pc.hc, tip:'淨營收 '+wan(pc.rev)+'｜來客 '+fmtN(pc.hc)+(py&&py.hc>0?'｜客單YoY '+sign1((pc.rev/pc.hc-py.rev/py.hc)/(py.rev/py.hc)*100)+'%':'')};
       o.cyoy={v:(py&&py.hc>0)?(pc.hc-py.hc)/py.hc*100:null, tip:'本月來客 '+fmtN(pc.hc)+(py?'｜去年同月 '+fmtN(py.hc):'｜去年同月無資料')};
     }else{ o.ticket=o.cyoy={v:null,tip:'POS 當月無資料'}; }
     /* 排班 */
@@ -488,7 +491,7 @@ function aggKpis(ids){
     o.yoy={v:rl>0?(rc-rl)/rl*100:null, tip:'加權：Σ本月÷Σ去年同月（'+wy.length+' 店）'};
   }else{ o.net=o.gm=o.hr=o.ach=o.yoy={v:null,tip:'無 P&L 資料'}; }
   const ws=R.filter(r=>r.pc&&r.pc.hc>0), pr=sum(ws,r=>r.pc.rev), ph=sum(ws,r=>r.pc.hc);
-  o.ticket= ph>0?{v:pr/ph, tip:'加權：Σ營收÷Σ來客（'+ws.length+' 店）'}:{v:null,tip:'無資料'};
+  o.ticket= ph>0?{v:pr/ph, tip:'加權：Σ淨營收÷Σ來客（'+ws.length+' 店）'}:{v:null,tip:'無資料'};
   const wc=ws.filter(r=>r.py&&r.py.hc>0), hc=sum(wc,r=>r.pc.hc), hl=sum(wc,r=>r.py.hc);
   o.cyoy= hl>0?{v:(hc-hl)/hl*100, tip:'加權：Σ本月來客÷Σ去年（'+wc.length+' 店）'}:{v:null,tip:'無資料'};
   const wh=R.filter(r=>r.sc&&r.sc.hrs>0), sr=sum(wh,r=>r.sc.rev), sh=sum(wh,r=>r.sc.hrs);
