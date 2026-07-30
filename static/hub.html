@@ -1,5 +1,5 @@
 <!-- Cowork commit 0f45066（本機 git log，2026-07-22，尚未 push；上一版 958deda） -->
-<!-- 2026-07-30 goTo 加 ?v= 時間戳防快取（含 PWD_B 三處導向改走 goTo） -->
+<!-- 2026-07-30 goTo 加 ?v= 時間戳防快取；同日第二批：hub 與 10 子頁密碼全數移出 repo，改由「權限中心」GAS 驗證 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -153,17 +153,6 @@ cursor: pointer; transition: background .15s;
 </div>
 
 <!-- 密碼 Modal（P&L 第二道） -->
-<div class="modal-bg" id="modalB">
-<div class="modal-box">
-<div class="modal-icon">🔒</div>
-<div class="modal-title">P&L 損益分析</div>
-<div class="modal-sub">此功能需要財務層密碼</div>
-<input class="modal-input" type="password" id="inputB" placeholder="請輸入財務密碼" autocomplete="current-password">
-<button class="modal-btn" onclick="checkPwdB()">確認</button>
-<button style="width:100%;margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--border);background:white;font-size:14px;font-family:inherit;cursor:pointer;color:var(--muted);" onclick="closeModalB()">取消</button>
-<div class="modal-error" id="errorB"></div>
-</div>
-</div>
 
 <!-- HEADER -->
 <div class="header">
@@ -211,7 +200,7 @@ cursor: pointer; transition: background .15s;
 </div>
 
 <!-- P&L 損益（鎖） -->
-<div class="hub-card pnl" onclick="unlockPnl()">
+<div class="hub-card pnl" onclick="goTo('dashboard-pnl.html')">
 <div class="card-icon">📊</div>
 <div class="card-title">P&L 損益 <span class="upd upd-month">🟡 每月手動</span></div>
 <div class="card-desc">月度損益分析<br>各店盈虧・費用拆解</div>
@@ -259,7 +248,7 @@ cursor: pointer; transition: background .15s;
 <!-- 採購系統 -->
 <div class="hub-card purchase" onclick="goTo('dashboard-purchase.html')">
 <div class="card-icon">🛒</div>
-<div class="card-title">採購系統</div>
+<div class="card-title">採購系統 <span class="upd upd-auto">🟢 自動</span></div>
 <div class="card-desc">四類建議採購・季節調整<br>盤點・依廠商出單</div>
 <div class="card-stat" id="statPurchase">—</div>
 <div class="card-stat-label" id="statPurchaseLabel">本週建議採購</div>
@@ -267,7 +256,7 @@ cursor: pointer; transition: background .15s;
 </div>
 
 <!-- 月會模式 -->
-<div class="hub-card monthly" onclick="unlockMonthly()">
+<div class="hub-card monthly" onclick="goTo('dashboard-monthly-review.html')">
 <div class="card-icon">📋</div>
 <div class="card-title">月會模式 <span class="upd upd-month">🟡 每月會前</span></div>
 <div class="card-desc">12 店 × 11 KPI 紅黃綠燈<br>紅黃燈自動彙整成討論清單</div>
@@ -295,14 +284,25 @@ cursor: pointer; transition: background .15s;
 <div class="footer">自己做烘焙聚樂部 經營儀表板 ｜ 資料來源：Google Sheets 即時查詢</div>
 
 <script>
-const PWD_A = 'diybc20260510';
-const PWD_B = 'diybc2026ss';
 
 const REVIEWS_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
 const MEMBER_SHEET = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const SCHEDULE_API = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
 const BUDGET_API = 'https://script.google.com/macros/s/AKfycbyF6tShTC6O4dpdDTcBSurABM_g_EIE6jAuhq7a4l10fsvk2BqdthJ-u4CTp3Z4yw4T/exec';
 const RESERVATION_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
+
+// ── 權限中心（2026-07-30：密碼移出 repo，改由 GAS + Sheet dim_auth 集中管理）──
+const AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+function authVerify(dashboard, pwd, cb) {
+const name = '__hubcb' + Date.now();
+const s = document.createElement('script');
+const to = setTimeout(() => done({ok:false, error:'連線逾時，請重試（GAS 冷啟動可能較慢）'}), 30000);
+function done(d) { clearTimeout(to); delete window[name]; if (s.parentNode) s.parentNode.removeChild(s); cb(d); }
+window[name] = done;
+s.onerror = () => done({ok:false, error:'連線失敗，請重試'});
+s.src = AUTH_API + '?action=verify&callback=' + name + '&dashboard=' + encodeURIComponent(dashboard) + '&pwd=' + encodeURIComponent(pwd);
+document.head.appendChild(s);
+}
 
 // ── 密碼邏輯 ───────────────────────────────────────────
 // session 有效期:4 小時 (毫秒)
@@ -326,73 +326,30 @@ return true;
 
 function checkPwdA() {
 const val = document.getElementById('inputA').value;
-if (val === PWD_A) {
+if (!val) return;
+const err = document.getElementById('errorA');
+err.textContent = '驗證中…';
+authVerify('hub', val, function(r) {
+if (r && r.ok) {
+err.textContent = '';
 setUnlock('hub_unlocked');
 document.getElementById('modalA').classList.remove('show');
 onUnlocked();
 } else {
-document.getElementById('errorA').textContent = '密碼錯誤，請再試一次';
+err.textContent = (r && r.error) || '驗證失敗';
 document.getElementById('inputA').value = '';
 document.getElementById('inputA').focus();
 }
+});
 }
 
 document.getElementById('inputA').addEventListener('keydown', e => {
 if (e.key === 'Enter') checkPwdA();
 });
 
-let _pwdBTarget = 'dashboard-pnl.html';
-function checkPwdB() {
-const val = document.getElementById('inputB').value;
-if (val === PWD_B) {
-setUnlock('pnl_unlocked');
-/* 2026-06-01: 設 sessionStorage flag 給 dashboard-pnl.html 偵測,免重複登入 */
-try { sessionStorage.setItem('hub_pwd_b_passed', '1'); } catch(_){}
-document.getElementById('modalB').classList.remove('show');
-goTo(_pwdBTarget);
-} else {
-document.getElementById('errorB').textContent = '密碼錯誤，請再試一次';
-document.getElementById('inputB').value = '';
-document.getElementById('inputB').focus();
-}
-}
-
-document.getElementById('inputB').addEventListener('keydown', e => {
-if (e.key === 'Enter') checkPwdB();
-});
-
-function closeModalB() {
-document.getElementById('modalB').classList.remove('show');
-document.getElementById('inputB').value = '';
-document.getElementById('errorB').textContent = '';
-}
-
-function unlockPnl() {
-_pwdBTarget = 'dashboard-pnl.html';
-if (isUnlocked('pnl_unlocked')) {
-/* 2026-06-01: 已解鎖直接跳,也要寫 flag */
-try { sessionStorage.setItem('hub_pwd_b_passed', '1'); } catch(_){}
-goTo('dashboard-pnl.html');
-return;
-}
-document.getElementById('modalB').classList.add('show');
-setTimeout(() => document.getElementById('inputB').focus(), 100);
-}
-
 function goTo(url) {
 /* 2026-07-30 防快取：附版本參數，Render 部署新版後子頁必抓最新 HTML，免手動強刷 */
 window.location.href = url + (url.indexOf('?') > -1 ? '&' : '?') + 'v=' + Date.now();
-}
-
-function unlockMonthly() {
-_pwdBTarget = 'dashboard-monthly-review.html';
-if (isUnlocked('pnl_unlocked')) {
-try { sessionStorage.setItem('hub_pwd_b_passed', '1'); } catch(_){}
-goTo('dashboard-monthly-review.html');
-return;
-}
-document.getElementById('modalB').classList.add('show');
-setTimeout(() => document.getElementById('inputB').focus(), 100);
 }
 
 // ── 載入後檢查 ──────────────────────────────────────────
