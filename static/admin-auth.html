@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>權限管理後台｜自己做烘焙聚樂部</title>
+<!-- v1.1：列表加「錯誤數／解鎖」欄（對應 GAS admin_unlock），涵蓋 pnl/monthly -->
+<!-- 2026-07-30 v1：10 個儀表板密碼集中管理（讀寫「權限中心」GAS／dim_auth）。
+     本頁不放任何密碼；管理密碼僅存在記憶體，關頁即清。變更紀錄見 Sheet 的 auth_log 分頁。 -->
+<style>
+:root{--dark:#4A3228;--brown:#7B4B36;--sub:#6F4E45;--bg:#F7F1EC;--line:#E4D6CC;--red:#C43030;--green:#2D7A55}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--dark)}
+header{background:var(--dark);color:#fff;padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header a.home{color:#fff;text-decoration:none;font-weight:700;font-size:13px;white-space:nowrap}
+header h1{font-size:18px;margin:0;font-weight:800}
+.wrap{max-width:860px;margin:0 auto;padding:18px 14px 40px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.hint{font-size:12px;color:var(--sub);line-height:1.6}
+input,select,button{font-family:inherit;font-size:14px}
+input,select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--dark)}
+button{padding:8px 14px;border:none;border-radius:8px;background:var(--brown);color:#fff;font-weight:700;cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
+button.ghost{background:#fff;color:var(--brown);border:1px solid var(--brown)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#F1E7DF;color:var(--sub);text-align:left;padding:8px 6px;font-size:12px;white-space:nowrap}
+td{border-top:1px solid var(--line);padding:8px 6px;vertical-align:middle}
+td input.pwd{width:130px}
+td input.ttl{width:58px}
+.eye{background:none;border:none;color:var(--sub);cursor:pointer;padding:2px 4px;font-size:14px}
+.msg{font-size:12px;min-height:16px;margin-top:8px}
+.msg.ok{color:var(--green)} .msg.err{color:var(--red)}
+.name b{font-size:14px} .name .id{font-size:12px;color:var(--sub)}
+.updated{font-size:12px;color:var(--sub);white-space:nowrap}
+#panel{display:none}
+@media(max-width:640px){
+  .hidecol{display:none}
+  td input.pwd{width:110px}
+}
+</style>
+</head>
+<body>
+<header>
+  <a href="hub.html" class="home">⬅ 回首頁</a>
+  <h1>🔐 權限管理後台</h1>
+  <span style="font-size:12px;opacity:.85">每個儀表板獨立密碼（含 P&L／月會）｜改密碼後「新登入」立即生效</span>
+</header>
+<div class="wrap">
+
+  <!-- 登入 -->
+  <div class="card" id="login">
+    <div style="font-weight:800;margin-bottom:8px">管理密碼</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input type="password" id="admPwd" placeholder="輸入管理密碼（dim_auth 的 __admin__ 列）" style="flex:1;min-width:220px" autocomplete="current-password">
+      <button id="loginBtn" onclick="doLogin()">登入</button>
+    </div>
+    <div class="msg" id="loginMsg"></div>
+    <div class="hint" style="margin-top:6px">管理密碼僅暫存於本頁記憶體，重新整理或關閉即需重新輸入。</div>
+  </div>
+
+  <!-- 主面板 -->
+  <div id="panel">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div style="font-weight:800">儀表板密碼一覽</div>
+        <button class="ghost" onclick="loadList()">🔄 重新載入</button>
+        <span class="hint">已登入者最長用到其 TTL 到期；停用（N）則新登入一律擋下。</span>
+      </div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>儀表板</th><th>密碼</th><th>TTL(時)</th><th>啟用</th><th>錯誤數</th>
+          <th class="hidecol">最後更新</th><th class="hidecol">備註</th><th></th>
+        </tr></thead>
+        <tbody id="tb"></tbody>
+      </table>
+      </div>
+      <div class="msg" id="listMsg"></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:800;margin-bottom:8px">變更管理密碼</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="password" id="newAdmPwd" placeholder="新的管理密碼" style="flex:1;min-width:200px">
+        <button onclick="changeAdmin()">更新管理密碼</button>
+      </div>
+      <div class="msg" id="admMsg"></div>
+      <div class="hint" style="margin-top:6px">更新成功後，本頁會登出並要求以新密碼重新登入。</div>
+    </div>
+
+    <div class="hint">歷史紀錄（誰時候驗證成功／失敗、後台改了什麼）：見權限中心 Sheet 的 <b>auth_log</b> 分頁。<br>
+    pnl／月會模式目前仍走既有 PWD_B（Phase 2 併入）。</div>
+  </div>
+</div>
+
+<script>
+/* ★★ 部署權限中心 GAS 後，把網頁應用程式 URL 貼在下一行（見 auth_center.gs 頭部 SOP 第 7 步） ★★ */
+const AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+
+let ADM = '';   /* 管理密碼，僅記憶體 */
+let LIST = [];
+
+function jsonp(params, timeoutMs = 45000){
+  return new Promise((resolve) => {
+    const cb = '__admcb' + Date.now() + Math.floor(Math.random()*1e4);
+    const s = document.createElement('script');
+    const to = setTimeout(() => { cleanup(); resolve({ok:false, error:'連線逾時（GAS 冷啟動可能較慢，請重試）'}); }, timeoutMs);
+    function cleanup(){ clearTimeout(to); delete window[cb]; s.remove(); }
+    window[cb] = (d) => { cleanup(); resolve(d); };
+    s.onerror = () => { cleanup(); resolve({ok:false, error:'連線失敗，請確認 AUTH_API 已填正確部署 URL'}); };
+    const qs = Object.entries(params).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&');
+    s.src = AUTH_API + '?callback=' + cb + '&' + qs;
+    document.head.appendChild(s);
+  });
+}
+
+function setMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text || '';
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function doLogin(){
+  const pwd = document.getElementById('admPwd').value;
+  if(!pwd) return;
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = '驗證中…';
+  const r = await jsonp({action:'admin_list', admin_pwd:pwd});
+  btn.disabled = false; btn.textContent = '登入';
+  if(r && r.ok){
+    ADM = pwd;
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('panel').style.display = 'block';
+    renderList(r.list || []);
+  } else {
+    setMsg('loginMsg', (r && r.error) || '登入失敗', false);
+    document.getElementById('admPwd').value = '';
+  }
+}
+document.getElementById('admPwd').addEventListener('keydown', e => { if(e.key === 'Enter') doLogin(); });
+
+async function loadList(){
+  setMsg('listMsg', '載入中…', true);
+  const r = await jsonp({action:'admin_list', admin_pwd:ADM});
+  if(r && r.ok){ renderList(r.list || []); setMsg('listMsg', '', true); }
+  else setMsg('listMsg', (r && r.error) || '載入失敗', false);
+}
+
+function renderList(list){
+  LIST = list;
+  const tb = document.getElementById('tb');
+  tb.innerHTML = list.map((d, i) => `
+    <tr>
+      <td class="name"><b>${d.name}</b><br><span class="id">${d.dashboard_id}</span></td>
+      <td style="white-space:nowrap">
+        <input class="pwd" type="password" id="p_${i}" value="${String(d.password).replace(/"/g,'&quot;')}">
+        <button class="eye" onclick="togglePwd(${i})" title="顯示/隱藏">👁</button>
+      </td>
+      <td><input class="ttl" type="number" min="1" id="t_${i}" value="${d.ttl_hours}"></td>
+      <td>
+        <select id="e_${i}">
+          <option value="Y" ${d.enabled === 'Y' ? 'selected' : ''}>Y</option>
+          <option value="N" ${d.enabled === 'N' ? 'selected' : ''}>N</option>
+        </select>
+      </td>
+      <td style="white-space:nowrap">${Number(d.fails)||0}${(Number(d.fails)||0) >= 15 ? ' 🔒' : ''}
+        ${(Number(d.fails)||0) > 0 ? `<button class="ghost" style="padding:3px 8px;font-size:12px;margin-left:4px" onclick="unlockRow(${i})">解鎖</button>` : ''}
+      </td>
+      <td class="updated hidecol">${d.updated_at || ''}</td>
+      <td class="hidecol"><span class="hint">${d.note || ''}</span></td>
+      <td><button id="s_${i}" onclick="saveRow(${i})">儲存</button></td>
+    </tr>`).join('');
+}
+
+function togglePwd(i){
+  const el = document.getElementById('p_' + i);
+  el.type = (el.type === 'password') ? 'text' : 'password';
+}
+
+async function saveRow(i){
+  const d = LIST[i];
+  const btn = document.getElementById('s_' + i);
+  btn.disabled = true; btn.textContent = '…';
+  const r = await jsonp({
+    action: 'admin_set',
+    admin_pwd: ADM,
+    dashboard: d.dashboard_id,
+    new_pwd: document.getElementById('p_' + i).value,
+    ttl_hours: document.getElementById('t_' + i).value,
+    enabled: document.getElementById('e_' + i).value
+  });
+  btn.disabled = false; btn.textContent = '儲存';
+  if(r && r.ok){ setMsg('listMsg', '✅ ' + d.name + ' 已更新（' + new Date().toLocaleTimeString('zh-TW') + '）', true); loadList(); }
+  else setMsg('listMsg', '❌ ' + d.name + '：' + ((r && r.error) || '更新失敗'), false);
+}
+
+async function unlockRow(i){
+  const d = LIST[i];
+  const r = await jsonp({action:'admin_unlock', admin_pwd:ADM, dashboard:d.dashboard_id});
+  if(r && r.ok){ setMsg('listMsg', '✅ ' + d.name + ' 已解除鎖定', true); loadList(); }
+  else setMsg('listMsg', (r && r.error) || '解鎖失敗', false);
+}
+
+async function changeAdmin(){
+  const np = document.getElementById('newAdmPwd').value;
+  if(!np){ setMsg('admMsg', '請輸入新的管理密碼', false); return; }
+  const r = await jsonp({action:'admin_set', admin_pwd:ADM, dashboard:'__admin__', new_pwd:np});
+  if(r && r.ok){
+    setMsg('admMsg', '✅ 管理密碼已更新，請以新密碼重新登入', true);
+    setTimeout(() => location.reload(), 1200);
+  } else setMsg('admMsg', (r && r.error) || '更新失敗', false);
+}
+</script>
+</body>
+</html>
