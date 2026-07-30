@@ -121,6 +121,64 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 /* FOOTER */
 .footer { text-align: center; padding: 20px; font-size: 12px; color: var(--muted); }
 </style>
+<script>
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL */
+(function(){
+  var DASH_ID = 'reservation';
+  var DASH_NAME = '訂位分析';   /* 與 dim_auth 的 name 欄一致 */
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var KEY = 'dash_auth_' + DASH_ID;
+  try {
+    var o = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) return;      /* 效期內 → 放行 */
+    localStorage.removeItem(KEY);
+  } catch(_){}
+  document.documentElement.style.visibility = 'hidden';
+  function verify(pwd, cb){
+    var name = '__agcb' + Date.now();
+    var s = document.createElement('script');
+    var to = setTimeout(function(){ done({ok:false, error:'連線逾時，請重試（GAS 冷啟動可能較慢）'}); }, 30000);
+    function done(d){ clearTimeout(to); delete window[name]; if (s.parentNode) s.parentNode.removeChild(s); cb(d); }
+    window[name] = done;
+    s.onerror = function(){ done({ok:false, error:'連線失敗，請重試'}); };
+    s.src = AUTH_API + '?action=verify&callback=' + name + '&dashboard=' + encodeURIComponent(DASH_ID) + '&pwd=' + encodeURIComponent(pwd);
+    document.head.appendChild(s);
+  }
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<input id="agPwd" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    function go(){
+      var v = inp.value; if (!v) return;
+      btn.disabled = true; btn.textContent = '驗證中…';
+      verify(v, function(r){
+        if (r && r.ok) {
+          try { localStorage.setItem(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 })); } catch(_){}
+          location.reload();
+        } else {
+          err.textContent = (r && r.error) || '驗證失敗';
+          btn.disabled = false; btn.textContent = '進入';
+          inp.value = ''; inp.focus();
+        }
+      });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
 </head>
 <body>
 
