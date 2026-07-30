@@ -25,6 +25,8 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .header-left h1 { font-size: 20px; font-weight: 800; }
 .header-left p { font-size: 12px; opacity: .85; margin-top: 3px; }
 .header-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.csv-btn { font-size: 12.5px; font-weight: 700; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.csv-btn:hover { background: #F7F1EE; }
 .back-btn { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 600; color: white; text-decoration: none; white-space: nowrap; transition: background .15s; }
 .back-btn:hover { background: rgba(255,255,255,.32); }
 .update-badge { background: rgba(255,255,255,.2); border-radius: 20px; padding: 6px 14px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.3); white-space: nowrap; }
@@ -320,7 +322,7 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 </div>
 
 <div class="section">
-<div class="section-title">📄 評論明細 <span id="detailCount" style="font-weight:400;font-size:12px;color:var(--muted);margin-left:8px;"></span></div>
+<div class="section-title" style="display:flex;align-items:center;gap:8px;">📄 評論明細 <span id="detailCount" style="font-weight:400;font-size:12px;color:var(--muted);"></span><button class="csv-btn" style="margin-left:auto;" onclick="exportReviewsCSV()" title="匯出目前篩選條件下的全部評論（非畫面前 200 筆）">⬇ 匯出 CSV</button></div>
 <div class="table-wrap">
 <table>
 <thead><tr><th>年月</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>評論性質</th><th>評論者</th><th>評論內容</th></tr></thead>
@@ -525,6 +527,7 @@ renderAll(rows);
 }
 
 function renderAll(rows) {
+_csvRows = rows;   /* 2026-07-30 W4：保存完整篩選結果供 CSV 匯出（畫面明細僅渲染前 200 筆）*/
 renderKPI(rows); renderTrendChart(rows); renderStarChart(rows);
 renderStoreChart(); renderStoreTable(rows); renderNegTable(rows); renderDetailTable(rows); renderInsights(rows);
 }
@@ -668,6 +671,41 @@ document.getElementById('detailCount').textContent = `共 ${rows.length} 筆${ro
 const tb = document.getElementById('detailTbody');
 if (!show.length) { tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">無符合條件的資料</td></tr>'; return; }
 tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=4?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td>${ isValidReview(r) ? '<span class="valid-badge">✓ 真實評論</span>' : (r.stars!==null&&r.stars<=4) ? '<span class="neg-badge">負評</span>' : (r.stars===5 && !validContent(r)) ? '<span class="empty-badge">5★ 空白</span>' : (r.stars===5) ? '<span class="plain-badge">5★ 一般</span>' : '<span class="empty-badge">—</span>' }</td><td>${esc(r.author||'—')}</td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}</td></tr>`).join('');
+}
+
+/* ---------- CSV 匯出（2026-07-30 第三批 W4）UTF-8 BOM，純前端 Blob ---------- */
+let _csvRows = [];
+function _csvCell(v){
+  if (v===null||v===undefined) return '';
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+}
+function _reviewNature(r){
+  if (isValidReview(r)) return '✓ 真實評論';
+  if (r.stars!==null && r.stars<=4) return '負評';
+  if (r.stars===5 && !validContent(r)) return '5★ 空白';
+  if (r.stars===5) return '5★ 一般';
+  return '—';
+}
+function exportReviewsCSV(){
+  const headers = ['年月','門市','品牌','區域','星等','評論性質','評論者','評論內容'];
+  const lines = [headers.map(_csvCell).join(',')];
+  _csvRows.forEach(r=>{
+    lines.push([
+      r.ym||'', r.store||'', r.brand||'', r.region||'',
+      (r.stars!==null && r.stars!==undefined ? r.stars : ''),
+      _reviewNature(r), r.author||'', cleanGoogleTranslation(r.text||'')
+    ].map(_csvCell).join(','));
+  });
+  const d = new Date();
+  const p = n=>String(n).padStart(2,'0');
+  const stamp = d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes());
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '評論明細_' + stamp + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
 }
 
 function clearFilter(id) { document.getElementById(id).value = ''; applyFilters(); }
