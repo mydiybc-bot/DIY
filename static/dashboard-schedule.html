@@ -78,6 +78,9 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .multi-dropdown-item.all-toggle { border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 10px; font-weight: 700; color: var(--olive-dark); }
 .multi-dropdown-empty { padding: 12px; text-align: center; color: var(--muted); font-size: 12px; font-style: italic; }
 
+/* CSV 匯出鍵（2026-07-30 第四批）*/
+.csv-btn{font-size:12.5px;font-weight:700;padding:4px 12px;border-radius:8px;border:1px solid var(--line,#e3e8ef);background:#fff;color:var(--muted,#6b7280);cursor:pointer;white-space:nowrap}
+.csv-btn:hover{background:#f4f6f9}
 /* 熱力矩陣 Top3 / 全部切換 */
 .heat-mode-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #FCEFE0; border: 1px solid #F2D2A8; border-radius: 10px; margin-bottom: 14px; font-size: 13px; color: #B26A1C; flex-wrap: wrap; }
 .heat-mode-banner.healthy { background: #DDF0DD; border-color: #B5DAB5; color: #2D6B3D; }
@@ -563,6 +566,7 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
       <div class="section-title collapsible" onclick="toggleCollapse('heat')">
         <span class="collapse-arrow" id="arrow-heat">▶</span> 🌡️ 店週熱力矩陣
         <span class="badge">著色 = 每工時營收</span>
+        <button class="csv-btn" id="csvHeatBtn" style="display:none;margin-left:auto;" onclick="event.stopPropagation();exportHeatCSV()">⬇ 匯出 CSV</button>
       </div>
       <div id="heatBody" class="collapse-body collapsed">
       <div class="heat-wrap">
@@ -829,6 +833,7 @@ function initUI() {
   initMonthlyTrend();
   renderAll();
   initEmpMonthly();
+  applyDeepLink();   /* 第四批：設好 #dailyMonth 後由既有 loadDailyData() 載入 */
   loadDailyData();
 }
 
@@ -1277,8 +1282,59 @@ function _effectiveKPI(row) {
   };
 }
 
+/* 2026-07-30 第四批 deep-link：接收月會模式傳來的 ?ym=YYYY-MM。
+   找不到對應選項一律靜默略過，維持本頁預設；只在首次載入套用一次。 */
+let _dlApplied = false;
+function _dlGetYm(){
+  if(_dlApplied) return null;
+  try{
+    const ym = new URLSearchParams(location.search).get('ym');
+    if(!ym || !/^\d{4}-\d{2}$/.test(ym)) return null;
+    return ym;
+  }catch(_){ return null; }
+}
+function applyDeepLink(){
+  const ym = _dlGetYm(); _dlApplied = true;
+  if(!ym) return;
+  const sel = document.getElementById('dailyMonth');
+  if(!sel) return;
+  if(![...sel.options].some(o => o.value === ym)) return;   /* 該月無資料 → 靜默略過 */
+  sel.value = ym;
+}
+
+/* ---------- CSV 匯出（2026-07-30 第四批）UTF-8 BOM、純前端 Blob ---------- */
+let _csvHeat = [], _csvDaily = [], _csvEmp = null;
+function _csvCell(v){
+  if(v===null||v===undefined) return '';
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+}
+function _csvDownload(headers, rows, baseName){
+  if(!rows || !rows.length) return;
+  const lines = [headers.map(_csvCell).join(',')];
+  rows.forEach(r => lines.push(r.map(_csvCell).join(',')));
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  const stamp = d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes());
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = baseName + '_' + stamp + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
+function exportHeatCSV(){ _csvDownload(['門市','週','rev/h','工時','旗標'], _csvHeat, '排班熱力矩陣'); }
+function exportDailyCSV(){
+  _csvDownload(['日期','週','工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常'], _csvDaily, '排班月份明細');
+}
+function exportEmpCSV(){
+  if(!_csvEmp) return;
+  _csvDownload(_csvEmp.headers, _csvEmp.rows, '人員月工時');
+}
+
 function renderHeatmap() {
   const rows = filteredRows();
+  _csvHeat = [];   /* 第四批：於下方雙層迴圈同步蒐集平面列 */
+  const _hb = document.getElementById('csvHeatBtn'); if(_hb) _hb.style.display = 'none';
   const container = document.querySelector('#heatTable').parentElement.parentElement;
   // 拿掉先前的 banner
   const oldBanner = container.querySelector('.heat-mode-banner');
@@ -1419,6 +1475,7 @@ function renderHeatmap() {
       if (flags.length) tip += '&#10;旗: ' + flags.map(f=>f.label).join(', ');
 
       const cellExtraClass = isFocusWeek ? ' focus-week' : (filterWeek ? ' context-week' : '');
+      _csvHeat.push([sid + ' ' + meta.store_name, w, Math.round(displayRph), displayHours, flagged ? '🚩' : '']);
       html += '<td><div class="heat-cell' + (flagged ? ' flagged' : '') + cellExtraClass + '" style="background:' + color + ';" title="' + tip + '">'
         + (isCurrent ? '<div class="current-mark">📡</div>' : '')
         + (flagged ? '<div class="flag-dot">🚩</div>' : '')
@@ -1430,6 +1487,7 @@ function renderHeatmap() {
   });
   html += '</tbody>';
   document.getElementById('heatTable').innerHTML = html;
+  if(_hb) _hb.style.display = _csvHeat.length ? '' : 'none';
 }
 
 function toggleHeatView() {
@@ -1810,6 +1868,7 @@ function positionTooltip(tt, e) {
 // === Tab C: 月份表格 ===
 function renderDailyTable() {
   const rows = dailyData.daily;
+  _csvDaily = [];
   if (rows.length === 0) {
     document.getElementById('dailyTabTable').innerHTML = '<div class="empty-state"><div class="icon">🌫️</div>該月無資料</div>';
     return;
@@ -1817,7 +1876,8 @@ function renderDailyTable() {
   const baseline = dailyData.baseline;
   const dayChar = ['日','一','二','三','四','五','六'];
 
-  let html = '<table class="daily-table"><thead><tr>'
+  let html = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportDailyCSV()">⬇ 匯出 CSV</button></div>'
+    + '<table class="daily-table"><thead><tr>'
     + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th>'
     + '</tr></thead><tbody>';
 
@@ -1841,6 +1901,13 @@ function renderDailyTable() {
     const hCls = Math.abs(hDelta) < 5 ? '' : (hDelta > 0 ? 'delta-pos' : 'delta-neg');
     const rCls = Math.abs(rDelta) < 5 ? '' : (rDelta > 0 ? 'delta-pos' : 'delta-neg');
 
+    _csvDaily.push([
+      r.date, wkday, (r.hours > 0 ? r.hours : ''), (r.revenue > 0 ? Math.round(r.revenue) : ''),
+      (r.rev_per_hour > 0 ? r.rev_per_hour : ''), tierLabel.replace(/^[^ ]+ /,''),
+      (r.rev_per_head > 0 ? Math.round(r.rev_per_head) : ''),
+      (r.hours > 0 ? hDelta.toFixed(0) : ''), (r.revenue > 0 ? rDelta.toFixed(0) : ''),
+      flags.map(f => f.label).join('；')
+    ]);
     html += '<tr' + (flagged ? ' class="flagged-row"' : '') + '>'
       + '<td>' + r.date.substring(5) + (r.is_holiday ? ' 🎉' : '') + '</td>'
       + '<td class="' + dayCellClass + '">' + wkday + '</td>'
@@ -2525,8 +2592,15 @@ function renderEmpResult() {
   const monthCols = months.map(m => '<th class="num">' + m.substring(5) + ' 月工時</th>').join('');
   const theadStore = showStoreCol ? '<th>門市</th>' : '';
 
+  _csvEmp = { headers: ['員工'].concat(showStoreCol ? ['門市'] : []).concat(months.map(m => m + ' 月工時')).concat(['合計工時','出勤天數','備註']), rows: [] };
   function tableFor(list) {
-    let t = '<div class="emp-table-wrap"><table class="emp-table"><thead><tr>'
+    list.forEach(r => {
+      _csvEmp.rows.push([_escNote(r.name)].concat(showStoreCol ? [[...r.stores].sort((a,b)=>a-b).join('、')] : [])
+        .concat(months.map(m => { const c = r.per[m]; return (c && c.hours > 0) ? c.hours : ''; }))
+        .concat([r.total, r.totalDays, r.notes.map(n => n.date + ' ' + n.note).join('；')]));
+    });
+    let t = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportEmpCSV()">⬇ 匯出 CSV</button></div>'
+      + '<div class="emp-table-wrap"><table class="emp-table"><thead><tr>'
       + '<th>員工</th>' + theadStore + monthCols
       + '<th class="num">合計工時</th><th class="num">出勤天數</th><th>備註</th>'
       + '</tr></thead><tbody>';
