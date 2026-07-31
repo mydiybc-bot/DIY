@@ -1,5 +1,6 @@
 <!-- Cowork commit 0f45066（本機 git log，2026-07-22，尚未 push；上一版 958deda） -->
 <!-- 2026-07-30 goTo 加 ?v= 時間戳防快取；同日第二批：hub 與 10 子頁密碼全數移出 repo，改由「權限中心」GAS 驗證 -->
+<!-- 2026-07-31 新增第 11 張卡「食譜成本」(dashboard-recipe-cost.html)；標題 10→11 個營運系統；新增 BOM_SHEET 與 loadRecipeStat() -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -70,6 +71,7 @@ border-radius: 18px 18px 0 0;
 .hub-card.purchase::before { background: linear-gradient(90deg, #2E7D32, #5BA85F); }
 .hub-card.monthly::before { background: linear-gradient(90deg, #8E2F22, #C4412F); }
 .hub-card.reservation::before { background: linear-gradient(90deg, #6A4FA0, #9B85C4); }
+.hub-card.recipe::before { background: linear-gradient(90deg, #00796B, #4DB6AC); }
 
 .card-icon { font-size: 32px; margin-bottom: 12px; line-height: 1; }
 .card-title { font-size: 17px; font-weight: 800; color: var(--primary-dark); margin-bottom: 6px; }
@@ -84,6 +86,7 @@ border-radius: 18px 18px 0 0;
 .hub-card.purchase .card-stat { color: #2E7D32; }
 .hub-card.monthly .card-stat { color: #8E2F22; }
 .hub-card.reservation .card-stat { color: #5A3F8F; }
+.hub-card.recipe .card-stat { color: #00695C; }
 .card-stat-label { font-size: 12px; color: var(--muted); font-weight: 500; }
 
 /* 更新方式徽章與提示（2026-07-02 新增） */
@@ -158,7 +161,7 @@ cursor: pointer; transition: background .15s;
 <div class="header">
 <div class="header-left">
 <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
-<p>整合 10 個營運系統 ｜ 12 間門市</p>
+<p>整合 11 個營運系統 ｜ 12 間門市</p>
 </div>
 <div class="header-badge" id="updateBadge">載入中…</div>
 </div>
@@ -245,6 +248,16 @@ cursor: pointer; transition: background .15s;
 <div class="card-arrow">→</div>
 </div>
 
+<!-- 食譜成本 -->
+<div class="hub-card recipe" onclick="goTo('dashboard-recipe-cost.html')">
+<div class="card-icon">🧮</div>
+<div class="card-title">食譜成本 <span class="upd upd-auto">🟢 自動</span></div>
+<div class="card-desc">每支甜點材料成本<br>成本率・毛利率・新品試算</div>
+<div class="card-stat" id="statRecipe"><span class="spin-sm"></span></div>
+<div class="card-stat-label" id="statRecipeLabel">可算成本甜點</div>
+<div class="card-arrow">→</div>
+</div>
+
 <!-- 採購系統 -->
 <div class="hub-card purchase" onclick="goTo('dashboard-purchase.html')">
 <div class="card-icon">🛒</div>
@@ -287,6 +300,7 @@ cursor: pointer; transition: background .15s;
 
 const REVIEWS_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
 const MEMBER_SHEET = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
+const BOM_SHEET = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
 const SCHEDULE_API = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
 const BUDGET_API = 'https://script.google.com/macros/s/AKfycbyF6tShTC6O4dpdDTcBSurABM_g_EIE6jAuhq7a4l10fsvk2BqdthJ-u4CTp3Z4yw4T/exec';
 const RESERVATION_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
@@ -446,6 +460,9 @@ loadBudgetStat();
 
 // ── 訂位分析:本月有效訂位數 ──
 loadReservationStat();
+
+// ── 食譜成本:BOM 本可算成本甜點支數 ──
+loadRecipeStat();
 }
 
 function loadScheduleStat() {
@@ -550,6 +567,36 @@ scriptEl.src = RESERVATION_API + '?fn=month&ym=' + ym + '&callback=' + cbName;
 scriptEl.onerror = () => {
 document.getElementById('statReservation').textContent = '—';
 document.getElementById('statReservationLabel').textContent = '無法取得';
+};
+document.head.appendChild(scriptEl);
+}
+
+// ── 食譜成本（2026-07-31 新增）：直讀 BOM 本「BOM表」，算不重複甜點支數 ──
+// 用 gviz JSONP（不是上面的 fetch 版）：BOM 本走 JSONP 與採購系統一致，不受 CORS 影響
+function loadRecipeStat() {
+const cbName = 'recipe_cb_' + Date.now();
+window[cbName] = function(json) {
+delete window[cbName];
+try { document.head.removeChild(scriptEl); } catch(e) {}
+try {
+const rows = (json && json.table && json.table.rows) ? json.table.rows : [];
+const n = rows.filter(r => r.c && r.c[0] && r.c[0].v).length;
+document.getElementById('statRecipe').textContent = n + ' 支';
+document.getElementById('statRecipeLabel').textContent = '可算成本甜點';
+} catch (e) {
+document.getElementById('statRecipe').textContent = '—';
+document.getElementById('statRecipeLabel').textContent = '無法取得';
+}
+};
+const scriptEl = document.createElement('script');
+scriptEl.src = 'https://docs.google.com/spreadsheets/d/' + BOM_SHEET + '/gviz/tq'
++ '?sheet=' + encodeURIComponent('BOM表')
++ '&tqx=responseHandler:' + cbName + ';out:json'
++ '&tq=' + encodeURIComponent('SELECT A GROUP BY A')
++ '&_cb=' + Date.now();
+scriptEl.onerror = () => {
+document.getElementById('statRecipe').textContent = '—';
+document.getElementById('statRecipeLabel').textContent = '無法取得';
 };
 document.head.appendChild(scriptEl);
 }
