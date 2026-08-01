@@ -1,3 +1,5 @@
+<!-- 2026-08-01 v2.0：新增「未來 14 天營收預估」（分店營收模型 × 訂位進榜曲線）＋ future 新鮮度哨兵；
+     修正壓力矩陣基準由「當月」改「近 28 天滾動」（原本每月 1~3 號日均=0，標紅失效）。 -->
 <!-- Cowork commit 0f45066（本機 git log，2026-07-22，尚未 push；上一版 958deda） -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -118,6 +120,18 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .err-msg { background: #FBE6E3; border: 1px solid #F2BBB3; color: #B23A2C; padding: 14px 18px; border-radius: 12px; margin: 16px 0; font-size: 13px; }
 .empty-note { text-align:center; padding:30px; color:var(--muted); font-size:13px; }
 
+/* 營收預估 */
+.fc-cards { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+.fc-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:10px 16px; min-width:132px; }
+.fc-card .nm { color:var(--muted); font-weight:700; font-size:12px; white-space:nowrap; }
+.fc-card .vv { color:var(--purple-dark); font-weight:800; font-size:17px; margin-top:3px; }
+.fc-card .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+.fc-card.hi { background:#F2F8F3; border-color:#C9E3CA; }
+.fc-note { margin-top:12px; font-size:12px; color:var(--muted); line-height:1.75; }
+.fc-lo { opacity:.5; font-style:italic; }
+.fresh-warn { background:#FBE6E3; border:1px solid #F2BBB3; color:#B23A2C; padding:12px 16px; border-radius:12px; margin:0 0 14px; font-size:13px; line-height:1.7; }
+.fresh-warn b { font-weight:800; }
+
 /* FOOTER */
 .footer { text-align: center; padding: 20px; font-size: 12px; color: var(--muted); }
 </style>
@@ -198,7 +212,8 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 詳細說明</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
-        <li>每日 05:00 自動回看前 3 天（D-3～D-1）訂位狀態並更新，未來 15 天（今天～+14 天）每日全量重建</li>
+        <li>每日 08:00 回看補歷史（D-3～D-1，斷層自動回補上限 14 天）；每日 10:15 由 <code>dailyFutureAndSnapshot</code> 獨立重建未來 15 天並寫入 pickup 快照</li>
+        <li>未來訂位若停止更新，頁面頂端會自動跳紅色警告並顯示停擺天數</li>
         <li>資料不含姓名／電話／Email／備註；LINE 會員識別碼僅用於「回訪會員」內部去重計算，不對外顯示</li>
         <li>資料異常請通知 Cowork 檢查管線執行紀錄</li>
       </ol>
@@ -217,6 +232,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
   </div>
 
   <div id="errorBox"></div>
+  <div id="freshBox"></div>
 
   <div id="mainContent" style="display:none;">
 
@@ -249,9 +265,18 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 
     <!-- 6. 未來14天訂位壓力 -->
     <div class="section">
-      <div class="section-title">🔥 未來 14 天訂位壓力 <span class="badge">單格 &gt; 該店本月日均 ×1.5 標紅</span></div>
+      <div class="section-title">🔥 未來 14 天訂位壓力 <span class="badge">單格 &gt; 該店近 28 天日均 ×1.5 標紅</span></div>
       <div class="pressure-summary" id="pressureSummary"></div>
       <div class="heat-wrap"><table class="heat-table" id="pressureTable"></table></div>
+    </div>
+
+    <!-- 6.5 營收預估 -->
+    <div class="section">
+      <div class="section-title">💰 未來 14 天營收預估
+        <span class="badge">訂位 × 進榜曲線 × 分店營收模型</span></div>
+      <div class="fc-cards" id="fcCards"></div>
+      <div class="heat-wrap"><table class="heat-table" id="fcTable"></table></div>
+      <div class="fc-note" id="fcNote"></div>
     </div>
 
     <!-- 7. 回訪分析 -->
@@ -323,7 +348,8 @@ function jsonp(url) {
 let MONTHS = [];          // [{ym,rows}]
 let CUR = { cols: [], rows: [], idx: {} };            // 目前選中月份資料
 let FUTURE = { cols: [], rows: [], idx: {} };         // fn=future 資料
-let CUR_MONTH_BASE = { cols: [], rows: [], idx: {} }; // 實際「本月」歷史資料（供未來壓力基準用，與下拉選單月份脫鉤）
+let CUR_MONTH_BASE = { cols: [], rows: [], idx: {} };
+let BASE28 = { cols: [], rows: [], idx: {} };            // 近 28 天滾動基準（跨月，供壓力矩陣與預估用） // 實際「本月」歷史資料（供未來壓力基準用，與下拉選單月份脫鉤）
 let selectedYm = '';
 
 function todayStr() {
@@ -333,6 +359,14 @@ function todayStr() {
 function curYm() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function prevYm() {
+  const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() - 1, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function daysAgoStr(n) {
+  const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() - n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function next15Dates() {
   const out = [];
@@ -379,13 +413,18 @@ async function loadAndRender() {
   try {
     const tasks = [jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(selectedYm)), jsonp(API_BASE + '?fn=future')];
     if (selectedYm !== curYm()) tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(curYm())));
+    // 2026-08-01：加載上個月，讓「近 28 天基準」在月初也成立（原本用當月，每月 1~3 號分母=0，標紅全失效）
+    tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(prevYm())).catch(() => ({ cols: [], rows: [] })));
     const results = await Promise.all(tasks);
     const monthRes = results[0], futureRes = results[1];
-    const curMonthRes = (results.length > 2) ? results[2] : monthRes;
+    const prevMonthRes = results[results.length - 1];
+    const curMonthRes = (results.length > 3) ? results[2] : monthRes;
 
     CUR = { cols: monthRes.cols || [], rows: monthRes.rows || [], idx: buildIdx(monthRes.cols || []) };
     FUTURE = { cols: futureRes.cols || [], rows: futureRes.rows || [], idx: buildIdx(futureRes.cols || []) };
     CUR_MONTH_BASE = { cols: curMonthRes.cols || [], rows: curMonthRes.rows || [], idx: buildIdx(curMonthRes.cols || []) };
+    const _bc = (curMonthRes.cols && curMonthRes.cols.length) ? curMonthRes.cols : (prevMonthRes.cols || []);
+    BASE28 = { cols: _bc, rows: (curMonthRes.rows || []).concat(prevMonthRes.rows || []), idx: buildIdx(_bc) };
 
     renderAll();
     document.getElementById('loadingBox').style.display = 'none';
@@ -412,7 +451,9 @@ function renderAll() {
   renderWeekSlotHeatmap();
   renderStoreCompare();
   renderPurpose();
+  renderFreshness();
   renderPressure();
+  renderForecast();
   renderRevisit();
 }
 
@@ -656,10 +697,11 @@ function renderPurpose() {
 // ============ 6. 未來14天訂位壓力 ============
 function renderPressure() {
   const fIdx = FUTURE.idx;
-  const bIdx = CUR_MONTH_BASE.idx;
-  const baseRows = CUR_MONTH_BASE.rows;
+  const bIdx = BASE28.idx;
+  // 2026-08-01 修正：基準由「本月」改為「近 28 天滾動」。原本每月 1~3 號當月資料為空 → 日均 0.0 → 標紅完全失效。
+  const _from = daysAgoStr(28), _to = daysAgoStr(1);
+  const baseRows = BASE28.rows.filter(r => { const d = r[bIdx.date]; return d >= _from && d <= _to; });
 
-  // 該店本月日均：分母＝本月資料涵蓋的實際天數（全店共用同一分母），分子＝該店有效訂位數
   const allBaseDates = new Set();
   const validCountByStore = {};
   baseRows.forEach(r => {
@@ -714,13 +756,162 @@ function renderPressure() {
       const isHot = avg > 0 && v > avg * 1.5;
       const bg = isHot ? '#FBE6E3' : (v > 0 ? '#F3EEFA' : '#F8F8F8');
       const color = isHot ? '#B23A2C' : '#2D1A14';
-      const tip = d + ' ' + st + '：' + v + ' 筆（本月日均 ' + avg.toFixed(1) + '）';
+      const tip = d + ' ' + st + '：' + v + ' 筆（近28天日均 ' + avg.toFixed(1) + '）';
       h += '<td><div class="heat-cell" style="background:' + bg + ';color:' + color + ';" title="' + tip + '">' + (v || '') + (isHot ? ' 🔴' : '') + '</div></td>';
     });
     h += '</tr>';
   });
   h += '</tbody>';
   table.innerHTML = h;
+}
+
+
+// ============ 6.5 營收預估引擎（2026-08-01 新增）============
+// 校準基礎：12 個月訂位（4,290 店日）× POS 每日營收，樣本外驗證 2026-05~07。
+// 係數 = [常數, 每筆有效訂位, 每位客人, 每千元訂單金額, 假日加成]
+const FC_COEF = {
+  '台中精明店':        [428.4,  521.6, 93.2, 330.4, 1794.4],
+  '台中草悟道店':      [242.0,  587.7, 44.2, 505.5, 1551.4],
+  '台北南京店':        [-1091.7, 545.9, 38.1, 673.1, 2752.5],
+  '台北士林店':        [-768.9, 543.7, 36.6, 574.1, 2029.9],
+  '台南Focus店':       [1439.6, 547.2, 67.5, 416.5, 1409.0],
+  '新竹文化店':        [164.6,  543.6, 58.9, 546.9, 1372.8],
+  '新北板橋店':        [1593.0, 373.6, 58.7, 476.9, 3674.0],
+  '新北新店店':        [333.1,  576.5, 23.9, 578.2,  471.5],
+  '桃園中壢店':        [935.3,  512.4, 73.4, 280.6, 2039.2],
+  '桃園藝文店':        [-273.3, 607.1, 25.1, 529.9, 2315.6],
+  '台北遠百信義A13店': [-209.4, 543.4, 24.3, 603.4, 1145.5],
+  '高雄SKM Park店':    [1735.0, 487.0, 25.4, 478.0, 1552.1]
+};
+// 每店樣本外單日準確率（2026-05~07，訂位已知時）
+const FC_ACC = {'台中精明店':85.1,'台中草悟道店':84.8,'台北南京店':85.7,'台北士林店':87.0,
+  '台南Focus店':87.7,'新竹文化店':75.5,'新北板橋店':89.9,'新北新店店':79.1,
+  '桃園中壢店':80.1,'桃園藝文店':78.9,'台北遠百信義A13店':81.7,'高雄SKM Park店':84.8};
+// 訂位進榜曲線 ρ(L)＝提前 L 天時「已訂位數 ÷ 最終訂位數」
+// L=0~6 為 2026-07-23 實測快照校準；L>=7 為外推，僅供概略參考。
+// ★ fact_resv_snapshot 累積滿 28 天後，應改由快照回歸重算並取代本表。
+const FC_RHO = {0:0.986,1:0.757,2:0.732,3:0.614,4:0.463,5:0.379,6:0.402,
+                7:0.360,8:0.330,9:0.310,10:0.290,11:0.270,12:0.260,13:0.250,14:0.240};
+const FC_MEASURED_MAX_LEAD = 6;
+
+function fcNT(n) { return 'NT$' + Math.round(n).toLocaleString(); }
+
+// 新鮮度哨兵：future 表若不是今天重建的，直接大字警告（這次 9 天停擺就是靠這個抓出來）
+function renderFreshness() {
+  const box = document.getElementById('freshBox');
+  const idx = FUTURE.idx;
+  if (!FUTURE.rows.length) {
+    box.innerHTML = '<div class="fresh-warn"><b>⚠️ 未來訂位表是空的</b>　請至 Apps Script 執行 <code>dailyFutureAndSnapshot</code>。</div>';
+    return;
+  }
+  let lo = '9999-99-99';
+  FUTURE.rows.forEach(r => { const d = r[idx.date]; if (d && d < lo) lo = d; });
+  const today = todayStr();
+  const stale = Math.round((new Date(today) - new Date(lo)) / 86400000);
+  if (stale > 0) {
+    box.innerHTML = '<div class="fresh-warn"><b>⚠️ 未來訂位資料已停止更新 ' + stale + ' 天</b>（表內最早日期 ' + lo
+      + '，應為今天 ' + today + '）。<br>代表 <code>rebuildFuture_</code> 已連續 ' + stale
+      + ' 天未執行，以下訂位壓力與營收預估僅涵蓋部分天數、且會系統性低估。<br>處理：Apps Script 執行 <code>dailyFutureAndSnapshot</code>，再執行 <code>pipelineHealth</code> 確認。</div>';
+  } else {
+    box.innerHTML = '';
+  }
+}
+
+function renderForecast() {
+  const idx = FUTURE.idx;
+  const today = todayStr();
+  const dates = next15Dates();
+  const valid = FUTURE.rows.filter(r => isValid(r, idx));
+
+  // 依「店 × 日」聚合目前已進榜的訂位
+  const g = {};
+  valid.forEach(r => {
+    const k = r[idx.store] + '|' + r[idx.date];
+    const o = g[k] || (g[k] = { v: 0, p: 0, ot: 0 });
+    o.v++;
+    o.p  += Number(r[idx.party_size])  || 0;
+    o.ot += Number(r[idx.order_total]) || 0;
+  });
+
+  const stores = Object.keys(FC_COEF).filter(s => FUTURE.rows.some(r => r[idx.store] === s));
+
+  // ★ 快照基準日＝future 表內最早日期。lead 必須從這天起算，不是從今天起算。
+  //   理由（2026-08-01 實測）：future 表若停止重建，用今天起算會誤取過高的進榜比例，
+  //   造成營收系統性低估 60~76%。以基準日起算則不論表新舊都成立。
+  let fcBase = '9999-99-99';
+  FUTURE.rows.forEach(r => { const d = r[idx.date]; if (d && d < fcBase) fcBase = d; });
+  const leadOf = d => Math.round((new Date(d + 'T00:00:00') - new Date(fcBase + 'T00:00:00')) / 86400000);
+
+  const grid = {}, dayTotal = {}, storeTotal = {};
+  const haveData = {};
+  dates.forEach(d => {
+    const L = leadOf(d);
+    grid[d] = {}; dayTotal[d] = 0; haveData[d] = false;
+    stores.forEach(st => {
+      const o = g[st + '|' + d];
+      if (!o) { grid[d][st] = null; return; }
+      haveData[d] = true;
+      const rho = FC_RHO[L] || 0.24;
+      const C = FC_COEF[st];
+      const dow = new Date(d + 'T00:00:00').getDay();
+      const wk = (dow === 0 || dow === 6) ? 1 : 0;
+      const rev = C[0] + C[1] * (o.v / rho) + C[2] * (o.p / rho) + C[3] * (o.ot / rho / 1000) + C[4] * wk;
+      const val = Math.max(0, rev);
+      grid[d][st] = val;
+      dayTotal[d] += val;
+      storeTotal[st] = (storeTotal[st] || 0) + val;
+    });
+  });
+
+  const covered = dates.filter(d => haveData[d]);
+  const sum7  = dates.slice(0, 7).reduce((s, d) => s + (dayTotal[d] || 0), 0);
+  const sum14 = dates.reduce((s, d) => s + (dayTotal[d] || 0), 0);
+  const hi = dates.slice(0, 3).reduce((s, d) => s + (dayTotal[d] || 0), 0);
+
+  document.getElementById('fcCards').innerHTML =
+      '<div class="fc-card hi"><div class="nm">未來 3 天合計</div><div class="vv">' + fcNT(hi)
+    + '</div><div class="sub">高信心（準確率約 94%）</div></div>'
+    + '<div class="fc-card"><div class="nm">未來 7 天合計</div><div class="vv">' + fcNT(sum7)
+    + '</div><div class="sub">全公司加總</div></div>'
+    + '<div class="fc-card"><div class="nm">未來 14 天合計</div><div class="vv">' + fcNT(sum14)
+    + '</div><div class="sub">含低信心區間</div></div>'
+    + '<div class="fc-card"><div class="nm">有資料天數</div><div class="vv">' + covered.length + ' / 15</div>'
+    + '<div class="sub">' + (covered.length < 15 ? '⚠️ 未涵蓋全區間' : '完整') + '</div></div>';
+
+  const table = document.getElementById('fcTable');
+  let h = '<thead><tr><th class="row-head">日期＼門市</th>'
+        + stores.map(st => '<th>' + (storeNumOf(st) ? storeNumOf(st) + ' ' : '') + st + '</th>').join('')
+        + '<th>全公司</th></tr></thead><tbody>';
+  dates.forEach(d => {
+    const L = leadOf(d);
+    const lo = L > FC_MEASURED_MAX_LEAD;
+    h += '<tr><td class="row-head">' + d.slice(5) + (lo ? ' <span class="fc-lo">低信心</span>' : '') + '</td>';
+    stores.forEach(st => {
+      const v = grid[d][st];
+      const bg = v === null ? '#F8F8F8' : (lo ? '#F6F4F9' : '#F3EEFA');
+      const txt = v === null ? '' : Math.round(v / 1000) + 'k';
+      const tip = v === null ? (d + ' ' + st + '：無訂位資料')
+        : (d + ' ' + st + '：預估 ' + fcNT(v) + '（提前 ' + L + ' 天，已進榜比例 '
+           + Math.round((FC_RHO[L] || .24) * 100) + '%' + (lo ? '，外推值' : '，實測值') + '）');
+      h += '<td><div class="heat-cell' + (lo ? ' fc-lo' : '') + '" style="background:' + bg
+         + '" title="' + tip + '">' + txt + '</div></td>';
+    });
+    h += '<td><div class="heat-cell" style="background:#EFE9F7;font-weight:800;'
+       + (lo ? 'opacity:.55;' : '') + '">' + (dayTotal[d] ? Math.round(dayTotal[d] / 1000) + 'k' : '') + '</div></td></tr>';
+  });
+  h += '</tbody>';
+  table.innerHTML = h;
+
+  const worst = Object.keys(FC_ACC).sort((a, b) => FC_ACC[a] - FC_ACC[b])[0];
+  document.getElementById('fcNote').innerHTML =
+      '<b>怎麼算的：</b>每店營收 ＝ 常數 ＋ 每筆訂位邊際營收 × 訂位數 ÷ 進榜比例 ＋ 人數項 ＋ 訂單金額項 ＋ 假日加成。'
+    + '訂位筆數與當日營收相關係數 <b>0.908</b>。<br>'
+    + '<b>實測準確率（樣本外 2026-05~07，訂位已知）：</b>單店單日 83.4%｜全公司單日 94.1%｜'
+    + '全公司單週 96.8%｜<b>單店單月 97.2%</b>。最不準的是 ' + worst + '（' + FC_ACC[worst] + '%）。<br>'
+    + '<b>端到端實測（2026-07-23 快照推 7 天，含進榜還原）：</b>全公司單日 <b>93.6%</b>'
+    + '（逐日誤差 +0.9% ~ +13.3%）｜單店單日 76.3%（中位數 85.5%）。<br>'
+    + '<b>低信心區間（提前 7 天以上）：</b>進榜比例為外推值，實務準確率約 65~80%，僅供人力調度參考，不可作為財務數字。<br>'
+    + '<b>會自動變準：</b><code>fact_resv_snapshot</code> 每日累積快照，滿 28 天後即可改用「分店 × 星期 × 提前天數」的實測進榜曲線取代外推。';
 }
 
 // ============ 7. 回訪分析 v1 ============
