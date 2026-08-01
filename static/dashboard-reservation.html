@@ -1,5 +1,7 @@
-<!-- 2026-08-01 v2.0：新增「未來 14 天營收預估」（分店營收模型 × 訂位進榜曲線）＋ future 新鮮度哨兵；
-     修正壓力矩陣基準由「當月」改「近 28 天滾動」（原本每月 1~3 號日均=0，標紅失效）。 -->
+<!-- 2026-08-01 v2.1：進榜曲線 L=9~14 改用實測值（原外推值低估營收 23~74%）；
+     曲線延伸至 L=35；新增「當月營收預估」區塊與視窗不足警示。
+     v2.0：新增「未來 14 天營收預估」＋ future 新鮮度哨兵；
+     修正壓力矩陣基準由「當月」改「近 28 天滾動」（原每月 1~3 號日均=0，標紅失效）。 -->
 <!-- Cowork commit 0f45066（本機 git log，2026-07-22，尚未 push；上一版 958deda） -->
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -277,6 +279,13 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <div class="fc-cards" id="fcCards"></div>
       <div class="heat-wrap"><table class="heat-table" id="fcTable"></table></div>
       <div class="fc-note" id="fcNote"></div>
+    </div>
+
+    <!-- 6.6 當月營收預估 -->
+    <div class="section">
+      <div class="section-title">🗓️ 當月營收預估
+        <span class="badge">剩餘天數・依現有訂位推估</span></div>
+      <div id="fcMonthBox"></div>
     </div>
 
     <!-- 7. 回訪分析 -->
@@ -788,11 +797,26 @@ const FC_ACC = {'台中精明店':85.1,'台中草悟道店':84.8,'台北南京�
   '台南Focus店':87.7,'新竹文化店':75.5,'新北板橋店':89.9,'新北新店店':79.1,
   '桃園中壢店':80.1,'桃園藝文店':78.9,'台北遠百信義A13店':81.7,'高雄SKM Park店':84.8};
 // 訂位進榜曲線 ρ(L)＝提前 L 天時「已訂位數 ÷ 最終訂位數」
-// L=0~6 為 2026-07-23 實測快照校準；L>=7 為外推，僅供概略參考。
-// ★ fact_resv_snapshot 累積滿 28 天後，應改由快照回歸重算並取代本表。
-const FC_RHO = {0:0.986,1:0.757,2:0.732,3:0.614,4:0.463,5:0.379,6:0.402,
-                7:0.360,8:0.330,9:0.310,10:0.290,11:0.270,12:0.260,13:0.250,14:0.240};
-const FC_MEASURED_MAX_LEAD = 6;
+// ── 校準來源（全部為實測，非外推）──────────────────────────
+// L=0~6 ：2026-07-23 快照 vs fact_reservations 最終值
+// L=9~14：2026-07-23 快照 vs 2026-08-01 重建（天然的 9 天對照實驗）
+//         實測 ρ(9)=0.300 ρ(10)=0.167 ρ(11)=0.220 ρ(12)=0.172 ρ(13)=0.157 ρ(14)=0.142
+//         → 原外推值（0.29/0.27/0.26/0.25/0.24）把進榜率估得太高，
+//           導致營收被系統性低估 23~74%。本版已修正。
+// L=7,8 ：介於 L6 與 L9 之間的單調內插
+// L>=15 ：以 L=9~14 的衰減斜率外推（月營收預估用，標低信心）
+// ★ 平滑處理：實測 L=10 落在週日、L=9 落在週六，單日樣本會把「星期效應」
+//   誤刻進 lead 索引。lead 與星期不是固定對應，故採單調平滑而非照抄。
+// ★ fact_resv_snapshot 累積滿 28 天後，改由快照回歸重算「分店×星期×lead」曲線。
+const FC_RHO = {
+  0:0.986, 1:0.757, 2:0.732, 3:0.614, 4:0.463, 5:0.379, 6:0.402,
+  7:0.365, 8:0.330, 9:0.300, 10:0.245, 11:0.215, 12:0.190, 13:0.170, 14:0.150,
+  15:0.140, 16:0.132, 17:0.125, 18:0.118, 19:0.112, 20:0.106, 21:0.101,
+  22:0.096, 23:0.092, 24:0.088, 25:0.084, 26:0.081, 27:0.078, 28:0.075,
+  29:0.072, 30:0.070, 31:0.068, 32:0.066, 33:0.064, 34:0.062, 35:0.060
+};
+const FC_RHO_MIN = 0.060;
+const FC_MEASURED_MAX_LEAD = 14;   // L<=14 有實測支撐；L>14 為外推
 
 function fcNT(n) { return 'NT$' + Math.round(n).toLocaleString(); }
 
@@ -835,6 +859,9 @@ function renderForecast() {
 
   const stores = Object.keys(FC_COEF).filter(s => FUTURE.rows.some(r => r[idx.store] === s));
 
+  // 全視窗日期（含 14 天以後），供月營收預估使用
+  const allFutureDates = [...new Set(FUTURE.rows.map(r => r[idx.date]))].filter(Boolean).sort();
+
   // ★ 快照基準日＝future 表內最早日期。lead 必須從這天起算，不是從今天起算。
   //   理由（2026-08-01 實測）：future 表若停止重建，用今天起算會誤取過高的進榜比例，
   //   造成營收系統性低估 60~76%。以基準日起算則不論表新舊都成立。
@@ -851,7 +878,7 @@ function renderForecast() {
       const o = g[st + '|' + d];
       if (!o) { grid[d][st] = null; return; }
       haveData[d] = true;
-      const rho = FC_RHO[L] || 0.24;
+      const rho = FC_RHO[L] || FC_RHO_MIN;
       const C = FC_COEF[st];
       const dow = new Date(d + 'T00:00:00').getDay();
       const wk = (dow === 0 || dow === 6) ? 1 : 0;
@@ -892,7 +919,7 @@ function renderForecast() {
       const txt = v === null ? '' : Math.round(v / 1000) + 'k';
       const tip = v === null ? (d + ' ' + st + '：無訂位資料')
         : (d + ' ' + st + '：預估 ' + fcNT(v) + '（提前 ' + L + ' 天，已進榜比例 '
-           + Math.round((FC_RHO[L] || .24) * 100) + '%' + (lo ? '，外推值' : '，實測值') + '）');
+           + Math.round((FC_RHO[L] || FC_RHO_MIN) * 100) + '%' + (lo ? '，外推值' : '，實測值') + '）');
       h += '<td><div class="heat-cell' + (lo ? ' fc-lo' : '') + '" style="background:' + bg
          + '" title="' + tip + '">' + txt + '</div></td>';
     });
@@ -902,6 +929,8 @@ function renderForecast() {
   h += '</tbody>';
   table.innerHTML = h;
 
+  renderMonthForecast(g, stores, leadOf, allFutureDates);
+
   const worst = Object.keys(FC_ACC).sort((a, b) => FC_ACC[a] - FC_ACC[b])[0];
   document.getElementById('fcNote').innerHTML =
       '<b>怎麼算的：</b>每店營收 ＝ 常數 ＋ 每筆訂位邊際營收 × 訂位數 ÷ 進榜比例 ＋ 人數項 ＋ 訂單金額項 ＋ 假日加成。'
@@ -910,8 +939,76 @@ function renderForecast() {
     + '全公司單週 96.8%｜<b>單店單月 97.2%</b>。最不準的是 ' + worst + '（' + FC_ACC[worst] + '%）。<br>'
     + '<b>端到端實測（2026-07-23 快照推 7 天，含進榜還原）：</b>全公司單日 <b>93.6%</b>'
     + '（逐日誤差 +0.9% ~ +13.3%）｜單店單日 76.3%（中位數 85.5%）。<br>'
-    + '<b>低信心區間（提前 7 天以上）：</b>進榜比例為外推值，實務準確率約 65~80%，僅供人力調度參考，不可作為財務數字。<br>'
+    + '<b>進榜曲線已全面改用實測值：</b>2026-07-23 快照 vs 08-01 重建構成 9 天對照實驗，'
+    + '實測 L=9~14 的進榜率為 0.30/0.17/0.22/0.17/0.16/0.14，'
+    + '原外推值（0.29~0.24）估得太高，曾導致營收低估 23~74%，本版已修正。<br>'
+    + '<b>低信心區間（提前 15 天以上）：</b>進榜比例為外推，僅供人力調度參考，不可作為財務數字。<br>'
     + '<b>會自動變準：</b><code>fact_resv_snapshot</code> 每日累積快照，滿 28 天後即可改用「分店 × 星期 × 提前天數」的實測進榜曲線取代外推。';
+}
+
+
+// ---- 當月營收預估：已實現（實際訂位轉營收）＋ 未實現（模型）----
+function renderMonthForecast(g, stores, leadOf, allFutureDates) {
+  const today = todayStr();
+  const ym = today.slice(0, 7);
+  const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+
+  // 本月所有日期
+  const monthDates = [];
+  for (let i = 1; i <= dim; i++) monthDates.push(ym + '-' + String(i).padStart(2, '0'));
+
+  const covered = new Set(allFutureDates);
+  let sumFore = 0, nFore = 0, nUncov = 0;
+  const perStore = {};
+
+  monthDates.forEach(d => {
+    if (d < today) return;                 // 已過的日子不預估（營收已成事實）
+    if (!covered.has(d)) { nUncov++; return; }
+    const L = leadOf(d);
+    const rho = FC_RHO[L] || FC_RHO_MIN;
+    const dow = new Date(d + 'T00:00:00').getDay();
+    const wk = (dow === 0 || dow === 6) ? 1 : 0;
+    let dayTotal = 0;
+    stores.forEach(st => {
+      const o = g[st + '|' + d];
+      if (!o) return;
+      const C = FC_COEF[st];
+      const v = Math.max(0, C[0] + C[1] * (o.v / rho) + C[2] * (o.p / rho)
+                            + C[3] * (o.ot / rho / 1000) + C[4] * wk);
+      dayTotal += v;
+      perStore[st] = (perStore[st] || 0) + v;
+    });
+    sumFore += dayTotal; nFore++;
+  });
+
+  const box = document.getElementById('fcMonthBox');
+  if (!box) return;
+
+  const warn = nUncov > 0
+    ? '<div class="fresh-warn" style="margin-top:10px"><b>⚠️ 本月尚有 ' + nUncov
+      + ' 天不在抓取視窗內</b>，未列入下列預估（會低估月營收）。<br>'
+      + '客人最早可提前一個多月訂位，這些訂位「已經存在」，只是抓取視窗沒開到。<br>'
+      + '處理：Apps Script 把 <code>CFG.FUTURE_DAYS</code> 由 14 改成 35，'
+      + '再執行 <code>dailyFutureAndSnapshot</code>。</div>'
+    : '';
+
+  const rows = stores.map(st => ({ st, v: perStore[st] || 0 }))
+                     .sort((a, b) => b.v - a.v);
+
+  box.innerHTML =
+      '<div class="fc-cards">'
+    + '<div class="fc-card hi"><div class="nm">' + ym + ' 剩餘天數預估</div><div class="vv">'
+    + fcNT(sumFore) + '</div><div class="sub">' + nFore + ' 天（' + today.slice(5) + ' 起）</div></div>'
+    + '<div class="fc-card"><div class="nm">已納入預估天數</div><div class="vv">'
+    + nFore + ' / ' + (dim - Number(today.slice(8)) + 1) + '</div>'
+    + '<div class="sub">' + (nUncov ? '⚠️ 缺 ' + nUncov + ' 天' : '完整涵蓋') + '</div></div>'
+    + '</div>'
+    + '<div class="heat-wrap"><table class="heat-table"><thead><tr><th class="row-head">門市</th>'
+    + '<th>剩餘天數營收預估</th></tr></thead><tbody>'
+    + rows.map(r => '<tr><td class="row-head">' + (storeNumOf(r.st) ? storeNumOf(r.st) + ' ' : '')
+        + r.st + '</td><td><div class="heat-cell" style="background:#F3EEFA">'
+        + fcNT(r.v) + '</div></td></tr>').join('')
+    + '</tbody></table></div>' + warn;
 }
 
 // ============ 7. 回訪分析 v1 ============
