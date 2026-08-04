@@ -27,6 +27,9 @@
   GAS 未動、快取版號不變（V20）。
 -->
 
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="dns-prefetch" href="https://script.google.com">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -222,7 +225,10 @@ a{color:var(--accent-light);text-decoration:none}
       verify(v, function(r){
         if (r && r.ok) {
           try { localStorage.setItem(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 })); } catch(_){}
-          location.reload();
+          /* 2026-08-03 效能：不再 location.reload()。頁面在輸入密碼期間已完成 Babel 編譯與資料載入，
+             重整會全部重跑一次（多花 5-10 秒）。改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
         } else {
           err.textContent = (r && r.error) || '驗證失敗';
           btn.disabled = false; btn.textContent = '進入';
@@ -244,6 +250,7 @@ a{color:var(--accent-light);text-decoration:none}
   <div class="dsb dsb-auto">
     <b>🟢 自動更新・每日</b>
     <span>肚肚 POS → BigQuery（每日自癒對帳）→ GAS 預聚合快取</span>
+    <span id="cacheBadge" style="font-size:12px;font-weight:700;color:#6F4E45"></span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 更新方式</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
@@ -360,22 +367,25 @@ function App(){
 
   /* ---------- FETCH DATA (JSONP to avoid GAS CORS redirect issue) ---------- */
   useEffect(()=>{
-    setLoading(true);
-    const cbName = '_gasCb_' + Date.now();
-    const timeout = setTimeout(()=>{
-      delete window[cbName];
-      setError('API 逾時，請重新整理頁面');
-      setLoading(false);
-    }, 120000);
-    window[cbName] = (d)=>{
-      clearTimeout(timeout);
-      delete window[cbName];
-      try{
-        // v3: net 已由後端算好，直接使用 d，不再前端覆蓋
-        const finalData = d;
-        setRawData(finalData);
-        const yms = [...new Set(finalData.monthly.map(m=>m.yearMonth))].sort();
-        if(yms.length){
+    /* 2026-08-03 效能：localStorage 快取（stale-while-revalidate）
+       有快取 → 立刻出圖（毫秒），同時背景向 GAS 取新資料，回來後靜默替換。
+       無快取 → 行為與改造前完全相同。 */
+    const CK = 'pos_cache_v2';
+    let dateInit = false;
+    const setBadge = (txt, color)=>{
+      try{ const el = document.getElementById('cacheBadge');
+        if(el){ el.textContent = txt; el.style.color = color || '#6F4E45'; } }catch(_){}
+    };
+    const fmtT = (ts)=>{ const d0 = new Date(ts);
+      return ('0'+d0.getHours()).slice(-2)+':'+('0'+d0.getMinutes()).slice(-2); };
+
+    const applyData = (d)=>{
+      // v3: net 已由後端算好，直接使用 d，不再前端覆蓋
+      const finalData = d;
+      setRawData(finalData);
+      const yms = [...new Set(finalData.monthly.map(m=>m.yearMonth))].sort();
+      if(yms.length && !dateInit){
+        dateInit = true;
           const cy = new Date().getFullYear().toString();
           const yearMonths = yms.filter(y=>y.startsWith(cy));
           setDateStart(yearMonths.length?yearMonths[0]:yms[0]);
@@ -388,9 +398,41 @@ function App(){
               setDateStart(_dl); setDateEnd(_dl); setQuickDate('');
             }
           }catch(_){}
-        }
-        setLoading(false);
-      }catch(e){setError(e.message);setLoading(false);}
+      }
+      setLoading(false);
+    };
+
+    /* 先吃快取 */
+    let hasCache = false;
+    try{
+      const c = JSON.parse(localStorage.getItem(CK) || 'null');
+      if(c && c.data && Array.isArray(c.data.monthly) && c.data.monthly.length){
+        hasCache = true;
+        applyData(c.data);
+        setBadge('⚡ 快取顯示（' + fmtT(c.t) + '取得）· 背景更新中…', '#B45309');
+      }
+    }catch(_){}
+    if(!hasCache){ setLoading(true); setBadge('連線中…（首次較慢）', '#B45309'); }
+
+    const cbName = '_gasCb_' + Date.now();
+    const timeout = setTimeout(()=>{
+      delete window[cbName];
+      if(!hasCache){ setError('API 逾時，請重新整理頁面'); setLoading(false); }
+      else { setBadge('⚠ 背景更新逾時，顯示的是快取資料', '#C4412F'); }
+    }, 120000);
+    window[cbName] = (d)=>{
+      clearTimeout(timeout);
+      delete window[cbName];
+      try{
+        if(!d || !Array.isArray(d.monthly) || !d.monthly.length) throw new Error('回傳資料為空');
+        applyData(d);
+        try{ localStorage.setItem(CK, JSON.stringify({ t: Date.now(), data: d })); }
+        catch(_){ try{ localStorage.removeItem(CK); }catch(__){} }
+        setBadge('✓ 已更新 ' + fmtT(Date.now()), '#2E7D32');
+      }catch(e){
+        if(!hasCache){ setError(e.message); setLoading(false); }
+        else { setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F'); }
+      }
     };
     /* 2026-07-30 冷啟動韌性：GAS 冷啟動期間會回 5xx 觸發 onerror（非逾時），
        首次失敗不報錯，3 秒後自動重掛 script 一次；沿用同一個 120s timeout，不重設。 */
@@ -407,8 +449,12 @@ function App(){
         }
         clearTimeout(timeout);
         delete window[cbName];
-        setError('API 載入失敗（已自動重試一次），請按重試或稍後再試');
-        setLoading(false);
+        if(!hasCache){
+          setError('API 載入失敗（已自動重試一次），請按重試或稍後再試');
+          setLoading(false);
+        } else {
+          setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F');
+        }
       };
       document.body.appendChild(script);
     };
@@ -942,17 +988,32 @@ function TabTarget({monthlyByStore, storesInData, dateStart, dateEnd, selRegion,
 
   // 載入各店逐月目標(JSONP,與主程式同模式)
   React.useEffect(()=>{
-    setBLoading(true);
+    /* 2026-08-03 效能：目標資料同樣走 localStorage stale-while-revalidate */
+    const BK = 'pos_budget_cache_v2';
+    let hasCache = false;
+    try{
+      const c = JSON.parse(localStorage.getItem(BK) || 'null');
+      if(c && c.data && c.data.stores && c.data.stores.length){
+        hasCache = true; setBudgetData(c.data); setBLoading(false);
+      }
+    }catch(_){}
+    if(!hasCache) setBLoading(true);
+
     const cbName = '_budgetCb_' + Date.now();
-    const timeout = setTimeout(()=>{ delete window[cbName]; setBError('目標資料載入逾時'); setBLoading(false); }, 60000);
+    const timeout = setTimeout(()=>{ delete window[cbName];
+      if(!hasCache){ setBError('目標資料載入逾時'); setBLoading(false); } }, 60000);
     window[cbName] = (d)=>{
       clearTimeout(timeout); delete window[cbName];
-      if(d && d.error){ setBError('目標 API:'+d.error); setBLoading(false); return; }
+      if(d && d.error){ if(!hasCache){ setBError('目標 API:'+d.error); setBLoading(false); } return; }
+      if(!d || !d.stores || !d.stores.length){ return; }
       setBudgetData(d); setBLoading(false);
+      try{ localStorage.setItem(BK, JSON.stringify({ t: Date.now(), data: d })); }
+      catch(_){ try{ localStorage.removeItem(BK); }catch(__){} }
     };
     const script = document.createElement('script');
     script.src = BUDGET_API_URL + '?action=get_store_monthly_budget&callback=' + cbName;
-    script.onerror = ()=>{ clearTimeout(timeout); delete window[cbName]; setBError('目標 API 載入失敗'); setBLoading(false); };
+    script.onerror = ()=>{ clearTimeout(timeout); delete window[cbName];
+      if(!hasCache){ setBError('目標 API 載入失敗'); setBLoading(false); } };
     document.body.appendChild(script);
   },[]);
 
