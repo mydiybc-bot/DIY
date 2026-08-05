@@ -319,20 +319,25 @@ document.head.appendChild(s);
 }
 
 // ── 密碼邏輯 ───────────────────────────────────────────
-// session 有效期:4 小時 (毫秒)
+// 2026-08-05：TTL 改由權限中心 dim_auth 的 hub 列 D 欄控制（verify 回傳 ttl_hours）
+// SESSION_TTL_MS 僅為後台未回傳時的 fallback；緊急繞過（Console 塞時間戳）行為不變
 const SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 
-// 設定登入 token (存時間戳)
-function setUnlock(key) {
+// 設定登入 token (存時間戳)＋後台回傳的 TTL
+function setUnlock(key, ttlHours) {
 localStorage.setItem(key, String(Date.now()));
+const ms = Number(ttlHours) * 3600 * 1000;
+if (ms > 0) localStorage.setItem(key + '_ttl', String(ms));
 }
 
 // 檢查 token 是否有效(存在且未過期)
 function isUnlocked(key) {
 const ts = parseInt(localStorage.getItem(key) || '0', 10);
 if (!ts) return false;
-if (Date.now() - ts > SESSION_TTL_MS) {
+const ttl = parseInt(localStorage.getItem(key + '_ttl') || '0', 10) || SESSION_TTL_MS;
+if (Date.now() - ts > ttl) {
 localStorage.removeItem(key); // 過期主動清掉
+localStorage.removeItem(key + '_ttl');
 return false;
 }
 return true;
@@ -346,7 +351,7 @@ err.textContent = '驗證中…';
 authVerify('hub', val, function(r) {
 if (r && r.ok) {
 err.textContent = '';
-setUnlock('hub_unlocked');
+setUnlock('hub_unlocked', r.ttl_hours);
 document.getElementById('modalA').classList.remove('show');
 onUnlocked();
 } else {
@@ -373,6 +378,15 @@ document.getElementById('modalA').classList.remove('show');
 onUnlocked();
 } else {
 setTimeout(() => document.getElementById('inputA').focus(), 200);
+/* 2026-08-05 效能：顯示密碼框的同時 ping 預熱權限中心 GAS，verify 由 3-8 秒降到 <1 秒 */
+(function warmup(){
+const pn = '__hubwarm' + Date.now();
+const ps = document.createElement('script');
+window[pn] = function(){ try { delete window[pn]; } catch(_){} if (ps.parentNode) ps.parentNode.removeChild(ps); };
+ps.onerror = window[pn];
+ps.src = AUTH_API + '?action=ping&callback=' + pn;
+document.head.appendChild(ps);
+})();
 }
 });
 
