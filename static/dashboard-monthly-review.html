@@ -112,6 +112,12 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
   document.documentElement.style.visibility = 'hidden';
   /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機，verify 由 3-8 秒降到 <1 秒 */
   (function warmup(){
+    /* 2026-08-05b：跨分頁節流——90 秒內全站只 ping 一次，避免多分頁齊開瞬間打爆 GAS 觸發限流 */
+    try {
+      var lp = Number(localStorage.getItem('__auth_ping_ts') || 0);
+      if (Date.now() - lp < 90000) return;
+      localStorage.setItem('__auth_ping_ts', String(Date.now()));
+    } catch(_){}
     var pn = '__agwarm' + Date.now();
     var ps = document.createElement('script');
     window[pn] = function(){ try { delete window[pn]; } catch(_){} if (ps.parentNode) ps.parentNode.removeChild(ps); };
@@ -119,11 +125,16 @@ table.mx{border-collapse:collapse;width:100%;min-width:980px}
     ps.src = AUTH_API + '?action=ping&callback=' + pn;
     document.head.appendChild(ps);
   })();
-  function verify(pwd, cb){
-    var name = '__agcb' + Date.now();
+  function verify(pwd, cb, _retry){
+    var name = '__agcb' + Date.now() + Math.floor(Math.random() * 1e4);
     var s = document.createElement('script');
     var to = setTimeout(function(){ done({ok:false, error:'連線逾時，請重試（GAS 冷啟動可能較慢）'}); }, 30000);
-    function done(d){ clearTimeout(to); delete window[name]; if (s.parentNode) s.parentNode.removeChild(s); cb(d); }
+    function done(d){
+      clearTimeout(to); delete window[name]; if (s.parentNode) s.parentNode.removeChild(s);
+      /* 2026-08-05b：多分頁齊開時 GAS 可能瞬間限流 → 連線類錯誤自動等 1.5 秒重試一次，仍失敗才回報 */
+      if (d && !d.ok && !_retry && /連線/.test(d.error || '')) { setTimeout(function(){ verify(pwd, cb, true); }, 1500); return; }
+      cb(d);
+    }
     window[name] = done;
     s.onerror = function(){ done({ok:false, error:'連線失敗，請重試'}); };
     s.src = AUTH_API + '?action=verify&callback=' + name + '&dashboard=' + encodeURIComponent(DASH_ID) + '&pwd=' + encodeURIComponent(pwd);
@@ -300,15 +311,21 @@ function jsonp(base, params, timeoutMs){
   return new Promise((resolve,reject)=>{
     const cb='_mrCb'+(++_jid)+'_'+Date.now();
     const to=setTimeout(()=>{ cleanup(); reject(new Error('逾時')); }, timeoutMs||30000);
-    function cleanup(){ delete window[cb]; if(s.parentNode) s.parentNode.removeChild(s); clearTimeout(to); }
+    function cleanup(){ delete window[cb]; if(s && s.parentNode) s.parentNode.removeChild(s); clearTimeout(to); }
     window[cb]=d=>{ cleanup(); resolve(d); };
     const u=new URL(base);
     u.searchParams.set('callback',cb);
     for(const k in (params||{})) u.searchParams.set(k,params[k]);
-    const s=document.createElement('script');
-    s.src=u.toString();
-    s.onerror=()=>{ cleanup(); reject(new Error('載入失敗')); };
-    document.body.appendChild(s);
+    let s, retries=2;
+    /* 2026-08-05b：網路層失敗自動重試 2 次（多分頁齊開時 Google 偶發限流） */
+    function fire(){
+      s=document.createElement('script');
+      u.searchParams.set('_r', String(Date.now()));
+      s.src=u.toString();
+      s.onerror=()=>{ if(s.parentNode) s.parentNode.removeChild(s); if(retries-- > 0){ setTimeout(fire, 1800); } else { cleanup(); reject(new Error('載入失敗（已自動重試 2 次）')); } };
+      document.body.appendChild(s);
+    }
+    fire();
   });
 }
 function gvizJsonp(sheetId, sheetName, timeoutMs, tq){
