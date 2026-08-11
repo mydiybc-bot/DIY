@@ -2137,6 +2137,7 @@ async function adminOneClickImport() {
       return;
     }
 
+    _normalizeParseResult(r);   /* 2026-08-11: 後端改回 fileResults[]，補回 summary/stores */
     _adminParseResult = r;
     showAdminMsg(msg, 'info', '✅ 解析完成,自動健康檢查中...');
     renderAdminSummary(r);
@@ -2537,6 +2538,83 @@ function adminShowManualFallback() {
   sec.style.display = 'block';
 }
 
+/* ===== 2026-08-11 顯示層相容修正 =====
+ * 症狀:一鍵匯入顯示「0 個檔案 / 0 筆資料」、展開明細空白,但後端其實解析成功。
+ * 根因:後端 admin_parse_batch 已改回傳 fileResults[](每檔含 records[]),
+ *       前端 renderAdminSummary/renderAdminReport 仍讀 r.summary / r.stores → 全部落空。
+ * 對策:純顯示層相容——缺 summary/stores 時從 fileResults 反推補齊。
+ *       下游 renderAdminSummary / renderAdminReport / adminAskCommit 全部自動正確。
+ * 紅線:不動 commit 邏輯、不動 GAS、不改任何寫入路徑。
+ */
+const _SIGN_PLUS_CODES = ['A001','G001'];    /* 收入科目(正號),其餘一律支出(負號) */
+const _EXPECT_RECORDS_PER_FILE = 39;         /* dim_account 固定 schema 39 筆 */
+
+function _normalizeParseResult(r) {
+  if (!r || !Array.isArray(r.fileResults)) return r;
+
+  const stores = [], warns = [], seen = {};
+  let totalRecords = 0, successFiles = 0, failedFiles = 0, hasBackendReconcile = false;
+
+  r.fileResults.forEach(f => {
+    const recs = Array.isArray(f.records) ? f.records : [];
+    const fname = f.fileName || '(未命名)';
+
+    if (f.ok === false) {
+      failedFiles++;
+      warns.push(fname + ': ' + (f.error || '解析失敗'));
+      return;
+    }
+    successFiles++;
+    totalRecords += recs.length;
+
+    const sid = recs.length ? recs[0].store_id  : (f.storeIdFromName || null);
+    const ym  = recs.length ? recs[0].year_month : (f.ymFromName || null);
+    const sumOf = codes => recs.filter(x => codes.indexOf(x.account_code) >= 0)
+                               .reduce((a, x) => a + (Number(x.amount) || 0), 0);
+    const revenue = sumOf(['A001']);
+    const direct  = sumOf(['B001', 'B002']);
+    const net = recs.reduce((a, x) =>
+      a + (_SIGN_PLUS_CODES.indexOf(x.account_code) >= 0 ? 1 : -1) * (Number(x.amount) || 0), 0);
+
+    /* 後端有給 reconcile_ok 就用後端的;沒給則改用前端檢核(筆數 39 / 有店號 / 營收>0) */
+    let recOk, recSrc;
+    if (typeof f.reconcile_ok === 'boolean') {
+      recOk = f.reconcile_ok; recSrc = 'backend'; hasBackendReconcile = true;
+    } else {
+      recOk = (recs.length === _EXPECT_RECORDS_PER_FILE) && !!sid && revenue > 0;
+      recSrc = 'frontend';
+    }
+
+    if (recs.length !== _EXPECT_RECORDS_PER_FILE)
+      warns.push(fname + ' 只有 ' + recs.length + ' 筆(應為 ' + _EXPECT_RECORDS_PER_FILE + ' 筆)');
+    if (!(revenue > 0))
+      warns.push(fname + ' 營收為 0,請確認');
+    const key = ym + '-' + sid;
+    if (seen[key]) warns.push('同一店月重複出現:' + key); else seen[key] = 1;
+
+    stores.push({
+      store_id: sid, year_month: ym, records: recs.length,
+      revenue: revenue, gross_profit: revenue - direct, net_profit: net,
+      reconcile_ok: recOk, reconcile_src: recSrc, file_name: fname
+    });
+  });
+
+  stores.sort((a, b) => (a.store_id || 0) - (b.store_id || 0));
+
+  if (!r.summary) r.summary = { totalRecords: totalRecords, successFiles: successFiles, failedFiles: failedFiles };
+  if (!r.stores || !r.stores.length) r.stores = stores;
+  if (!Array.isArray(r.warnings)) r.warnings = [];
+  r.warnings = r.warnings.concat(warns);
+
+  /* scan.skipped 只做灰字提示:不算失敗、不進 warnings
+     (主資料倉那類檔案每次都在資料夾裡,不該每次都亮黃燈) */
+  r._skipped = (r.scan && Array.isArray(r.scan.skipped)) ? r.scan.skipped : [];
+  r._ymList = Object.keys(seen).map(k => k.split('-')[0])
+                    .filter((v, i, a) => a.indexOf(v) === i).sort();
+  r._reconcileSrc = hasBackendReconcile ? 'backend' : 'frontend';
+  return r;
+}
+
 /* M3.5: 精簡摘要(1-2 行)
  * 2026-06-09 fallback: 後端 summary 偶會回 0,改從 r.stores 反推檔案數,
  * totalRecords 0 時用「stores.length 個檔案」顯示,避免誤導(地雷 14 教訓)
@@ -2603,21 +2681,47 @@ function renderAdminReport(r) {
     html += '失敗: <strong style="color:var(--red)">' + (r.summary.failedFiles || 0) + '</strong>';
     html += '</div>';
   }
+  if (r._ymList && r._ymList.length) {
+    html += '<div style="margin-bottom:8px; font-size:13px;">期間: <strong>' + r._ymList.join(' / ') + '</strong></div>';
+  }
   if (r.stores && r.stores.length) {
     html += '<table class="admin-report-table"><thead><tr>';
-    html += '<th>店</th><th class="num">營收</th><th class="num">毛利</th><th class="num">淨利</th><th>對帳</th>';
+    html += '<th>店</th><th class="num">筆數</th><th class="num">營收</th><th class="num">毛利</th><th class="num">淨利</th><th>檢核</th>';
     html += '</tr></thead><tbody>';
+    let tRec = 0, tRev = 0, tGp = 0, tNet = 0;
     r.stores.forEach(s => {
       const okIcon = s.reconcile_ok ? '<span style="color:var(--green)">✅</span>' : '<span style="color:var(--red)">❌</span>';
+      const nRec = (s.records === undefined || s.records === null) ? null : s.records;
+      const recBad = (nRec !== null && nRec !== _EXPECT_RECORDS_PER_FILE);
+      tRec += (nRec || 0); tRev += (s.revenue || 0); tGp += (s.gross_profit || 0); tNet += (s.net_profit || 0);
       html += '<tr>';
       html += '<td>' + (s.store_name || ('店' + s.store_id)) + '</td>';
+      html += '<td class="num"' + (recBad ? ' style="color:var(--red); font-weight:700;"' : '') + '>' + (nRec === null ? '-' : nRec) + '</td>';
       html += '<td class="num">' + fmtNum(s.revenue) + '</td>';
       html += '<td class="num">' + fmtNum(s.gross_profit) + '</td>';
       html += '<td class="num">' + fmtNum(s.net_profit) + '</td>';
       html += '<td>' + okIcon + '</td>';
       html += '</tr>';
     });
+    html += '<tr style="font-weight:700; border-top:2px solid var(--line);">';
+    html += '<td>合計 ' + r.stores.length + ' 店</td>';
+    html += '<td class="num">' + tRec + '</td>';
+    html += '<td class="num">' + fmtNum(tRev) + '</td>';
+    html += '<td class="num">' + fmtNum(tGp) + '</td>';
+    html += '<td class="num">' + fmtNum(tNet) + '</td>';
+    html += '<td></td></tr>';
     html += '</tbody></table>';
+    if (r._reconcileSrc === 'frontend') {
+      html += '<div style="font-size:12px; color:var(--text2); margin-top:6px;">';
+      html += 'ℹ️ 後端未回傳對帳結果,「檢核」欄為前端驗證(筆數=' + _EXPECT_RECORDS_PER_FILE + ' / 有店號 / 營收&gt;0),不等同本期損益對帳。';
+      html += '</div>';
+    }
+  }
+  if (r._skipped && r._skipped.length) {
+    html += '<div style="font-size:12px; color:var(--text2); margin-top:8px;">';
+    html += '⏭ 略過 ' + r._skipped.length + ' 個非損益表檔案: ' +
+            r._skipped.map(x => (x.name || '?')).join('、');
+    html += '</div>';
   }
   if (r.warnings && r.warnings.length) {
     html += '<div class="admin-status warn" style="margin-top:10px;"><strong>⚠️ 警示:</strong><br>';
