@@ -958,6 +958,8 @@ function loadAnalDims(){
 /* 容器名正規化（2026-08-11 m 批）：空白/連字號/「無」類標記＝不需容器，不列入統計 */
 var CT_NONE={"-":1,"–":1,"—":1,"－":1,"無":1,"無容器":1,"不需":1,"不需要":1,"無需":1,"x":1,"X":1,"×":1,"na":1,"NA":1,"N/A":1,"n/a":1,".":1,"。":1,"0":1};
 function contName(v){var t=String(v==null?"":v).replace(/\s+/g,"").trim();if(!t)return "";if(CT_NONE[t])return "";return t;}
+/* 固定容器名（兜底）：這些品項就算只寫在 BOM「食材/器具名稱」欄、從未出現在「容器」欄，也視為容器 */
+var CT_BASE={"彩色塑膠碗":1,"白色瓷碗":1,"工作盆":1,"擠花袋":1,"塑膠碗":1,"塑膠袋":1};
 function anSkuIdx(){var idx={};SKUS.forEach(function(s){if(s.name)idx[s.name]=s;(s.aliases||[]).forEach(function(a){if(a)idx[a]=s;});});return idx;}
 function runAnal(){
   if(!ST.anFrom||!ST.anTo||ST.anFrom>ST.anTo){toast("請選起訖日期");return;}
@@ -990,10 +992,19 @@ function runAnal(){
       m.cost=(m.sku&&m.sku.price&&m.sku.packQty>0&&(m.cat==="食材"||m.cat==="耗材"))?m.qty/m.sku.packQty*m.sku.price:0;
       return m;});
     matArr.sort(function(a,b){return b.qty-a.qty;});
-    /* 容器彙總（2026-08-11 m 批）：逐 BOM 列計數——每個食材各占一個容器，同甜點內同種容器不去重。無容器標記(-/無/空白)不計。 */
-    var conts={};
+    /* 容器彙總（2026-08-11 m 批 rev3）：兩個來源合併——
+       (1) E 欄「容器」：逐 BOM 列計數，每列一個容器（同甜點同種容器不去重）
+       (2) B 欄「食材/器具名稱」本身就是容器品項（彩色塑膠碗/白色瓷碗/工作盆/擠花袋…）→ 依該列數量併入
+       容器名清單由 E 欄現有值動態產生，日後 BOM 新增容器種類不需改程式。
+       同一列 B 與 E 同名時只計一次，避免重複。無容器標記(-/無/空白)不計。 */
+    var conts={},CSET={};Object.keys(CT_BASE).forEach(function(k){CSET[k]=1;});
+    Object.keys(ANBOM).forEach(function(dn){ANBOM[dn].forEach(function(L){var c=contName(L.ct);if(c)CSET[c]=1;});});
     sales.forEach(function(sl){var lines=ANBOM[sl.name];if(!lines)return;
-      lines.forEach(function(L){var c=contName(L.ct);if(c)conts[c]=(conts[c]||0)+sl.qty;});});
+      lines.forEach(function(L){
+        var c=contName(L.ct);if(c)conts[c]=(conts[c]||0)+sl.qty;
+        var mn=contName(L.m);
+        if(!CSET[mn]){var sx=idx[L.m];mn=sx?contName(sx.name):"";}
+        if(mn&&CSET[mn]&&mn!==c)conts[mn]=(conts[mn]||0)+sl.qty*(num(L.q)||1);});});
     var contArr=Object.keys(conts).map(function(c){return {name:c,qty:conts[c]};});
     contArr.sort(function(a,b){return b.qty-a.qty;});
     ANRES={from:ST.anFrom,to:ST.anTo,store:ST.anStore,c1:ST.anC1,c2:ST.anC2,sales:sales,mats:matArr,conts:contArr,noBom:noBom,noSku:Object.keys(noSku)};
@@ -1045,10 +1056,10 @@ function viewPeriodStats(){
   mShown.forEach(function(m){h+='<tr><td>'+(m.cat?'<span class="badge clk b-'+m.cat+'" data-mcat="'+m.cat+'" title="只看'+m.cat+'">'+m.cat+'</span>':'')+'<b>'+m.name+'</b></td><td class="right"><b>'+fmt(Math.round(m.qty))+'</b></td><td>'+m.unit+'</td><td class="right">'+(m.cost?'$'+fmt(Math.round(m.cost)):'—')+'</td></tr>';});
   if(!mShown.length)h+='<tr><td colspan="4" class="muted">'+(q?'找不到「'+q+'」':'無資料')+'</td></tr>';
   h+='</table></div>'+(mList.length>50&&!ST.anAllM?'<div style="text-align:center;margin-top:6px"><span class="why" id="anAllM">展開全部 '+mList.length+' 項 ▾</span></div>':'')+'</div>';
-  if(ANRES.conts&&ANRES.conts.length){h+='<div class="card"><div class="muted" style="margin-bottom:4px">🥣 期間容器使用（逐食材計；每個食材各占一個容器）</div>'
+  if(ANRES.conts&&ANRES.conts.length){h+='<div class="card"><div class="muted" style="margin-bottom:4px">🥣 期間容器使用（逐食材計，含直接領用的磗盆袋）</div>'
     +'<div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">使用次數</th></tr>';
     ANRES.conts.forEach(function(c){h+='<tr><td><b>'+c.name+'</b></td><td class="right"><b>'+fmt(Math.round(c.qty))+'</b></td></tr>';});
-    h+='</table></div><div class="sub" style="margin-top:4px">逐 BOM 列計數（每個食材一個容器），與預約頁期間備料、容器用量頁同口徑；容器可清洗重複使用，此為週轉需求次數，非採購量。</div></div>';}
+    h+='</table></div><div class="sub" style="margin-top:4px">合併兩個來源：「容器」欄逐列計（每個食材一個）＋「食材/器具」欄本身是容器品項者依數量併入；容器可清洗重複使用，此為週轉需求次數，非採購量。</div></div>';}
   if(ANRES.noBom.length)h+='<div class="note">ℹ️ '+ANRES.noBom.length+' 款商品無 BOM（加價購/材料包等），已計入銷售、不展開物料：'+ANRES.noBom.slice(0,5).join('、')+(ANRES.noBom.length>5?'…':'')+'</div>';
   if(ANRES.noSku.length)h+='<div class="note">⚠️ '+ANRES.noSku.length+' 項用料對不上主檔（以 BOM 名稱列出）：'+ANRES.noSku.slice(0,5).join('、')+(ANRES.noSku.length>5?'…':'')+'</div>';
   return h;}
@@ -1120,7 +1131,7 @@ function viewBooking(){var store=ST.storeId;
       h+='<div style="overflow-x:auto"><table><tr><th>品項</th><th class="right">需求量</th><th class="right">換算採購</th></tr>'
         +rows.map(function(x){var pk=(x.sku&&x.sku.packQty>0&&x.unit===x.sku.useUnit)?dec(x.qty/x.sku.packQty)+' '+x.sku.buyUnit:'—';
           return '<tr><td><b>'+x.name+'</b></td><td class="right"><b>'+fmt(Math.round(x.qty*100)/100)+'</b> '+x.unit+'</td><td class="right">'+pk+'</td></tr>';}).join('')+'</table></div>';});
-    if(BKNEED.containers.length){h+='<div class="vh" style="margin-top:8px"><span class="vn">容器（逐食材計）</span><span class="vl"></span></div><div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">需求數</th></tr>'+BKNEED.containers.map(function(c){return '<tr><td><b>'+c.name+'</b></td><td class="right">'+fmt(c.qty)+'</td></tr>';}).join('')+'</table></div>';}
+    if(BKNEED.containers.length){h+='<div class="vh" style="margin-top:8px"><span class="vn">容器（逐食材計＋直接領用）</span><span class="vl"></span></div><div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">需求數</th></tr>'+BKNEED.containers.map(function(c){return '<tr><td><b>'+c.name+'</b></td><td class="right">'+fmt(c.qty)+'</td></tr>';}).join('')+'</table></div>';}
     if(!BKNEED.desserts.length)h+='<div class="note">此期間無預約。</div>';
   }else h+='<div class="note" style="margin-top:6px">選起訖日按「計算備料」；含食材、耗材、器具模具與容器需求。</div>';
   h+='</div>';
@@ -1574,12 +1585,16 @@ function wire(){
       var byD={};sel.forEach(function(b){byD[b.dessert]=(byD[b.dessert]||0)+b.qty;});
       var byName={};SKUS.forEach(function(sk){byName[sk.name]=sk;});
       var bomByD={};rs.forEach(function(r){var dn=String(r["甜點名稱"]||"").trim();if(!dn)return;(bomByD[dn]=bomByD[dn]||[]).push({item:String(r["食材/器具名稱"]||"").trim(),qty:num(r["數量"]),unit:String(r["單位"]||"").trim(),cont:String(r["容器"]||"").trim()});});
-      var need={},cont={},unknown=[];
+      var need={},cont={},unknown=[],CSET2={};Object.keys(CT_BASE).forEach(function(k){CSET2[k]=1;});
+      Object.keys(bomByD).forEach(function(dn){bomByD[dn].forEach(function(r){var c=contName(r.cont);if(c)CSET2[c]=1;});});
       Object.keys(byD).forEach(function(dn){var n=byD[dn],rows=bomByD[dn];
         if(!rows||!rows.length){unknown.push(dn);return;}
         rows.forEach(function(r){if(!r.item)return;
           var k=r.item+"|"+r.unit;(need[k]=need[k]||{name:r.item,unit:r.unit,qty:0}).qty+=r.qty*n;
-          var c=contName(r.cont);if(c)cont[c]=(cont[c]||0)+n;});});
+          var c=contName(r.cont);if(c)cont[c]=(cont[c]||0)+n;
+          var mn=contName(r.item);
+          if(!CSET2[mn]){var sx=byName[r.item];mn=sx?contName(sx.name):"";}
+          if(mn&&CSET2[mn]&&mn!==c)cont[mn]=(cont[mn]||0)+n*(num(r.qty)||1);});});
       var items=Object.keys(need).map(function(k){var x=need[k],sk=byName[x.name];
         return {name:x.name,unit:x.unit,qty:x.qty,sku:sk||null,cat:sk?sk.cat:"未對應"};});
       items.sort(function(a,b){return b.qty-a.qty;});
