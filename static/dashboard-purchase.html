@@ -145,6 +145,16 @@
 .abk input{font-size:15px;font-weight:700;text-align:center}
 .alock{color:var(--mut);font-size:12px}
 
+  /* 2026-08-11 n 批：期間統計物料鑽取 */
+  .mrow{cursor:pointer}
+  .mrow:hover{background:#f6faf6}
+  .mrow.on{background:#eef6ff}
+  .mcar{color:#8a8a8a;font-size:12px;margin-left:2px}
+  .mdrill>td{background:#fbfbfb;padding:8px 10px !important}
+  .drillbox{font-size:12.5px}
+  .dtab{width:100%;border-collapse:collapse;margin-top:4px}
+  .dtab th{font-size:12px;color:#666;font-weight:600;text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+  .dtab td{font-size:12.5px;padding:4px 6px;border-bottom:1px solid #eee}
 </style>
 <script>
 /* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL */
@@ -268,7 +278,7 @@ var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UN
 var SKU={}; // sku_id -> sku
 var BKNEED=null,BOMROWS=null; // 期間備料結果／BOM 表快取
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anMCat:"全部",anAllS:false,anAllM:false,totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",adjSku:"",adjVal:"",adjNote:"",saveWarn:null,writeWarn:[],exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anMCat:"全部",anAllS:false,anAllM:false,anDrill:"",anDrillMode:"規格",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",adjSku:"",adjVal:"",adjNote:"",saveWarn:null,writeWarn:[],exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
@@ -985,8 +995,16 @@ function runAnal(){
         var per=L.q*anConv(L.m,L.u);
         if(s2&&AN_LOSS[s2.cat])per=per*AN_LOSS[s2.cat];
         var key=s2?s2.id:("?"+L.m);
-        var o=mats[key]||(mats[key]={name:s2?s2.name:L.m,cat:s2?s2.cat:"",unit:s2?s2.useUnit:String(L.u||""),qty:0,sku:s2||null});
+        var o=mats[key]||(mats[key]={name:s2?s2.name:L.m,cat:s2?s2.cat:"",unit:s2?s2.useUnit:String(L.u||""),qty:0,sku:s2||null,key:key,specs:{},dess:{}});
         o.qty+=sl.qty*per;
+        /* 2026-08-11 n 批：規格／甜點鑽取明細（純統計，不影響 qty 與成本計算） */
+        var su=String(L.u||"").trim()||o.unit||"";
+        var sq=Math.round(num(L.q)*1000)/1000;
+        var sk2=sq+"\u0001"+su;
+        var sp=o.specs[sk2]||(o.specs[sk2]={q:sq,u:su,cnt:0,qty:0});
+        sp.cnt+=sl.qty; sp.qty+=sl.qty*per;
+        var dz=o.dess[sl.name]||(o.dess[sl.name]={name:sl.name,portions:0,qty:0,lines:0});
+        dz.portions=sl.qty; dz.qty+=sl.qty*per; dz.lines+=1;
         if(!s2)noSku[L.m]=1;});});
     var matArr=Object.keys(mats).map(function(k){var m=mats[k];
       m.cost=(m.sku&&m.sku.price&&m.sku.packQty>0&&(m.cat==="食材"||m.cat==="耗材"))?m.qty/m.sku.packQty*m.sku.price:0;
@@ -1015,6 +1033,39 @@ function anCatOpts(){
     if(m.c1)c1s[m.c1]=1;
     if(m.c2&&m.c2!=="無"&&(!ST.anC1||m.c1===ST.anC1))c2s[m.c2]=1;});
   return {c1:Object.keys(c1s).sort(),c2:Object.keys(c2s).sort()};}
+/* ===== 2026-08-11 n 批：期間統計「物料鑽取」（純顯示層，零計算改動） =====
+   點物料列 → 展開「規格／甜點」兩檔：
+   · 規格＝該物料在 BOM 中被寫成哪幾種用量（200g、250g…），依使用次數（份數合計）降冪
+   · 甜點＝該物料用在哪些甜點，依總用量降冪，同時附份數
+   資料全部來自 runAnal 已算好的 m.specs / m.dess，不新增任何 gviz 請求。 */
+var AN_DRILL_TOP=15;
+function anDrillRow(m){
+  var mode=(ST.anDrillMode==="甜點")?"甜點":"規格";
+  var h='<tr class="mdrill"><td colspan="4"><div class="drillbox">';
+  h+='<span class="seg">'+["規格","甜點"].map(function(x){return '<div class="'+(x===mode?"on":"")+'" data-dmode="'+x+'">'+x+'</div>';}).join("")+'</span>';
+  var rows=[],more=0,head="";
+  if(mode==="規格"){
+    var ks=Object.keys(m.specs||{});
+    var arr=ks.map(function(k){return m.specs[k];}).sort(function(a,b){return b.cnt-a.cnt;});
+    head='<tr><th>規格（配方寫法）</th><th class="right">使用次數</th><th class="right">佔比</th><th class="right">總用量</th></tr>';
+    var tc=0;arr.forEach(function(x){tc+=x.cnt;});
+    more=Math.max(0,arr.length-AN_DRILL_TOP);
+    arr.slice(0,AN_DRILL_TOP).forEach(function(x){
+      rows.push('<tr><td><b>'+dec(x.q)+' '+(x.u||m.unit||"")+'</b></td><td class="right"><b>'+fmt(Math.round(x.cnt))+'</b> 次</td><td class="right">'+(tc?Math.round(x.cnt/tc*100):0)+'%</td><td class="right">'+fmt(Math.round(x.qty))+' '+(m.unit||"")+'</td></tr>');});
+    h+='<div class="sub" style="margin:4px 0">共 <b>'+arr.length+'</b> 種規格　·　同一物料規格越多，備料與教學越複雜</div>';
+  }else{
+    var ds=Object.keys(m.dess||{}).map(function(k){return m.dess[k];}).sort(function(a,b){return b.qty-a.qty;});
+    head='<tr><th>甜點</th><th class="right">總用量</th><th class="right">佔比</th><th class="right">份數</th></tr>';
+    var tq3=0;ds.forEach(function(x){tq3+=x.qty;});
+    more=Math.max(0,ds.length-AN_DRILL_TOP);
+    ds.slice(0,AN_DRILL_TOP).forEach(function(x){
+      rows.push('<tr><td><b>'+x.name+'</b>'+(x.lines>1?' <span class="sub">('+x.lines+' 處)</span>':'')+'</td><td class="right"><b>'+fmt(Math.round(x.qty))+'</b> '+(m.unit||"")+'</td><td class="right">'+(tq3?Math.round(x.qty/tq3*100):0)+'%</td><td class="right">'+fmt(Math.round(x.portions))+'</td></tr>');});
+    h+='<div class="sub" style="margin:4px 0">共 <b>'+ds.length+'</b> 款甜點用到　·　依總用量排序</div>';
+  }
+  h+='<div style="overflow-x:auto"><table class="dtab">'+head+rows.join("")+'</table></div>';
+  if(more>0)h+='<div class="sub" style="margin-top:4px">…另有 '+more+' 項未顯示</div>';
+  h+='</div></td></tr>';
+  return h;}
 function viewPeriodStats(){
   if(!ST.anFrom){var d0=new Date(TODAY.getTime()-29*864e5);ST.anFrom=ymd(d0);ST.anTo=ymd(TODAY);}
   if(!ANMAP&&!ANLOAD){loadAnalDims().then(function(){render();});}
@@ -1053,7 +1104,9 @@ function viewPeriodStats(){
     +'<div class="sub" style="margin-bottom:6px">顯示 <b>'+fmt(mList.length)+'</b> / '+fmt(ANRES.mats.length)+' 項'+(mCat!=="全部"?'　·　類別：<b>'+mCat+'</b>':'')+(mSubCost?'　·　食耗材估算成本小計 <b>$'+fmt(Math.round(mSubCost))+'</b>':'')+'</div>'
     +'<div style="margin-bottom:6px"><input class="sm" id="anQ" style="width:100%;max-width:320px" placeholder="🔍 特定食材工具查詢…" value="'+(ST.anQ||'').replace(/"/g,'&quot;')+'"></div>'
     +'<div style="overflow-x:auto"><table><tr><th>物料項目</th><th class="right">總需求量</th><th>單位</th><th class="right">估算成本</th></tr>';
-  mShown.forEach(function(m){h+='<tr><td>'+(m.cat?'<span class="badge clk b-'+m.cat+'" data-mcat="'+m.cat+'" title="只看'+m.cat+'">'+m.cat+'</span>':'')+'<b>'+m.name+'</b></td><td class="right"><b>'+fmt(Math.round(m.qty))+'</b></td><td>'+m.unit+'</td><td class="right">'+(m.cost?'$'+fmt(Math.round(m.cost)):'—')+'</td></tr>';});
+  mShown.forEach(function(m){var op=(ST.anDrill===m.key);
+    h+='<tr class="mrow'+(op?' on':'')+'" data-mdrill="'+String(m.key).replace(/"/g,'&quot;')+'" title="點看規格／甜點分布"><td>'+(m.cat?'<span class="badge clk b-'+m.cat+'" data-mcat="'+m.cat+'" title="只看'+m.cat+'">'+m.cat+'</span>':'')+'<b>'+m.name+'</b> <span class="mcar">'+(op?'▾':'▸')+'</span></td><td class="right"><b>'+fmt(Math.round(m.qty))+'</b></td><td>'+m.unit+'</td><td class="right">'+(m.cost?'$'+fmt(Math.round(m.cost)):'—')+'</td></tr>';
+    if(op)h+=anDrillRow(m);});
   if(!mShown.length)h+='<tr><td colspan="4" class="muted">'+(q?'找不到「'+q+'」':'無資料')+'</td></tr>';
   h+='</table></div>'+(mList.length>50&&!ST.anAllM?'<div style="text-align:center;margin-top:6px"><span class="why" id="anAllM">展開全部 '+mList.length+' 項 ▾</span></div>':'')+'</div>';
   if(ANRES.conts&&ANRES.conts.length){h+='<div class="card"><div class="muted" style="margin-bottom:4px">🥣 期間容器使用（逐食材計，含直接領用的磗盆袋）</div>'
@@ -1515,10 +1568,19 @@ function wire(){
   var aq=$("#anQ");if(aq){aq.oninput=function(){ST.anQ=aq.value;ST.anQF=true;render();};if(ST.anQF){aq.focus();var L3=aq.value.length;try{aq.setSelectionRange(L3,L3);}catch(e){}ST.anQF=false;}}
   var aas=$("#anAllS");if(aas)aas.onclick=function(){ST.anAllS=true;render();};
   var aam=$("#anAllM");if(aam)aam.onclick=function(){ST.anAllM=true;render();};
-  Array.prototype.forEach.call(document.querySelectorAll("[data-mcat]"),function(el){el.onclick=function(){
+  Array.prototype.forEach.call(document.querySelectorAll("[data-mcat]"),function(el){el.onclick=function(ev){
+    if(ev&&ev.stopPropagation)ev.stopPropagation();
     var c=el.getAttribute("data-mcat")||"全部";
     ST.anMCat=(ST.anMCat===c&&c!=="全部")?"全部":c;
-    ST.anAllM=false;render();};});
+    ST.anAllM=false;ST.anDrill="";render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-mdrill]"),function(el){el.onclick=function(ev){
+    var tg=ev&&ev.target;
+    if(tg&&tg.getAttribute&&tg.getAttribute("data-mcat"))return;
+    var k=el.getAttribute("data-mdrill")||"";
+    ST.anDrill=(ST.anDrill===k)?"":k;render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-dmode]"),function(el){el.onclick=function(ev){
+    if(ev&&ev.stopPropagation)ev.stopPropagation();
+    ST.anDrillMode=el.getAttribute("data-dmode")||"規格";render();};});
   var tf=$("#totFrom");if(tf)tf.onchange=function(){ST.totFrom=tf.value;};
   var tt=$("#totTo");if(tt)tt.onchange=function(){ST.totTo=tt.value;};
   var tr=$("#totRun");if(tr)tr.onclick=runRank;
