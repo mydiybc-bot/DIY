@@ -657,8 +657,18 @@ const _RETRY_SAFE = [
   'verify_password','admin_verify','admin_get_config','admin_list_backups',
   'admin_scan_folder','admin_check_duplicates'
 ];
+/* 2026-08-12b 回壓修正（實測:單次載入打出 18 發 GAS、合計 417 秒）
+ * 量到的事實:每個唯讀 action 都跑滿 3 次(1+重試2),get_fact_data 更是 3 查詢×3 次=9 發。
+ * 機制:Apps Script 同帳號的 Web App 執行是「排隊」的,不是併發。
+ *      逾時→重試→佇列更長→更多逾時→更多重試,形成雪崩(congestion collapse)。
+ *      重試對「排隊塞住」完全無效,只會加重塞車;它只對冷啟動 5xx 有意義。
+ * 對策:區分兩種失敗——
+ *      · 載入失敗(onerror,冷啟動 5xx) → 值得重試,但只 1 次
+ *      · 逾時(請求其實還在 GAS 佇列裡跑) → 絕不重試,直接讓錯誤卡出來讓人工重試
+ * 紅線不變:寫入類 action 不在 _RETRY_SAFE,一次就是一次。
+ */
 function callApi(action, params={}, opt={}) {
-  const maxRetry = (_RETRY_SAFE.indexOf(action) >= 0) ? (opt.retry !== undefined ? opt.retry : 2) : 0;
+  const maxRetry = (_RETRY_SAFE.indexOf(action) >= 0) ? (opt.retry !== undefined ? opt.retry : 1) : 0;
   const timeoutMs = opt.timeout || 45000;
   let attempt = 0;
   function fire() {
@@ -667,7 +677,8 @@ function callApi(action, params={}, opt={}) {
       const timeout = setTimeout(() => {
         delete window[cbName];
         if (script.parentNode) script.parentNode.removeChild(script);
-        reject(new Error('API 逾時'));
+        const err = new Error('API 逾時'); err.kind = 'timeout';  /* 逾時不重試 */
+        reject(err);
       }, timeoutMs);
       window[cbName] = function(data) {
         clearTimeout(timeout);
@@ -687,13 +698,15 @@ function callApi(action, params={}, opt={}) {
         clearTimeout(timeout);
         delete window[cbName];
         if (script.parentNode) script.parentNode.removeChild(script);
-        reject(new Error('載入失敗'));
+        const err = new Error('載入失敗'); err.kind = 'error';    /* 冷啟動 5xx,可重試 */
+        reject(err);
       };
       document.body.appendChild(script);
     });
   }
   function run() {
     return fire().catch(e => {
+      if (e && e.kind === 'timeout') throw e;   /* 逾時代表請求還卡在 GAS 佇列,重試只會更塞 */
       if (attempt < maxRetry) {
         attempt++;
         return new Promise(r => setTimeout(r, 1800)).then(run);
@@ -706,19 +719,10 @@ function callApi(action, params={}, opt={}) {
 
 /* 預熱：GAS 冷啟動時第一發必慢，先射一發輕量 ping 把引擎叫醒，不等回應、不報錯。
    跨分頁節流 90 秒，避免多分頁齊開瞬間打爆（比照權限閘門 2026-08-05b 作法）。 */
-function _warmApi() {
-  try {
-    const lp = Number(localStorage.getItem('__pnl_ping_ts') || 0);
-    if (Date.now() - lp < 90000) return;
-    localStorage.setItem('__pnl_ping_ts', String(Date.now()));
-  } catch(_) {}
-  const n = '__pnlwarm' + Date.now();
-  const s = document.createElement('script');
-  window[n] = function(){ try { delete window[n]; } catch(_){} if (s.parentNode) s.parentNode.removeChild(s); };
-  s.onerror = window[n];
-  s.src = API + '?action=get_stores&callback=' + n;
-  document.head.appendChild(s);
-}
+/* 2026-08-12b 停用:實測 ping 自己就吃掉 16.6 秒。
+   GAS 同帳號執行是排隊的,ping 不會「暖機」,只會先佔住一個位子讓真正的請求排在後面。
+   保留空函式以免其他地方誤引用而爆掉。 */
+function _warmApi() { /* no-op:見上方說明 */ }
 
 /* ===== HELPERS ===== */
 function sumL1(d, l1) { return d.filter(r=>r.category_l1===l1).reduce((s,r)=>s+r.amount,0); }
@@ -784,7 +788,7 @@ async function doLogin() {
     const r = await callApi('verify_password',{password:pwd});
     if(r.ok){
       TOKEN=r.token;
-      document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; _warmApi(); await initApp();
+      document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; await initApp();
     }
     else { err.textContent='密碼錯誤,請重試'; }
   } catch(e) { err.textContent='連線失敗: '+e.message; }
@@ -1021,10 +1025,10 @@ async function loadData() {
     const lmS = ymAddMonths(ymSn, -rangeLen), lmE = ymAddMonths(ymEn, -rangeLen);
     const lyS = ymAddMonths(ymSn, -12),       lyE = ymAddMonths(ymEn, -12);
     try {
-      const [rm, ry] = await Promise.all([
-        callApi('get_fact_data',{store_ids:ids, ym_min:lmS, ym_max:lmE}),
-        callApi('get_fact_data',{store_ids:ids, ym_min:lyS, ym_max:lyE})
-      ]);
+      /* 2026-08-12b:兩發併發改序列。同一個 GAS 專案併發不會比較快(Apps Script 同帳號排隊),
+         只會讓兩發互相排隊並拉高逾時機率——比照 initApp 今日稍早的同樣修正。 */
+      const rm = await callApi('get_fact_data',{store_ids:ids, ym_min:lmS, ym_max:lmE});
+      const ry = await callApi('get_fact_data',{store_ids:ids, ym_min:lyS, ym_max:lyE});
       COMP_LASTMONTH = rm.data||[];
       COMP_LASTYEAR  = ry.data||[];
     } catch(e) {
