@@ -644,35 +644,80 @@ let LATEST_YM = null;
 
 /* ===== API (JSONP to bypass CORS) ===== */
 let _jsonpId = 0;
-function callApi(action, params={}) {
-  return new Promise((resolve, reject) => {
-    const cbName = '_jsonpCb' + (++_jsonpId) + '_' + Date.now();
-    const timeout = setTimeout(() => {
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-      reject(new Error('API 逾時'));
-    }, 20000);
-    window[cbName] = function(data) {
-      clearTimeout(timeout);
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-      resolve(data);
-    };
-    const u = new URL(API);
-    u.searchParams.set('action', action);
-    u.searchParams.set('callback', cbName);
-    if (TOKEN) u.searchParams.set('token', TOKEN);
-    for (const k in params) u.searchParams.set(k, params[k]);
-    const script = document.createElement('script');
-    script.src = u.toString();
-    script.onerror = function() {
-      clearTimeout(timeout);
-      delete window[cbName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-      reject(new Error('載入失敗'));
-    };
-    document.body.appendChild(script);
-  });
+/* 2026-08-12 韌性修正（症狀：初始化失敗 API 逾時）
+ * 根因三合一：(a) 逾時只有 20 秒，GAS 冷啟動 + get_yms 掃全表常超過；
+ *            (b) initApp 用 Promise.all 三發併發打同一支 GAS，多分頁齊開時觸發 Google 限流；
+ *            (c) onerror（冷啟動 5xx）直接 reject，無重試。
+ * 對策：逾時 20s→45s；唯讀 action 白名單自動重試 2 次（1.8s 間隔）。
+ * 紅線：寫入類 action（admin_set_config / admin_rollback / admin_commit 等）不在白名單，
+ *       維持「一次就是一次」，絕不因重試造成重複寫入。
+ */
+const _RETRY_SAFE = [
+  'get_stores','get_accounts','get_yms','get_fact_data','get_ledger',
+  'verify_password','admin_verify','admin_get_config','admin_list_backups',
+  'admin_scan_folder','admin_check_duplicates'
+];
+function callApi(action, params={}, opt={}) {
+  const maxRetry = (_RETRY_SAFE.indexOf(action) >= 0) ? (opt.retry !== undefined ? opt.retry : 2) : 0;
+  const timeoutMs = opt.timeout || 45000;
+  let attempt = 0;
+  function fire() {
+    return new Promise((resolve, reject) => {
+      const cbName = '_jsonpCb' + (++_jsonpId) + '_' + Date.now();
+      const timeout = setTimeout(() => {
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        reject(new Error('API 逾時'));
+      }, timeoutMs);
+      window[cbName] = function(data) {
+        clearTimeout(timeout);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        resolve(data);
+      };
+      const u = new URL(API);
+      u.searchParams.set('action', action);
+      u.searchParams.set('callback', cbName);
+      if (TOKEN) u.searchParams.set('token', TOKEN);
+      for (const k in params) u.searchParams.set(k, params[k]);
+      if (attempt > 0) u.searchParams.set('_r', String(Date.now()));  /* 破快取，避免重試被瀏覽器擋回同一個失敗回應 */
+      const script = document.createElement('script');
+      script.src = u.toString();
+      script.onerror = function() {
+        clearTimeout(timeout);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        reject(new Error('載入失敗'));
+      };
+      document.body.appendChild(script);
+    });
+  }
+  function run() {
+    return fire().catch(e => {
+      if (attempt < maxRetry) {
+        attempt++;
+        return new Promise(r => setTimeout(r, 1800)).then(run);
+      }
+      throw new Error(e.message + (maxRetry ? '（已自動重試 ' + maxRetry + ' 次）' : ''));
+    });
+  }
+  return run();
+}
+
+/* 預熱：GAS 冷啟動時第一發必慢，先射一發輕量 ping 把引擎叫醒，不等回應、不報錯。
+   跨分頁節流 90 秒，避免多分頁齊開瞬間打爆（比照權限閘門 2026-08-05b 作法）。 */
+function _warmApi() {
+  try {
+    const lp = Number(localStorage.getItem('__pnl_ping_ts') || 0);
+    if (Date.now() - lp < 90000) return;
+    localStorage.setItem('__pnl_ping_ts', String(Date.now()));
+  } catch(_) {}
+  const n = '__pnlwarm' + Date.now();
+  const s = document.createElement('script');
+  window[n] = function(){ try { delete window[n]; } catch(_){} if (s.parentNode) s.parentNode.removeChild(s); };
+  s.onerror = window[n];
+  s.src = API + '?action=get_stores&callback=' + n;
+  document.head.appendChild(s);
 }
 
 /* ===== HELPERS ===== */
@@ -739,7 +784,7 @@ async function doLogin() {
     const r = await callApi('verify_password',{password:pwd});
     if(r.ok){
       TOKEN=r.token;
-      document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; await initApp();
+      document.getElementById('login-screen').style.display='none'; document.getElementById('app').style.display='block'; _warmApi(); await initApp();
     }
     else { err.textContent='密碼錯誤,請重試'; }
   } catch(e) { err.textContent='連線失敗: '+e.message; }
@@ -753,14 +798,47 @@ function doLogout() {
 }
 
 /* ===== INIT ===== */
+/* 2026-08-12：初始化失敗改為頁內錯誤卡（原本用 alert，按掉後畫面永遠停在「載入中…」，
+   使用者無從重試，只能整頁重整並重打密碼）。此卡片可直接重試，不必重新登入。 */
+function _pnlInitError(msg) {
+  let box = document.getElementById('pnl-init-error');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'pnl-init-error';
+    box.style.cssText = 'margin:24px auto;max-width:680px;padding:20px 24px;border:1px solid #C4412F;'
+      + 'border-radius:12px;background:#FFF6F4;color:#8A2B1E;font-size:14px;line-height:1.7;';
+    const app = document.getElementById('app') || document.body;
+    app.insertBefore(box, app.firstChild);
+  }
+  box.innerHTML = '<div style="font-weight:700;font-size:16px;margin-bottom:6px;">⚠️ 初始化失敗</div>'
+    + '<div style="margin-bottom:10px;">' + msg + '</div>'
+    + '<div style="font-size:12px;color:#6F4E45;margin-bottom:12px;">'
+    + '常見原因：Apps Script 冷啟動過慢，或多個儀表板分頁同時開啟觸發 Google 限流。'
+    + '建議先關掉其他 DIYBC 分頁再重試。</div>'
+    + '<button onclick="_pnlRetryInit()" style="padding:8px 18px;border-radius:8px;border:1px solid #C4412F;'
+    + 'background:#fff;color:#C4412F;font-weight:700;cursor:pointer;font-size:14px;">🔄 重試</button>'
+    + '<a href="' + API + '?action=get_yms" target="_blank" style="margin-left:12px;font-size:12px;color:#C4412F;">直接測 API</a>';
+  box.style.display = 'block';
+}
+function _pnlClearInitError() {
+  const box = document.getElementById('pnl-init-error');
+  if (box) box.style.display = 'none';
+}
+async function _pnlRetryInit() {
+  _pnlClearInitError();
+  await initApp();
+}
+window._pnlRetryInit = _pnlRetryInit;
+
 async function initApp() {
   showLoad(true);
+  _pnlClearInitError();
   try {
-    const [sr,ar,yr] = await Promise.all([
-      callApi('get_stores'),
-      callApi('get_accounts'),
-      callApi('get_yms')
-    ]);
+    /* 2026-08-12：三發併發改為序列。三支都是同一個 GAS 專案，併發不會比較快
+       （Apps Script 同帳號會排隊），反而容易觸發限流讓三發一起死。 */
+    const sr = await callApi('get_stores');
+    const ar = await callApi('get_accounts');
+    const yr = await callApi('get_yms');
     STORES = sr.stores||[];
     ACCOUNTS = ar.accounts||[];
     buildSignMap();
@@ -774,7 +852,7 @@ async function initApp() {
     const metricSel = document.getElementById('trend-metric');
     if (metricSel) metricSel.value = 'L1:營業收入';
     await loadData();
-  } catch(e) { alert('初始化失敗: '+e.message); }
+  } catch(e) { _pnlInitError(e.message); }
   showLoad(false);
 }
 
