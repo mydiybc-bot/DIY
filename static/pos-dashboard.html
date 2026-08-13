@@ -2341,11 +2341,9 @@ function ProgramRankTooltip({active, payload}){
       <div>折扣金額：{fmt.currency(p.discount)}</div>
       <div>使用次數：{fmt.number(uses)}</div>
       {uses > 0 && <div>平均讓利：{fmt.currency(Math.round(avg))} / 次</div>}
-      {(p.revActual||0) > 0 && <div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed #F0D9D5'}}>
-        帶動營業額（實付）：{fmt.currency(Math.round(p.revActual||0))}
-        {p.discount > 0 && <div>效益比：每 $1 讓利帶動實付 ${(p.revActual/p.discount).toFixed(1)}</div>}
-        <div style={{color:'#6F4E45',marginTop:2}}>※用券交易之整筆金額；多券交易會重複歸屬，各方案不可加總</div>
-      </div>}
+      {/* v28（2026-08-13 經營者裁定）：移除「帶動營業額（實付）」與「效益比」顯示——
+          加購型方案（如加購餅乾）是把陪同客轉成加購、提高個人客單價，對「帶動整筆訂單」無因果，
+          整筆歸屬口徑對所有方案都有同樣的歸因失真。revActual 資料照算保留（地雷14），僅前端不顯示。 */}
       {orig && <div style={{marginTop:6,paddingTop:6,borderTop:'1px dashed #F0D9D5',color:'#C4412F'}}>
         反推原價 ≈ {fmt.currency(Math.round(orig))}<br/>
         客人實付 ≈ {fmt.currency(Math.round(orig - avg))}
@@ -2414,20 +2412,17 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
   },[fDBP]);
   const programTop = programRank.slice(0,15);
 
-  // v23: 方案排行三檢視 → v24: 四檢視（＋使用次數）—— 固定以「讓利前15大」為母體，換排序與條長
-  //   cost=讓利成本（紅）/ rev=帶動實付營收（綠）/ roi=效益比：每$1讓利帶動實付（綠）/ uses=使用次數（青）
-  //   注意：效益比＝營收含金量，非增量歸因（高比值方案的客人可能本來就會來）
+  // v24: 四檢視 → v28（2026-08-13）: 二檢視——移除「帶動實付營收」「效益比」兩個鏡頭。
+  //   原因（經營者裁定）：整筆歸屬口徑對加購型方案歸因失真（加購餅乾＝提高個人客單價，非帶動整筆訂單），
+  //   其餘方案也有同樣問題，兩鏡頭下架。revActual 仍照常聚合（地雷14，別當死碼刪），僅不再顯示。
   const [rankMode, setRankMode] = useState('cost');
   const RANK_MODES = [
     {k:'cost', label:'讓利成本', dk:'discount', name:'折扣金額', color:'#C4412F'},
-    {k:'rev',  label:'帶動實付營收', dk:'revActual', name:'帶動實付營收', color:'#22c55e'},
-    {k:'roi',  label:'效益比', dk:'roi', name:'每$1讓利帶動實付', color:'#22c55e'},
     {k:'uses', label:'使用次數', dk:'uses', name:'使用次數', color:'#06b6d4'}
   ];
   const rankCfg = RANK_MODES.find(m=>m.k===rankMode) || RANK_MODES[0];
   const programTopView = useMemo(()=>{
-    const base = programTop.map(p=>({ ...p, roi: (p.discount>0 ? Math.round(p.revActual/p.discount*10)/10 : 0) }));
-    return [...base].sort((a,b)=>(b[rankCfg.dk]||0)-(a[rankCfg.dk]||0));
+    return [...programTop].sort((a,b)=>(b[rankCfg.dk]||0)-(a[rankCfg.dk]||0));
   },[programTop, rankMode]);
 
   const yearCompare = useMemo(()=>{
@@ -2539,32 +2534,22 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
           ))}
         </div>
         <div className="chart-subtitle">{
-          rankMode==='roi'
-          ? '效益比＝每 $1 讓利帶動的實付營收（同一組讓利前 15 大方案）。這是「營收含金量」非增量歸因——高比值方案（如會員9折）的客人可能本來就會來；多券交易營收會重複歸屬'
-          : rankMode==='rev'
-          ? '同一組讓利前 15 大方案，改依「帶動實付營收」排序（用券交易之實際收款，serial 去重）。多券交易營收會重複歸屬，各方案不可加總'
-          : rankMode==='uses'
+          rankMode==='uses'
           ? '同一組讓利前 15 大方案，改依「使用次數」排序（這張券總共被刷了幾次）'
-          : '前 15 大方案（手打變體已收斂）。4人同行$500 已扣除 $500券佔位營收=真實讓利。游標懸停看次數／平均讓利／帶動實付營業額；「N折」方案自動反推原價與實付'
+          : '前 15 大方案（手打變體已收斂）。4人同行$500 已扣除 $500券佔位營收=真實讓利。游標懸停看次數／平均讓利；「N折」方案自動反推原價與實付'
         }</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={480}>
             <BarChart data={programTopView} layout="vertical" margin={{left:10,right:30}}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:12}} tickFormatter={rankMode==='roi'?(v=>'×'+v):fmt.short}/>
+              <XAxis type="number" stroke="#B89E97" tick={{fontSize:12}} tickFormatter={fmt.short}/>
               <YAxis type="category" dataKey="voucher" width={180} stroke="#B89E97" tick={{fontSize:12}}/>
               <Tooltip content={<ProgramRankTooltip/>}/>
               <Bar dataKey={rankCfg.dk} name={rankCfg.name} fill={rankCfg.color} radius={[0,4,4,0]}/>
             </BarChart>
           </ResponsiveContainer>
         </div>
-        {/* v24 白話說明：帶動營業額怎麼算（刻意不寫死金額，隨期間/分店篩選變動仍正確） */}
-        <div style={{marginTop:6,fontSize:12,color:'#6F4E45',lineHeight:1.6}}>
-          <div><b>「帶動營業額」怎麼算（白話版）：</b>把「有用到這張券」的每一筆交易挑出來，加總<b>那整筆交易客人實際付的錢</b>（含同一單的陪同費、加購等）。</div>
-          <div>・一筆交易可能同時用兩種券，同一筆錢會記在兩個方案上——所以<b>各方案的營業額不能相加</b>當總營收。</div>
-          <div>・<b>效益比</b>＝帶動實付 ÷ 折扣讓利＝每讓利 1 元換回幾元實收。比值高不代表要多做（會員9折的客人多半本來就會來）；免費體驗券比值低是「拉新成本」的本質，不是做壞了。</div>
-          <div>・4人同行$500 的讓利金額已扣除系統佔位商品（$500券），避免虛高。</div>
-        </div>
+        {/* v28：v24 的「帶動營業額白話說明框」隨兩鏡頭下架一併移除；$500佔位說明已在讓利成本副標 */}
       </div>
 
       {/* 方案年度對比 */}
@@ -2862,12 +2847,13 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* Chart 3: 分店加購率 */}
       <div className="chart-card">
         <div className="chart-title">分店・升級率</div>
-        <div className="chart-subtitle">（加價購＋69折換款）÷ 總數（%），看現場推升級的成效</div>
+        <div className="chart-subtitle">（加價購＋69折換款）÷ 總數（%），看現場推升級的成效・軸自 30% 起跳放大差異</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...storeData].sort((a,b)=>b.upgradeRate-a.upgradeRate)} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
-              <XAxis type="number" stroke="#B89E97" tick={{fontSize:12}} tickFormatter={v=>v.toFixed(0)+'%'}/>
+              {/* v28（2026-08-13）：0% 起跳時各店差異看不出來，改 30% 起跳（allowDataOverflow：低於 30% 的店貼齊軸原點） */}
+              <XAxis type="number" domain={[30,100]} ticks={[30,40,50,60,70,80,90,100]} allowDataOverflow={true} stroke="#B89E97" tick={{fontSize:12}} tickFormatter={v=>v.toFixed(0)+'%'}/>
               <YAxis type="category" dataKey="store" width={112} stroke="#B89E97" tick={{fontSize:12}}/>
               <Tooltip content={<CustomTooltip formatter={v=>fmt.pct(v)}/>}/>
               <Bar dataKey="upgradeRate" name="升級率(%)" fill={BD_PAID} radius={[0,4,4,0]}/>

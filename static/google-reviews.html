@@ -335,6 +335,14 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 </table></div>
 </div>
 </div>
+<details style="margin-top:12px;">
+<summary style="cursor:pointer;font-weight:700;font-size:13px;color:#6F4E45;">🧩 夥伴名偵測・全部候選清單（點開檢查誤抓／漏抓）</summary>
+<div style="font-size:12px;color:var(--muted);margin:6px 0;">列出目前篩選範圍內三種規則（英文名／疊字名／小名「小X・阿X」）抓到的<b>全部</b>名稱（不只 TOP15），隨上方門市／期間篩選連動。看到「不是夥伴」的名稱，回報 Claude 加入排除表即可；有夥伴沒被抓到，也回報名字放寬規則。</div>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>名稱</th><th>類型</th><th>出現店別</th><th>則數</th></tr></thead>
+<tbody id="nickScanTbody"></tbody>
+</table></div>
+</details>
 </div>
 
 <div class="section">
@@ -634,7 +642,8 @@ function hasPersonName(c){
   const en = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                    // 大寫英文名（從寬）
   if (en.some(t => !NAME_STOP.has(t.toUpperCase()))) return true;
   const dup = c.match(/([\u4e00-\u9fff])\1/g) || [];                        // 中文疊字名（與夥伴表同口徑）
-  return dup.some(w => !DUP_NAME_STOP.has(w));
+  if (dup.some(w => !DUP_NAME_STOP.has(w))) return true;
+  return nickCandidates(c).length > 0;                                      // 「小X／阿X」小名（2026-08-13 放寬，與夥伴表同口徑）
 }
 function isValidReview(r){
   if (r.stars !== 5) return false;
@@ -780,6 +789,23 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 // ===== 5 星口碑分析：關鍵字 & 優秀夥伴（吃過濾後的 5 星評論，跟門市/期間連動）=====
 const ANALYSIS_KW = ['蛋糕','餅乾','塔','派','服務','親切','熱心','熱情','幫忙','協助','幫助','耐心','細心','貼心','用心','態度','專業','友善','主動','鼓勵','招待','教學','講解','指導','示範','體驗','平板','步驟','簡單','有趣','好玩','輕鬆','環境','乾淨','舒適','空間','氣氛','位置','好吃','漂亮','可愛','生日','拍照','優惠','推薦','成就感','回憶','驚喜','值得','開心'];
 const EN_NAME_STOP = new Set('The And This That They Was Were Are Our You Your Her His Its For Had Has Have Very Good Nice Great Fun But All Can Will She Him Not Amazing Awesome Really Super Love Loved Yes Wow Thank Thanks Google Original Translated Would Could Should Here There When What Time Made Make Recommend Highly Definitely Experience Staff Service Also Even Just Only Place Cake Diy With From Got Again Been Them Who How Out Cute Delicious Best Kind Patient Friendly Happy Birthday Dessert Desserts Recipe Chinese English Everything Both One Two Store Shop Try Went Come Came Take Took Get Feel Felt Well More Most Much Many Some Any Their'.split(' '));
+// ===== 「小X／阿X」小名偵測（2026-08-13 放寬，補疊字/英文名抓不到的暱稱如 小菱、小魚、阿哲）=====
+// 誤抓 → 名稱加入 NICK_STOP；漏抓（名字前一字被擋）→ 檢查 NICK_PREV_BLOCK。改動後 hasPersonName 與 countNames 自動同口徑（共用本函式）。
+const NICK_STOP = new Set(['小姐','小哥','小弟','小妹','小孩','小朋','小童','小幫','小編','小二','小一','小三','小四','小五','小六','小七','小八','小九','小十','小半','小兩','小時','小心','小小','小學','小人','小費','小吃','小點','小蛋','小餅','小杯','小盒','小包','小袋','小碗','小盤','小份','小塊','小巧','小型','小號','小店','小廚','小資','小貴','小累','小擠','小吵','小熱','小冷','小遠','小慢','小忙','小亂','小趕','小急','小雷','小失','小可','小遺','小驚','小確','小缺','小抱','小尷','小提','小建','小地','小插','小瑕','小知','小遊','小禮','小紅','小計','小結','小了','小的','小喔','小耶','小啊','小唷','小哦','小呢','小吧','小啦','小欸','阿姨','阿嬤','阿公','阿伯','阿婆','阿母','阿爸','阿祖','阿姑','阿舅','阿嫂','阿姊','阿姐','阿兵','阿彌']);
+const NICK_PREV_BLOCK = '太很超較偏變縮略稍微挺蠻滿大極頗更最還嫌從自老點';  // 前一字是程度/尺寸詞 →「太小了」「有點小貴」類，非人名
+function nickCandidates(t){
+  const out = [];
+  const re = /[小阿][\u4e00-\u9fff]/g;
+  let m;
+  while ((m = re.exec(t)) !== null) {
+    const w = m[0];
+    if (NICK_STOP.has(w)) continue;
+    const prev = m.index > 0 ? t[m.index - 1] : '';
+    if (prev && NICK_PREV_BLOCK.indexOf(prev) >= 0) continue;
+    out.push(w);
+  }
+  return out;
+}
 const DUP_NAME_STOP = new Set(['謝謝','姐姐','姊姊','哥哥','弟弟','妹妹','爸爸','媽媽','叔叔','爺爺','奶奶','婆婆','公公','推推','好好','讚讚','棒棒','滿滿','哈哈','嘻嘻','呵呵','嘿嘿','啦啦','喔喔','哦哦','嗯嗯','會會','慢慢','剛剛','常常','天天','日日','人人','個個','種種','多多','快快','微微','漸漸','默默','偷偷','悄悄','紛紛','匆匆','輕輕','深深','遠遠','高高','長長','大大','小小','少少','早早','晚晚','久久','團團','整整','樣樣','件件','處處','時時','每每','再再','一一','看看','試試','問問','想想','做做','玩玩','走走','坐坐','聊聊','笑笑','等等','通通','統統','稍稍','明明','白白','空空','緩緩','徐徐','悠悠','款款','聲聲','步步','層層','片片','點點','絲絲','陣陣','串串','包包','盒盒','娃娃','毛毛','乖乖','呀呀','耶耶','蹦蹦','跳跳','體體','谢谢','赞赞','满满','刚刚','种种','会会','个个','长长','远远','点点','层层','处处','时时','样样','试试','问问','团团','声声','纷纷','轻轻','渐渐','谈谈','缓缓','静静']);
 function rankMap(m){ return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
 function countKeywords(r5){
@@ -794,6 +820,7 @@ function countNames(r5){
     const seen = new Set();
     (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w)) seen.add(w); });
     (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w)) seen.add(w); });
+    nickCandidates(t).forEach(w=>{ seen.add(w); });   // 「小X／阿X」小名（2026-08-13，與 hasPersonName 同口徑）
     seen.forEach(nm => { const key = r.store + '\n' + nm; if(!c[key]) c[key]={store:r.store,name:nm,n:0}; c[key].n++; });
   }
   return Object.values(c).sort((a,b)=>b.n-a.n);
@@ -810,6 +837,29 @@ function renderInsights(rows){
   document.getElementById('nameTbody').innerHTML = nm.length
     ? nm.map((o,i)=>`<tr><td>${i+1}</td><td>${esc(o.store)}</td><td>${esc(o.name)}</td><td>${o.n}</td></tr>`).join('')
     : '<tr><td colspan="4" style="color:var(--muted)">此範圍無可辨識的夥伴名</td></tr>';
+
+  // 2026-08-13 候選掃描：三種規則抓到的全部名稱（跨店合併、標類型），供經營者確認誤抓/漏抓後回報調整排除表
+  const scan = {};
+  for (const r of r5){
+    const t = validContent(r); if(!t) continue;
+    const seen = new Set();
+    (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w)) seen.add(w+'\n英文名'); });
+    (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w)) seen.add(w+'\n疊字名'); });
+    nickCandidates(t).forEach(w=>{ seen.add(w+'\n小名'); });
+    seen.forEach(k=>{
+      if(!scan[k]){ const p=k.split('\n'); scan[k]={name:p[0], type:p[1], n:0, stores:new Set()}; }
+      scan[k].n++; scan[k].stores.add(r.store);
+    });
+  }
+  const scanRows = Object.values(scan).sort((a,b)=>b.n-a.n);
+  const st = document.getElementById('nickScanTbody');
+  if (st) st.innerHTML = scanRows.length
+    ? scanRows.map((o,i)=>{
+        const ss=[...o.stores];
+        const disp=ss.slice(0,3).join('、')+(ss.length>3?(' 等'+ss.length+'店'):'');
+        return `<tr><td>${i+1}</td><td>${esc(o.name)}</td><td>${esc(o.type)}</td><td>${esc(disp)}</td><td>${o.n}</td></tr>`;
+      }).join('')
+    : '<tr><td colspan="5" style="color:var(--muted)">此範圍無候選</td></tr>';
 }
 
 window.addEventListener('DOMContentLoaded', initLoad);
