@@ -670,7 +670,47 @@ const _RETRY_SAFE = [
  *      · 逾時(請求其實還在 GAS 佇列裡跑) → 絕不重試,直接讓錯誤卡出來讓人工重試
  * 紅線不變:寫入類 action 不在 _RETRY_SAFE,一次就是一次。
  */
+/* ===== 2026-08-13 前端唯讀快取層 =====
+ * 背景:GAS 同帳號 Web App 排隊執行,多分頁/多儀表板齊開互相塞車(8/12 實測結論)。
+ * 對策:唯讀 action 結果存 localStorage,同條件重開不再打 GAS——
+ *   · get_stores / get_accounts / get_yms:TTL 6 小時(維度資料,月更)
+ *   · get_fact_data:TTL 10 分鐘,key 含完整查詢參數
+ * 紅線:寫入類 action 一律不進快取;admin_commit / admin_rollback 成功後
+ *   立即清 fact/yms 快取,避免匯入後看到舊資料。錯誤回應不快取。
+ * 逃生口:網址加 ?nocache=1 開頁即清空全部快取(排查用)。 */
+const _CACHE_TTL = { get_stores: 6*3600e3, get_accounts: 6*3600e3, get_yms: 6*3600e3, get_fact_data: 10*60e3 };
+const _CACHE_PREFIX = 'pnlc1:';
+function _cacheKey(action, params){ return _CACHE_PREFIX + action + ':' + JSON.stringify(params||{}); }
+function _cacheGet(action, params){
+  const ttl = _CACHE_TTL[action]; if(!ttl) return null;
+  try{
+    const raw = localStorage.getItem(_cacheKey(action, params)); if(!raw) return null;
+    const o = JSON.parse(raw);
+    if(!o || typeof o.t !== 'number' || (Date.now() - o.t) > ttl){ localStorage.removeItem(_cacheKey(action, params)); return null; }
+    return o.d;
+  }catch(e){ return null; }
+}
+function _cacheSet(action, params, data){
+  if(!_CACHE_TTL[action]) return;
+  if(!data || data.error) return;               /* 錯誤回應不快取 */
+  try{ localStorage.setItem(_cacheKey(action, params), JSON.stringify({t: Date.now(), d: data})); }
+  catch(e){ _cacheClearAll(); }                 /* localStorage 滿:全清後放棄本次寫入 */
+}
+function _cacheDel(pred){
+  try{
+    const del = [];
+    for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i);
+      if(k && k.indexOf(_CACHE_PREFIX)===0 && pred(k)) del.push(k); }
+    del.forEach(k=>localStorage.removeItem(k));
+  }catch(e){}
+}
+function _cacheClearFact(){ _cacheDel(k => k.indexOf('get_fact_data')>0 || k.indexOf('get_yms')>0); }
+function _cacheClearAll(){ _cacheDel(function(){ return true; }); }
+try{ if (new URLSearchParams(location.search).get('nocache')==='1') _cacheClearAll(); }catch(e){}
+
 function callApi(action, params={}, opt={}) {
+  const _hit = (opt && opt.noCache) ? null : _cacheGet(action, params);
+  if (_hit) return Promise.resolve(_hit);
   const maxRetry = (_RETRY_SAFE.indexOf(action) >= 0) ? (opt.retry !== undefined ? opt.retry : 1) : 0;
   const timeoutMs = opt.timeout || 45000;
   let attempt = 0;
@@ -687,6 +727,7 @@ function callApi(action, params={}, opt={}) {
         clearTimeout(timeout);
         delete window[cbName];
         if (script.parentNode) script.parentNode.removeChild(script);
+        _cacheSet(action, params, data);   /* 2026-08-13 唯讀快取(白名單外自動略過) */
         resolve(data);
       };
       const u = new URL(API);
@@ -2963,6 +3004,7 @@ async function adminCommitDo(duplicateMode) {
     if (r.rowsSkipped) summary += ' | 跳過 ' + r.rowsSkipped + ' 筆';
     if (r.replacedBackupSheet) summary += ' | 備份分頁: ' + r.replacedBackupSheet;
     showAdminMsg(msg, 'ok', summary);
+    _cacheClearFact();   /* 2026-08-13 匯入成功→清 fact/yms 快取,避免看到舊資料 */
     document.getElementById('admin-commit-btn').disabled = true;
     /* 2026-06-09: 記錄上次成功 commit 到 sessionStorage,避免 15 小時後重開不知道做過了(地雷 14 教訓) */
     try {
@@ -3034,6 +3076,7 @@ async function adminRollbackDo(backupName) {
       return;
     }
     showAdminMsg(msg, 'ok', '✅ 還原完成: ' + (r.restored_rows || '?') + ' 筆');
+    _cacheClearFact();   /* 2026-08-13 還原成功→清 fact/yms 快取 */
   } catch(e) {
     showAdminMsg(msg, 'err', '還原異常: ' + e.message);
   }
