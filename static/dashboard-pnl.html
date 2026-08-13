@@ -304,7 +304,7 @@ table th.pnl-cmp { color: #A89B88; }
   var KEY = 'dash_auth_' + DASH_ID;
   try {
     var o = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (o && o.exp && Date.now() < o.exp) return;      /* 效期內 → 放行 */
+    if (o && o.exp && Date.now() < o.exp) { window.__pnlAuthed = true; return; }   /* 效期內 → 放行 */
     localStorage.removeItem(KEY);
   } catch(_){}
   document.documentElement.style.visibility = 'hidden';
@@ -351,6 +351,9 @@ table th.pnl-cmp { color: #A89B88; }
              改為就地拆除遮罩即可。 */
           if (d && d.parentNode) d.parentNode.removeChild(d);
           document.documentElement.style.visibility = '';
+          /* 2026-08-12c:閘門開了才啟動資料載入(見 autoLoginFromHub 的說明) */
+          window.__pnlAuthed = true;
+          if (window.__pnlStartApp) { var f = window.__pnlStartApp; window.__pnlStartApp = null; f(); }
         } else {
           err.textContent = (r && r.error) || '驗證失敗';
           btn.disabled = false; btn.textContent = '進入';
@@ -992,7 +995,13 @@ function updateAreaButton() {
 }
 
 /* ===== LOAD DATA ===== */
+/* 2026-08-12c 世代鎖:實測單次載入出現 8 發 get_fact_data(單輪最多 3 發+重試),
+   代表兩輪 loadData 重疊(重載/查詢/快速鍵連按)。JSONP 無法中止舊請求,
+   但可以讓舊輪的結果作廢:每輪領一個世代號,await 回來後發現世代已換就直接退出,
+   不寫狀態、不觸發第二輪的比較期請求 → 不再滾雪球。 */
+let _loadGen = 0;
 async function loadData() {
+  const _gen = ++_loadGen;
   showLoad(true);
   try {
     const ymS=document.getElementById('f-ym-start').value;
@@ -1015,6 +1024,7 @@ async function loadData() {
     }
 
     const r = await callApi('get_fact_data',{store_ids:ids, ym_min:ymS, ym_max:ymE});
+    if (_gen !== _loadGen) return;            /* 已有較新一輪,本輪作廢 */
     DATA = r.data||[];
 
     /* 0514：抓比較期。
@@ -1028,15 +1038,24 @@ async function loadData() {
       /* 2026-08-12b:兩發併發改序列。同一個 GAS 專案併發不會比較快(Apps Script 同帳號排隊),
          只會讓兩發互相排隊並拉高逾時機率——比照 initApp 今日稍早的同樣修正。 */
       const rm = await callApi('get_fact_data',{store_ids:ids, ym_min:lmS, ym_max:lmE});
-      const ry = await callApi('get_fact_data',{store_ids:ids, ym_min:lyS, ym_max:lyE});
+      if (_gen !== _loadGen) return;
+      /* 2026-08-12c:區間長度=12 個月時,上期與去年同期是同一段(往前推 12 個月),
+         第二發是重複查詢,直接複用 → 預設「近12月」視圖少傳一發 0.83MB。 */
+      let ry;
+      if (lmS === lyS && lmE === lyE) { ry = rm; }
+      else {
+        ry = await callApi('get_fact_data',{store_ids:ids, ym_min:lyS, ym_max:lyE});
+        if (_gen !== _loadGen) return;
+      }
       COMP_LASTMONTH = rm.data||[];
       COMP_LASTYEAR  = ry.data||[];
     } catch(e) {
       COMP_LASTMONTH = []; COMP_LASTYEAR = [];  /* 比較期失敗不阻斷主畫面 */
     }
+    if (_gen !== _loadGen) return;
     renderAll();
-  } catch(e) { alert('載入失敗: '+e.message); }
-  showLoad(false);
+  } catch(e) { if (_gen === _loadGen) alert('載入失敗: '+e.message); }
+  if (_gen === _loadGen) showLoad(false);
 }
 
 /* ===== RENDER ALL ===== */
@@ -3091,7 +3110,16 @@ function callApiLong(action, params={}) {
   TOKEN = 'hub-session';
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
-  initApp();
+  /* 2026-08-12c 修正「輸入密碼前就偷跑」:
+     實測(Console resource timing):get_stores 在 verify 完成前就已發出——
+     舊行為是密碼遮罩下先偷跑 initApp 的 5 發資料請求,verify 反而排在它們後面
+     (實測 verify 10.3s、而同一支 auth GAS 的 ping 只要 1.8s,差距就是排隊)。
+     密碼還沒過就先打資料,慢在登入、錯在順序;密碼打錯或放棄,那 5 發全是白跑的鬼請求
+     (JSONP 無法取消,GAS 端會繼續執行到完為止,擠壓下一次載入)。
+     改為:閘門開了(__pnlAuthed)才 initApp;否則掛在 __pnlStartApp 等 verify 成功後啟動。
+     金融頁 TTL 4 小時 → 每天第一次開頁必走 fresh-session,這條路徑就是「今天特別慢」的主因。 */
+  if (window.__pnlAuthed) { initApp(); }
+  else { window.__pnlStartApp = function(){ initApp(); }; }
 })();
 /* ===== hub 單一登入整合 END ===== */
 
