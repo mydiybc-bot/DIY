@@ -638,6 +638,7 @@ const SERVICE_KW = ['服務','服务','店員','店员','員工','员工','老�
 const NAME_STOP = new Set(['THE','AND','THIS','THAT','THEY','WAS','WERE','ARE','OUR','YOU','YOUR','HER','HIS','ITS','FOR','HAD','HAS','HAVE','VERY','GOOD','NICE','GREAT','FUN','BUT','ALL','CAN','WILL','SHE','HIM','NOT','AMAZING','AWESOME','REALLY','SUPER','LOVE','LOVED','YES','WOW','THANK','THANKS','GOOGLE','ORIGINAL','TRANSLATED','WOULD','COULD','SHOULD','HERE','THERE','WHEN','WHAT','TIME','MADE','MAKE','RECOMMEND','HIGHLY','DEFINITELY','EXPERIENCE','STAFF','SERVICE','ALSO','EVEN','JUST','ONLY','PLACE','CAKE','DIY','SKM','WITH','FROM','GOT','AGAIN','BEEN','THEM','WHO','HOW','OUT','WALKED','EVENTUALLY','EASY','UNLIMITED','ACCOMODATING','ACCOMMODATING','ESPECIALLY','NEITHER','HOWEVE','HOWEVER','WHENEVER','SEEING','ANOTHER','SOMETIMES','OVERALL','WHETHER','TAIPEI','BAKERY','SMALL','PIE','TARTS','BLACK','CHIFFON','VALENTINE','DAY','TEAM','TODAY','FIRST','THANKYOU','INSTAGRAM','PAD','PADS']);
 function validContent(r){ return cleanGoogleTranslation(String(r.text||'')).trim(); }   // 5星非空白判定用清理後內容
 function hasPersonName(c, store){
+  if (allowNames(c, store).length > 0) return true;                          // 分店夥伴綽號白名單（2026-08-17）
   if (/謝謝|谢谢|感謝|感谢|多謝|多谢|多虧|多亏|感恩/.test(c)) return true;   // 答謝某人＝有提到人
   const en = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                    // 大寫英文名（從寬）
   if (en.some(t => !NAME_STOP.has(t.toUpperCase()) && !storeStopped(store, t))) return true;
@@ -827,6 +828,14 @@ const NAME_STOP_BY_STORE = {
   '吳寶春(高雄SKM)': new Set(['小卡','小白','可可','Oreo','小夥','小撇','小老','小創','小聲','小鳥','脆脆']),
 };
 function storeStopped(store, w){ const s = NAME_STOP_BY_STORE[store]; return !!(s && s.has(w)); }
+// ===== 分店「夥伴綽號白名單」（2026-08-17）=====
+// 三字以上／非疊字／非「小X阿X」的綽號（如 花栗鼠），三條既有人名規則一律漏抓 → 逐店登記在此。
+// 命中＝直接視為人名：有效評論判定通過、夥伴排行榜列名（類型標「綽號」）。用「內容包含」比對。
+// 新增前先確認確實是該店夥伴綽號；字串越短越容易誤傷（勿放兩字以下通用詞）。
+const NAME_ALLOW_BY_STORE = {
+  '新北新店店': ['花栗鼠'],
+};
+function allowNames(t, store){ const l = NAME_ALLOW_BY_STORE[store]; if(!l) return []; return l.filter(w => t.indexOf(w) >= 0); }
 function rankMap(m){ return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
 function countKeywords(r5){
   const c = {};
@@ -841,6 +850,7 @@ function countNames(r5){
     (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
     (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
     nickCandidates(t, r.store).forEach(w=>{ seen.add(w); });   // 「小X／阿X」小名（2026-08-13，與 hasPersonName 同口徑）
+    allowNames(t, r.store).forEach(w=>{ seen.add(w); });        // 分店夥伴綽號白名單（2026-08-17）
     seen.forEach(nm => { const key = r.store + '\n' + nm; if(!c[key]) c[key]={store:r.store,name:nm,n:0}; c[key].n++; });
   }
   return Object.values(c).sort((a,b)=>b.n-a.n);
@@ -866,6 +876,7 @@ function renderInsights(rows){
     (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n英文名'); });
     (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n疊字名'); });
     nickCandidates(t, r.store).forEach(w=>{ seen.add(w+'\n小名'); });
+    allowNames(t, r.store).forEach(w=>{ seen.add(w+'\n綽號'); });
     seen.forEach(k=>{
       if(!scan[k]){ const p=k.split('\n'); scan[k]={name:p[0], type:p[1], n:0, stores:new Set()}; }
       scan[k].n++; scan[k].stores.add(r.store);
