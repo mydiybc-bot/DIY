@@ -635,15 +635,15 @@ const MONTHLY_REVIEW_TARGET = 15;  // 各店每月「有效評論」目標則數
 // 與人無關的活動/產品/場地(體驗/好吃/環境/好玩)一律不算。
 const SERVICE_KW = ['服務','服务','店員','店员','員工','员工','老闆','老板','店長','店长','小幫手','小帮手','工作人員','工作人员','人員','人员','師傅','师傅','同仁','店家','櫃檯','柜台','服務員','服务员','小姐','小哥','親切','亲切','熱心','热心','熱情','热情','熱忱','热忱','耐心','細心','细心','貼心','贴心','用心','友善','專業','专业','態度','态度','周到','大方','幫忙','帮忙','幫助','帮助','協助','协助','支援','教學','教学','教導','教导','講解','讲解','指導','指导','解說','解说','引導','引导','示範','示范','招待','人很好','人都很好','人超好','人真好','人蠻好','人满好','人不錯','人不错','nice','friendly','staff','service','patient','helpful','kind'];
 // 大寫英文詞中「不是人名」的常見字，需排除（其餘大寫英文一律從寬視為人名）
-const NAME_STOP = new Set(['THE','AND','THIS','THAT','THEY','WAS','WERE','ARE','OUR','YOU','YOUR','HER','HIS','ITS','FOR','HAD','HAS','HAVE','VERY','GOOD','NICE','GREAT','FUN','BUT','ALL','CAN','WILL','SHE','HIM','NOT','AMAZING','AWESOME','REALLY','SUPER','LOVE','LOVED','YES','WOW','THANK','THANKS','GOOGLE','ORIGINAL','TRANSLATED','WOULD','COULD','SHOULD','HERE','THERE','WHEN','WHAT','TIME','MADE','MAKE','RECOMMEND','HIGHLY','DEFINITELY','EXPERIENCE','STAFF','SERVICE','ALSO','EVEN','JUST','ONLY','PLACE','CAKE','DIY','SKM','WITH','FROM','GOT','AGAIN','BEEN','THEM','WHO','HOW','OUT']);
+const NAME_STOP = new Set(['THE','AND','THIS','THAT','THEY','WAS','WERE','ARE','OUR','YOU','YOUR','HER','HIS','ITS','FOR','HAD','HAS','HAVE','VERY','GOOD','NICE','GREAT','FUN','BUT','ALL','CAN','WILL','SHE','HIM','NOT','AMAZING','AWESOME','REALLY','SUPER','LOVE','LOVED','YES','WOW','THANK','THANKS','GOOGLE','ORIGINAL','TRANSLATED','WOULD','COULD','SHOULD','HERE','THERE','WHEN','WHAT','TIME','MADE','MAKE','RECOMMEND','HIGHLY','DEFINITELY','EXPERIENCE','STAFF','SERVICE','ALSO','EVEN','JUST','ONLY','PLACE','CAKE','DIY','SKM','WITH','FROM','GOT','AGAIN','BEEN','THEM','WHO','HOW','OUT','WALKED','EVENTUALLY','EASY','UNLIMITED','ACCOMODATING','ACCOMMODATING','ESPECIALLY','NEITHER','HOWEVE','HOWEVER','WHENEVER','SEEING','ANOTHER','SOMETIMES','OVERALL','WHETHER','TAIPEI','BAKERY','SMALL','PIE','TARTS','BLACK','CHIFFON','VALENTINE','DAY','TEAM','TODAY','FIRST','THANKYOU','INSTAGRAM','PAD','PADS']);
 function validContent(r){ return cleanGoogleTranslation(String(r.text||'')).trim(); }   // 5星非空白判定用清理後內容
-function hasPersonName(c){
+function hasPersonName(c, store){
   if (/謝謝|谢谢|感謝|感谢|多謝|多谢|多虧|多亏|感恩/.test(c)) return true;   // 答謝某人＝有提到人
   const en = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                    // 大寫英文名（從寬）
-  if (en.some(t => !NAME_STOP.has(t.toUpperCase()))) return true;
+  if (en.some(t => !NAME_STOP.has(t.toUpperCase()) && !storeStopped(store, t))) return true;
   const dup = c.match(/([\u4e00-\u9fff])\1/g) || [];                        // 中文疊字名（與夥伴表同口徑）
-  if (dup.some(w => !DUP_NAME_STOP.has(w))) return true;
-  return nickCandidates(c).length > 0;                                      // 「小X／阿X」小名（2026-08-13 放寬，與夥伴表同口徑）
+  if (dup.some(w => !DUP_NAME_STOP.has(w) && !storeStopped(store, w))) return true;
+  return nickCandidates(c, store).length > 0;                                      // 「小X／阿X」小名（2026-08-13 放寬，與夥伴表同口徑）
 }
 function isValidReview(r){
   if (r.stars !== 5) return false;
@@ -651,7 +651,7 @@ function isValidReview(r){
   if (!c) return false;                                                    // 空白
   const low = c.toLowerCase();
   if (SERVICE_KW.some(k => low.includes(k.toLowerCase()))) return true;    // 提到服務/事項
-  return hasPersonName(c);                                                 // 或有人名（從寬）
+  return hasPersonName(c, r.store);                                                 // 或有人名（從寬）
 }
 
 // 各店固定顯示序＝店號 1→12（末位 13 西門已歇業放最後）；字串須與評論 Sheet「門市」完全一致
@@ -788,25 +788,45 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 
 // ===== 5 星口碑分析：關鍵字 & 優秀夥伴（吃過濾後的 5 星評論，跟門市/期間連動）=====
 const ANALYSIS_KW = ['蛋糕','餅乾','塔','派','服務','親切','熱心','熱情','幫忙','協助','幫助','耐心','細心','貼心','用心','態度','專業','友善','主動','鼓勵','招待','教學','講解','指導','示範','體驗','平板','步驟','簡單','有趣','好玩','輕鬆','環境','乾淨','舒適','空間','氣氛','位置','好吃','漂亮','可愛','生日','拍照','優惠','推薦','成就感','回憶','驚喜','值得','開心'];
-const EN_NAME_STOP = new Set('The And This That They Was Were Are Our You Your Her His Its For Had Has Have Very Good Nice Great Fun But All Can Will She Him Not Amazing Awesome Really Super Love Loved Yes Wow Thank Thanks Google Original Translated Would Could Should Here There When What Time Made Make Recommend Highly Definitely Experience Staff Service Also Even Just Only Place Cake Diy With From Got Again Been Them Who How Out Cute Delicious Best Kind Patient Friendly Happy Birthday Dessert Desserts Recipe Chinese English Everything Both One Two Store Shop Try Went Come Came Take Took Get Feel Felt Well More Most Much Many Some Any Their'.split(' '));
+const EN_NAME_STOP = new Set('The And This That They Was Were Are Our You Your Her His Its For Had Has Have Very Good Nice Great Fun But All Can Will She Him Not Amazing Awesome Really Super Love Loved Yes Wow Thank Thanks Google Original Translated Would Could Should Here There When What Time Made Make Recommend Highly Definitely Experience Staff Service Also Even Just Only Place Cake Diy With From Got Again Been Them Who How Out Cute Delicious Best Kind Patient Friendly Happy Birthday Dessert Desserts Recipe Chinese English Everything Both One Two Store Shop Try Went Come Came Take Took Get Feel Felt Well More Most Much Many Some Any Their Walked Eventually Easy Unlimited Accomodating Accommodating Especially Neither Howeve However Whenever Seeing Another Sometimes Overall Whether Taipei Bakery Small Pie Tarts Black Chiffon Valentine Day Team Today First Thankyou Instagram Pad Pads'.split(' '));
 // ===== 「小X／阿X」小名偵測（2026-08-13 放寬，補疊字/英文名抓不到的暱稱如 小菱、小魚、阿哲）=====
 // 誤抓 → 名稱加入 NICK_STOP；漏抓（名字前一字被擋）→ 檢查 NICK_PREV_BLOCK。改動後 hasPersonName 與 countNames 自動同口徑（共用本函式）。
 const NICK_STOP = new Set(['小姐','小哥','小弟','小妹','小孩','小朋','小童','小幫','小編','小二','小一','小三','小四','小五','小六','小七','小八','小九','小十','小半','小兩','小時','小心','小小','小學','小人','小費','小吃','小點','小蛋','小餅','小杯','小盒','小包','小袋','小碗','小盤','小份','小塊','小巧','小型','小號','小店','小廚','小資','小貴','小累','小擠','小吵','小熱','小冷','小遠','小慢','小忙','小亂','小趕','小急','小雷','小失','小可','小遺','小驚','小確','小缺','小抱','小尷','小提','小建','小地','小插','小瑕','小知','小遊','小禮','小紅','小計','小結','小了','小的','小喔','小耶','小啊','小唷','小哦','小呢','小吧','小啦','小欸','阿姨','阿嬤','阿公','阿伯','阿婆','阿母','阿爸','阿祖','阿姑','阿舅','阿嫂','阿姊','阿姐','阿兵','阿彌']);
 const NICK_PREV_BLOCK = '太很超較偏變縮略稍微挺蠻滿大極頗更最還嫌從自老點';  // 前一字是程度/尺寸詞 →「太小了」「有點小貴」類，非人名
-function nickCandidates(t){
+function nickCandidates(t, store){
   const out = [];
   const re = /[小阿][\u4e00-\u9fff]/g;
   let m;
   while ((m = re.exec(t)) !== null) {
     const w = m[0];
     if (NICK_STOP.has(w)) continue;
+    if (store && storeStopped(store, w)) continue;               // 分店排除表（2026-08-17）
     const prev = m.index > 0 ? t[m.index - 1] : '';
     if (prev && NICK_PREV_BLOCK.indexOf(prev) >= 0) continue;
     out.push(w);
   }
   return out;
 }
-const DUP_NAME_STOP = new Set(['謝謝','姐姐','姊姊','哥哥','弟弟','妹妹','爸爸','媽媽','叔叔','爺爺','奶奶','婆婆','公公','推推','好好','讚讚','棒棒','滿滿','哈哈','嘻嘻','呵呵','嘿嘿','啦啦','喔喔','哦哦','嗯嗯','會會','慢慢','剛剛','常常','天天','日日','人人','個個','種種','多多','快快','微微','漸漸','默默','偷偷','悄悄','紛紛','匆匆','輕輕','深深','遠遠','高高','長長','大大','小小','少少','早早','晚晚','久久','團團','整整','樣樣','件件','處處','時時','每每','再再','一一','看看','試試','問問','想想','做做','玩玩','走走','坐坐','聊聊','笑笑','等等','通通','統統','稍稍','明明','白白','空空','緩緩','徐徐','悠悠','款款','聲聲','步步','層層','片片','點點','絲絲','陣陣','串串','包包','盒盒','娃娃','毛毛','乖乖','呀呀','耶耶','蹦蹦','跳跳','體體','谢谢','赞赞','满满','刚刚','种种','会会','个个','长长','远远','点点','层层','处处','时时','样样','试试','问问','团团','声声','纷纷','轻轻','渐渐','谈谈','缓缓','静静']);
+const DUP_NAME_STOP = new Set(['謝謝','姐姐','姊姊','哥哥','弟弟','妹妹','爸爸','媽媽','叔叔','爺爺','奶奶','婆婆','公公','推推','好好','讚讚','棒棒','滿滿','哈哈','嘻嘻','呵呵','嘿嘿','啦啦','喔喔','哦哦','嗯嗯','會會','慢慢','剛剛','常常','天天','日日','人人','個個','種種','多多','快快','微微','漸漸','默默','偷偷','悄悄','紛紛','匆匆','輕輕','深深','遠遠','高高','長長','大大','小小','少少','早早','晚晚','久久','團團','整整','樣樣','件件','處處','時時','每每','再再','一一','看看','試試','問問','想想','做做','玩玩','走走','坐坐','聊聊','笑笑','等等','通通','統統','稍稍','明明','白白','空空','緩緩','徐徐','悠悠','款款','聲聲','步步','層層','片片','點點','絲絲','陣陣','串串','包包','盒盒','娃娃','毛毛','乖乖','呀呀','耶耶','蹦蹦','跳跳','體體','体体','谢谢','赞赞','满满','刚刚','种种','会会','个个','长长','远远','点点','层层','处处','时时','样样','试试','问问','团团','声声','纷纷','轻轻','渐渐','谈谈','缓缓','静静']);
+// ===== 分店「非夥伴名」排除表（2026-08-17 經營者逐店確認）=====
+// 只在該店排除；同一名稱在別店仍視為夥伴（例：Jelly 在精明店非夥伴、他店仍算）。
+// 全站都不可能是人名的通用詞（英文句子字、品牌詞）請加全域表 NAME_STOP / EN_NAME_STOP / DUP_NAME_STOP / NICK_STOP。
+// key 必須與評論 Sheet「門市」完全一致（半形括號、小寫 focus）。
+const NAME_STOP_BY_STORE = {
+  '台中精明店': new Set(['小卡','嗚嗚','小狗','熊熊','酥酥','小細','阿勇','抱抱','小帥','Dolce','Grazie','Jelly','小天']),
+  '台中草悟道店': new Set(['小漏']),
+  '台北南京店': new Set(['美美','小狗','小白','熊熊','重重','順順','利利','小家','往往']),
+  '台北士林店': new Set(['美美','小狗','漂漂','亮亮','小卡','小技','小福','學學','小動','醜醜','約約','拍拍','妥妥','當當']),
+  '台南focus店': new Set(['小白','可可','小狗','Oreo','小夥','眉眉','角角','小姊','小黑','妙妙','漂漂','亮亮','油油','怪怪','小美']),
+  '新竹文化店': new Set(['小卡','小白','可可','舒舒','服服','成成','小黃','她她']),
+  '新北板橋店': new Set(['小狗','嗚嗚','漂漂','亮亮','小卡','小老','狗狗','重重','畫畫','小細','平平','貼貼','小尖','小些','是是','小飲','鬆鬆','小手','小夥','嚐嚐']),
+  '新北新店店': new Set(['小狗','小白','嗚嗚','小卡','小老','狗狗','熊熊','畫畫','可可','小細','啊啊','店店','小祝','抱抱','噴噴','誇誇','短短','他他','小女','愛愛']),
+  '桃園中壢店': new Set(['颼颼','漂漂','亮亮','小卡','小白']),
+  '桃園藝文店': new Set(['小細','抱抱','美美','小配','小空','Michael','Jackson','小白','指指','太太','小老']),
+  '吳寶春(台北信義A13)': new Set(['小狗','小白','嗚嗚','邊邊','坑坑','疤疤','上上','小作','嘟嘟']),
+  '吳寶春(高雄SKM)': new Set(['小卡','小白','可可','Oreo','小夥','小撇','小老','小創','小聲','小鳥','脆脆']),
+};
+function storeStopped(store, w){ const s = NAME_STOP_BY_STORE[store]; return !!(s && s.has(w)); }
 function rankMap(m){ return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
 function countKeywords(r5){
   const c = {};
@@ -818,9 +838,9 @@ function countNames(r5){
   for (const r of r5){
     const t = validContent(r); if(!t) continue;
     const seen = new Set();
-    (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w)) seen.add(w); });
-    (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w)) seen.add(w); });
-    nickCandidates(t).forEach(w=>{ seen.add(w); });   // 「小X／阿X」小名（2026-08-13，與 hasPersonName 同口徑）
+    (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
+    (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
+    nickCandidates(t, r.store).forEach(w=>{ seen.add(w); });   // 「小X／阿X」小名（2026-08-13，與 hasPersonName 同口徑）
     seen.forEach(nm => { const key = r.store + '\n' + nm; if(!c[key]) c[key]={store:r.store,name:nm,n:0}; c[key].n++; });
   }
   return Object.values(c).sort((a,b)=>b.n-a.n);
@@ -843,9 +863,9 @@ function renderInsights(rows){
   for (const r of r5){
     const t = validContent(r); if(!t) continue;
     const seen = new Set();
-    (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w)) seen.add(w+'\n英文名'); });
-    (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w)) seen.add(w+'\n疊字名'); });
-    nickCandidates(t).forEach(w=>{ seen.add(w+'\n小名'); });
+    (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n英文名'); });
+    (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n疊字名'); });
+    nickCandidates(t, r.store).forEach(w=>{ seen.add(w+'\n小名'); });
     seen.forEach(k=>{
       if(!scan[k]){ const p=k.split('\n'); scan[k]={name:p[0], type:p[1], n:0, stores:new Set()}; }
       scan[k].n++; scan[k].stores.add(r.store);
