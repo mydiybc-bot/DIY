@@ -53,6 +53,19 @@
     padding:8px 10px;background:#fff;color:var(--ink)}
   button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--red2);outline-offset:1px}
 
+  /* 大類分頁 */
+  .bigtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .bigtabs button{border:1px solid var(--line);background:#fff;color:var(--muted);
+    padding:8px 16px;border-radius:10px;font-size:13.5px;font-weight:700;cursor:pointer;transition:.15s}
+  .bigtabs button:hover{border-color:var(--red2);color:var(--red1)}
+  .bigtabs button.on{background:var(--red1);border-color:var(--red1);color:#fff}
+  .bigtabs button .n{font-weight:400;opacity:.75;font-size:12px;margin-left:4px}
+  .natnote{font-size:12.5px;color:#8A4A1E;background:#FFF0E6;border:1px solid #F0CBB0;
+    border-radius:8px;padding:8px 12px;margin-bottom:12px;line-height:1.55}
+  .ph{display:inline-block;font-size:12px;font-weight:700;color:#8A4A1E;background:#FFE9D6;
+    border:1px solid #F0CBB0;padding:1px 7px;border-radius:6px;margin-left:6px}
+  .orig{font-size:12px;color:var(--muted);margin-left:8px}
+
   /* ===== 查價比價（英雄區） ===== */
   .hero .bar{position:sticky;top:58px;z-index:10;background:var(--card);
     padding:12px 0 8px;margin:-4px 0 6px;border-bottom:1px solid var(--line)}
@@ -228,13 +241,14 @@
   <!-- 資料狀態列（更新方式與 SOP） -->
   <div class="dsb dsb-quarter">
     <b>🟠 手動更新・每季</b>
-    <span>單據交 Claude 抽單價 → 貼到 fact_vendor_price 最底，本頁自動重算</span>
+    <span>食材：廠商單據抽價｜器具模具耗材：出貨中心 Shopline 目錄 → 貼到 fact_vendor_price 最底，本頁自動重算</span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 更新步驟</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
         <li>季初收集上一季各廠商送貨單／對帳單 PDF</li>
-        <li>丟給 Claude（vendor-price-tracker）產「可直接貼 Sheet 的 15 欄長表列」</li>
+        <li>丟給 Claude（vendor-price-tracker）產「可直接貼 Sheet 的 <b>19 欄</b>長表列」（含標準品名／大類／價格性質）</li>
         <li>貼到 fact_vendor_price 分頁<b>最底</b>（只新增、不覆蓋，季別格式 YYYYQn）→ 重新整理本頁</li>
+        <li>器具／模具／耗材：從 Shopline 後台匯出商品明細（BulkUpdateForm），交 Claude 轉成同格式長表</li>
       </ol>
     </div>
   </div>
@@ -242,19 +256,21 @@
   <div class="kpis">
     <div class="kpi"><div class="v num" id="kItems">–</div><div class="l">追蹤品項</div></div>
     <div class="kpi"><div class="v num" id="kSups">–</div><div class="l">供應商</div></div>
-    <div class="kpi"><div class="v num" id="kVol">–</div><div class="l">季內有價差品項</div></div>
-    <div class="kpi"><div class="v num" id="kCmp">–</div><div class="l">可換算每kg／L 比價</div></div>
+    <div class="kpi"><div class="v num" id="kVol">–</div><div class="l" id="lVol">可跨供應商比價品項</div></div>
+    <div class="kpi"><div class="v num" id="kCmp">–</div><div class="l" id="lCmp">季內有價差品項</div></div>
   </div>
 
   <!-- ===== 查價比價（英雄區・主角） ===== -->
   <div class="card hero">
     <h2>🔍 查價比價<span class="tax-note">單價皆含稅</span></h2>
-    <div class="desc">輸入原物料名稱，立刻看到<b>所有供應商的報價</b>、自動換算每kg／L、由便宜到貴排序、最便宜掛 🏆。點「季內價差」可展開各批進貨與跨季走勢。</div>
+    <div class="desc">先選上方<b>大類</b>，再輸入品名。外購食材會把<b>所有供應商的報價</b>並排、換算每kg／L、由便宜到貴排序、最便宜掛 🏆；器具／模具／耗材為出貨中心目錄價，一價到底。</div>
+    <div class="bigtabs" id="bigTabs"></div>
+    <div class="natnote" id="natNote" style="display:none"></div>
     <div class="bar">
       <div class="searchrow">
         <div class="sic">
           <span class="mag">🔍</span>
-          <input id="cmpSearch" placeholder="輸入品名，如 葡萄、細砂糖、鮮奶油、巧克力…" autocomplete="off">
+          <input id="cmpSearch" placeholder="輸入品名，如 可可粉、杏仁粉、擀麵棍、慕斯圈、洗潔精…" autocomplete="off">
           <button class="clr" id="cmpClr" aria-label="清除">✕</button>
         </div>
       </div>
@@ -301,7 +317,7 @@
   </details>
 </main>
 <footer>
-  資料來源：廠商送貨單／對帳單／發票明細表抽取（vendor-price-tracker）。德麥、皓廷為單據原含稅；其餘原未稅已×1.05換算為含稅。
+  資料來源：<b>食材</b>＝廠商送貨單／對帳單／發票明細表抽取（vendor-price-tracker）；<b>器具／模具／耗材</b>＝出貨中心 Shopline 商品目錄（內部目錄價，非外購成交價，不做議價分析）。德麥、皓廷為單據原含稅；其餘原未稅已×1.05換算為含稅。
   生鮮蔬果、整顆蛋、麵粉、鮮乳等法定免稅取原值不加稅。「每kg／L」為跨規格、跨供應商比價的基準。
 </footer>
 
@@ -357,10 +373,17 @@ function aggregate(rows){
   const latestQ = seasons[seasons.length-1];
   const prevQ = seasons.length >= 2 ? seasons[seasons.length-2] : null;
   window.__latestQ = latestQ;
+  // 主鍵＝公司｜供應商｜標準品名｜規格。標準品名讓同品跨供應商能並排；
+  // 規格保留，避免 970g/盒 與 20盒/箱 被併成一列而失真。
+  // 包裝規格用「每基準量」判定（數值比文字穩：970g/盒 與 20盒/箱 會分開，
+  // 「12*1kg」與「12*1kg冷藏」這種同物異寫則會正確合併）
+  const packOf = r => { const v = +r['每基準量']; return (!isNaN(v) && v>0) ? String(v) : '-'; };
   const groups = {};
   rows.forEach(r => {
-    const code = r['料號'];
-    const key = (r['公司']||'') + '|' + r['供應商'] + '|' + ((code && code !== '-') ? code : 'name:'+r['品名']);
+    const std = (r['標準品名'] && String(r['標準品名']).trim()) || r['品名'];
+    // 不含公司：同供應商同品項同包裝，跨帳套合併成一列（公司改為屬性），
+    // 否則同一支杏仁粉會因分屬共好/共享/共有而重複三列。
+    const key = r['供應商'] + '|' + std + '|' + packOf(r);
     (groups[key] = groups[key] || []).push(r);
   });
   return Object.values(groups).map(rs => {
@@ -381,11 +404,15 @@ function aggregate(rows){
       .map(r => ({store: r['店別'], date: r['日期'], price: +r['含稅單價']}))
       .filter(x => !isNaN(x.price))
       .sort((a,b) => a.price - b.price);
+    const comps = [...new Set(rs.map(r=>r['公司']).filter(Boolean))];
     return {
-      company: sample['公司'] || '—',
+      company: comps[0] || '—', companies: comps,
       name: sample['品名'], sup: sample['供應商'], code: sample['料號'],
       spec: sample['規格'], unit: sample['單位'], tax: sample['稅別'],
       cat: sample['品類'] || '未分類', dim: sample['基準維度'] || '計數',
+      std: (sample['標準品名'] && String(sample['標準品名']).trim()) || sample['品名'],
+      big: (sample['大類'] && String(sample['大類']).trim()) || '食材',
+      nature: (sample['價格性質'] && String(sample['價格性質']).trim()) || '外購成交',
       base: q[latestQ] ?? mx, min: mn, max: mx, vol_pct: vol, perbase: perbase,
       unit_price: (up !== '' && up != null && !isNaN(+up)) ? +up : null,
       chg: chg, q: q, detail: detail
@@ -404,7 +431,12 @@ function cmpOf(d){
 }
 
 let recipe = [];
-const FILTER = { q:'', cat:'', co:'' };
+const FILTER = { q:'', cat:'', co:'', big:'食材' };
+// 大類顯示順序；零售商品預設不出現在分頁（可由「全部」看到）
+const BIG_ORDER = ['食材','耗材','器具','模具','設備','零售商品','服務費用'];
+const BIG_ICON  = {'食材':'🥣','耗材':'🧻','器具':'🥄','模具':'🍰','設備':'⚙️','零售商品':'🛍️','服務費用':'🚚'};
+// 內部目錄價：一價到底、單一來源 → 不談議價/季內價差
+const isCatalog = d => String(d.nature||'').indexOf('目錄')>=0 || String(d.nature||'').indexOf('售價')>=0;
 
 (async function init(){
   let data;
@@ -427,13 +459,24 @@ const FILTER = { q:'', cat:'', co:'' };
   // 季別徽章
   document.getElementById('seasonTag').textContent = window.__latestQ || '本季';
 
-  const sups = [...new Set(data.map(d=>d.sup))];
-  const cats = [...new Set(data.map(d=>d.cat))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
   const cos  = [...new Set(data.map(d=>d.company))].filter(c=>c && c!=='—');
-  document.getElementById('kItems').textContent = data.length;
-  document.getElementById('kSups').textContent = sups.length;
-  document.getElementById('kVol').textContent = data.filter(d=>d.vol_pct>0).length;
-  document.getElementById('kCmp').textContent = data.filter(d=>d.unit_price).length;
+
+  // ---- 大類分頁 ----
+  const bigs = BIG_ORDER.filter(b => data.some(d=>d.big===b));
+  const bigTabs = document.getElementById('bigTabs');
+  if(!bigs.includes(FILTER.big)) FILTER.big = bigs[0] || '';
+  bigs.forEach(b=>{
+    const n = data.filter(d=>d.big===b).length;
+    const btn=document.createElement('button');
+    btn.innerHTML = `${BIG_ICON[b]||''} ${b}<span class="n">${n}</span>`;
+    btn.dataset.big=b;
+    btn.onclick=()=>{ FILTER.big=b; FILTER.cat=''; syncBig(); };
+    bigTabs.appendChild(btn);
+  });
+  const allBtn=document.createElement('button');
+  allBtn.innerHTML='全部<span class="n">'+data.length+'</span>'; allBtn.dataset.big='';
+  allBtn.onclick=()=>{ FILTER.big=''; FILTER.cat=''; syncBig(); };
+  bigTabs.appendChild(allBtn);
 
   // ---- 品類 chips ----
   const catChips = document.getElementById('catChips');
@@ -449,9 +492,47 @@ const FILTER = { q:'', cat:'', co:'' };
     };
     return b;
   };
-  catChips.appendChild(mkChip('全部','','cat'));
-  cats.forEach(c=> catChips.appendChild(mkChip(c, c, 'cat')));
-  document.querySelector('.chip[data-group="cat"]').classList.add('on'); // 全部 預設亮
+  window.__mkChip = mkChip;
+  window.__rebuildCats = function(){
+    const pool = data.filter(d=>!FILTER.big || d.big===FILTER.big);
+    const cs = [...new Set(pool.map(d=>d.cat))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+    catChips.querySelectorAll('.chip').forEach(x=>x.remove());
+    catChips.appendChild(mkChip('全部','','cat'));
+    cs.forEach(c=> catChips.appendChild(mkChip(c, c, 'cat')));
+    catChips.querySelector('.chip[data-group="cat"]').classList.add('on');
+    catChips.style.display = cs.length>1 ? 'flex' : 'none';
+  };
+  window.__syncKPI = function(){
+    const pool = data.filter(d=>!FILTER.big || d.big===FILTER.big);
+    const catalog = pool.length>0 && pool.every(isCatalog);
+    document.getElementById('kItems').textContent = new Set(pool.map(d=>d.std)).size;
+    document.getElementById('kSups').textContent  = new Set(pool.map(d=>d.sup)).size;
+    const k3=document.getElementById('kVol'), l3=document.getElementById('lVol');
+    const k4=document.getElementById('kCmp'), l4=document.getElementById('lCmp');
+    if(catalog){
+      const multi = pool.filter(d=>String(d.nature).indexOf('佔位')>=0).length;
+      k3.textContent = fmt(pool.reduce((a,d)=>a+(+d.base||0),0)); l3.textContent='整套目錄價合計';
+      k4.textContent = multi; l4.textContent='佔位價・待確認';
+    }else{
+      const byStd={}; pool.forEach(d=>{(byStd[d.std]=byStd[d.std]||new Set()).add(d.sup);});
+      k3.textContent = Object.values(byStd).filter(v=>v.size>1).length; l3.textContent='可跨供應商比價品項';
+      k4.textContent = pool.filter(d=>d.vol_pct>0).length; l4.textContent='季內有價差品項';
+    }
+  };
+  window.syncBig = function(){
+    document.querySelectorAll('#bigTabs button').forEach(x=>x.classList.toggle('on', x.dataset.big===FILTER.big));
+    const pool = data.filter(d=>!FILTER.big || d.big===FILTER.big);
+    const catalog = pool.length>0 && pool.every(isCatalog);
+    const note=document.getElementById('natNote');
+    if(catalog){
+      note.style.display='block';
+      note.innerHTML = (FILTER.big==='零售商品')
+        ? '<b>這是對客售價，不是進貨成本。</b>這區是 Shopline 上架給客人買的商品，價格為售價，請勿當成材料成本使用。'
+        : '<b>內部目錄價（出貨中心）</b>：單一來源、一價到底，因此不顯示比價排序、季內價差與議價訊號。價格於出貨中心調價時才變動。';
+    } else note.style.display='none';
+    document.getElementById('advDetails').style.display = catalog ? 'none' : '';
+    window.__rebuildCats(); window.__syncKPI(); renderCompare();
+  };
 
   // ---- 公司 chips（>1 家才顯示）----
   if(cos.length>1){
@@ -467,15 +548,16 @@ const FILTER = { q:'', cat:'', co:'' };
   si.oninput = ()=>{ FILTER.q = si.value; clr.classList.toggle('show', !!si.value); renderCompare(); };
   clr.onclick = ()=>{ si.value=''; FILTER.q=''; clr.classList.remove('show'); renderCompare(); si.focus(); };
 
-  renderCompare();
+  syncBig();
 
   // ---- 成本試算器 picker ----
   const picker = document.getElementById('picker');
-  data.slice().sort((a,b)=> (a.cat||'').localeCompare(b.cat||'','zh-Hant')||a.name.localeCompare(b.name,'zh-Hant'))
+  data.slice().sort((a,b)=> BIG_ORDER.indexOf(a.big)-BIG_ORDER.indexOf(b.big)
+      || (a.cat||'').localeCompare(b.cat||'','zh-Hant')||a.std.localeCompare(b.std,'zh-Hant'))
     .forEach(d=>{
       const c=cmpOf(d);
       const pl = c.norm ? fmt(d.unit_price)+'/'+c.unit : fmt(d.base)+'/'+(d.unit||'個');
-      picker.add(new Option(`${d.name}｜${d.sup} ${pl}`, d.__i));
+      picker.add(new Option(`${(BIG_ICON[d.big]||'')} ${d.std}｜${d.sup} ${pl}`, d.__i));
     });
   document.getElementById('addBtn').onclick=()=>{
     const d=data[+picker.value];
@@ -485,17 +567,19 @@ const FILTER = { q:'', cat:'', co:'' };
   renderCalc();
 
   // ---- 進階分析：展開才畫圖 ----
-  const cmpCats = cats.filter(c=>data.filter(d=>d.cat===c&&d.unit_price).length>=2);
+  const foodData = data.filter(d=>!isCatalog(d));
+  const cmpCats = [...new Set(foodData.map(d=>d.cat))].sort((a,b)=>a.localeCompare(b,'zh-Hant'))
+    .filter(c=>foodData.filter(d=>d.cat===c&&d.unit_price).length>=2);
   const catPick = document.getElementById('catPick');
   cmpCats.forEach(c=>catPick.add(new Option(c,c)));
-  catPick.onchange=()=>renderCmp(data, catPick.value);
+  catPick.onchange=()=>renderCmp(foodData, catPick.value);
   const adv = document.getElementById('advDetails');
   let advDone=false;
   adv.addEventListener('toggle', ()=>{
     if(adv.open && !advDone){
       advDone=true;
-      renderVol(data);
-      if(cmpCats.length) renderCmp(data, cmpCats[0]);
+      renderVol(foodData);
+      if(cmpCats.length) renderCmp(foodData, cmpCats[0]);
     }
   });
 })();
@@ -505,12 +589,13 @@ function renderCompare(){
   const data = window.__data, wrap = document.getElementById('cmpList');
   const q = FILTER.q.trim();
   const quotes = data.filter(d =>
-    (!FILTER.co  || d.company===FILTER.co) &&
+    (!FILTER.big || d.big===FILTER.big) &&
+    (!FILTER.co  || (d.companies||[]).includes(FILTER.co)) &&
     (!FILTER.cat || d.cat===FILTER.cat) &&
-    (!q || d.name.includes(q) || (d.sup&&d.sup.includes(q)) || (d.cat&&d.cat.includes(q)))
+    (!q || d.std.includes(q) || d.name.includes(q) || (d.sup&&d.sup.includes(q)) || (d.cat&&d.cat.includes(q)))
   );
   const g = {};
-  quotes.forEach(d=>{ (g[d.name]=g[d.name]||[]).push(d); });
+  quotes.forEach(d=>{ (g[d.std]=g[d.std]||[]).push(d); });
   const names = Object.keys(g).sort((a,b)=>
     (g[a][0].cat||'').localeCompare(g[b][0].cat||'','zh-Hant') || a.localeCompare(b,'zh-Hant'));
   document.getElementById('cmpCount').innerHTML =
@@ -523,6 +608,7 @@ function renderCompare(){
 }
 
 function renderGroup(name, quotes){
+  const catalog = quotes.every(isCatalog);
   const cmp = quotes.map(d=>{ const c=cmpOf(d); return {d, ...c}; });
   const units = [...new Set(cmp.map(c=>c.unit))];
   const homo = units.length===1;              // 同基準才排序、才選最便宜
@@ -530,15 +616,28 @@ function renderGroup(name, quotes){
   const best = homo ? cmp[0] : null;
   const cat = quotes[0].cat || '未分類';
   const multi = cmp.length>1;
-  const bestBadge = (best && multi)
+  const bestBadge = (best && multi && !catalog)
     ? `<span class="best">最低 ${fmt(best.val)}/${best.unit}</span>` : '';
 
   const rows = cmp.map((c,idx)=>{
-    const d=c.d, win = homo && multi && idx===0;
+    const d=c.d, win = homo && multi && idx===0 && !catalog;
     const big = c.norm
       ? `<span class="pk">${fmt(d.unit_price)}<small>/${c.unit}</small></span>`
       : `<span class="pk">${fmt(d.base)}<small>/${esc(d.unit||'個')}</small></span>`;
     const sub = c.norm ? `<span class="raw">單價 ${fmt(d.base)}/${esc(d.unit||'個')}</span>` : '';
+    if(catalog){
+      const ph = String(d.nature).indexOf('佔位')>=0 ? '<span class="ph">佔位價・待確認</span>' : '';
+      const orig = (d.name && d.name!==d.std) ? `<span class="orig">目錄名：${esc(d.name)}</span>` : '';
+      return `<div class="q">
+        <div class="q-main">
+          <span class="rank"></span>
+          <span class="sup">${esc(d.sup)}</span>
+          ${d.spec?`<span class="spec">${esc(d.spec)}</span>`:''}
+          ${ph}${orig}
+        </div>
+        <div class="q-price">${big}${chgCatalog(d)}</div>
+      </div>`;
+    }
     const chg = (d.chg==null)
       ? `<span class="mut" title="下一季資料灌入後才有跨季漲跌">vs前季 —</span>`
       : `<span class="chg ${d.chg>0?'up':(d.chg<0?'down':'flat')}">vs前季 ${d.chg>0?'▲+':(d.chg<0?'▼':'')}${d.chg}%</span>`;
@@ -550,7 +649,7 @@ function renderGroup(name, quotes){
       <div class="q-main">
         <span class="rank">${win?'🏆':''}</span>
         <span class="sup">${esc(d.sup)}</span>
-        <span class="co">${esc(d.company)}</span>
+        <span class="co">${esc((d.companies&&d.companies.length>1) ? d.companies[0]+'+'+(d.companies.length-1) : d.company)}</span>
         <span class="tax ${tx.c}">${tx.t}</span>
         ${d.spec?`<span class="spec">${esc(d.spec)}</span>`:''}
       </div>
@@ -567,6 +666,13 @@ function renderGroup(name, quotes){
     </div>
     <div class="grp-body">${rows}</div>
   </div>`;
+}
+
+// 內部目錄價的跨季顯示：只講調價，不講議價
+function chgCatalog(d){
+  if(d.chg==null) return `<span class="mut" title="下一季目錄再匯一次才有調價比較">本季快照</span>`;
+  if(d.chg===0)   return `<span class="chg flat">未調價</span>`;
+  return `<span class="chg ${d.chg>0?'up':'down'}">調價 ${d.chg>0?'▲+':'▼'}${d.chg}%</span>`;
 }
 
 // 點季內價差 → 展開各批進貨明細 + 跨季走勢
