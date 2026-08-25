@@ -1486,9 +1486,49 @@ function dlShelfCsv(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
   toast("已下載 CSV");}
 /* ===== 經營者總覽 ===== */
+/* ===== 2026-08-25 q 批：立即重算（總覽頁，總部／經營者限定） =====
+   目的：預約包館／事件檔期／單位對照／BOM／對照表 這些「隔日 07:05、07:31 才生效」的修改，
+   改完可按鈕請後端立刻重算（rebuildPurchaseAgg＋rebuildEventLayer；月度聚合仍走每日 07:40）。
+   流程：JSONP 呼叫 GAS doGet(action=rebuild)→後端排入 1 秒後一次性觸發器並立即回應
+   →前端每 20 秒輪詢 status（比對 id 免時鐘誤差），完成後提示重新整理。
+   純新增：computeRow 與既有寫入路徑零改動。⚠️ 07:00–07:45 自動排程時段避免使用（與每日重算撞寫）。 */
+var RB={busy:false,id:0,pollN:0,pollT:null,cbN:0,msg:"",cls:""};
+function rbColor(cls){return cls==="ok"?"#2E7D32":cls==="err"?"#C0392B":"#8A7466";}
+function rbSet(m,cls){RB.msg=m;RB.cls=cls||"";var el=$("#rbMsg");if(el){el.textContent=m;el.style.color=rbColor(RB.cls);}}
+function rbBtnEnable(on){var b=$("#rbBtn");if(b)b.disabled=!on;}
+function rbCard(){return '<div class="card"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+  +'<button class="btn" id="rbBtn" onclick="rbNow()"'+(RB.busy?' disabled':'')+'>🔄 立即重算</button>'
+  +'<span id="rbMsg" style="font-size:13px;color:'+rbColor(RB.cls)+'">'
+  +(RB.msg||"改了預約／事件檔期／單位對照／BOM 後，按此立即重算，免等隔日早上（約 2–3 分鐘）")
+  +'</span></div></div>';}
+function rbJsonp(action,done){var name="__rbCb"+(++RB.cbN),to=null,s=document.createElement("script"),fin=false;
+  function cleanup(){if(fin)return;fin=true;try{delete window[name];}catch(e){window[name]=undefined;}
+    if(s.parentNode)s.parentNode.removeChild(s);}
+  window[name]=function(res){clearTimeout(to);cleanup();done(null,res);};
+  to=setTimeout(function(){cleanup();done("timeout");},15000);
+  s.onerror=function(){clearTimeout(to);cleanup();done("neterr");};
+  s.src=GAS_URL+"?action="+action+"&token="+encodeURIComponent(API_TOKEN)+"&callback="+name+"&_="+Date.now();
+  document.body.appendChild(s);}
+function rbNow(){if(RB.busy)return;RB.busy=true;rbBtnEnable(false);rbSet("⏳ 送出重算要求…");
+  rbJsonp("rebuild",function(err,res){
+    if(err){RB.busy=false;rbBtnEnable(true);rbSet("⚠️ 後端無回應。請 2 分鐘後重新整理看資料是否更新；一直失敗＝GAS 尚未部署新版本。","err");return;}
+    if(res&&res.ok&&res.id){RB.id=res.id;RB.pollN=0;rbSet("✅ 已排入重算，進行中…（約 2–3 分鐘，完成會在這裡提示）");
+      RB.pollT=setTimeout(rbPoll,20000);return;}
+    RB.busy=false;rbBtnEnable(true);
+    if(res&&res.busy){rbSet("⚠️ 後端正在重算中（"+(res.age!=null?res.age+" 秒前開始":"稍早排入")+"），請稍候再試。","err");}
+    else{rbSet("❌ 要求被拒："+((res&&res.msg)||"未知")+"（token 不符或版本未部署）","err");}});}
+function rbPoll(){rbJsonp("status",function(err,res){RB.pollN++;
+  var match=!err&&res&&res.id===RB.id;
+  if(match&&res.status==="done"){RB.busy=false;rbBtnEnable(true);
+    rbSet("✅ 重算完成！請重新整理頁面載入最新資料。","ok");toast("✅ 重算完成，請重新整理");return;}
+  if(match&&res.status==="error"){RB.busy=false;rbBtnEnable(true);
+    rbSet("❌ 重算失敗："+(res.msg||"詳見 GAS 執行紀錄"),"err");return;}
+  if(RB.pollN>=12){RB.busy=false;rbBtnEnable(true);
+    rbSet("⏱ 超過 4 分鐘未確認完成。請重新整理看資料是否已更新；異常請查 GAS 執行紀錄。","err");return;}
+  RB.pollT=setTimeout(rbPoll,20000);});}
 function viewOverview(){var rowsByStore=STORES.map(function(st){var need=liveItems(st.id).map(function(s){return {s:s,r:rowFor(st.id,s)};}).filter(function(x){return x.r.packs>0;});return {st:st,need:need.length,val:need.reduce(function(a,x){return a+x.r.packs*x.s.price;},0)};});
   var maxv=Math.max.apply(null,rowsByStore.map(function(r){return r.val;}).concat([1])),totV=rowsByStore.reduce(function(a,r){return a+r.val;},0);
-  var html='<div class="summary"><div class="stat"><div class="n">$'+fmt(totV)+'</div><div class="l">本週全店預估採購</div></div><div class="stat"><div class="n">'+STORES.length+'</div><div class="l">門市</div></div></div><div class="card"><div class="muted" style="margin-bottom:6px">各店預估採購金額</div>';
+  var html=rbCard()+'<div class="summary"><div class="stat"><div class="n">$'+fmt(totV)+'</div><div class="l">本週全店預估採購</div></div><div class="stat"><div class="n">'+STORES.length+'</div><div class="l">門市</div></div></div><div class="card"><div class="muted" style="margin-bottom:6px">各店預估採購金額</div>';
   rowsByStore.forEach(function(r){html+='<div style="margin:9px 0"><div style="display:flex;justify-content:space-between;font-size:13px"><b>'+r.st.name+'</b><span>$'+fmt(r.val)+'　·　'+r.need+' 項</span></div><div class="barbg" style="margin-top:4px"><div class="bar" style="width:'+(r.val/maxv*100)+'%"></div></div></div>';});
   html+='</div>';
   /* 盤點覆蓋（2026-08-05 l 批）：建議量＝訂貨點−現有；沒盤點的店，「現有」是空值、建議形同全額補貨。此卡給總部/經營者追各店落地進度。 */
