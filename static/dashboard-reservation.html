@@ -1,3 +1,7 @@
+<!-- 2026-08-27 v2.6：切換月份加速。①future／當月／上月只抓一次（原本每次切月都重抓，共 4 支）
+     ②月資料記憶體 LRU 快取（上限 6 個月，當月與上月釘住不淘汰）③改串行取數（GAS 同帳號序列執行，併發只塞車）
+     ④切月份改局部重繪（壓力矩陣／營收預估／健康警示不依賴選定月份）＋不再整頁消失
+     ⑤逐月回訪與月快取雙向共用，跑完後切最近幾個月皆為 0 次請求。 -->
 <!-- 2026-08-27 v2.5：月份下拉可選「未來月份」（資料來自 fact_reservations_future），當月自動併入月底尚未到店的訂位。
      切點＝歷史表最大日期，只補其後、不重複計算；涵蓋天數改數「實際有資料的不重複日期」以抓出中間的洞。 -->
 <!-- 2026-08-27 v2.4：明示歸月口徑「依客人到店日、非下訂日」（月份選擇器旁＋名詞說明＋有效訂位卡）；
@@ -299,6 +303,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
     <label>📅 月份</label>
     <select id="monthSel" class="month-sel"><option>載入中…</option></select>
     <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">🔄 重新整理</button>
+    <span id="monthBusy" style="display:none;font-size:13px;font-weight:700;color:var(--purple);">⏳ 載入中…</span>
     <span style="font-size:12px;color:var(--muted);font-weight:600;">依<b>客人到店日期</b>歸月，不是下訂日期</span>
   </div>
 
@@ -311,7 +316,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
   <div id="freshBox"></div>
   <div id="futBox"></div>
 
-  <div id="mainContent" style="display:none;">
+  <div id="mainContent" style="display:none;transition:opacity .15s;">
 
     <!-- 1. KPI -->
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
@@ -550,6 +555,60 @@ function remapRows(srcCols, srcRows, dstCols) {
   console.warn('[訂位儀表板] future 與 fact 欄位順序不同，已依欄名重排');
   return srcRows.map(r => map.map(i => (i < 0 ? '' : r[i])));
 }
+// 2026-08-27 v2.6：月資料快取（記憶體 LRU）
+// 切換月份原本每次重抓 4 支 API（選定月／future／當月／上月），其中 3 支跟選哪個月無關；
+// 加上 GAS 同帳號序列執行 → 每切一次都要排一輪隊。改為：future/當月/上月只抓一次，
+// 已看過的月份直接從記憶體拿。上限 6 個月，避免 20 萬列全留在記憶體。
+const MONTH_CACHE = {}, MONTH_LRU = [], MONTH_CACHE_MAX = 6;
+function cachePut(ym, r) {
+  MONTH_CACHE[ym] = r;
+  const i = MONTH_LRU.indexOf(ym); if (i >= 0) MONTH_LRU.splice(i, 1);
+  MONTH_LRU.push(ym);
+  // 當月與上月釘住不淘汰——它們是「近 28 天基準」與「當月營收預估」的基礎，
+  // 每次載入都要用。若被逐月回訪的掃描擠出快取，切回當月就得重抓。
+  const pin = { [curYm()]: 1, [prevYm()]: 1 };
+  while (MONTH_LRU.length > MONTH_CACHE_MAX) {
+    const j = MONTH_LRU.findIndex(y => !pin[y]);
+    if (j < 0) break;
+    delete MONTH_CACHE[MONTH_LRU.splice(j, 1)[0]];
+  }
+}
+function cacheGet(ym) {
+  const v = MONTH_CACHE[ym];
+  if (!v) return null;
+  const i = MONTH_LRU.indexOf(ym); if (i >= 0) { MONTH_LRU.splice(i, 1); MONTH_LRU.push(ym); }
+  return v;
+}
+function cacheClear() { Object.keys(MONTH_CACHE).forEach(k => delete MONTH_CACHE[k]); MONTH_LRU.length = 0; }
+async function getMonth(ym) {
+  const hit = cacheGet(ym);
+  if (hit) return hit;
+  let r;
+  try { r = await jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
+  catch (e) { r = { cols: [], rows: [] }; }
+  cachePut(ym, r);
+  return r;
+}
+let FUTURE_RAW = null;      // future 只抓一次（切月份時它不會變）
+let LOADED_ONCE = false;
+
+// 切換月份時不要整頁消失——只把內容淡化並在月份旁顯示小字，體感差很多
+function setBusy(on, partial) {
+  const lb = document.getElementById('loadingBox'), mc = document.getElementById('mainContent');
+  const sel = document.getElementById('monthSel'), btn = document.getElementById('refreshBtn');
+  const tip = document.getElementById('monthBusy');
+  if (sel) sel.disabled = on;
+  if (btn) btn.disabled = on;
+  if (partial) {
+    if (tip) tip.style.display = on ? 'inline' : 'none';
+    if (mc) { mc.style.opacity = on ? '.4' : ''; mc.style.pointerEvents = on ? 'none' : ''; }
+  } else {
+    if (tip) tip.style.display = 'none';
+    if (lb) lb.style.display = on ? 'block' : 'none';
+    if (mc) { mc.style.display = on ? 'none' : 'block'; mc.style.opacity = ''; mc.style.pointerEvents = ''; }
+  }
+}
+
 function minDateOf(rows, di) { let lo = ''; rows.forEach(r => { const d = r[di]; if (d && (!lo || d < lo)) lo = d; }); return lo; }
 function maxDateOf(rows, di) { let hi = ''; rows.forEach(r => { const d = r[di]; if (d && d > hi) hi = d; }); return hi; }
 
@@ -745,7 +804,7 @@ async function init() {
       + MONTHS.map(m => '<option value="' + m.ym + '">' + m.ym + '（' + m.rows + ' 筆）</option>').join('');
     selectedYm = MONTHS.some(m => m.ym === curYm()) ? curYm() : MONTHS[0].ym;
     sel.value = selectedYm;
-    sel.addEventListener('change', () => { selectedYm = sel.value; loadAndRender(); });
+    sel.addEventListener('change', () => { selectedYm = sel.value; loadAndRender({ partial: true }); });
     await loadAndRender();
     // 逐月回訪趨勢：主畫面渲染完再背景計算（有 12 小時快取，通常直接秒開）
     setTimeout(function(){ loadRevisitTrend(false); }, 1200);
@@ -755,30 +814,32 @@ async function init() {
   }
 }
 
-async function loadAndRender() {
-  document.getElementById('loadingBox').style.display = 'block';
-  document.getElementById('mainContent').style.display = 'none';
+async function loadAndRender(opt) {
+  opt = opt || {};
+  const force = !!opt.force;
+  const partial = !!opt.partial && LOADED_ONCE && !force;
+  if (force) { cacheClear(); FUTURE_RAW = null; }
+  setBusy(true, partial);
   document.getElementById('errorBox').innerHTML = '';
   try {
     const isFutMonth = FUTURE_YMS.indexOf(selectedYm) >= 0;
-    // v2.5：純未來月份不需要打歷史表（那邊本來就沒有資料）
-    const tasks = [
-      isFutMonth ? Promise.resolve({ cols: [], rows: [] })
-                 : jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(selectedYm)),
-      _futurePrefetch ? Promise.resolve(_futurePrefetch) : jsonp(API_BASE + '?fn=future')
-    ];
-    _futurePrefetch = null;   // 只用一次，之後（含按重新整理）都重抓最新的
-    if (isFutMonth || selectedYm !== curYm()) tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(curYm())));
+
+    // v2.6：串行取數。GAS 同帳號 Web App 是序列執行的，Promise.all 併發不會比較快，
+    // 只會讓「已經在快取裡的月份」也被塞在隊伍後面。
+    // future／當月／上月 這三支跟「選哪個月」無關 → 只抓一次，之後切月份完全不重抓。
+    if (!FUTURE_RAW) {
+      FUTURE_RAW = _futurePrefetch || await jsonp(API_BASE + '?fn=future');
+    }
+    _futurePrefetch = null;
+    const futureRes = FUTURE_RAW;
+    const monthRes = isFutMonth ? { cols: [], rows: [] } : await getMonth(selectedYm);
+    const curMonthRes = (!isFutMonth && selectedYm === curYm()) ? monthRes : await getMonth(curYm());
     // 2026-08-01：加載上個月，讓「近 28 天基準」在月初也成立（原本用當月，每月 1~3 號分母=0，標紅全失效）
-    tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(prevYm())).catch(() => ({ cols: [], rows: [] })));
-    const results = await Promise.all(tasks);
-    const monthRes = results[0], futureRes = results[1];
-    const prevMonthRes = results[results.length - 1];
-    const curMonthRes = (results.length > 3) ? results[2] : monthRes;
+    const prevMonthRes = await getMonth(prevYm());
 
     FUTURE = dropTest(futureRes.cols, futureRes.rows);
     const _fact = dropTest(monthRes.cols, monthRes.rows);
-    EXCLUDED_TEST = _fact.dropped;
+    EXCLUDED_TEST = isFutMonth ? FUTURE.dropped : _fact.dropped;
     CUR_SRC = { futureFrom: '', isFutureMonth: false };
 
     if (isFutMonth) {
@@ -805,40 +866,47 @@ async function loadAndRender() {
     const _bc = (CUR_MONTH_BASE.cols && CUR_MONTH_BASE.cols.length) ? CUR_MONTH_BASE.cols : (_pm.cols || []);
     BASE28 = { cols: _bc, rows: CUR_MONTH_BASE.rows.concat(_pm.rows), idx: buildIdx(_bc) };
 
-    renderAll();
-    document.getElementById('loadingBox').style.display = 'none';
-    document.getElementById('mainContent').style.display = 'block';
+    // 切換月份時，未來訂位壓力／營收預估／資料健康警示都不依賴選定月份 → 不必重畫
+    if (partial) renderMonthScope(); else renderAll();
+    LOADED_ONCE = true;
+    setBusy(false, partial);
 
-    // v2.3：POS 實際營收獨立背景載入（GAS 同帳號序列執行，不與訂位資料搶同一個請求）
-    // 拿到後只重繪營收預估區，主畫面不等它
-    POS_STATE = 'loading';
-    loadPosNet().then(() => { try { renderForecast(); } catch (_) {} });
+    if (!partial) {
+      // v2.3：POS 實際營收獨立背景載入（GAS 同帳號序列執行，不與訂位資料搶同一個請求）
+      // 拿到後只重繪營收預估區，主畫面不等它
+      POS_STATE = 'loading';
+      loadPosNet().then(() => { try { renderForecast(); } catch (_) {} });
+    }
   } catch (e) {
-    document.getElementById('loadingBox').style.display = 'none';
+    setBusy(false, partial);
     showError('資料載入失敗：' + e.message);
   }
 }
 
 function refreshAll() {
-  const btn = document.getElementById('refreshBtn');
-  btn.disabled = true;
-  loadAndRender().finally(() => { btn.disabled = false; });
+  // 「重新整理」＝清掉所有快取、向後端要最新的
+  loadAndRender({ force: true });
 }
 
 function showError(msg) {
   document.getElementById('errorBox').innerHTML = '<div class="err-msg">⚠️ ' + msg + '</div>';
 }
 
-function renderAll() {
+// 只依賴「選定月份」的區塊——切月份時只需要重畫這些
+function renderMonthScope() {
   renderKPI();
   renderDailyTrend();
   renderWeekSlotHeatmap();
   renderStoreCompare();
   renderPurpose();
-  renderFreshness();
-  renderPressure();
-  renderForecast();
   renderRevisit();
+  renderFutureNote();
+}
+function renderAll() {
+  renderMonthScope();
+  renderFreshness();   // 依 FUTURE / BASE28，與選定月份無關
+  renderPressure();    // 依 FUTURE / BASE28
+  renderForecast();    // 依 FUTURE / POS，永遠講「當月」
 }
 
 // ============ 共用小工具 ============
@@ -1323,8 +1391,10 @@ function renderFreshness() {
     }
   }
   box.innerHTML = html;
+}
 
-  // v2.5：選到未來月份 / 當月含未來段時，明白告訴使用者這些數字還會長
+// v2.5：選到未來月份 / 當月含未來段時，明白告訴使用者這些數字還會長
+function renderFutureNote() {
   const fb = document.getElementById('futBox');
   if (fb) {
     if (CUR_SRC.isFutureMonth) {
@@ -1698,9 +1768,14 @@ async function loadRevisitTrend(force) {
       box.innerHTML = '<div class="rv-prog"><div class="spin" style="width:18px;height:18px;border-width:2px;vertical-align:-3px"></div>'
         + '　正在計算 ' + ym + '（' + (i + 1) + ' / ' + yms.length + '）…第一次計算約需 20～60 秒，之後 12 小時內開啟都會直接顯示'
         + '<div class="rv-bar"><i style="width:' + Math.round((i / yms.length) * 100) + '%"></i></div></div>';
-      let res;
-      try { res = await jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
-      catch (e) { res = { cols: [], rows: [] }; }
+      // v2.6：與月份快取雙向共用——已抓過的直接用，新抓的也放進去。
+      // 回訪趨勢本來就會把每個月都讀一遍，跑完之後切換最近幾個月幾乎都是瞬間。
+      let res = cacheGet(ym);
+      if (!res) {
+        try { res = await jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
+        catch (e) { res = { cols: [], rows: [] }; }
+        cachePut(ym, res);
+      }
       const idx = buildIdx(res.cols || []);
       const cnt = {};
       (res.rows || []).forEach(r => {
