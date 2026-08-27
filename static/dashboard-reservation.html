@@ -1,3 +1,7 @@
+<!-- 2026-08-27 v2.5：月份下拉可選「未來月份」（資料來自 fact_reservations_future），當月自動併入月底尚未到店的訂位。
+     切點＝歷史表最大日期，只補其後、不重複計算；涵蓋天數改數「實際有資料的不重複日期」以抓出中間的洞。 -->
+<!-- 2026-08-27 v2.4：明示歸月口徑「依客人到店日、非下訂日」（月份選擇器旁＋名詞說明＋有效訂位卡）；
+     有效訂位卡新增「資料涵蓋 MM-DD～MM-DD（N / 全月天數）」與當月未成熟警語，避免拿未長完的當月去跟已結束月份比較。 -->
 <!-- 2026-08-27 v2.3：當月「已發生營收」改讀 POS 實際入帳（revenue_net），只有未來才用模型預估。
      切點＝POS 資料涵蓋日；POS 未同步的空窗用訂位模型補、畫面明示補幾天；讀不到 POS 自動退回模型並跳紅字。
      來源優先序：自有快取(3h) → POS 儀表板 localStorage 快取(6h，同網域免費) → POS 後端 JSONP(含冷啟動重試)。 -->
@@ -141,6 +145,8 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .fc-lo { opacity:.5; font-style:italic; }
 .fresh-warn { background:#FBE6E3; border:1px solid #F2BBB3; color:#B23A2C; padding:12px 16px; border-radius:12px; margin:0 0 14px; font-size:13px; line-height:1.7; }
 .fresh-warn b { font-weight:800; }
+.fut-note { background:#EFF3FB; border:1px solid #C9D6EE; color:#2A4370; padding:12px 16px; border-radius:12px; margin:0 0 14px; font-size:13px; line-height:1.8; }
+.fut-note b { font-weight:800; }
 
 /* 說明面板（2026-08-27 新增）*/
 .help-btn { background:var(--bg); border:1px solid var(--border); color:var(--purple-dark); font-family:inherit; font-size:12px; font-weight:700; padding:2px 10px; border-radius:12px; cursor:pointer; }
@@ -293,6 +299,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
     <label>📅 月份</label>
     <select id="monthSel" class="month-sel"><option>載入中…</option></select>
     <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">🔄 重新整理</button>
+    <span style="font-size:12px;color:var(--muted);font-weight:600;">依<b>客人到店日期</b>歸月，不是下訂日期</span>
   </div>
 
   <div id="loadingBox" class="loading">
@@ -302,6 +309,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 
   <div id="errorBox"></div>
   <div id="freshBox"></div>
+  <div id="futBox"></div>
 
   <div id="mainContent" style="display:none;">
 
@@ -318,6 +326,10 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
         <li><b>取消率</b>＝被取消的筆數 ÷ 當月全部訂位筆數（含取消）。分母是「所有進來過的訂位」。</li>
         <li><b>未勾出席率</b>＝已經過去的日子裡，狀態還停在「已訂位」但店端沒有勾「出席」的比例。</li>
       </ul>
+      <div class="eg"><b>📅 月份是怎麼歸的？依「客人到店的日子」，不是「客人下訂的日子」。</b><br>
+      選 2026-08 ＝ 到店日落在 8/1～8/31 的訂位。所以 <b>8 月下訂、9 月才來的客人不算在這裡</b>（會算進 9 月）；反過來 7 月下訂、8 月要來的客人有算進來。<br>
+      ⚠️ 來源系統<b>沒有記錄「訂位建立時間」</b>，所以無法回答「這個月收到幾筆訂位」「客人平均提前幾天訂」——已向訂位系統廠商提出加欄需求。<br><br>
+      <b>⏳ 當月的數字還沒長完，不要直接拿去跟上個月比。</b>兩個原因：① 月底那幾天的客人還沒到，訂位還會繼續進來；② 歷史資料是逐日抓的，最新幾天可能還沒入庫。下方「有效訂位」卡會顯示<b>資料實際涵蓋到哪一天</b>，看那個才準。要做月對月比較，請等該月完全結束後再看。</div>
       <div class="eg"><b>問：未勾出席率有沒有包含在取消率裡面？　答：完全沒有，兩者不重疊。</b><br>
       想像 100 筆訂位：其中 30 筆客人自己取消了 → <b>取消率 30%</b>。剩下 70 筆是有效訂位，這 70 筆裡有 12 筆到了當天沒有被勾出席 → <b>未勾出席率 ＝ 12 ÷ 70 ＝ 17.1%</b>。分母不一樣，一個是全部訂位、一個只算沒取消的。<br>
       <span class="warnline">注意：「未勾出席」不等於「客人沒來」。</span>兩種可能——① 客人真的放鳥沒出現；② 客人有來，但店端當天忘了在後台勾出席。所以這個數字要先當成<b>現場作業紀律指標</b>看：數字特別高的店，先確認是不是根本沒在勾，再談客人放鳥。</div>
@@ -523,6 +535,23 @@ let FUTURE = { cols: [], rows: [], idx: {} };         // fn=future 資料
 let CUR_MONTH_BASE = { cols: [], rows: [], idx: {} };
 let BASE28 = { cols: [], rows: [], idx: {} };            // 近 28 天滾動基準（跨月，供壓力矩陣與預估用） // 實際「本月」歷史資料（供未來壓力基準用，與下拉選單月份脫鉤）
 let selectedYm = '';
+// 2026-08-27 v2.5：未來月份支援
+// 訂位資料分兩張表——fact_reservations（已過去的日子）與 fact_reservations_future（今天～+35 天）。
+// 原本月份下拉只讀歷史表，所以「客人已經訂了下個月」完全看不到，連當月月底那幾天也被漏掉。
+let FUTURE_YMS = [];                                   // 只存在於 future 表的月份（例：2026-09）
+let CUR_SRC = { futureFrom: '', isFutureMonth: false }; // 目前這個月從哪一天起是「尚未發生的訂位」
+let _futurePrefetch = null;                            // init 已抓過一次 future，首次載入不重抓
+
+// future 與 fact 的欄位順序理論上相同；不同時依欄名重排，避免錯位
+function remapRows(srcCols, srcRows, dstCols) {
+  if (!srcRows.length) return [];
+  if (srcCols.join('\u0001') === dstCols.join('\u0001')) return srcRows;
+  const map = dstCols.map(c => srcCols.indexOf(c));
+  console.warn('[訂位儀表板] future 與 fact 欄位順序不同，已依欄名重排');
+  return srcRows.map(r => map.map(i => (i < 0 ? '' : r[i])));
+}
+function minDateOf(rows, di) { let lo = ''; rows.forEach(r => { const d = r[di]; if (d && (!lo || d < lo)) lo = d; }); return lo; }
+function maxDateOf(rows, di) { let hi = ''; rows.forEach(r => { const d = r[di]; if (d && d > hi) hi = d; }); return hi; }
 
 function todayStr() {
   const d = new Date();
@@ -696,7 +725,24 @@ async function init() {
       showError('目前沒有任何月份資料');
       return;
     }
-    sel.innerHTML = MONTHS.map(m => '<option value="' + m.ym + '">' + m.ym + '（' + m.rows + ' 筆）</option>').join('');
+    // v2.5：先抓一次 future，找出「只存在於未來表」的月份（例：客人已訂 9 月）
+    try { _futurePrefetch = await jsonp(API_BASE + '?fn=future'); } catch (_) { _futurePrefetch = null; }
+    const _f = dropTest(_futurePrefetch && _futurePrefetch.cols, _futurePrefetch && _futurePrefetch.rows);
+    const _today = todayStr();
+    const _have = new Set(MONTHS.map(m => m.ym));
+    const _cnt = {};
+    _f.rows.forEach(r => {
+      const d = r[_f.idx.date];
+      if (!d || d < _today) return;
+      const y = d.slice(0, 7);
+      if (_have.has(y)) return;              // 已在歷史表的月份不重複列
+      _cnt[y] = (_cnt[y] || 0) + 1;
+    });
+    FUTURE_YMS = Object.keys(_cnt).sort();
+
+    sel.innerHTML =
+        FUTURE_YMS.slice().reverse().map(y => '<option value="' + y + '">' + y + '（未來訂位 ' + _cnt[y].toLocaleString() + ' 筆）</option>').join('')
+      + MONTHS.map(m => '<option value="' + m.ym + '">' + m.ym + '（' + m.rows + ' 筆）</option>').join('');
     selectedYm = MONTHS.some(m => m.ym === curYm()) ? curYm() : MONTHS[0].ym;
     sel.value = selectedYm;
     sel.addEventListener('change', () => { selectedYm = sel.value; loadAndRender(); });
@@ -714,8 +760,15 @@ async function loadAndRender() {
   document.getElementById('mainContent').style.display = 'none';
   document.getElementById('errorBox').innerHTML = '';
   try {
-    const tasks = [jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(selectedYm)), jsonp(API_BASE + '?fn=future')];
-    if (selectedYm !== curYm()) tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(curYm())));
+    const isFutMonth = FUTURE_YMS.indexOf(selectedYm) >= 0;
+    // v2.5：純未來月份不需要打歷史表（那邊本來就沒有資料）
+    const tasks = [
+      isFutMonth ? Promise.resolve({ cols: [], rows: [] })
+                 : jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(selectedYm)),
+      _futurePrefetch ? Promise.resolve(_futurePrefetch) : jsonp(API_BASE + '?fn=future')
+    ];
+    _futurePrefetch = null;   // 只用一次，之後（含按重新整理）都重抓最新的
+    if (isFutMonth || selectedYm !== curYm()) tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(curYm())));
     // 2026-08-01：加載上個月，讓「近 28 天基準」在月初也成立（原本用當月，每月 1~3 號分母=0，標紅全失效）
     tasks.push(jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(prevYm())).catch(() => ({ cols: [], rows: [] })));
     const results = await Promise.all(tasks);
@@ -723,9 +776,30 @@ async function loadAndRender() {
     const prevMonthRes = results[results.length - 1];
     const curMonthRes = (results.length > 3) ? results[2] : monthRes;
 
-    CUR = dropTest(monthRes.cols, monthRes.rows);
-    EXCLUDED_TEST = CUR.dropped;
     FUTURE = dropTest(futureRes.cols, futureRes.rows);
+    const _fact = dropTest(monthRes.cols, monthRes.rows);
+    EXCLUDED_TEST = _fact.dropped;
+    CUR_SRC = { futureFrom: '', isFutureMonth: false };
+
+    if (isFutMonth) {
+      // 整個月都還沒發生 → 資料全部來自 future 表
+      const rows = FUTURE.rows.filter(r => String(r[FUTURE.idx.date] || '').slice(0, 7) === selectedYm);
+      CUR = { cols: FUTURE.cols, rows: rows, idx: FUTURE.idx };
+      CUR_SRC = { futureFrom: minDateOf(rows, FUTURE.idx.date), isFutureMonth: true };
+    } else if (selectedYm === curYm()) {
+      // 當月＝歷史表（已過去）＋ future 表（月底那幾天，已經收到但還沒發生）
+      // 以歷史表最大日期為切點，只補它之後的，保證不重複計算
+      const fMax = maxDateOf(_fact.rows, _fact.idx.date);
+      const extraSrc = FUTURE.rows.filter(r => {
+        const d = String(r[FUTURE.idx.date] || '');
+        return d.slice(0, 7) === selectedYm && d > fMax;
+      });
+      const extra = remapRows(FUTURE.cols, extraSrc, _fact.cols);
+      CUR = { cols: _fact.cols, rows: _fact.rows.concat(extra), idx: _fact.idx };
+      CUR_SRC = { futureFrom: extra.length ? minDateOf(extraSrc, FUTURE.idx.date) : '', isFutureMonth: false };
+    } else {
+      CUR = _fact;
+    }
     CUR_MONTH_BASE = dropTest(curMonthRes.cols, curMonthRes.rows);
     const _pm = dropTest(prevMonthRes.cols, prevMonthRes.rows);
     const _bc = (CUR_MONTH_BASE.cols && CUR_MONTH_BASE.cols.length) ? CUR_MONTH_BASE.cols : (_pm.cols || []);
@@ -778,6 +852,35 @@ function renderKPI() {
   const valid = rows.filter(r => isValid(r, idx));
   const cancelled = rows.filter(r => !isValid(r, idx));
 
+  // 2026-08-27 v2.4／v2.5：資料實際涵蓋狀況
+  // 注意：不能用「最早～最晚」的天數差當涵蓋天數——中間可能有洞（例：歷史抓到 25 號、
+  // 未來表從 27 號起，26 號其實是缺的）。必須數「實際有資料的不重複日期」。
+  const dset = new Set();
+  rows.forEach(r => { const d = r[idx.date]; if (d) dset.add(d); });
+  const dLo = dset.size ? [...dset].sort()[0] : '';
+  const dHi = dset.size ? [...dset].sort()[dset.size - 1] : '';
+  const dim0 = new Date(Number(selectedYm.slice(0, 4)), Number(selectedYm.slice(5, 7)), 0).getDate();
+  const isCurMonth = (selectedYm === curYm());
+  const tdy = todayStr();
+  let holes = 0;                       // 已經過去、卻沒有資料的日子＝真正的資料洞
+  for (let i = 1; i <= dim0; i++) {
+    const ds = selectedYm + '-' + String(i).padStart(2, '0');
+    if (ds < tdy && !dset.has(ds)) holes++;
+  }
+  let coverTxt = '';
+  if (dset.size) {
+    const hasFut = CUR_SRC.isFutureMonth || !!CUR_SRC.futureFrom;
+    coverTxt = '資料涵蓋 ' + dLo.slice(5) + '～' + dHi.slice(5) + '（' + dset.size + ' / ' + dim0 + ' 天）'
+      + (holes > 0 ? '　⚠️ 過去日期缺 ' + holes + ' 天資料'
+         : hasFut ? '　⏳ 含未來訂位，數字還會再長'
+         : isCurMonth ? '　⏳ 本月未結束'
+         : dset.size >= dim0 ? '　✅ 全月完整' : '　⚠️ 未涵蓋整月');
+  }
+  const futFrom = CUR_SRC.futureFrom;
+  const futTxt = CUR_SRC.isFutureMonth
+    ? '🔮 整個月都是<b>未來訂位</b>——客人已經訂了，但還沒到店，數字每天都會增加'
+    : (futFrom ? '🔮 其中 <b>' + futFrom.slice(5) + ' 起</b>為未來訂位（尚未到店，還會再增加）' : '');
+
   const totalParty = valid.reduce((s, r) => s + (Number(r[idx.party_size]) || 0), 0);
   const cancelRate = pct(cancelled.length, rows.length);
 
@@ -792,13 +895,20 @@ function renderKPI() {
   const recipePerPerson = totalParty > 0 ? (totalRecipes / totalParty) : null;
 
   const cards = [
-    { label: '有效訂位', val: valid.length.toLocaleString(), sub: selectedYm + ' 共 ' + rows.length.toLocaleString() + ' 筆（含取消）',
-      help: '<b>算法：</b>當月狀態為「已訂位」或「已付訂金」的筆數，也就是<b>沒有被取消</b>的訂位。下方「共 ' + rows.length.toLocaleString() + ' 筆」是含取消的全部訂位量。<br>只要客人沒按取消就算有效，<b>跟客人最後有沒有到店無關</b>。' },
+    { label: '有效訂位', val: valid.length.toLocaleString(),
+      sub: selectedYm + ' 共 ' + rows.length.toLocaleString() + ' 筆（含取消）'
+        + (coverTxt ? '<br>' + coverTxt : '') + (futTxt ? '<br>' + futTxt : ''),
+      help: '<b>算法：</b>狀態為「已訂位」或「已付訂金」的筆數，也就是<b>沒有被取消</b>的訂位。「共 ' + rows.length.toLocaleString() + ' 筆」是含取消的全部訂位量。只要客人沒按取消就算有效，<b>跟客人最後有沒有到店無關</b>。<br>'
+        + '<b>📅 歸月方式：依「客人到店的日子」</b>，不是下訂日子。所以 ' + selectedYm + ' 下訂、下個月才來的客人<b>不算在這裡</b>。<br>'
+        + (coverTxt ? '<b>⏳ 目前涵蓋：</b>' + coverTxt.replace('資料涵蓋 ', '') + (isCurMonth ? '。當月數字尚未成熟，不要直接拿去跟已結束的月份比。' : '') : '') },
     { label: '總人數', val: totalParty.toLocaleString() + ' 人', sub: '有效訂位合計人數',
       help: '<b>算法：</b>把每一筆有效訂位的「人數」欄加總，<b>含陪同者</b>。已取消的訂位不計入。<br>這是預估到店人流，不是實際到店人數。' },
     { label: '取消率', val: fmtPct(cancelRate), sub: cancelled.length.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' 筆', alert: cancelRate !== null && cancelRate > 30,
       help: '<b>算法：</b>' + cancelled.length.toLocaleString() + ' 筆已取消 ÷ ' + rows.length.toLocaleString() + ' 筆全部訂位（含取消）＝ ' + fmtPct(cancelRate) + '。<br><b>只算客人主動取消的</b>；沒取消但沒來的不在這裡，那是右邊的「未勾出席率」。超過 30% 會轉紅。' },
-    { label: '未勾出席率', val: fmtPct(noAttendRate), sub: '過去日已訂位 ' + pastBooked.length.toLocaleString() + ' 筆中未勾', alert: noAttendRate !== null && noAttendRate > 30,
+    { label: '未勾出席率', val: fmtPct(noAttendRate),
+      sub: pastBooked.length === 0 ? '本月尚無已過去的日子，無法計算'
+                                   : '過去日已訂位 ' + pastBooked.length.toLocaleString() + ' 筆中未勾',
+      alert: noAttendRate !== null && noAttendRate > 30,
       help: '<b>算法：</b>' + pastBookedNoAttend.length.toLocaleString() + ' ÷ ' + pastBooked.length.toLocaleString() + ' ＝ ' + fmtPct(noAttendRate) + '。分母＝日期已經過去、狀態仍是「已訂位」的筆數；分子＝其中店端沒有勾「出席」的。<br><b>已取消的完全不在分母裡，所以跟左邊的取消率不重疊、不會重複計算。</b><br>數字偏高有兩種可能：客人放鳥，或店端當天忘了勾出席——先確認是哪一種再處理。' },
     { label: '陪同率', val: fmtPct(companionRate), sub: '陪同 ' + totalCompanions.toLocaleString() + ' / 人數 ' + totalParty.toLocaleString(),
       help: '<b>算法：</b>陪同人數 ÷ 總人數。陪同＝<b>只陪著來、不做甜點</b>的人（例如家長帶小孩）。<br>這個數字越高，代表座位被佔用但沒有產生食譜收入，是評估翻桌效率的參考。' },
@@ -1213,6 +1323,25 @@ function renderFreshness() {
     }
   }
   box.innerHTML = html;
+
+  // v2.5：選到未來月份 / 當月含未來段時，明白告訴使用者這些數字還會長
+  const fb = document.getElementById('futBox');
+  if (fb) {
+    if (CUR_SRC.isFutureMonth) {
+      fb.innerHTML = '<div class="fut-note"><b>🔮 你正在看未來月份 ' + selectedYm + '</b>　'
+        + '這些是<b>客人已經訂好、但還沒到店</b>的訂位，資料來自「未來訂位表」。<br>'
+        + '① 數字每天都會增加——越後面的日子收到的訂位越少，這是正常的，不代表生意差。<br>'
+        + '② <b>取消率會偏低</b>：大部分取消發生在接近到店日的時候，現在還沒發生。<br>'
+        + '③ <b>未勾出席率無法計算</b>：客人都還沒來。<br>'
+        + '④ 未來訂位表只涵蓋今天起約 35 天，所以更遠的月份會只有前半段或看不到。</div>';
+    } else if (CUR_SRC.futureFrom) {
+      fb.innerHTML = '<div class="fut-note"><b>ℹ️ 本月 ' + CUR_SRC.futureFrom.slice(5) + ' 起的訂位尚未到店</b>　'
+        + '已經收到的部分都算進下面的數字了，但那幾天還會再增加，<b>取消率也還會往上走</b>。'
+        + '要做月對月比較，請等整個月結束後再看。</div>';
+    } else {
+      fb.innerHTML = '';
+    }
+  }
 }
 
 function renderForecast() {
