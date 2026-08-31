@@ -31,6 +31,7 @@
   .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 16px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
   .dsb b{font-weight:800;white-space:nowrap}
   .dsb-auto{background:#EFF7EF;border-color:#C9E3CA;color:#2F5D33}
+  .dsb-warn{background:#FFF4E5;border-color:#F0B35A;color:#8A5A00}
   .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
   .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#4A3A30;font-size:13px}
   .dsb-sop.open{display:block}
@@ -256,7 +257,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="h-top"><a href="hub.html" class="home">⬅ 回首頁</a><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:12px"></span></div>
+    <div class="h-top"><a href="hub.html" class="home">⬅ 回首頁</a><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:12px"></span><button id="refreshBtn" title="重新讀取 Sheet 最新資料（不重算，只重讀）" style="margin-left:8px;border:1px solid #cfeacd;background:transparent;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer">🔄 更新</button></div>
     <div class="selrow">
       <select id="roleSel"><option value="店長">店長</option><option value="總部">總部／經營者</option></select>
       <select id="storeSel"></select>
@@ -275,6 +276,7 @@
       </ol>
     </div>
   </div>
+  <div class="dsb dsb-warn" id="gvWarn" style="display:none"></div>
   <main id="view"><div class="loading"><div class="spin"></div><div style="margin-top:12px">讀取資料中…</div></div></main>
 </div>
 <div class="toast" id="toast"></div>
@@ -303,30 +305,66 @@ var SKUS=[],STORES=[],AGG={},PARAM={},INV={},SIDX={},SFACT={low:0.8,high:1.2},UN
 var SKU={}; // sku_id -> sku
 var BKNEED=null,BOMROWS=null; // 期間備料結果／BOM 表快取
 var PLABEL={"上週":"上週週平均","近4週":"近4週週平均","近8週":"近8週週平均"};
-var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",cmpSku:"",cmpFrom:"",cmpTo:"",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anMCat:"全部",anAllS:false,anAllM:false,anDrill:"",anDrillMode:"規格",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",adjSku:"",adjVal:"",adjNote:"",saveWarn:null,writeWarn:[],exp:{},showExcl:false,orderEdit:{},orderOff:{}};
+var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",season:true,seasonMode:"自動",needOnly:true,qmode:"期間統計",qperiod:"近4週",anFrom:"",anTo:"",anStore:"",anC1:"",anC2:"",anQ:"",anQF:false,anMCat:"全部",anAllS:false,anAllM:false,anDrill:"",anDrillMode:"規格",totFrom:"",totTo:"",totSku:"",totScope:"全公司",totCat:"全部",totQ:"",totAll:false,totQF:false,salesQ:"",salesAll:false,salesQF:false,q:"",qFocus:false,vq:"",invFilter:"全部",adjSku:"",adjVal:"",adjNote:"",saveWarn:null,writeWarn:[],exp:{},showExcl:false,orderEdit:{},orderOff:{}};
 
+/* ── 資料源讀取（2026-08-31 t 批）────────────────────────────────────────
+   Google Sheet 被人貼資料／跑腳本時會整份鎖住重算，gviz 可能十幾分鐘不回應。
+   舊行為：等 20 秒 → 靜默回 [] → 畫面像「沒資料」，店長無法分辨是沒貨還是壞了。
+   新行為：讀成功 → 存一份到瀏覽器（localStorage）；讀失敗／逾時 → 改用上次成功的那份，
+           並在頁面上方亮橘色警示列說明「資料源忙碌中、顯示的是幾點的資料」。
+   回傳陣列可能帶兩個標記：rows.__cached＝快取時間戳（用的是舊資料）／rows.__failed＝true（連舊資料都沒有）。
+   呼叫端不需要改；需要區分來源的（如 loadAnalDims）自己看標記。 */
+var GV={bad:{},TIMEOUT:20000,MAXCACHE:1500000,MAXQ:40};
+function gvHash(str){var h=0;for(var i=0;i<str.length;i++){h=((h<<5)-h+str.charCodeAt(i))|0;}return (h>>>0).toString(36);}
+function gvcGet(key){try{var t=localStorage.getItem("dpc:"+key);if(!t)return null;var o=JSON.parse(t);if(!o||!o.d)return null;return o;}catch(e){return null;}}
+function gvcSet(key,rows){
+  try{var t=JSON.stringify({t:Date.now(),d:rows});if(t.length>GV.MAXCACHE)return;
+    try{localStorage.setItem("dpc:"+key,t);}catch(e1){gvcEvict(true);try{localStorage.setItem("dpc:"+key,t);}catch(e2){}}
+    if(key.indexOf("gq:")===0)gvcEvict(false);
+  }catch(e){}}
+function gvcEvict(hard){ /* 查詢快取只留最近 MAXQ 筆；hard＝空間不足時砍一半 */
+  try{var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf("dpc:gq:")===0)ks.push(k);}
+    var lim=hard?Math.floor(GV.MAXQ/2):GV.MAXQ;if(ks.length<=lim)return;
+    ks.sort(function(a,b){var ta=0,tb=0;try{ta=JSON.parse(localStorage.getItem(a)).t||0;}catch(e){}try{tb=JSON.parse(localStorage.getItem(b)).t||0;}catch(e){}return ta-tb;});
+    ks.slice(0,ks.length-lim).forEach(function(k){localStorage.removeItem(k);});
+  }catch(e){}}
+function gvBanner(){
+  var el=document.getElementById("gvWarn");if(!el)return;
+  var ks=Object.keys(GV.bad);if(!ks.length){el.style.display="none";el.innerHTML="";return;}
+  var oldest=null,noCache=0;ks.forEach(function(k){var b=GV.bad[k];if(b.cached){if(oldest===null||b.cached<oldest)oldest=b.cached;}else noCache++;});
+  function hm(t){var d=new Date(t);return (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
+  var msg;
+  if(noCache===0)msg='<b>⚠️ 資料源忙碌中</b><span>Google Sheet 可能正在重算（有人貼資料或跑腳本）。目前顯示的是 <b>'+hm(oldest)+'</b> 讀到的資料，數字可能不是最新；稍後重新整理即可更新。</span>';
+  else if(oldest===null)msg='<b>⚠️ 資料源沒有回應</b><span>Google Sheet 可能正在重算（有人貼資料或跑腳本），而且這台裝置沒有先前的資料可用。請等幾分鐘後重新整理；若持續超過 30 分鐘請通知總部。</span>';
+  else msg='<b>⚠️ 資料源忙碌中</b><span>部分資料改用 <b>'+hm(oldest)+'</b> 的舊資料，另有 '+noCache+' 張表完全讀不到。請等幾分鐘後重新整理。</span>';
+  el.innerHTML=msg;el.style.display="";
+}
+function gvCore(url,key,tag){
+  var p=fetch(url).then(function(r){return r.text();}).then(function(t){
+    var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
+    var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
+    var rows=((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
+    gvcSet(key,rows);return {ok:true,rows:rows};
+  }).catch(function(e){console.warn('gviz '+tag+' 失敗',e);return {ok:false};});
+  var to=new Promise(function(res){setTimeout(function(){res({ok:false,timeout:true});},GV.TIMEOUT);});
+  return Promise.race([p,to]).then(function(r){
+    if(r.ok){delete GV.bad[key];gvBanner();return r.rows;}
+    var c=gvcGet(key);var rows;
+    if(c){rows=c.d;rows.__cached=c.t;GV.bad[key]={cached:c.t,tag:tag};}
+    else{rows=[];rows.__failed=true;GV.bad[key]={cached:false,tag:tag};}
+    console.warn('gviz '+tag+(r.timeout?' 逾時':' 失敗')+(c?'，改用 '+new Date(c.t).toLocaleString()+' 的快取':'，且無快取'));
+    gvBanner();return rows;
+  });
+}
 function gviz(sheetName){
   var url='https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName);
-  var p=fetch(url).then(function(r){return r.text();}).then(function(t){
-    var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
-    var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
-    return ((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
-  }).catch(function(e){console.warn('gviz '+sheetName+' 失敗',e);return [];});
-  return Promise.race([p, new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
+  return gvCore(url,"gv:"+SHEET_ID+":"+sheetName,sheetName);
 }
 function gvizQ(sheetName,tq,ssid){
-  var url='https://docs.google.com/spreadsheets/d/'+(ssid||SHEET_ID)+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName)+'&tq='+encodeURIComponent(tq);
-  var p=fetch(url).then(function(r){return r.text();}).then(function(t){
-    var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
-    var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
-    return ((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
-  }).catch(function(e){console.warn('gvizQ 失敗',e);return [];});
-  return Promise.race([p,new Promise(function(res){setTimeout(function(){res([]);},20000);})]);
+  var id=ssid||SHEET_ID;
+  var url='https://docs.google.com/spreadsheets/d/'+id+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheetName)+'&tq='+encodeURIComponent(tq);
+  return gvCore(url,"gq:"+id+":"+sheetName+":"+gvHash(tq),sheetName);
 }
-function isoWeekOf(d){var t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));var day=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-day);var ys=new Date(Date.UTC(t.getUTCFullYear(),0,1));var wk=Math.ceil((((t-ys)/86400000)+1)/7);return t.getUTCFullYear()+'-W'+(wk<10?'0':'')+wk;}
-function lastWeeks(n){var a=[],d=new Date();for(var i=0;i<n;i++){a.unshift(isoWeekOf(new Date(d.getTime()-i*7*86400000)));}return a;}
-function weekMonday(label){var m=label.match(/(\d{4})-W(\d{2})/);if(!m)return'';var y=+m[1],w=+m[2];var jan4=new Date(Date.UTC(y,0,4));var mon=new Date(jan4.getTime()-((jan4.getUTCDay()||7)-1)*86400000+(w-1)*7*86400000);return (mon.getUTCMonth()+1)+'/'+mon.getUTCDate();}
-var CMPRES=null;
 function gvDate(v){if(v==null||v==="")return null;if(v instanceof Date)return isNaN(v)?null:v;
   if(typeof v==="string"){var m=v.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?/);
     if(m)return new Date(+m[1],+m[2],+m[3],+(m[4]||0),+(m[5]||0),+(m[6]||0));
@@ -335,7 +373,22 @@ function gvDate(v){if(v==null||v==="")return null;if(v instanceof Date)return is
 function ymd(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 function toBool(x){return x===true||x==="TRUE"||x==="true"||x===1||x==="1";}
 
-async function bootstrap(){ try {
+function stampUpd(){var el=$("#upd");if(!el)return;var d=new Date();el.textContent="已更新 "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
+/* 2026-08-31 t 批 Q1：表頭「🔄 更新」＝重讀全部 Sheet 表（不觸發後端重算），改完店別參數／盤點後立刻看到最新值。
+   keep=true 時保留目前門市與分頁，且不重跑初始 render／loadStoreFlow（由 refreshAll 自己接手）。 */
+var RF={busy:false};
+function refreshAll(){
+  if(RF.busy)return;RF.busy=true;
+  var el=$("#upd");if(el)el.textContent="更新中…";
+  Object.keys(GV.bad).forEach(function(k){delete GV.bad[k];});
+  ANMAP=null;ANBOM=null;AN_FAILED=false;SHIST={};FLOWST="";
+  return bootstrap(true).then(function(){
+    RF.busy=false;stampUpd();
+    try{render();}catch(e){console.warn(e);}
+    loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
+    toast("已重新讀取最新資料");
+  });}
+async function bootstrap(keep){ try {
   var res=await Promise.all([gviz('dim_sku'),gviz('dim_store_par'),gviz('agg_purchase'),gviz('agg_container'),gviz('dim_season'),gviz('dim_unitconv'),gviz('fact_inventory'),gviz('agg_booking'),gviz('dim_dessert'),gviz('fact_booking'),gviz('dim_event'),gviz('agg_newitem'),gviz('ref_sku_price')]);
   var dSku=res[0],dPar=res[1],aP=res[2],aC=res[3],dS=res[4],dU=res[5],fInv=res[6],aB=res[7],dD=res[8],fB=res[9],dEv=res[10]||[],dNi=res[11]||[];
   /* 2026-08-19 單價參考層：ref_sku_price 唯讀（缺席/失敗時 gviz 已回 [] → REFP={} 靜默降級）。
@@ -368,13 +421,15 @@ async function bootstrap(){ try {
   delete storeSet["13"];
   STORES=Object.keys(storeSet).sort(function(a,b){var na=+a,nb=+b;if(!isNaN(na)&&!isNaN(nb))return na-nb;return String(a).localeCompare(String(b));}).map(function(id){return {id:id,name:id+"號店"};});
   if(!STORES.length)STORES=[{id:"1",name:"1號店"}];
-  ST.storeId=STORES[0].id;
+  if(!keep||!ST.storeId||!STORES.some(function(s){return s.id===ST.storeId;}))ST.storeId=STORES[0].id;
   $("#storeSel").innerHTML=STORES.map(function(s){return '<option value="'+s.id+'">'+s.name+'</option>';}).join("");
-  $("#upd").textContent="已更新";
+  $("#storeSel").value=ST.storeId;
+  stampUpd();
   } catch(e){ console.warn("bootstrap 發生問題",e); }
   if(!STORES.length){STORES=[{id:"1",name:"1號店"}];}
   if(!ST.storeId)ST.storeId=STORES[0].id;
   if(!$("#storeSel").options.length)$("#storeSel").innerHTML=STORES.map(function(s){return '<option value="'+s.id+'">'+s.name+'</option>';}).join("");
+  if(keep)return;
   try{ render(); }catch(e2){ console.warn(e2); $("#view").innerHTML='<div class="card">載入發生問題，請重新整理頁面；若持續，回報我。</div>'; }
   loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
 }
@@ -908,31 +963,6 @@ function viewPlog(){
   h+='</table></div><div class="muted">顯示最近 '+rows.length+' 筆</div>';return h;}
 
 /* ===== 查詢 ===== */
-function viewCompare(){
-  var wks=lastWeeks(26);
-  if(!ST.cmpFrom||wks.indexOf(ST.cmpFrom)<0)ST.cmpFrom=wks[wks.length-4];
-  if(!ST.cmpTo||wks.indexOf(ST.cmpTo)<0)ST.cmpTo=wks[wks.length-1];
-  var opts=SKUS.slice().sort(function(a,b){return (a.cat+a.name)<(b.cat+b.name)?-1:1;})
-    .map(function(s){return '<option value="'+s.id+'"'+(s.id===ST.cmpSku?' selected':'')+'>'+s.cat+'｜'+s.name+'</option>';}).join('');
-  function wsel(id,val){return '<select class="sm" id="'+id+'">'+wks.map(function(w){return '<option value="'+w+'"'+(w===val?' selected':'')+'>'+w.slice(5)+'週('+weekMonday(w)+'~)</option>';}).join('')+'</select>';}
-  var h='<div class="note">12 店同品項比較 · 週粒度（起訖含），資料滾動保留 26 週。器具/模具無耗用資料，備品(非BOM)僅估計不在此列。</div>';
-  h+='<div class="card"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select class="sm" id="cmpSku" style="max-width:230px"><option value="">— 選品項 —</option>'+opts+'</select>'
-    +wsel("cmpFrom",ST.cmpFrom)+'<span class="muted">→</span>'+wsel("cmpTo",ST.cmpTo)
-    +'<button class="btn" id="cmpRun">查詢</button></div></div>';
-  if(CMPRES&&CMPRES.sku===ST.cmpSku&&CMPRES.from===ST.cmpFrom&&CMPRES.to===ST.cmpTo){
-    var s=skuById(ST.cmpSku),rows=CMPRES.rows,tot=0,max=0,nw=CMPRES.nWeeks;
-    rows.forEach(function(r){tot+=r.qty;if(r.qty>max)max=r.qty;});
-    var avg=rows.length?tot/rows.length:0;
-    h+='<div class="card"><table><tr><th>店</th><th class="right">用量('+s.useUnit+')</th><th class="right">換算採購</th><th class="right">週平均</th><th class="right">vs 全店均</th><th style="width:30%"></th></tr>';
-    rows.sort(function(a,b){return b.qty-a.qty;}).forEach(function(r){
-      var pk=s.packQty>0?(r.qty/s.packQty):0, dv=avg>0?Math.round((r.qty/avg-1)*100):0;
-      h+='<tr><td><b>'+storeName(r.store)+'</b></td><td class="right"><b>'+fmt(r.qty)+'</b></td><td class="right">'+dec(pk)+' '+s.buyUnit+'</td><td class="right">'+fmt(r.qty/nw)+'</td>'
-        +'<td class="right" style="color:'+(dv>15?'#C0392B':dv<-15?'#2E7D32':'#55606E')+'">'+(dv>0?'+':'')+dv+'%</td>'
-        +'<td><div style="background:#DCEBDD;height:12px;border-radius:6px;width:'+(max?Math.round(r.qty/max*100):0)+'%"></div></td></tr>';});
-    h+='<tr><td><b>合計</b></td><td class="right"><b>'+fmt(tot)+'</b></td><td class="right">'+(s.packQty>0?dec(tot/s.packQty)+' '+s.buyUnit:'')+'</td><td class="right">'+fmt(tot/nw||0)+'</td><td></td><td></td></tr></table></div>';
-    if(!rows.length)h+='<div class="note">此期間無用量資料。</div>';
-  }else if(CMPRES==="loading"){h+='<div class="note">查詢中…</div>';}
-  return h;}
 function skuById(id){for(var i=0;i<SKUS.length;i++)if(SKUS[i].id===id)return SKUS[i];return {useUnit:"",buyUnit:"",packQty:0};}
 function loadStoreFlow(st){if(FLOWST===String(st))return Promise.resolve();FLOWST=String(st);USAGED={};ORDERS=[];
   return Promise.all([
@@ -973,24 +1003,17 @@ function runPeriod(){ if(!ST.totFrom||!ST.totTo){toast("請選起迄月份");ret
   if(ST.totFrom>ST.totTo){toast("起月不能大於迄月");return;}
   TOTRES=null;ST.totSku="";ST.totAll=false;ST.salesAll=false;
   runSales();runRank();}
-function runCompare(){var sk=ST.cmpSku;if(!sk){toast("請先選品項");return;}
-  CMPRES="loading";render();
-  gvizQ("agg_usage_week","select A,C,D where B='"+sk+"'").then(function(rs){
-    var f=ST.cmpFrom,t=ST.cmpTo,by={},wkset={};
-    rs.forEach(function(r){var w=String(r["週"]||"");if(w>=f&&w<=t){var st=String(r["店號"]);by[st]=(by[st]||0)+(+r["用量"]||0);wkset[w]=1;}});
-    var wksAll=lastWeeks(26),i1=wksAll.indexOf(f),i2=wksAll.indexOf(t),nW=(i1>=0&&i2>=i1)?(i2-i1+1):Object.keys(wkset).length||1;
-    CMPRES={sku:sk,from:f,to:t,nWeeks:nW,rows:Object.keys(by).filter(function(s){return s!=="13";}).map(function(s){return {store:s,qty:by[s]};})};
-    render();});}
-var ANRES=null,ANMAP=null,ANBOM=null,ANLOAD=null;
+var ANRES=null,ANMAP=null,ANBOM=null,ANLOAD=null,AN_FAILED=false;
 var AN_COUNT={"顆":1,"個":1,"支":1,"張":1,"片":1,"件":1,"對":1,"朵":1,"雙":1,"捲":1,"卷":1,"條":1,"組":1,"包":1,"罐":1,"份":1,"碗":1,"滴":1,"台":1,"杯":1,"盤":1};
 var AN_LOSS={"食材":1.05,"耗材":1.03};
-function anConv(item,unit){unit=String(unit||"").trim();
+function anConv(item,unit,alt){unit=String(unit||"").trim();
   if(!unit||unit==="g"||unit==="ml")return 1;
   for(var i=0;i<UNITCONV.length;i++){if(UNITCONV[i].item===item&&UNITCONV[i].unit===unit)return num(UNITCONV[i].amt)||1;}
+  if(alt&&alt!==item){for(var i2=0;i2<UNITCONV.length;i2++){if(UNITCONV[i2].item===alt&&UNITCONV[i2].unit===unit)return num(UNITCONV[i2].amt)||1;}}
   for(var j=0;j<UNITCONV.length;j++){var it=UNITCONV[j].item;if((it==="（通用）"||it==="(通用)"||it==="通用")&&UNITCONV[j].unit===unit)return num(UNITCONV[j].amt)||1;}
   return 1;}
 function loadAnalDims(){
-  if(ANMAP&&ANBOM)return Promise.resolve();
+  if(ANMAP&&ANBOM&&!AN_FAILED)return Promise.resolve();  /* 上次讀失敗 → 這次重讀，不要用空表 */
   if(ANLOAD)return ANLOAD;
   ANLOAD=Promise.all([
     gvizQ("產品名稱對照表","select A,B,G,H label A 'pn', B 'cn', G 'c1', H 'c2'"),
@@ -1003,6 +1026,7 @@ function loadAnalDims(){
     ANBOM={};
     res[1].forEach(function(r){var dn=String(r["d"]||"").trim(),m=String(r["m"]||"").trim();if(!dn||!m)return;
       (ANBOM[dn]=ANBOM[dn]||[]).push({m:m,q:num(r["q"]),u:r["u"],ct:String(r["ct"]||"").trim()});});
+    AN_FAILED=!!(res[0].__failed||res[1].__failed);
     ANLOAD=null;});
   return ANLOAD;}
 /* 容器名正規化（2026-08-11 m 批）：空白/連字號/「無」類標記＝不需容器，不列入統計 */
@@ -1032,7 +1056,10 @@ function runAnal(){
     sales.forEach(function(sl){var lines=ANBOM[sl.name];
       if(!lines){noBom.push(sl.name);return;}
       lines.forEach(function(L){var s2=idx[L.m];
-        var per=L.q*anConv(L.m,L.u);
+        var per=L.q*anConv(L.m,L.u,s2?s2.name:null);   /* BOM 寫法 → 基準單位（多為 g） */
+        /* 2026-08-31 t 批 Q3：再從基準單位換到該品項的「使用單位」。舊版停在基準單位卻標成使用單位（黑芝麻 3,701g 顯示成 3,701 匙）。
+           使用單位＝g/ml 或查不到換算 → 係數 1，行為與舊版相同。 */
+        if(s2){var uu=String(s2.useUnit||"").trim();if(uu&&uu!=="g"&&uu!=="ml"){var uf=anConv(L.m,uu,s2.name);if(uf>0&&uf!==1)per=per/uf;}}
         if(s2&&AN_LOSS[s2.cat])per=per*AN_LOSS[s2.cat];
         var key=s2?s2.id:("?"+L.m);
         var o=mats[key]||(mats[key]={name:s2?s2.name:L.m,cat:s2?s2.cat:"",unit:s2?s2.useUnit:String(L.u||""),qty:0,sku:s2||null,key:key,specs:{},dess:{}});
@@ -1066,7 +1093,8 @@ function runAnal(){
         if(mn&&CSET[mn]&&mn!==c)conts[mn]=(conts[mn]||0)+sl.qty*(num(L.q)||1);});});
     var contArr=Object.keys(conts).map(function(c){return {name:c,qty:conts[c]};});
     contArr.sort(function(a,b){return b.qty-a.qty;});
-    ANRES={from:ST.anFrom,to:ST.anTo,store:ST.anStore,c1:ST.anC1,c2:ST.anC2,sales:sales,mats:matArr,conts:contArr,noBom:noBom,noSku:Object.keys(noSku)};
+    var src=res[1].__failed?"fail":(res[1].__cached?res[1].__cached:"live");
+    ANRES={from:ST.anFrom,to:ST.anTo,store:ST.anStore,c1:ST.anC1,c2:ST.anC2,sales:sales,mats:matArr,conts:contArr,noBom:noBom,noSku:Object.keys(noSku),src:src};
     render();});}
 function anCatOpts(){
   var c1s={},c2s={};
@@ -1080,6 +1108,95 @@ function anCatOpts(){
    · 甜點＝該物料用在哪些甜點，依總用量降冪，同時附份數
    資料全部來自 runAnal 已算好的 m.specs / m.dess，不新增任何 gviz 請求。 */
 var AN_DRILL_TOP=0;   /* 0＝全部顯示，不截斷（2026-08-11 經營者要求） */
+/* ===== 2026-08-31 t 批 Q7：鑽取新增「各店使用量」「各店採購量」 =====
+   目的：同一物料，左看各店期間內「應該用掉多少」（POS×BOM），右看各店「實際向大平台叫了多少」（fact_shopline），比對多叫／少叫。
+   · 各店銷量：第一次點時才查一次 POS資料（同期間、同篩選，多 group by 店號），存在 ANRES.byStore；換期間重查。
+   · 大平台明細：第一次點時才查一次 fact_shopline（同期間，全店），存在 ANRES.plat。
+   · 大平台品名≠主檔品名（大平台會加規格、括號、代碼），用「去符號後包含／字對重疊」啟發式配對，並把配到的品名列出讓人核對。 */
+function anStoreLoad(){
+  if(!ANRES||ANRES==="loading"||ANRES.byStore)return Promise.resolve();
+  if(ANRES.byStoreLoad)return ANRES.byStoreLoad;
+  var R=ANRES,w="C >= date '"+R.from+"' and C <= date '"+R.to+"'";
+  if(R.store)w+=" and A="+(+R.store);
+  if(R.c1)w+=" and E='"+R.c1+"'";
+  if(R.c2)w+=" and F='"+R.c2+"'";
+  var tq="select A, D, sum(H) where "+w+" group by A, D label A 's', D 'p', sum(H) 'q'";
+  R.byStoreLoad=gvizQ("POS資料",tq).then(function(rs){
+    var by={};rs.forEach(function(r){var st=String(r["s"]==null?"":r["s"]).trim(),pn=String(r["p"]||"").trim(),q=num(r["q"]);
+      if(!st||st==="13"||!pn||!(q>0))return;var cn=((ANMAP||{})[pn]||{cn:pn}).cn;((by[st]=by[st]||{})[cn]=(by[st][cn]||0)+q);});
+    R.byStore=by;R.byStoreFail=!!rs.__failed;delete R.byStoreLoad;});
+  return R.byStoreLoad;}
+function anPlatLoad(){
+  if(!ANRES||ANRES==="loading"||ANRES.plat)return Promise.resolve();
+  if(ANRES.platLoad)return ANRES.platLoad;
+  var R=ANRES,tq="select A,B,C,D,E,F,G where B >= date '"+R.from+"' and B <= date '"+R.to+"'"+(R.store?" and A="+(+R.store):"");
+  R.platLoad=gvizQ("fact_shopline",tq,MONTH_SHEET_ID).then(function(rs){
+    R.plat=rs.map(function(r){var d=gvDate(r["日期"]);
+      return {st:String(r["店號"]==null?"":r["店號"]).trim(),date:d?ymd(d):String(r["日期"]||"").slice(0,10),ord:String(r["訂單號碼"]||""),name:String(r["品項"]||""),qty:num(r["數量"]),price:num(r["單價"])};
+    }).filter(function(x){return x.st&&x.st!=="13"&&x.name;});
+    R.platFail=!!rs.__failed;delete R.platLoad;});
+  return R.platLoad;}
+function anNorm(x){return String(x||"").replace(/[\s（）()\[\]【】\/／\-－_·．.｜|,，、]/g,"").toLowerCase();}
+function anPlatMatch(platName,sku){
+  if(!sku||!sku.name)return false;
+  var nP=anNorm(platName);if(!nP)return false;
+  var cands=[sku.name].concat(sku.aliases||[]);
+  var code=(String(sku.name).match(/^([A-Za-z]\d{2})(?![0-9A-Za-z])/)||[])[1];
+  var codeHit=!!(code&&new RegExp("^"+code+"(?![0-9])","i").test(String(platName).trim()));
+  for(var i=0;i<cands.length;i++){
+    var n=anNorm(cands[i]).replace(/^[a-z]\d{2}/,"");if(n.length<2)continue;
+    if(nP.indexOf(n)>=0)return true;
+    var bg=[],hit=0;for(var k=0;k+1<n.length;k++)bg.push(n.substr(k,2));
+    bg.forEach(function(b){if(nP.indexOf(b)>=0)hit++;});
+    if(codeHit&&hit>=1)return true;
+    if(bg.length&&hit/bg.length>=0.6)return true;}
+  return false;}
+function anPeriodWeeks(){if(!ANRES||ANRES==="loading")return 1;var a=new Date(ANRES.from+"T00:00:00"),b=new Date(ANRES.to+"T00:00:00");var d=Math.round((b-a)/864e5)+1;return Math.max(1,d/7);}
+function anStoreUsage(m){ /* 各店期間用量（使用單位）＝Σ 該店各甜點銷量 × 單份用量 */
+  var by=ANRES.byStore||{},out={};
+  Object.keys(by).forEach(function(st){var u=0;Object.keys(m.dess||{}).forEach(function(dn){var dz=m.dess[dn];if(!(dz.portions>0))return;var q=by[st][dn]||0;if(q>0)u+=q*(dz.qty/dz.portions);});if(u>0)out[st]=u;});
+  return out;}
+function anBuyTxt(st,m,u){ /* 換算採購：依店別內容量覆蓋（pqOf）→ 採購單位 */
+  if(!m.sku)return "–";var pq=pqOf(st,m.sku);if(!(pq>0))return "–";return dec(u/pq)+" "+(m.sku.buyUnit||"");}
+function anDrillStores(m,h){
+  if(!ANRES.byStore){anStoreLoad().then(function(){render();});return h+'<div class="sub" style="margin:4px 0">讀取各店銷量中…</div>';}
+  var us=anStoreUsage(m),sts=Object.keys(us).sort(function(a,b){return us[b]-us[a];}),wk=anPeriodWeeks();
+  var tot=0,mx=0;sts.forEach(function(st){tot+=us[st];if(us[st]>mx)mx=us[st];});var avg=sts.length?tot/sts.length:0;
+  var plat=ANRES.plat?ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);}):null;
+  var pq={};if(plat)plat.forEach(function(x){pq[x.st]=(pq[x.st]||0)+x.qty;});
+  h+='<div class="sub" style="margin:4px 0">共 <b>'+sts.length+'</b> 店有用量　·　期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算採購依各店內容量':'')+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">換算採購</th><th class="right">週平均</th><th class="right">vs 全店均</th>'+(plat?'<th class="right">大平台叫貨</th>':'')+'<th style="width:26%"></th></tr>';
+  sts.forEach(function(st){var u=us[st],dv=avg>0?Math.round((u/avg-1)*100):0;
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right"><b>'+fmt(u)+'</b> '+(m.unit||"")+'</td><td class="right">'+anBuyTxt(st,m,u)+'</td><td class="right">'+fmt(u/wk)+'</td><td class="right" style="color:'+(dv>15?'#C0392B':dv<-15?'#2E7D32':'#55606E')+'">'+(dv>0?'+':'')+dv+'%</td>'+(plat?'<td class="right">'+(pq[st]?fmt(pq[st]):'<span class="muted">0</span>')+'</td>':'')+'<td><div style="background:#DCEBDD;height:12px;border-radius:6px;width:'+(mx?Math.round(u/mx*100):0)+'%"></div></td></tr>';});
+  h+='<tr><td><b>合計</b></td><td class="right"><b>'+fmt(tot)+'</b> '+(m.unit||"")+'</td><td class="right">'+(m.sku&&m.sku.packQty>0?dec(tot/m.sku.packQty)+' '+m.sku.buyUnit:'–')+'</td><td class="right">'+fmt(tot/wk)+'</td><td></td>'+(plat?'<td class="right">'+fmt(plat.reduce(function(a,x){return a+x.qty;},0))+'</td>':'')+'<td></td></tr></table></div>';
+  if(!sts.length)h+='<div class="sub">此期間各店都沒有用量。</div>';
+  if(!plat)h+='<div class="sub" style="margin-top:4px">切到「各店採購量」後，這裡會多一欄「大平台叫貨」方便對照。</div>';
+  return h;}
+function anDrillPlat(m,h){
+  if(!ANRES.plat){anPlatLoad().then(function(){render();});anStoreLoad();return h+'<div class="sub" style="margin:4px 0">讀取大平台下單明細中…</div>';}
+  if(!ANRES.byStore)anStoreLoad().then(function(){render();});
+  if(!m.sku)return h+'<div class="sub" style="margin:4px 0">此物料未對應主檔品項，無法比對大平台。</div>';
+  var rows=ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);});
+  var names={};rows.forEach(function(x){names[x.name]=(names[x.name]||0)+x.qty;});
+  h+='<div class="sub" style="margin:4px 0">期間 '+ANRES.from+'〜'+ANRES.to+'　·　來源：採購大平台（fact_shopline，資料至上次貼入）'+(ANRES.platFail?'　·　<span style="color:#b3261e">⚠️ 資料源沒回應</span>':'')+'</div>';
+  if(!rows.length)return h+'<div class="sub">大平台這段期間找不到對應「'+shEsc(m.sku.name)+'」的品名（可能是自購、未上架，或大平台品名差異太大）。</div>';
+  h+='<div class="sub" style="margin:2px 0 6px">配對到的大平台品名（依名稱相似自動配對，請核對）：'+Object.keys(names).map(function(n){return '<span class="spectag">'+shEsc(n)+' ×'+fmt(names[n])+'</span>';}).join(' ')+'</div>';
+  var us=ANRES.byStore?anStoreUsage(m):null;
+  var by={};rows.forEach(function(x){var b=by[x.st]=by[x.st]||{qty:0,amt:0,ords:{},rows:[]};b.qty+=x.qty;b.amt+=x.qty*x.price;b.ords[x.ord]=1;b.rows.push(x);});
+  var sts=Object.keys(by).sort(function(a,b){return by[b].qty-by[a].qty;});
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">下單次數</th><th class="right">採購數量</th><th class="right">金額</th>'+(us?'<th class="right">期間用量</th><th class="right">換算採購</th>':'')+'</tr>';
+  var tq=0,ta=0;
+  sts.forEach(function(st){var b=by[st];tq+=b.qty;ta+=b.amt;var u=us?(us[st]||0):null;
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+Object.keys(b.ords).length+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="right">NT$'+fmt(b.amt)+'</td>'+(us?'<td class="right">'+(u?fmt(u)+' '+(m.unit||""):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u):'–')+'</td>':'')+'</tr>';});
+  h+='<tr><td><b>合計</b></td><td class="right"></td><td class="right"><b>'+fmt(tq)+'</b></td><td class="right">NT$'+fmt(ta)+'</td>'+(us?'<td></td><td></td>':'')+'</tr></table></div>';
+  if(us){var missing=Object.keys(us).filter(function(st){return !by[st];});if(missing.length)h+='<div class="sub" style="margin-top:4px">有用量但期間內沒向大平台叫貨的店：'+missing.map(storeName).join('、')+'（可能自購、或用庫存）</div>';}
+  else h+='<div class="sub" style="margin-top:4px">各店用量讀取中，稍後會補上「期間用量／換算採購」兩欄。</div>';
+  rows.sort(function(a,b){return (+a.st)-(+b.st)||(a.date<b.date?1:a.date>b.date?-1:0);});
+  h+='<div class="sub" style="margin:8px 0 4px"><b>訂單明細</b>（'+rows.length+' 筆，依店、日期新→舊）</div>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th>日期</th><th>訂單號碼</th><th>大平台品項</th><th class="right">數量</th><th class="right">單價</th><th class="right">金額</th></tr>';
+  rows.forEach(function(x){h+='<tr><td>'+storeName(x.st)+'</td><td>'+x.date+'</td><td>'+shEsc(x.ord)+'</td><td>'+shEsc(x.name)+'</td><td class="right">'+fmt(x.qty)+'</td><td class="right">@'+dec(x.price)+'</td><td class="right">NT$'+fmt(x.qty*x.price)+'</td></tr>';});
+  h+='</table></div>';
+  return h;}
 function anCut(arr){return AN_DRILL_TOP>0?arr.slice(0,AN_DRILL_TOP):arr;}
 /* 甜點列的規格標籤：該甜點對此物料寫了哪幾個用量（依數量降冪；同規格重複以 ×N 表示） */
 function anSpecTxt(x,m){
@@ -1090,9 +1207,12 @@ function anSpecTxt(x,m){
   var txt=arr.map(function(a){return dec(a.q)+(a.u||"")+(a.n>1?"\u00d7"+a.n:"");}).join(" ＋ ");
   return ' <span class="spectag">'+txt+'</span>';}
 function anDrillRow(m){
-  var mode=(ST.anDrillMode==="甜點")?"甜點":"規格";
+  var MODES=["規格","甜點","各店使用量","各店採購量"];
+  var mode=MODES.indexOf(ST.anDrillMode)>=0?ST.anDrillMode:"規格";
   var h='<tr class="mdrill"><td colspan="4"><div class="drillbox">';
-  h+='<span class="seg">'+["規格","甜點"].map(function(x){return '<div class="'+(x===mode?"on":"")+'" data-dmode="'+x+'">'+x+'</div>';}).join("")+'</span>';
+  h+='<span class="seg">'+MODES.map(function(x){return '<div class="'+(x===mode?"on":"")+'" data-dmode="'+x+'">'+x+'</div>';}).join("")+'</span>';
+  if(mode==="各店使用量"){h=anDrillStores(m,h);return h+'</div></td></tr>';}
+  if(mode==="各店採購量"){h=anDrillPlat(m,h);return h+'</div></td></tr>';}
   var rows=[],more=0,head="";
   if(mode==="規格"){
     var ks=Object.keys(m.specs||{});
@@ -1134,6 +1254,8 @@ function viewPeriodStats(){
   if(!ANRES)return h+'<div class="note">例：5/1〜5/30＋次類別「2026 夏季限定」→ 檔期賣了什麼、用了什麼一次看。</div>';
   var totQty=0;ANRES.sales.forEach(function(s2){totQty+=s2.qty;});
   var totCost=0;ANRES.mats.forEach(function(m){totCost+=m.cost||0;});
+  if(ANRES.src==="fail")h+='<div class="note" style="color:#b3261e"><b>⚠️ 資料源沒有回應</b>，這不是「沒有銷售」。Google Sheet 可能正在重算，請等幾分鐘後再按一次查詢。</div>';
+  else if(ANRES.src&&ANRES.src!=="live")h+='<div class="note" style="color:#8a5a00"><b>⚠️ 資料源忙碌中</b>，以下是 '+new Date(ANRES.src).toLocaleString()+' 讀到的舊結果，稍後再查一次可更新。</div>';
   h+='<div class="note">'+ANRES.from+' 〜 '+ANRES.to+'　·　'+(ANRES.store?storeName(ANRES.store):'全部分店')+(ANRES.c1?'　·　'+ANRES.c1:'')+(ANRES.c2?'／'+ANRES.c2:'')
     +'　·　甜點 '+ANRES.sales.length+' 款共 <b>'+fmt(Math.round(totQty))+'</b> 個　·　物料 '+ANRES.mats.length+' 項　·　食耗材估算成本 <b>$'+fmt(Math.round(totCost))+'</b></div>';
   var sShown=ST.anAllS?ANRES.sales:ANRES.sales.slice(0,20);
@@ -1167,17 +1289,9 @@ function viewPeriodStats(){
   if(ANRES.noSku.length)h+='<div class="note">⚠️ '+ANRES.noSku.length+' 項用料對不上主檔（以 BOM 名稱列出）：'+ANRES.noSku.slice(0,5).join('、')+(ANRES.noSku.length>5?'…':'')+'</div>';
   return h;}
 function viewQuery(){var store=ST.storeId;
-  var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量","跨店比較","容器用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
+  var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
+  if(ST.qmode==="跨店比較"||ST.qmode==="容器用量")ST.qmode="期間統計";  /* 2026-08-31 t 批 Q8：兩分頁已移除，殘留值歸位 */
   if(ST.qmode==="期間統計")return html+viewPeriodStats();
-  if(ST.qmode==="跨店比較")return html+viewCompare();
-  if(ST.qmode==="容器用量"){var cs=CONTAINER[store]||{};
-    var crows={};Object.keys(cs).forEach(function(t){var nm=contName(t);if(!nm)return;
-      var o=crows[nm]||(crows[nm]={name:nm,week:0,avg4:0});o.week+=num(cs[t].week);o.avg4+=num(cs[t].avg4);});
-    var carr=Object.keys(crows).map(function(k){return crows[k];}).filter(function(c){return c.avg4>0||c.week>0;}).sort(function(a,b){return b.avg4-a.avg4;});
-    html+='<div class="note">門市：'+storeName(store)+'　·　容器近 4 週平均使用次數（逐食材計；每個食材各占一個容器）。無容器標記已排除。</div><div class="card"><table><tr><th>容器</th><th class="right">週平均</th></tr>';
-    carr.forEach(function(c){html+='<tr><td><b>'+c.name+'</b></td><td class="right"><b>'+fmt(c.avg4)+'</b> 次/週</td></tr>';});
-    if(!carr.length)html+='<tr><td colspan="2" class="muted">無資料</td></tr>';
-    html+='</table></div><div class="sub" style="margin-top:4px">來源：agg_container（每日 POS×BOM 預聚合）。容器可清洗重複使用，此為週轉需求次數，非採購量。</div>';return html;}
   html+='<div class="note">門市：'+storeName(store)+'　·　本店期間用量（週平均）。資料來自每日 POS×BOM 預聚合。</div>';
   html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
   html+=catChips();var rows=SKUS.filter(function(s){return ST.cat==="全部"||s.cat===ST.cat;}).map(function(s){var a=aggOf(store,s);return {s:s,avg:a.avg4,wk:a.week};}).filter(function(x){return x.avg>0||x.wk>0;}).sort(function(a,b){return b.avg-a.avg;});
@@ -1300,8 +1414,15 @@ function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
 function viewUnitConv(){var ed=ST.role==="總部";
   var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note">同食材多單位→基準單位，GAS 展開 BOM 前統一換算。改「＝基準量」或於底部新增，按「儲存」寫回 dim_unitconv；隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th></tr>';
-  UNITCONV.forEach(function(u,i){html+='<tr><td>'+u.item+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td></tr>';});
+  /* 2026-08-31 t 批 Q4：引擎規則＝「dim_sku 使用單位」必須等於這裡的「基準單位」（BOM 各種寫法先換到基準單位，再以使用單位計量、÷每採購單位內容量出建議量）。
+     不相等時引擎會把基準量直接當成使用單位的數（例：1 包→160 g 但使用單位＝包 ⇒ 每用 1 包算成 160 包）。這裡逐列檢查並標出。 */
+  var _idx=anSkuIdx(),_warnN=0;
+  UNITCONV.forEach(function(u,i){var sk=_idx[u.item],warn='';
+    if(sk){var uu=String(sk.useUnit||'').trim(),bb=String(u.base||'').trim();
+      if(uu&&bb&&uu!==bb){_warnN++;warn='<div class="sub" style="color:#b3261e">⚠️ 使用單位「'+uu+'」≠ 基準單位「'+bb+'」→ 統計與訂貨點會用錯單位'+((u.unit===uu)?'（每用 1 '+uu+' 會被算成 '+u.amt+' '+uu+'）':'')+'。二選一：把主檔使用單位改成「'+bb+'」並把「每採購單位內容量」改成以 '+bb+' 計；或刪掉這列、全部用「'+uu+'」計量</div>';}}
+    html+='<tr><td>'+u.item+(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>')+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td></tr>';});
   if(!UNITCONV.length)html+='<tr><td colspan="4" class="muted">無資料</td></tr>';html+='</table></div>';
+  if(_warnN)html='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">⚠️ 有 <b>'+_warnN+'</b> 列的「使用單位」與「基準單位」不一致，會讓統計與訂貨建議用錯單位（詳見各列紅字）。</div>'+html;
   if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">新增換算（例：品項「鹹蛋黃」單位「包」換算量 45 基準「g」）</div><div style="display:flex;gap:6px;flex-wrap:wrap"><input class="sm" style="width:150px" placeholder="適用品項或（通用）" id="cvItem"><input class="sm" style="width:64px" placeholder="單位" id="cvUnit"><input class="sm" style="width:80px" type="number" step="0.01" placeholder="換算量" id="cvAmt"><input class="sm" style="width:80px" placeholder="基準單位" id="cvBase" value="g"></div></div><div class="toolbar"><button class="btn" id="saveConv">儲存單位對照</button></div>';
   return html;}
 
@@ -1827,10 +1948,6 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-invf]"),function(el){el.onclick=function(){ST.invFilter=el.dataset.invf;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-qmode]"),function(el){el.onclick=function(){ST.qmode=el.dataset.qmode;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-qperiod]"),function(el){el.onclick=function(){ST.qperiod=el.dataset.qperiod;render();};});
-  var cs=$("#cmpSku");if(cs)cs.onchange=function(){ST.cmpSku=cs.value;};
-  var cf=$("#cmpFrom");if(cf)cf.onchange=function(){ST.cmpFrom=cf.value;};
-  var ct=$("#cmpTo");if(ct)ct.onchange=function(){ST.cmpTo=ct.value;};
-  var cr=$("#cmpRun");if(cr)cr.onclick=runCompare;
   var af=$("#anFrom");if(af)af.onchange=function(){ST.anFrom=af.value;};
   var at2=$("#anTo");if(at2)at2.onchange=function(){ST.anTo=at2.value;};
   var asel=$("#anStore");if(asel)asel.onchange=function(){ST.anStore=asel.value;};
@@ -2044,6 +2161,8 @@ function wire(){
 /* ===== 🏬 採購大平台下單紀錄（出貨中心 Shopline 訂單歷史）=====
    2026-08-25 q 批建置；2026-08-29 s 批正名：分頁 key "下單紀錄"→"大平台"。
    2026-08-31 t 批：移除「📈 月趨勢」分段（shTrendView＋.shbars 系列 CSS 全刪）；排行欄名「次數」→「下單次數」；品項排行可點列展開該品項每一次下單（日期／單號／數量／單價／金額，依訂單號合併故列數＝下單次數）；採購參考改混合口徑（期間內統計＋全歷史上次下單；未訂天數以資料截止日計非今天；期間內未訂僅列 ⚠️ 者）；預設期間近 6 個月。
+   2026-08-31 t 批（第一步）：gviz/gvizQ 改走 gvCore：成功存 localStorage 快取（dpc:*），逾時/失敗改用快取並亮 #gvWarn 橘色警示列；無快取回 [] 帶 __failed。loadAnalDims 失敗不再快取空表（AN_FAILED）；查詢頁摘要標示資料來源。
+   2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。
    ❗ 命名邊界：本頁＝fact_shopline（已向出貨中心下過的單、月檔 Sheet、總部每月貼）；
       採購系統自己的下單紀錄是 fact_order（BOM 本、店長按「複製訂貨單」時寫入），兩者勿混。
    資料源：月檔 Sheet（MONTH_SHEET_ID）fact_shopline 分頁，gvizQ 按店 lazy 載入＋快取。
@@ -2216,6 +2335,7 @@ function shWire(){
 /* ===== 啟動 ===== */
 $("#roleSel").onchange=function(){ST.role=this.value;ST.exp={};render();};
 $("#storeSel").onchange=function(){ST.storeId=this.value;ST.exp={};ST.orderEdit={};ST.orderOff={};ST.q="";ST.vq="";render();loadStoreFlow(ST.storeId).then(function(){render();});};
+if(typeof window!=="undefined"){var __rb=document.getElementById("refreshBtn");if(__rb)__rb.onclick=function(){refreshAll();};}
 if(typeof window!=="undefined"&&!window.__TEST__) bootstrap();
 </script>
 </body>
