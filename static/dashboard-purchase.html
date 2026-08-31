@@ -424,6 +424,8 @@ async function bootstrap(keep){ try {
   CONTAINER={};aC.forEach(function(r){var st=String(r["店號"]);((CONTAINER[st]=CONTAINER[st]||{})[r["容器"]]={week:num(r["上週次數"]),avg4:num(r["近4週均"])});});
   SIDX={};SFACT={low:0.8,high:1.2};dS.forEach(function(r){var mk=r["月份"],v=num(r["季節指數"]);if(String(mk)==="淡季係數"){if(v)SFACT.low=v;return;}if(String(mk)==="旺季係數"){if(v)SFACT.high=v;return;}var mm=num(mk);if(mm>=1&&mm<=12)SIDX[mm]=v||1;});for(var m=1;m<=12;m++)if(!SIDX[m])SIDX[m]=1;
   UNITCONV=dU.map(function(r){return {item:r["適用品項"],unit:r["單位"],base:r["基準單位"],amt:num(r["換算量"])};});
+  /* 2026-08-31 t 批：單位對照頁「網頁上刪除」走獨立 GAS 專案 diybc-conv-api（與 shelfApi 同模式）。網址貼在 dim_unitconv 第 1 列任一空白表頭格（建議 F1），這裡從表頭鍵名偵測。 */
+  CONV_API="";if(dU[0]){Object.keys(dU[0]).forEach(function(k){if(String(k).trim().indexOf("https://script.google.com/")===0)CONV_API=String(k).trim();});}
   // fact_inventory：取每店每料最新一筆
   INV={};var ts={};fInv.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"],dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;var k=st+"|"+id;if(!(k in ts)||t>=ts[k]){ts[k]=t;((INV[st]=INV[st]||{})[id]={onHand:num(r["現有量"]),breakage:num(r["破損量"]),t:(t||null)});}});
   /* 2026-08-20 p 批：13 號店已結束營業，全站排除（來源含歷史資料仍會帶出該店號）。 */
@@ -1439,15 +1441,16 @@ function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
 function viewUnitConv(){var ed=ST.role==="總部";
-  var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note">同食材多單位→基準單位，GAS 展開 BOM 前統一換算。改「＝基準量」或於底部新增，按「儲存」寫回 dim_unitconv；隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th></tr>';
+  var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note">同食材多單位→基準單位，GAS 展開 BOM 前統一換算。改「＝基準量」或於底部新增，按「儲存」寫回 dim_unitconv；隔日 agg 重算生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th>'+(ed?'<th></th>':'')+'</tr>';
   /* 2026-08-31 t 批 Q4：引擎規則＝「dim_sku 使用單位」必須等於這裡的「基準單位」（BOM 各種寫法先換到基準單位，再以使用單位計量、÷每採購單位內容量出建議量）。
      不相等時引擎會把基準量直接當成使用單位的數（例：1 包→160 g 但使用單位＝包 ⇒ 每用 1 包算成 160 包）。這裡逐列檢查並標出。 */
   var _idx=anSkuIdx(),_warnN=0;
   UNITCONV.forEach(function(u,i){var sk=_idx[u.item],warn='';
     if(sk){var uu=String(sk.useUnit||'').trim(),bb=String(u.base||'').trim();
       if(uu&&bb&&uu!==bb){_warnN++;warn='<div class="sub" style="color:#b3261e">⚠️ 使用單位「'+uu+'」≠ 基準單位「'+bb+'」→ 統計與訂貨點會用錯單位'+((u.unit===uu)?'（每用 1 '+uu+' 會被算成 '+u.amt+' '+uu+'）':'')+'。二選一：把主檔使用單位改成「'+bb+'」並把「每採購單位內容量」改成以 '+bb+' 計；或刪掉這列、全部用「'+uu+'」計量</div>';}}
-    html+='<tr><td>'+u.item+(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>')+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td></tr>';});
-  if(!UNITCONV.length)html+='<tr><td colspan="4" class="muted">無資料</td></tr>';html+='</table></div>';
+    html+='<tr><td>'+u.item+(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>')+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td>'+(ed?'<td>'+(CONV_API?'<button class="btn sm ghost" data-cvdel="'+i+'" title="刪除這列換算">🗑</button>':'<span class="muted" title="尚未部署 diybc-conv-api">—</span>')+'</td>':'')+'</tr>';});
+  if(!UNITCONV.length)html+='<tr><td colspan="5" class="muted">無資料</td></tr>';html+='</table></div>';
+  if(ed&&!CONV_API)html+='<div class="note">要在網頁上直接刪除換算列：部署獨立 GAS 專案 <b>diybc-conv-api</b>（見交付的 convApi.gs），把網址貼到 dim_unitconv 的 <b>F1</b>，再按 🔄 更新。</div>';
   if(_warnN)html='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">⚠️ 有 <b>'+_warnN+'</b> 列的「使用單位」與「基準單位」不一致，會讓統計與訂貨建議用錯單位（詳見各列紅字）。</div>'+html;
   if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">新增換算（例：品項「鹹蛋黃」單位「包」換算量 45 基準「g」）</div><div style="display:flex;gap:6px;flex-wrap:wrap"><input class="sm" style="width:150px" placeholder="適用品項或（通用）" id="cvItem"><input class="sm" style="width:64px" placeholder="單位" id="cvUnit"><input class="sm" style="width:80px" type="number" step="0.01" placeholder="換算量" id="cvAmt"><input class="sm" style="width:80px" placeholder="基準單位" id="cvBase" value="g"></div></div><div class="toolbar"><button class="btn" id="saveConv">儲存單位對照</button></div>';
   return html;}
@@ -1522,6 +1525,17 @@ function viewMaster(){var ed=ST.role==="總部";
 var SHELF_VER="2026-08";
 var SHELF=[["冷藏","蛋黃液","依原包裝","","依原包裝","分蛋冷藏D+2"],["常溫","雞蛋","冷藏+1個月/常溫+14","","",""],["冷藏","蛋白液","依原包裝","","依原包裝","分蛋冷藏D+2"],["常溫","低筋麵粉","依原包裝","","",""],["冷藏","乳酪","依原包裝","","D+7",""],["常溫","高筋麵粉","依原包裝","","",""],["冷藏","奶油","依原包裝","切分冷凍D+30","D+10",""],["常溫","砂糖","依原包裝","","",""],["冷藏","牛奶","依原包裝","","依原包裝",""],["常溫","糖粉","依原包裝","","",""],["冷藏","動植鮮","依原包裝","","依原包裝",""],["常溫","防潮糖粉","依原包裝","","",""],["冷藏","裝飾鮮奶油","依食譜","","D+3","半成品"],["常溫","可可粉","依原包裝","","",""],["冷藏","克林姆","依原包裝","","依原包裝",""],["常溫","防潮可可粉","依原包裝","","",""],["冷藏","各類果漿","依原包裝","","依原包裝","開元"],["常溫","沙拉油","依原包裝","","",""],["冷藏","覆盆子果泥","依原包裝","冷凍D+30","D+14",""],["常溫","巧克力(黑/白/黃/粉)","依原包裝","","",""],["冷藏","藍莓果醬","依原包裝","冷凍D+30","D+14",""],["常溫","抹茶粉","依原包裝","","",""],["冷藏","檸檬汁","依原包裝","","D+14",""],["常溫","泡打粉","依原包裝","","",""],["冷藏","寒天ＱＱ","依原包裝","","",""],["常溫","玉米粉","依原包裝","","",""],["冷藏","核桃","依原包裝","","依原包裝",""],["常溫","太白粉","依原包裝","","",""],["冷藏","杏仁片","依原包裝","","依原包裝",""],["常溫","調和蜂蜜","依原包裝","","",""],["冷藏","杏仁粉","依原包裝","","依原包裝",""],["常溫","咖啡粉","依原包裝","","",""],["冷藏","三色脆球","依原包裝","","",""],["常溫","咖啡豆","依原包裝","","","飲料區"],["冷藏","吉利丁凍","依食譜","","D+14","半成品"],["常溫","牛奶球","依原包裝","","","飲料區"],["冷藏","鹽漬櫻花","依原包裝","","依原包裝","公司貨"],["常溫","焦糖醬","依原包裝","","",""],["冷藏","糖漬橘皮丁","依原包裝","","依原包裝","公司貨"],["常溫","各類茶包","依原包裝","","","含飲料區"],["冷藏","各類水果","","","",""],["常溫","各類Monin糖漿","依原包裝","","","開元"],["常溫","吉利丁粉","依原包裝","","",""],["常溫","豆漿粉","依原包裝","","",""],["常溫","OREO碎片","依原包裝","","",""],["常溫","OREO粉","依原包裝","","",""],["常溫","大OREO","依原包裝","","",""],["常溫","小OREO","依原包裝","","",""],["常溫","脆笛酥","依原包裝","","",""],["冷凍","蛋糕片","依食譜","","","半成品"],["常溫","蓮花餅乾","依原包裝","","",""],["冷凍","紙杯蛋糕","依食譜","","","半成品"],["常溫","消化餅","依原包裝","","",""],["常溫","鹽","依原包裝","","",""],["常溫","胡椒粉","依原包裝","","",""],["冷凍","地瓜","依原包裝","","依原包裝",""],["常溫","卡士達粉","依原包裝","","",""],["冷凍","檸檬汁","依原包裝","","",""],["常溫","寒天粉","依原包裝","","",""],["冷凍","起司絲","依原包裝","","",""],["常溫","咖啡酒","依原包裝","","",""],["冷凍","帕馬森起司粉","依原包裝","","",""],["常溫","蘭姆酒","依原包裝","","",""],["冷凍","雙色乳酪丁","依原包裝","","",""],["常溫","澄酒","依原包裝","","",""],["冷凍","肉桂奶油","冷凍D+60","冷藏D+30","","半成品"],["冷凍","肉桂捲淋醬","冷凍D+60","冷藏D+30","","吳寶春叫貨"],["常溫","B08塔派粉","依原包裝","","","公司貨"],["冷凍","荔枝玫瑰果乾","冷凍D+30","","",""],["常溫","翻糖裝飾","依原包裝","","","公司貨"],["冷凍","酒釀桂圓果乾","冷凍D+30","","",""],["常溫","各類糖珠","依原包裝","","","公司貨"],["冷凍","布里歐麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各類茶粉","依原包裝","","","公司貨"],["冷凍","歐式麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各色色膏","依原包裝","","","公司貨"],["冷凍","穀物麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各色色粉","依原包裝","","","公司貨"]];
 var SHELFD=null,SHELFLD=null,SHELFERR=false,SHELF_API="",SHELF_TOKEN="dbc-shelf-Kp3vR8";
+var CONV_API="",CONV_TOKEN="dbc-conv-Wm4nQ7";
+function postConv(payload){payload.type="conv";payload.token=CONV_TOKEN;
+  return fetch(CONV_API,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)});}
+function convDelete(i){var u=UNITCONV[i];if(!u)return;
+  if(!CONV_API){toast("尚未部署 diybc-conv-api，請先照 convApi.gs 說明部署並把網址貼到 dim_unitconv F1");return;}
+  if(!confirm("確定刪除換算「"+u.item+"｜1 "+u.unit+"＝"+u.amt+" "+u.base+"」？\n刪除後系統以「1 "+u.unit+"＝1 "+u.unit+"」直接計量。"))return;
+  postConv({action:"delete",item:u.item,unit:u.unit}).catch(function(){});
+  UNITCONV.splice(i,1);render();toast("已送出刪除，背景確認中…");
+  setTimeout(function(){gvizQ("dim_unitconv","select A,B").then(function(rs){
+    var still=rs.some(function(r){return String(r["適用品項"]||"").trim()===String(u.item).trim()&&String(r["單位"]||"").trim()===String(u.unit).trim();});
+    if(still){toast("⚠️ Sheet 上仍有這列（可能是快取延遲），請稍後按 🔄 更新確認");}else{toast("✅ 已確認自 Sheet 刪除；記得按 🔄 更新讓建議採購重算");}});},4000);}
 function loadShelf(force){
   if(force){SHELFD=null;SHELFLD=null;SHELFERR=false;}
   if(SHELFD||SHELFLD)return SHELFLD||Promise.resolve();
@@ -2166,6 +2180,7 @@ function wire(){
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});var lo=$("#sfLow"),hi=$("#sfHigh");if(lo&&+lo.value>0){SFACT.low=+lo.value;post({type:"season",month:"淡季係數",idx:SFACT.low});}if(hi&&+hi.value>0){SFACT.high=+hi.value;post({type:"season",month:"旺季係數",idx:SFACT.high});}toast("已送出季節指數與淡旺季係數");};
   // 單位對照
   Array.prototype.forEach.call(document.querySelectorAll("[data-cvi]"),function(el){el.onchange=function(){var u=UNITCONV[+el.dataset.cvi];u.amt=+el.value;u._dirty=1;};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-cvdel]"),function(el){el.onclick=function(){convDelete(+el.dataset.cvdel);};});
   var scv=$("#saveConv");if(scv)scv.onclick=function(){var n=0;UNITCONV.forEach(function(u){if(u._dirty){post({type:"conv",item:u.item,unit:u.unit,base:u.base,amt:u.amt},true);delete u._dirty;n++;}});  // 2026-07-27 修：勿再命名 var sc（會覆蓋 saveCount 閉包捕捉的 sc，盤點頁按儲存會拋錯）
     var it=($("#cvItem").value||"").trim(),un=($("#cvUnit").value||"").trim(),am=+$("#cvAmt").value,ba=($("#cvBase").value||"g").trim();
     if(it&&un&&am>0){post({type:"conv",item:it,unit:un,base:ba,amt:am},true);UNITCONV.push({item:it,unit:un,base:ba,amt:am});n++;}
@@ -2190,7 +2205,7 @@ function wire(){
    2026-08-25 q 批建置；2026-08-29 s 批正名：分頁 key "下單紀錄"→"大平台"。
    2026-08-31 t 批：移除「📈 月趨勢」分段（shTrendView＋.shbars 系列 CSS 全刪）；排行欄名「次數」→「下單次數」；品項排行可點列展開該品項每一次下單（日期／單號／數量／單價／金額，依訂單號合併故列數＝下單次數）；採購參考改混合口徑（期間內統計＋全歷史上次下單；未訂天數以資料截止日計非今天；期間內未訂僅列 ⚠️ 者）；預設期間近 6 個月。
    2026-08-31 t 批（第一步）：gviz/gvizQ 改走 gvCore：成功存 localStorage 快取（dpc:*），逾時/失敗改用快取並亮 #gvWarn 橘色警示列；無快取回 [] 帶 __failed。loadAnalDims 失敗不再快取空表（AN_FAILED）；查詢頁摘要標示資料來源。
-   2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。追加：用量附第二單位（anAlt/anQty：匙↔g 互附）。追加：總部按「🔄 更新」＝重讀＋自動立即重算＋完成自動重讀（rbInWindow 避開 07:00–07:45；店長僅重讀）。
+   2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。追加：用量附第二單位（anAlt/anQty：匙↔g 互附）。追加：總部按「🔄 更新」＝重讀＋自動立即重算＋完成自動重讀（rbInWindow 避開 07:00–07:45；店長僅重讀）。追加：單位對照頁每列 🗑 刪除（獨立 GAS diybc-conv-api，網址貼 dim_unitconv F1 自動偵測；樂觀移除＋4 秒回讀驗證）。
    ❗ 命名邊界：本頁＝fact_shopline（已向出貨中心下過的單、月檔 Sheet、總部每月貼）；
       採購系統自己的下單紀錄是 fact_order（BOM 本、店長按「複製訂貨單」時寫入），兩者勿混。
    資料源：月檔 Sheet（MONTH_SHEET_ID）fact_shopline 分頁，gvizQ 按店 lazy 載入＋快取。
