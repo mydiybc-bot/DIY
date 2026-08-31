@@ -257,7 +257,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="h-top"><a href="hub.html" class="home">⬅ 回首頁</a><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:12px"></span><button id="refreshBtn" title="重新讀取 Sheet 最新資料（不重算，只重讀）" style="margin-left:8px;border:1px solid #cfeacd;background:transparent;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer">🔄 更新</button></div>
+    <div class="h-top"><a href="hub.html" class="home">⬅ 回首頁</a><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:12px"></span><button id="refreshBtn" title="總部：重讀＋立即重算（約 2–3 分鐘，完成自動載入）／店長：重讀最新資料" style="margin-left:8px;border:1px solid #cfeacd;background:transparent;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer">🔄 更新</button></div>
     <div class="selrow">
       <select id="roleSel"><option value="店長">店長</option><option value="總部">總部／經營者</option></select>
       <select id="storeSel"></select>
@@ -377,7 +377,11 @@ function stampUpd(){var el=$("#upd");if(!el)return;var d=new Date();el.textConte
 /* 2026-08-31 t 批 Q1：表頭「🔄 更新」＝重讀全部 Sheet 表（不觸發後端重算），改完店別參數／盤點後立刻看到最新值。
    keep=true 時保留目前門市與分頁，且不重跑初始 render／loadStoreFlow（由 refreshAll 自己接手）。 */
 var RF={busy:false};
-function refreshAll(){
+/* 2026-08-31 t 批（反饋追加）：總部／經營者按「🔄 更新」＝重讀 ＋ 自動送出「立即重算」，重算完成再自動重讀一次（約 2–3 分鐘，表頭會顯示進度）。
+   店長按「🔄 更新」只重讀：盤點／店別參數的改動前端即時生效，不需要重算；12 店各自按會把後端打爆，且 07:00–07:45 與每日排程撞寫。
+   noRebuild=true（重算完成後的自動重讀）不再觸發重算，避免無限迴圈。 */
+function rbInWindow(){var d=new Date(),m=d.getHours()*60+d.getMinutes();return m>=7*60&&m<7*60+45;}
+function refreshAll(noRebuild){
   if(RF.busy)return;RF.busy=true;
   var el=$("#upd");if(el)el.textContent="更新中…";
   Object.keys(GV.bad).forEach(function(k){delete GV.bad[k];});
@@ -386,6 +390,11 @@ function refreshAll(){
     RF.busy=false;stampUpd();
     try{render();}catch(e){console.warn(e);}
     loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
+    if(!noRebuild&&ST.role==="總部"){
+      if(RB.busy){toast("已重讀；後端重算仍在進行中");return;}
+      if(rbInWindow()){toast("已重讀。07:00–07:45 是每日自動重算時段，這段不另外送重算");return;}
+      RB.fromRefresh=true;rbNow();
+      toast("已重讀，後端重算中（約 2–3 分鐘），完成會自動載入");return;}
     toast("已重新讀取最新資料");
   });}
 async function bootstrap(keep){ try {
@@ -1635,9 +1644,10 @@ function dlShelfCsv(){
    流程：JSONP 呼叫 GAS doGet(action=rebuild)→後端排入 1 秒後一次性觸發器並立即回應
    →前端每 20 秒輪詢 status（比對 id 免時鐘誤差），完成後提示重新整理。
    純新增：computeRow 與既有寫入路徑零改動。⚠️ 07:00–07:45 自動排程時段避免使用（與每日重算撞寫）。 */
-var RB={busy:false,id:0,pollN:0,pollT:null,cbN:0,msg:"",cls:""};
+var RB={busy:false,id:0,pollN:0,pollT:null,cbN:0,msg:"",cls:"",fromRefresh:false,POLL_MS:20000};
 function rbColor(cls){return cls==="ok"?"#2E7D32":cls==="err"?"#C0392B":"#8A7466";}
-function rbSet(m,cls){RB.msg=m;RB.cls=cls||"";var el=$("#rbMsg");if(el){el.textContent=m;el.style.color=rbColor(RB.cls);}}
+function rbSet(m,cls){RB.msg=m;RB.cls=cls||"";var el=$("#rbMsg");if(el){el.textContent=m;el.style.color=rbColor(RB.cls);}
+  if(RB.fromRefresh){var u=$("#upd");if(u)u.textContent=m.length>40?m.slice(0,40)+"…":m;}}
 function rbBtnEnable(on){var b=$("#rbBtn");if(b)b.disabled=!on;}
 function rbCard(){return '<div class="card"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
   +'<button class="btn" id="rbBtn" onclick="rbNow()"'+(RB.busy?' disabled':'')+'>🔄 立即重算</button>'
@@ -1656,19 +1666,20 @@ function rbNow(){if(RB.busy)return;RB.busy=true;rbBtnEnable(false);rbSet("⏳ �
   rbJsonp("rebuild",function(err,res){
     if(err){RB.busy=false;rbBtnEnable(true);rbSet("⚠️ 後端無回應。請 2 分鐘後重新整理看資料是否更新；一直失敗＝GAS 尚未部署新版本。","err");return;}
     if(res&&res.ok&&res.id){RB.id=res.id;RB.pollN=0;rbSet("✅ 已排入重算，進行中…（約 2–3 分鐘，完成會在這裡提示）");
-      RB.pollT=setTimeout(rbPoll,20000);return;}
+      RB.pollT=setTimeout(rbPoll,RB.POLL_MS);return;}
     RB.busy=false;rbBtnEnable(true);
     if(res&&res.busy){rbSet("⚠️ 後端正在重算中（"+(res.age!=null?res.age+" 秒前開始":"稍早排入")+"），請稍候再試。","err");}
     else{rbSet("❌ 要求被拒："+((res&&res.msg)||"未知")+"（token 不符或版本未部署）","err");}});}
 function rbPoll(){rbJsonp("status",function(err,res){RB.pollN++;
   var match=!err&&res&&res.id===RB.id;
   if(match&&res.status==="done"){RB.busy=false;rbBtnEnable(true);
+    if(RB.fromRefresh){RB.fromRefresh=false;rbSet("✅ 重算完成，正在載入最新資料…","ok");refreshAll(true).then(function(){var u=$("#upd");if(u)u.textContent=u.textContent+"（含重算）";toast("✅ 重算完成，已載入最新資料");});return;}
     rbSet("✅ 重算完成！請重新整理頁面載入最新資料。","ok");toast("✅ 重算完成，請重新整理");return;}
   if(match&&res.status==="error"){RB.busy=false;rbBtnEnable(true);
-    rbSet("❌ 重算失敗："+(res.msg||"詳見 GAS 執行紀錄"),"err");return;}
+    rbSet("❌ 重算失敗："+(res.msg||"詳見 GAS 執行紀錄"),"err");RB.fromRefresh=false;return;}
   if(RB.pollN>=12){RB.busy=false;rbBtnEnable(true);
-    rbSet("⏱ 超過 4 分鐘未確認完成。請重新整理看資料是否已更新；異常請查 GAS 執行紀錄。","err");return;}
-  RB.pollT=setTimeout(rbPoll,20000);});}
+    rbSet("⏱ 超過 4 分鐘未確認完成。請重新整理看資料是否已更新；異常請查 GAS 執行紀錄。","err");RB.fromRefresh=false;return;}
+  RB.pollT=setTimeout(rbPoll,RB.POLL_MS);});}
 function viewOverview(){var rowsByStore=STORES.map(function(st){var need=liveItems(st.id).map(function(s){return {s:s,r:rowFor(st.id,s)};}).filter(function(x){return x.r.packs>0;});return {st:st,need:need.length,val:need.reduce(function(a,x){return a+x.r.packs*x.s.price;},0)};});
   var maxv=Math.max.apply(null,rowsByStore.map(function(r){return r.val;}).concat([1])),totV=rowsByStore.reduce(function(a,r){return a+r.val;},0);
   var html=rbCard()+'<div class="summary"><div class="stat"><div class="n">$'+fmt(totV)+'</div><div class="l">本週全店預估採購</div></div><div class="stat"><div class="n">'+STORES.length+'</div><div class="l">門市</div></div></div><div class="card"><div class="muted" style="margin-bottom:6px">各店預估採購金額</div>';
@@ -2179,7 +2190,7 @@ function wire(){
    2026-08-25 q 批建置；2026-08-29 s 批正名：分頁 key "下單紀錄"→"大平台"。
    2026-08-31 t 批：移除「📈 月趨勢」分段（shTrendView＋.shbars 系列 CSS 全刪）；排行欄名「次數」→「下單次數」；品項排行可點列展開該品項每一次下單（日期／單號／數量／單價／金額，依訂單號合併故列數＝下單次數）；採購參考改混合口徑（期間內統計＋全歷史上次下單；未訂天數以資料截止日計非今天；期間內未訂僅列 ⚠️ 者）；預設期間近 6 個月。
    2026-08-31 t 批（第一步）：gviz/gvizQ 改走 gvCore：成功存 localStorage 快取（dpc:*），逾時/失敗改用快取並亮 #gvWarn 橘色警示列；無快取回 [] 帶 __failed。loadAnalDims 失敗不再快取空表（AN_FAILED）；查詢頁摘要標示資料來源。
-   2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。追加：用量附第二單位（anAlt/anQty：匙↔g 互附）。
+   2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。追加：用量附第二單位（anAlt/anQty：匙↔g 互附）。追加：總部按「🔄 更新」＝重讀＋自動立即重算＋完成自動重讀（rbInWindow 避開 07:00–07:45；店長僅重讀）。
    ❗ 命名邊界：本頁＝fact_shopline（已向出貨中心下過的單、月檔 Sheet、總部每月貼）；
       採購系統自己的下單紀錄是 fact_order（BOM 本、店長按「複製訂貨單」時寫入），兩者勿混。
    資料源：月檔 Sheet（MONTH_SHEET_ID）fact_shopline 分頁，gvizQ 按店 lazy 載入＋快取。
