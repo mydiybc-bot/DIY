@@ -164,11 +164,6 @@
   body.print-shelf .shelfcard{break-inside:avoid;border:1px solid #bbb;box-shadow:none}
 }
   /* 🏬 採購大平台下單紀錄（2026-08-25 q 批建置，2026-08-29 s 批正名） */
-  .shbars{display:flex;align-items:flex-end;gap:3px;height:150px;padding-top:20px;min-width:520px}
-  .shbc{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:24px}
-  .shbar{width:100%;max-width:34px;background:var(--blue);border-radius:3px 3px 0 0;position:relative}
-  .shbar .bv{position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--mut);white-space:nowrap}
-  .shbl{font-size:12px;color:var(--mut);white-space:nowrap}
   .shdue{color:#dc2626;font-weight:700}.shok{color:#1a7f37}
   .shoh:hover td{background:#f6f9ff}
   #shQ,#shoQ{border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:13px}
@@ -2048,12 +2043,13 @@ function wire(){
 
 /* ===== 🏬 採購大平台下單紀錄（出貨中心 Shopline 訂單歷史）=====
    2026-08-25 q 批建置；2026-08-29 s 批正名：分頁 key "下單紀錄"→"大平台"。
+   2026-08-31 t 批：移除「📈 月趨勢」分段（shTrendView＋.shbars 系列 CSS 全刪）；排行欄名「次數」→「下單次數」；品項排行可點列展開該品項每一次下單（日期／單號／數量／單價／金額，依訂單號合併故列數＝下單次數）；採購參考改混合口徑（期間內統計＋全歷史上次下單；未訂天數以資料截止日計非今天；期間內未訂僅列 ⚠️ 者）；預設期間近 6 個月。
    ❗ 命名邊界：本頁＝fact_shopline（已向出貨中心下過的單、月檔 Sheet、總部每月貼）；
       採購系統自己的下單紀錄是 fact_order（BOM 本、店長按「複製訂貨單」時寫入），兩者勿混。
    資料源：月檔 Sheet（MONTH_SHEET_ID）fact_shopline 分頁，gvizQ 按店 lazy 載入＋快取。
    純唯讀顯示層：不寫任何 Sheet、不動引擎、computeRow 零改動。 */
 var SHIST={},SHLOAD={},SHVST="";
-function shInit(){if(ST.shMode===undefined){ST.shMode="訂單";ST.shPer="12";ST.shoQ="";ST.shSort="amt";ST.shPage=0;ST.shExp={};}}
+function shInit(){if(ST.shMode==="趨勢")ST.shMode="訂單";if(!ST.shRexp)ST.shRexp={};if(ST.shMode===undefined){ST.shMode="訂單";ST.shPer="6";ST.shoQ="";ST.shSort="amt";ST.shPage=0;ST.shExp={};ST.shRexp={};}}
 function shEsc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function shN(n){return (Math.round((+n||0)*100)/100).toLocaleString("zh-Hant-TW");}
 function shM(n){return "NT$"+Math.round(+n||0).toLocaleString("zh-Hant-TW");}
@@ -2109,59 +2105,86 @@ function shOrdView(rows){
   return h;
 }
 function shRankView(rows){
+  if(!ST.shRexp)ST.shRexp={};
   var m={};
-  rows.forEach(function(r){var e=m[r.name]=m[r.name]||{cat:r.cat,qty:0,amt:0,ords:{},last:""};e.qty+=r.qty;e.amt+=r.qty*r.price;e.ords[r.ord]=1;if(r.date>e.last)e.last=r.date;});
-  var list=Object.keys(m).map(function(n){var e=m[n];var c=0;for(var k in e.ords)c++;return {name:n,cat:e.cat,qty:e.qty,amt:e.amt,cnt:c,last:e.last};});
+  rows.forEach(function(r){
+    var e=m[r.name]=m[r.name]||{cat:r.cat,qty:0,amt:0,ords:{},oseq:[],last:""};
+    e.qty+=r.qty;e.amt+=r.qty*r.price;
+    if(!e.ords[r.ord]){e.ords[r.ord]={date:r.date,qty:0,amt:0};e.oseq.push(r.ord);}
+    var o=e.ords[r.ord];o.qty+=r.qty;o.amt+=r.qty*r.price;if(r.date<o.date)o.date=r.date;
+    if(r.date>e.last)e.last=r.date;
+  });
+  var list=Object.keys(m).map(function(n){var e=m[n];return {name:n,cat:e.cat,qty:e.qty,amt:e.amt,cnt:e.oseq.length,last:e.last,ords:e.ords,oseq:e.oseq};});
   if(!list.length)return '<div class="muted">此期間沒有資料。</div>';
   var s=ST.shSort;
   list.sort(function(a,b){return s==="qty"?b.qty-a.qty:(s==="cnt"?b.cnt-a.cnt:b.amt-a.amt);});
   function hd(k,label){return '<th style="text-align:right;cursor:pointer" data-shsort="'+k+'">'+label+(s===k?" ▼":"")+'</th>';}
-  var h='<table><thead><tr><th>#</th><th>品項</th>'+hd("qty","總數量")+hd("amt","總金額")+hd("cnt","次數")+'<th>最近下單</th></tr></thead><tbody>';
-  list.forEach(function(e,i){h+='<tr><td>'+(i+1)+'</td><td>'+shEsc(e.name)+' <span class="muted">'+shEsc(e.cat)+'</span></td><td style="text-align:right">'+shN(e.qty)+'</td><td style="text-align:right">'+shM(e.amt)+'</td><td style="text-align:right">'+e.cnt+'</td><td>'+e.last+'</td></tr>';});
-  return h+'</tbody></table>';
+  var h='<table><thead><tr><th>#</th><th>品項</th>'+hd("qty","總數量")+hd("amt","總金額")+hd("cnt","下單次數")+'<th>最近下單</th></tr></thead><tbody>';
+  list.forEach(function(e,i){
+    var open=!!ST.shRexp[e.name];
+    h+='<tr class="shoh" data-shrexp="'+shEsc(e.name)+'" style="cursor:pointer"><td>'+(i+1)+'</td><td>'+shEsc(e.name)+' <span class="muted">'+shEsc(e.cat)+'</span> '+(open?'▴':'▾')+'</td><td style="text-align:right">'+shN(e.qty)+'</td><td style="text-align:right">'+shM(e.amt)+'</td><td style="text-align:right">'+e.cnt+'</td><td>'+e.last+'</td></tr>';
+    if(open){
+      var os=e.oseq.slice().sort(function(a,b){var da=e.ords[a].date,db=e.ords[b].date;return da<db?1:(da>db?-1:(a<b?1:-1));});
+      h+='<tr><td colspan="6" style="background:#fffdf2;padding:4px 10px"><table style="font-size:12.5px"><thead><tr><th>訂單日期</th><th>訂單號碼</th><th style="text-align:right">數量</th><th style="text-align:right">單價</th><th style="text-align:right">金額</th></tr></thead><tbody>';
+      os.forEach(function(k){var o=e.ords[k];
+        h+='<tr><td>'+o.date+'</td><td>'+shEsc(k)+'</td><td style="text-align:right">'+shN(o.qty)+'</td><td style="text-align:right">@'+shN(o.qty?o.amt/o.qty:0)+'</td><td style="text-align:right">'+shM(o.amt)+'</td></tr>';});
+      h+='</tbody></table></td></tr>';
+    }
+  });
+  return h+'</tbody></table><div class="muted" style="margin-top:6px">點品項可展開該品項的每一次下單紀錄（日期／單號／數量／單價／金額）。</div>';
 }
-function shTrendView(rows){
-  var m={};rows.forEach(function(r){var k=r.date.slice(0,7);m[k]=(m[k]||0)+r.qty*r.price;});
-  var keys=Object.keys(m).sort();
-  if(!keys.length)return '<div class="muted">此期間沒有資料。</div>';
-  var mx=0;keys.forEach(function(k){if(m[k]>mx)mx=m[k];});
-  var h='<div class="shbars">';
-  keys.forEach(function(k){var p=Math.max(3,Math.round(m[k]/mx*100));
-    h+='<div class="shbc"><div class="shbar" style="height:'+p+'%"><span class="bv">'+Math.round(m[k]/1000)+'K</span></div><span class="shbl">'+k.slice(2)+'</span></div>';});
-  return h+'</div><div class="muted" style="margin-top:6px">柱高＝當月下單金額（K＝千元）。搭配上方搜尋可看單一品項的月趨勢。</div>';
-}
+
 function shAdvView(){
+  /* 2026-08-31 t 批 混合口徑：月均量／下單次數／平均週期＝期間內資料（跟上方篩選）；上次下單／距今＝全歷史。
+     期間內沒下單但歷史有的品項仍列出（那正是該補的訊號）。 */
   var all=SHIST[String(ST.storeId)]||[],q=(ST.shoQ||"").toLowerCase();
   if(!all.length)return '<div class="muted">此店沒有大平台下單紀錄。</div>';
   var mxD=new Date(all[all.length-1].date+"T00:00:00");
+  var wf=null;
+  if(ST.shPer!=="all"){var d0=new Date(all[all.length-1].date+"T00:00:00");d0.setMonth(d0.getMonth()-(+ST.shPer)+1);d0.setDate(1);wf=ymd(d0);}
+  /* 未訂天數以「資料截止日」計，不用今天：每月才貼一次資料，用今天會把最近幾天已訂但還沒貼進來的品項誤報成 ⚠️ */
+  function dd(a,b){return Math.round((b-a)/86400000);}
+  function D(x){return new Date(x+"T00:00:00");}
+  function nk(o){var c=0;for(var k in o)c++;return c;}
   var m={};
   all.forEach(function(r){
     if(q&&r.name.toLowerCase().indexOf(q)<0)return;
-    var e=m[r.name]=m[r.name]||{cat:r.cat,qty:0,days:{},first:"9999",last:""};
-    e.qty+=r.qty;e.days[r.date]=1;if(r.date<e.first)e.first=r.date;if(r.date>e.last)e.last=r.date;
+    var e=m[r.name]=m[r.name]||{cat:r.cat,hdays:{},hfirst:"9999",hlast:"",pqty:0,pords:{},pdays:{},pfirst:"9999",plast:""};
+    e.hdays[r.date]=1;if(r.date<e.hfirst)e.hfirst=r.date;if(r.date>e.hlast)e.hlast=r.date;
+    if(!wf||r.date>=wf){e.pqty+=r.qty;e.pords[r.ord]=1;e.pdays[r.date]=1;if(r.date<e.pfirst)e.pfirst=r.date;if(r.date>e.plast)e.plast=r.date;}
   });
-  var today=new Date();today.setHours(0,0,0,0);
-  function dd(a,b){return Math.round((b-a)/86400000);}
   var list=Object.keys(m).map(function(n){
-    var e=m[n],cnt=0;for(var k in e.days)cnt++;
-    var fd=new Date(e.first+"T00:00:00"),ld=new Date(e.last+"T00:00:00");
-    var itv=cnt>=2?dd(fd,ld)/(cnt-1):null;
-    var since=dd(ld,today);
-    var months=Math.max(1,(dd(fd,mxD)+1)/30.4);
-    return {name:n,cat:e.cat,qty:e.qty,cnt:cnt,last:e.last,since:since,itv:itv,mavg:e.qty/months,due:!!(cnt>=3&&itv&&since>itv*1.5)};
+    var e=m[n],pc=nk(e.pords),pdc=nk(e.pdays),hdc=nk(e.hdays);
+    var since=dd(D(e.hlast),mxD);
+    var itv=pdc>=2?dd(D(e.pfirst),D(e.plast))/(pdc-1):null;
+    var hitv=hdc>=2?dd(D(e.hfirst),D(e.hlast))/(hdc-1):null;
+    var cov0=(wf&&wf>e.hfirst)?wf:e.hfirst;
+    var months=Math.max(1,(dd(D(cov0),mxD)+1)/30.4);
+    var mavg=pc?e.pqty/months:null;
+    var thr=itv?Math.round(itv*1.5):null;
+    var due=false,stx;
+    if(pc===0){
+      if(hdc>=3&&hitv&&since>hitv*1.5){due=true;stx='<span class="shdue">⚠️ 期間內未下單</span> <span class="muted">（歷史約每 '+Math.round(hitv)+' 天訂一次）</span>';}
+      else stx='<span class="muted">期間內未下單</span>';
+    }else if(pdc>=3&&itv){
+      if(since>itv*1.5){due=true;stx='<span class="shdue">⚠️ 超過 '+thr+' 天未訂</span>';}
+      else stx='<span class="shok">✓ 正常</span> <span class="muted">（'+thr+' 天內）</span>';
+    }else stx='<span class="muted">資料少</span>';
+    return {name:n,cat:e.cat,pqty:e.pqty,cnt:pc,itv:itv,last:e.hlast,since:since,mavg:mavg,due:due,stx:stx,inPer:pc>0};
   });
+  list=list.filter(function(e){return e.inPer||e.due;});  /* 期間內沒訂且歷史不足以判斷的不列（純雜訊），切「全部歷史」可見 */
   if(!list.length)return '<div class="muted">沒有符合的品項。</div>';
-  list.sort(function(a,b){if(a.due!==b.due)return a.due?-1:1;return b.qty-a.qty;});
-  var h='<table><thead><tr><th>品項</th><th style="text-align:right">月均量</th><th style="text-align:right">次數</th><th style="text-align:right">平均週期(天)</th><th>上次下單</th><th style="text-align:right">距今(天)</th><th>狀態</th></tr></thead><tbody>';
+  list.sort(function(a,b){if(a.due!==b.due)return a.due?-1:1;if(a.inPer!==b.inPer)return a.inPer?-1:1;return (b.pqty-a.pqty)||(b.since-a.since);});
+  var perLbl=ST.shPer==="all"?"全部歷史":"近 "+ST.shPer+" 個月";
+  var h='<table><thead><tr><th>品項</th><th style="text-align:right">月均量</th><th style="text-align:right">下單次數</th><th style="text-align:right">平均週期(天)</th><th>上次下單</th><th style="text-align:right">未訂天數</th><th>狀態</th></tr></thead><tbody>';
   list.forEach(function(e){
-    var stx=e.due?'<span class="shdue">⚠️ 逾常態週期</span>':(e.cnt>=3?'<span class="shok">✓ 正常</span>':'<span class="muted">資料少</span>');
-    h+='<tr><td>'+shEsc(e.name)+' <span class="muted">'+shEsc(e.cat)+'</span></td><td style="text-align:right">'+e.mavg.toFixed(1)+'</td><td style="text-align:right">'+e.cnt+'</td><td style="text-align:right">'+(e.itv?Math.round(e.itv):'–')+'</td><td>'+e.last+'</td><td style="text-align:right">'+e.since+'</td><td>'+stx+'</td></tr>';});
-  return h+'</tbody></table><div class="muted" style="margin-top:6px">依「該店全部下單歷史」計算，不受期間篩選影響。月均量＝歷史總量÷涵蓋月數；⚠️＝距上次下單已超過平均下單週期的 1.5 倍，可能該補了。本頁看的是「向出貨中心下單」的行為紀錄，與建議頁的 POS 用量推估互補；實際下單請以盤點庫存與建議頁為準。</div>';
+    h+='<tr><td>'+shEsc(e.name)+' <span class="muted">'+shEsc(e.cat)+'</span></td><td style="text-align:right">'+(e.mavg==null?'–':e.mavg.toFixed(1))+'</td><td style="text-align:right">'+e.cnt+'</td><td style="text-align:right">'+(e.itv?Math.round(e.itv):'–')+'</td><td>'+e.last+'</td><td style="text-align:right">'+e.since+'</td><td>'+e.stx+'</td></tr>';});
+  return h+'</tbody></table><div class="muted" style="margin-top:6px">月均量／下單次數／平均週期＝<b>'+perLbl+'</b>內的資料（月均量＝期間內數量÷涵蓋月數，新品從首次下單起算；平均週期＝期間內下單日之間的平均間隔）；上次下單＝全部歷史；未訂天數＝上次下單到<b>資料截止日 '+ymd(mxD)+'</b> 的天數（資料每月更新，不以今天計）。⚠️＝未訂天數超過平均週期的 1.5 倍，可能該補了；「期間內未下單」＝這段期間沒訂過、但以前常訂。期間內沒訂且以前也少訂的品項不列，切「全部歷史」可見。本頁看的是「向出貨中心下單」的行為紀錄，與建議頁的 POS 用量推估互補；實際下單請以盤點庫存與建議頁為準。</div>';
 }
 function viewShist(){
   shInit();
   var st=String(ST.storeId||"");
-  if(SHVST!==st){SHVST=st;ST.shPage=0;ST.shExp={};}
+  if(SHVST!==st){SHVST=st;ST.shPage=0;ST.shExp={};ST.shRexp={};}
   if(!st)return '<div class="note">請先選擇門市。</div>';
   if(!SHIST[st]){
     loadShist(st).then(function(){if(ST.tab==="大平台")render();});
@@ -2172,12 +2195,12 @@ function viewShist(){
   var oc=0;for(var k in os)oc++;
   var h='<div class="note">🏬 <b>採購大平台下單紀錄</b>　本店向<b>出貨中心（採購大平台）</b>實際下過的訂單歷史，唯讀。資料至 <b>'+(all.length?all[all.length-1].date:"—")+'</b>，每月由總部更新、非即時。'+(all.length?'':'　⚠️ 此店在資料中沒有任何訂單。')+'</div>'+'<div class="note" style="background:#FFF8E7">ℹ️ 〈跟「📑 訂貨單」不一樣〉本頁＝<b>已經向大平台下過的單</b>（過去實際發生的）；「📑 訂貨單」＝<b>本系統依盤點算出、這次該訂多少</b>（還沒下的）。兩邊數字不會也不需要一樣。</div>';
   h+='<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">';
-  h+='<span class="seg">'+["訂單","排行","趨勢","採購參考"].map(function(mo){return '<div class="'+(ST.shMode===mo?"on":"")+'" data-shmode="'+mo+'">'+({"訂單":"📋 訂單","排行":"🏆 品項排行","趨勢":"📈 月趨勢","採購參考":"🛒 採購參考"})[mo]+'</div>';}).join("")+'</span>';
+  h+='<span class="seg">'+["訂單","排行","採購參考"].map(function(mo){return '<div class="'+(ST.shMode===mo?"on":"")+'" data-shmode="'+mo+'">'+({"訂單":"📋 訂單","排行":"🏆 品項排行","採購參考":"🛒 採購參考"})[mo]+'</div>';}).join("")+'</span>';
   h+='<select id="shPer">'+[["3","近3個月"],["6","近6個月"],["12","近12個月"],["all","全部歷史"]].map(function(p){return '<option value="'+p[0]+'"'+(ST.shPer===p[0]?" selected":"")+'>'+p[1]+'</option>';}).join("")+'</select>';
   h+='<input id="shoQ" type="text" placeholder="🔍 搜尋品項" value="'+shEsc(ST.shoQ)+'" style="min-width:150px">';
   h+='<span class="muted">訂單 '+oc+' 張｜數量 '+shN(q)+'｜金額 '+shM(a)+'</span>';
   h+='</div></div>';
-  h+='<div class="card" style="overflow-x:auto">'+(ST.shMode==="訂單"?shOrdView(rows):ST.shMode==="排行"?shRankView(rows):ST.shMode==="趨勢"?shTrendView(rows):shAdvView())+'</div>';
+  h+='<div class="card" style="overflow-x:auto">'+(ST.shMode==="訂單"?shOrdView(rows):ST.shMode==="排行"?shRankView(rows):shAdvView())+'</div>';
   return h;
 }
 function shWire(){
@@ -2185,6 +2208,7 @@ function shWire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-shsort]"),function(el){el.onclick=function(){ST.shSort=el.dataset.shsort;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-shpg]"),function(el){el.onclick=function(){ST.shPage+=(+el.dataset.shpg);render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-shexp]"),function(el){el.onclick=function(){var k=el.dataset.shexp;ST.shExp[k]=!ST.shExp[k];render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-shrexp]"),function(el){el.onclick=function(){var k=el.dataset.shrexp;if(!ST.shRexp)ST.shRexp={};ST.shRexp[k]=!ST.shRexp[k];render();};});
   var sp=$("#shPer");if(sp)sp.onchange=function(){ST.shPer=this.value;ST.shPage=0;render();};
   bindQ($("#shoQ"),function(v){ST.shoQ=v;ST.shPage=0;render();});
 }
