@@ -7,6 +7,7 @@
 <link rel="manifest" href="purchase-manifest.json">
 <title>自己做 · 採購系統</title>
 <!-- 2026-07-25 全站字級下限修正：9 處 11px→12px（.badge/.pill/.tagnew/.lock/.own/header 更新時間/兩個檔期徽章/建議採購表副行）。無其他改動。 -->
+<!-- 2026-09-01 v 批（盤點頁）：①卡片移除品類標籤，改以分區內「品類分隔列」呈現 ②分區內排序 品類(食材→耗材→器具→模具)→店別自訂順序→品名 ③包材耗材區併入烘烤區（autoZone 耗材→烘烤區；Sheet 殘留的「包材耗材區」由 zoneAlias 對映，不動資料）④新籤「🏬 出貨中心」（廠商含出貨中心）⑤新籤「💤 零需求」：訂貨點/標配 0 的品項移出「全部」、不計進度與未盤；訂貨單「本輪未盤點 N 項」同步排除。計算層 rowFor 零改動。 -->
 <!-- 2026-07-27 盤點體驗改版（純前端）：①移除 需關注/接近/久未盤 快篩與燈號/推估/未盤點估算標籤（estOnHand/invLight/invTag 保留備用）②搜尋拆二：品項 datalist 可點選＋廠商下拉，AND 疊加 ③盤點 session：延續/新的一週彈窗、localStorage invSession_/invDraft_（草稿防遺失，不動 Sheet 歷史）、進度條、本次未盤快篩、下一個未盤浮動鈕 ④分區可收合(invZC_)、控制列 sticky、輸入框 42px/16px 防 iOS 縮放 ⑤儲存盤點後清草稿並跳訂貨單。 -->
 <!-- 2026-07-27 店長自助調整基準值：盤點頁/訂貨單頁每列「⚙ 調整」→ 對話框輸入本店實際週用量（採購單位），永久寫回 dim_store_par。寫哪欄依品項型態自動判定：POS推算品項→權數(=目標÷POS推算)、備品→手動週用量、器具模具→標配數量。同時 post type:'plog' 寫軌跡（需 GAS 端 handler，未部署時靜默忽略）。新增總部/經營者「🧾 參數軌跡」分頁讀 fact_param_log，變動≥20%橘、≥50%紅。依經營者決策：不設上下限護欄。 -->
 <!-- 2026-07-27 寫入回讀驗證（修 Cowork 驗收發現之資料遺失風險）：post 為 no-cors，opaque response 一律 resolve，原本送出即 clearDraft，GAS 失敗時店長草稿會靜默消失。改為送出後回讀 fact_inventory（cache-bust，2/4/6 秒三次重試），比對「Sheet 現有量＝送出值」相符才清草稿並跳訂貨單；不符或連線失敗則保留草稿、不跳頁、顯示紅色警示要求重按。判準用值不用時間戳以避開時鐘偏差。同批：onHand placeholder 0→未填。 -->
@@ -169,6 +170,7 @@
   .shoh:hover td{background:#f6f9ff}
   #shQ,#shoQ{border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:13px}
   #shPer{border:1px solid var(--line);border-radius:9px;padding:6px 8px;font-size:13px}
+.catsep{font-size:12px;font-weight:700;color:#64748b;letter-spacing:.06em;padding:8px 2px 2px;border-bottom:1px dashed #e2e8f0;margin-bottom:2px}
 </style>
 <script>
 /* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL */
@@ -499,14 +501,18 @@ function newActive(st){var g=NEWAGG[st]||{};for(var k in g){if(g[k].qty>0)return
 function periodLabel(){return PLABEL[ST.period]||ST.period;}
 function periodWeekly(st,s){var a=aggOf(st,s);return ST.period==="上週"?a.week:a.avg4;}
 function manualOf(st,s){return num(pOf(st,s).manualWeekly);}
-var ZONE_ORDER=["冰箱區","洞洞牆區","烘烤區","包材耗材區","器具區","模具區","員工區","凍庫區","其他"];
+var ZONE_ORDER=["冰箱區","洞洞牆區","烘烤區","器具區","模具區","員工區","凍庫區","其他"];
 function autoZone(s){var n=s.name;
   if(s.cat==="模具")return"模具區";
   if(s.cat==="器具")return"器具區";
-  if(s.cat==="耗材")return"包材耗材區";
+  if(s.cat==="耗材")return"烘烤區";   /* 2026-09-01 v 批：包材耗材區併入烘烤區 */
   if(s.vendor==="半成品"||/牛奶|鮮奶油|奶油|乳酪|起司|優格|蛋白液|蛋黃液|布丁|奶凍|果泥|新鮮|草莓|藍莓|檸檬|芒果|荔枝|葡萄|水蜜桃|奇異果|凍$|餡|麻糬|可爾必思|培根|地瓜|蛋$/.test(n))return"冰箱區";
   return"洞洞牆區";}
-function zoneOf(st,s){var z=pOf(st,s).zone;if(z&&z!=="未分區")return z;if(s.defZone)return s.defZone;return autoZone(s);}
+function zoneOf(st,s){var z=pOf(st,s).zone;if(z&&z!=="未分區")return zoneAlias(z);if(s.defZone)return zoneAlias(s.defZone);return autoZone(s);}
+function zoneAlias(z){return z==="包材耗材區"?"烘烤區":z;}   /* 2026-09-01 v 批：Sheet 內殘留的舊分區名一律併入烘烤區，不動資料 */
+/* 2026-09-01 v 批：零需求＝食材/耗材 訂貨點 0（近4週無用量、無手動週用、無預約/檔期需求）或 器具/模具 標配與檔期需求皆 0。建議永遠 0，盤了也不會產生訂貨 */
+function zeroDemand(st,s){var r=rowFor(st,s);return r.isDurable?num(r.basis.par)===0:num(r.reorderPoint)===0;}
+function isDC(st,s){return /出貨中心/.test(String(vendorOf(st,s)||""));}
 function bookOf(st,s){return num((BOOKAGG[st]||{})[s.id]);}
 function estOnHand(st,s){var iv=ivOf(st,s);if(iv.t==null||iv.onHand==null)return null;
   var units=num(iv.onHand)*pqOf(st,s), t0=iv.t, days=(TODAY.getTime()-t0)/864e5;
@@ -887,13 +893,18 @@ function reasonBox(s,r,up){var b=r.basis,pq=pqOf(ST.storeId,s);
 function zonesOrdered(store,items){var g={};items.forEach(function(s){var p=pOf(store,s),z=p.zone||"未分區",o=(p.ord==null?9999:p.ord);g[z]=g[z]||{name:z,minOrd:o,items:[]};if(o<g[z].minOrd)g[z].minOrd=o;g[z].items.push({s:s,o:o});});
   var arr=Object.keys(g).map(function(k){return g[k];});arr.sort(function(a,b){return a.minOrd-b.minOrd;});arr.forEach(function(x){x.items.sort(function(a,b){return a.o-b.o;});});return arr;}
 function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcLoad(store);ZCST=store;}
-  var ss=sessStart(store),live=liveItems(store);
+  var ss=sessStart(store),liveAll=liveItems(store);
+  /* 2026-09-01 v 批：零需求品項移出預設清單，另立「💤 零需求」籤；進度、未盤、下一個未盤皆不計它們 */
+  var live=liveAll.filter(function(s){return !zeroDemand(store,s);}),zero=liveAll.filter(function(s){return zeroDemand(store,s);});
+  var allZ=zero.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
   var all=live.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
   var nEv=all.filter(function(s){return !!markOf(store,s);}).length;
   var nUn=all.filter(function(s){return !countedNow(store,s);}).length;
-  var items=all.filter(function(s){var f=ST.invFilter;
+  var nDC=all.filter(function(s){return isDC(store,s);}).length;
+  var items=(ST.invFilter==="零需求"?allZ:all).filter(function(s){var f=ST.invFilter;
     if(f==="本次未盤")return !countedNow(store,s);
     if(f==="檔期")return !!markOf(store,s);
+    if(f==="出貨中心")return isDC(store,s);
     return true;});
   var groups=zonesOrderedZ(store,items);
   var done=live.filter(function(s){return countedNow(store,s);}).length,tot=live.length;
@@ -911,14 +922,18 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
       +(sw.net?'目前連不上資料表，無法確認。':(sw.bad+' / '+sw.total+' 筆在資料表中查不到。'))
       +'請確認網路後<b>再按一次「儲存盤點」</b>。在確認成功前，你填的數字都還在，離開或重整也不會消失。</div></div>';}
   html+='<div class="stickyctl">'+catChips();
-  html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
+  html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat(nDC?[["出貨中心","🏬 出貨中心("+nDC+")"]]:[]).concat(allZ.length?[["零需求","💤 零需求("+allZ.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
   html+=searchBar(store)+'</div>';
+  if(ST.invFilter==="零需求")html+='<div class="note">💤 這些品項目前<b>訂貨點／標配為 0</b>（近 4 週無用量、無手動週用、無預約或檔期需求；器具模具＝標配未設），盤了也不會產生訂貨，所以不列在「全部」。若已停售，請回報總部在主檔處理；若本店確實不用，可到「店別參數」取消啟用；若是器具模具，請在店別參數填標配。</div>';
+  if(ST.invFilter==="出貨中心")html+='<div class="note">🏬 廠商為出貨中心的品項。盤完後到「訂貨單」的出貨中心區塊即可整批下單。</div>';
   if(!items.length)html+='<div class="note">此篩選目前沒有品項 ✅</div>';
   html+='<div class="groups">';
   groups.forEach(function(gp){var zc=!!ZC[gp.name];var zDone=gp.items.filter(function(o){return countedNow(store,o.s);}).length;
     html+='<div class="group"><div class="vh zhead" data-zc="'+escA(gp.name)+'"><span class="vn">📍 '+gp.name+'</span><span class="vl"></span><span class="muted">'+zDone+'/'+gp.items.length+' 項 '+(zc?'▸ 展開':'▾')+'</span></div>';
     if(!zc){html+='<div class="card" style="padding:4px 12px">';
+    var lastCat="";
     gp.items.forEach(function(o){var s=o.s,iv=ivOf(store,s),dur=isDur(s),r=rowFor(store,s);
+      if(s.cat!==lastCat){lastCat=s.cat;html+='<div class="catsep">'+s.cat+'</div>';}
       var rpP=pqEff(store,s)>0?dec(r.reorderPoint/pqOf(store,s)):dec(r.reorderPoint);
       var ref=dur?('標配 '+fmt(parOf(store,s))+' '+s.useUnit):('訂貨點 '+rpP+' '+(pqEff(store,s)>0?s.buyUnit:s.useUnit));
       var psp=packSpec(store,s);if(psp)ref+='　📦 '+psp;
@@ -927,7 +942,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
       var sug=seen?('<div class="sub" style="color:'+(r.packs>0?'#C0392B':'#2E7D32')+';font-weight:600">'+(r.packs>0?('建議 '+r.packs+' '+s.buyUnit):'庫存足')+'</div>'):'';
       var vOn=(seen&&iv.onHand!=null)?iv.onHand:"";
       var vBr=(seen&&iv.breakage!=null)?iv.breakage:"";
-      html+='<div class="row"><div><span class="tag t'+({食材:1,耗材:2,器具:3,模具:4})[s.cat]+'">'+s.cat+'</span><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'+((!dur&&pqEff(store,s)>0)?'<div class="ipt-lbl" style="color:#0369a1">1 '+s.buyUnit+'='+fmt(pqOf(store,s))+s.useUnit+(pqCust(store,s)?'（本店）':'')+'</div>':'')+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+vBr+'" placeholder="0"></div>':'')+'</div></div>';});
+      html+='<div class="row"><div><b>'+dispName(store,s)+'</b>'+newBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+sug+'</div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'+((!dur&&pqEff(store,s)>0)?'<div class="ipt-lbl" style="color:#0369a1">1 '+s.buyUnit+'='+fmt(pqOf(store,s))+s.useUnit+(pqCust(store,s)?'（本店）':'')+'</div>':'')+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填">'+(dur?'<div style="margin-top:5px"><span class="ipt-lbl">破損</span><input class="sm" type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="breakage" value="'+vBr+'" placeholder="0"></div>':'')+'</div></div>';});
     html+='</div>';}
     html+='</div>';});
   html+='</div>';
@@ -940,13 +955,14 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   return html;}
 function zonesOrderedZ(store,items){var by={};items.forEach(function(s){var z=zoneOf(store,s);(by[z]=by[z]||[]).push({s:s,ord:num(pOf(store,s).ord)||999});});
   var names=Object.keys(by).sort(function(a,b){var ia=ZONE_ORDER.indexOf(a),ib=ZONE_ORDER.indexOf(b);ia=ia<0?99:ia;ib=ib<0?99:ib;return ia-ib||(a<b?-1:1);});
-  return names.map(function(nm){return {name:nm,items:by[nm].sort(function(a,b){return a.ord-b.ord||(a.s.name<b.s.name?-1:1)}),};});}
+  var CO={食材:1,耗材:2,器具:3,模具:4};
+  return names.map(function(nm){return {name:nm,items:by[nm].sort(function(a,b){return (CO[a.s.cat]||9)-(CO[b.s.cat]||9)||a.ord-b.ord||(a.s.name<b.s.name?-1:1)}),};});}
 
 /* ===== 訂貨單 ===== */
 function viewOrder(){var store=ST.storeId,live=liveItems(store);
   mergeDraft(store);
   var counted=live.filter(function(s){return countedForOrder(store,s);});
-  var skipped=live.length-counted.length;
+  var skipped=live.filter(function(s){return !countedForOrder(store,s)&&!zeroDemand(store,s);}).length;   /* 2026-09-01 v 批：零需求不算「未盤」 */
   var need=counted.map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;});
   var skipNote=skipped>0?('<div class="note">🔕 有 <b>'+skipped+'</b> 項本輪未盤點，未列入訂貨單（未盤點＝本次不需採購）。若其中有該訂的，請回盤點頁填入現有數量。</div>'):'';
   if(!need.length)return skipNote+'<div class="card">本店目前無需採購 🎉</div>';
