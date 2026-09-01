@@ -416,7 +416,7 @@ async function bootstrap(keep){ try {
   BOOKINGS=fB.map(function(r){return {id:String(r['預約ID']||''),store:String(r['店號']),date:(function(){var d=gvDate(r['日期']);return d?ymd(d):String(r['日期']||'').slice(0,10);})(),dessert:r['甜點']||'',qty:num(r['數量']),note:r['備註']||'',status:r['狀態']||''};}).filter(function(b){return b.id;});
   EVENTS=dEv.map(function(r){var f=gvDate(r["開始日"]),g=gvDate(r["結束日"]);return {name:r["事件名"]||"",from:f,to:g,coef:num(r["加成係數"]),scope:r["適用品類"]||"全部",on:(r["啟用"]==null||r["啟用"]==="")?true:(toBool(r["啟用"])||r["啟用"]==="是")};}).filter(function(e){return e.name&&e.from&&e.to&&e.coef>0&&e.to>=e.from;});
   NEWAGG={};dNi.forEach(function(r){var st=String(r["店號"]);if(!st||!r["sku_id"])return;((NEWAGG[st]=NEWAGG[st]||{})[r["sku_id"]]={qty:num(r["需求量"]),ev:r["事件名"]||"",excl:(r["專屬"]==="是"||r["專屬"]===true),who:r["新品清單"]||""});});
-  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim(),aliases:String(r["BOM別名"]||"").split(/[;,，、]/).map(function(a){return a.trim();}).filter(Boolean)};}).filter(function(s){return s.id&&s.name;});
+  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim(),src:String(r["來源"]||"").trim(),aliases:String(r["BOM別名"]||"").split(/[;,，、]/).map(function(a){return a.trim();}).filter(Boolean)};}).filter(function(s){return s.id&&s.name;});
   SKU={};SKUS.forEach(function(s){SKU[s.id]=s;});
   AGG={};var storeSet={};
   aP.forEach(function(r){var st=String(r["店號"]);storeSet[st]=1;((AGG[st]=AGG[st]||{})[r["sku_id"]]={week:num(r["上週用量"]),avg4:num(r["近4週均"]),status:r["狀態"]||"販售中",launch:r["上市日"]||""});});
@@ -1140,10 +1140,15 @@ function anStoreLoad(){
       if(!st||st==="13"||!pn||!(q>0))return;var cn=((ANMAP||{})[pn]||{cn:pn}).cn;((by[st]=by[st]||{})[cn]=(by[st][cn]||0)+q);});
     R.byStore=by;R.byStoreFail=!!rs.__failed;delete R.byStoreLoad;});
   return R.byStoreLoad;}
+/* 2026-09-01 u 批：大平台下單量的統計期間＝指定期間往前推 AN_PLAT_LEAD 天。
+   理由（經營者）：新品開賣前 10–15 天就要進貨，8/23 開賣的中秋品，叫貨發生在 8/8 起；只看指定期間會漏掉備貨那一批。 */
+var AN_PLAT_LEAD=15;
+function anPlatFrom(){var d=new Date(ANRES.from+"T00:00:00");d.setDate(d.getDate()-AN_PLAT_LEAD);return ymd(d);}
 function anPlatLoad(){
   if(!ANRES||ANRES==="loading"||ANRES.plat)return Promise.resolve();
   if(ANRES.platLoad)return ANRES.platLoad;
-  var R=ANRES,tq="select A,B,C,D,E,F,G where B >= date '"+R.from+"' and B <= date '"+R.to+"'"+(R.store?" and A="+(+R.store):"");
+  var R=ANRES;R.platFrom=anPlatFrom();
+  var tq="select A,B,C,D,E,F,G where B >= date '"+R.platFrom+"' and B <= date '"+R.to+"'"+(R.store?" and A="+(+R.store):"");
   R.platLoad=gvizQ("fact_shopline",tq,MONTH_SHEET_ID).then(function(rs){
     R.plat=rs.map(function(r){var d=gvDate(r["日期"]);
       return {st:String(r["店號"]==null?"":r["店號"]).trim(),date:d?ymd(d):String(r["日期"]||"").slice(0,10),ord:String(r["訂單號碼"]||""),name:String(r["品項"]||""),qty:num(r["數量"]),price:num(r["單價"])};
@@ -1187,21 +1192,27 @@ function anStoreUsage(m){ /* 各店期間用量（使用單位）＝Σ 該店各
   var by=ANRES.byStore||{},out={};
   Object.keys(by).forEach(function(st){var u=0;Object.keys(m.dess||{}).forEach(function(dn){var dz=m.dess[dn];if(!(dz.portions>0))return;var q=by[st][dn]||0;if(q>0)u+=q*(dz.qty/dz.portions);});if(u>0)out[st]=u;});
   return out;}
-function anBuyTxt(st,m,u){ /* 換算採購：依店別內容量覆蓋（pqOf）→ 採購單位 */
-  if(!m.sku)return "–";var pq=pqOf(st,m.sku);if(!(pq>0))return "–";return dec(u/pq)+" "+(m.sku.buyUnit||"");}
+function anBuyTxt(st,m,u){ /* 換算單位：依店別內容量覆蓋（pqOf）→ 採購單位 */
+  if(!m.sku)return "–";var bu=String(m.sku.buyUnit||"").trim(),uu=String(m.unit||"").trim();
+  /* 2026-09-01：採購單位是 g/ml 但使用單位不是（如黑芝麻 匙／g／內容量 1），用量÷內容量會把 82 匙算成 82 g。改走換算表（匙→g）。 */
+  if((bu==="g"||bu==="ml")&&uu&&uu!==bu){var a=anAlt(m);if(a&&a.unit===bu)return fmt(u*a.f)+" "+bu;}
+  var pq=pqOf(st,m.sku);if(!(pq>0))return "–";return dec(u/pq)+" "+bu;}
 function anDrillStores(m,h){
   if(!ANRES.byStore){anStoreLoad().then(function(){render();});return h+'<div class="sub" style="margin:4px 0">讀取各店銷量中…</div>';}
   var us=anStoreUsage(m),sts=Object.keys(us).sort(function(a,b){return us[b]-us[a];}),wk=anPeriodWeeks();
   var tot=0,mx=0;sts.forEach(function(st){tot+=us[st];if(us[st]>mx)mx=us[st];});var avg=sts.length?tot/sts.length:0;
+  if(!ANRES.plat&&!ANRES.platLoad)anPlatLoad().then(function(){render();});
   var plat=ANRES.plat?ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);}):null;
   var pq={};if(plat)plat.forEach(function(x){pq[x.st]=(pq[x.st]||0)+x.qty;});
-  h+='<div class="sub" style="margin:4px 0">共 <b>'+sts.length+'</b> 店有用量　·　期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算採購依各店內容量':'')+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
-  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">換算採購</th><th class="right">週平均</th><th class="right">vs 全店均</th>'+(plat?'<th class="right">大平台叫貨</th>':'')+'<th style="width:26%"></th></tr>';
+  var pfrom=ANRES.platFrom||anPlatFrom();
+  h+='<div class="sub" style="margin:4px 0">共 <b>'+sts.length+'</b> 店有用量　·　用量期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算單位依各店內容量':'')+'　·　<b>採購大平台下單量統計期間 '+pfrom+'〜'+ANRES.to+'</b>（往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）'+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">換算單位</th><th class="right">週平均</th><th class="right">vs 全店均</th><th class="right">採購大平台下單量</th><th style="width:26%"></th></tr>';
   sts.forEach(function(st){var u=us[st],dv=avg>0?Math.round((u/avg-1)*100):0;
-    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+anQty(m,u,true)+'</td><td class="right">'+anBuyTxt(st,m,u)+'</td><td class="right">'+fmt(u/wk)+'</td><td class="right" style="color:'+(dv>15?'#C0392B':dv<-15?'#2E7D32':'#55606E')+'">'+(dv>0?'+':'')+dv+'%</td>'+(plat?'<td class="right">'+(pq[st]?fmt(pq[st]):'<span class="muted">0</span>')+'</td>':'')+'<td><div style="background:#DCEBDD;height:12px;border-radius:6px;width:'+(mx?Math.round(u/mx*100):0)+'%"></div></td></tr>';});
-  h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku&&m.sku.packQty>0?dec(tot/m.sku.packQty)+' '+m.sku.buyUnit:'–')+'</td><td class="right">'+fmt(tot/wk)+'</td><td></td>'+(plat?'<td class="right">'+fmt(plat.reduce(function(a,x){return a+x.qty;},0))+'</td>':'')+'<td></td></tr></table></div>';
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+anQty(m,u,true)+'</td><td class="right">'+anBuyTxt(st,m,u)+'</td><td class="right">'+fmt(u/wk)+'</td><td class="right" style="color:'+(dv>15?'#C0392B':dv<-15?'#2E7D32':'#55606E')+'">'+(dv>0?'+':'')+dv+'%</td><td class="right">'+(plat?(pq[st]?fmt(pq[st]):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td><td><div style="background:#DCEBDD;height:12px;border-radius:6px;width:'+(mx?Math.round(u/mx*100):0)+'%"></div></td></tr>';});
+  h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku&&m.sku.packQty>0?dec(tot/m.sku.packQty)+' '+m.sku.buyUnit:'–')+'</td><td class="right">'+fmt(tot/wk)+'</td><td></td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td><td></td></tr></table></div>';
   if(!sts.length)h+='<div class="sub">此期間各店都沒有用量。</div>';
-  if(!plat)h+='<div class="sub" style="margin-top:4px">切到「各店採購量」後，這裡會多一欄「大平台叫貨」方便對照。</div>';
+  if(plat&&!plat.length)h+='<div class="sub" style="margin-top:4px">大平台 '+pfrom+'〜'+ANRES.to+' 找不到對應此品項的下單（可能自購、未上架，或品名差異太大）。</div>';
+  else if(plat)h+='<div class="sub" style="margin-top:4px">下單量單位＝大平台品項的單位（包/組/件…），與換算單位不一定相同；明細見「各店採購量」。</div>';
   return h;}
 function anDrillPlat(m,h){
   if(!ANRES.plat){anPlatLoad().then(function(){render();});anStoreLoad();return h+'<div class="sub" style="margin:4px 0">讀取大平台下單明細中…</div>';}
@@ -1209,8 +1220,8 @@ function anDrillPlat(m,h){
   if(!m.sku)return h+'<div class="sub" style="margin:4px 0">此物料未對應主檔品項，無法比對大平台。</div>';
   var rows=ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);});
   var names={};rows.forEach(function(x){names[x.name]=(names[x.name]||0)+x.qty;});
-  h+='<div class="sub" style="margin:4px 0">期間 '+ANRES.from+'〜'+ANRES.to+'　·　來源：採購大平台（fact_shopline，資料至上次貼入）'+(ANRES.platFail?'　·　<span style="color:#b3261e">⚠️ 資料源沒回應</span>':'')+'</div>';
-  if(!rows.length)return h+'<div class="sub">大平台這段期間找不到對應「'+shEsc(m.sku.name)+'」的品名（可能是自購、未上架，或大平台品名差異太大）。</div>';
+  h+='<div class="sub" style="margin:4px 0">統計期間 <b>'+(ANRES.platFrom||anPlatFrom())+'〜'+ANRES.to+'</b>（指定期間往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）　·　來源：採購大平台（fact_shopline，資料至上次貼入）'+(ANRES.platFail?'　·　<span style="color:#b3261e">⚠️ 資料源沒回應</span>':'')+'</div>';
+  if(!rows.length)return h+'<div class="sub">大平台 '+(ANRES.platFrom||anPlatFrom())+'〜'+ANRES.to+' 找不到對應「'+shEsc(m.sku.name)+'」的品名（可能是自購、未上架，或大平台品名差異太大）。</div>';
   h+='<div class="sub" style="margin:2px 0 6px">配對到的大平台品名（依名稱相似自動配對，請核對）：'+Object.keys(names).map(function(n){return '<span class="spectag">'+shEsc(n)+' ×'+fmt(names[n])+'</span>';}).join(' ')+'</div>';
   var us=ANRES.byStore?anStoreUsage(m):null;
   var by={};rows.forEach(function(x){var b=by[x.st]=by[x.st]||{qty:0,amt:0,ords:{},rows:[]};b.qty+=x.qty;b.amt+=x.qty*x.price;b.ords[x.ord]=1;b.rows.push(x);});
@@ -1499,9 +1510,14 @@ function viewMaster(){var ed=ST.role==="總部";
     +'<input class="sm" id="nsUse" style="width:56px" placeholder="使用單位g" value="g"><input class="sm" id="nsVendor" style="width:80px" placeholder="廠商"><input class="sm" id="nsBuy" style="width:64px" placeholder="採購單位"><input class="sm" id="nsPq" type="number" style="width:80px" placeholder="內容量"><input class="sm" id="nsPrice" type="number" style="width:70px" placeholder="單價">'
     +'<button class="btn" id="nsAdd">新增</button></div></div>';
   var mf=ST.mfilter||"全部";
+  /* 2026-09-01 u 批：獨立 GAS diybc-sku-autodraft 每日 06:xx 把 BOM 對不上主檔的品項自動建成草稿（來源欄「自動草稿…」）。
+     這裡把草稿列出來讓總部補 廠商／內容量／單價 三格；三格齊全隔天標記自動清除。 */
+  var draftN=SKUS.filter(function(s){return s.src.indexOf("自動草稿")===0;}).length;
+  if(draftN&&mf!=="待確認")html+='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">🆕 有 <b>'+draftN+'</b> 項是系統從 BOM 自動建的草稿，類別是推測的、廠商／內容量／單價還沒填。<a href="#" data-mfilter="待確認" style="color:#8A5A00;font-weight:700">點這裡只看草稿</a></div>';
   html+='<div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項／廠商／編號，空白分隔可多關鍵字" value="'+(ST.q||'').replace(/"/g,'&quot;')+'">'
-    +["全部","單價未填","有警示","有建議價"].map(function(x){return '<button class="btn sm'+(mf===x?'':' ghost')+'" data-mfilter="'+x+'">'+x+'</button>';}).join('')+'</div>';
+    +["全部","待確認","單價未填","有警示","有建議價"].map(function(x){var lb=x==="待確認"?("🆕 待確認"+(draftN?" "+draftN:"")):x;return '<button class="btn sm'+(mf===x?'':' ghost')+(x==="待確認"&&draftN?' style="border-color:#F0B35A"':'')+'" data-mfilter="'+x+'">'+lb+'</button>';}).join('')+'</div>';
   var items=SKUS.filter(function(s){if(!matchQ(s))return false;
+    if(mf==="待確認")return s.src.indexOf("自動草稿")===0;
     if(mf==="單價未填")return !(s.price>0);
     if(mf==="有警示"){var rp=REFP[s.id];if(!rp)return false;var w=String(rp.warn||"").trim();return w.indexOf("🔴")===0||w.indexOf("⚠")===0;}
     if(mf==="有建議價")return REFP[s.id]&&REFP[s.id].sug!=null;
@@ -1510,7 +1526,8 @@ function viewMaster(){var ed=ST.role==="總部";
   items.forEach(function(s){
     if(!ed){html+='<tr><td><b>'+s.name+'</b></td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td>'+s.vendor+'</td><td>'+s.buyUnit+'</td><td>'+fmt(s.packQty)+' '+s.useUnit+'</td><td>'+fmt(s.price)+'</td>'+refCellM(s,false)+'</tr>';return;}
     var catSel='<select class="sm" data-m="'+s.id+'" data-f="cat">'+["食材","耗材","器具","模具"].map(function(c){return '<option'+(c===s.cat?' selected':'')+'>'+c+'</option>';}).join('')+'</select>';
-    html+='<tr><td><b>'+s.name+'</b></td><td>'+catSel+'</td>'
+    var dr=s.src.indexOf("自動草稿")===0;var miss=[];if(dr){if(!String(s.vendor||"").trim())miss.push("廠商");if(!(s.packQty>1||(s.buyUnit&&s.buyUnit!==s.useUnit)))miss.push("內容量/採購單位");if(!(s.price>0))miss.push("單價");}
+    html+='<tr'+(dr?' style="background:#FFFBF0"':'')+'><td><b>'+s.name+'</b>'+(dr?'<div class="sub" style="color:#8A5A00">🆕 '+s.src+(miss.length?'｜還缺：'+miss.join('、'):'｜三格已填，隔天自動轉正式')+'</div>':'')+'</td><td>'+catSel+'</td>'
       +'<td><input class="tx" style="width:78px" type="text" data-m="'+s.id+'" data-f="vendor" value="'+String(s.vendor||'').replace(/"/g,'&quot;')+'"></td>'
       +'<td><input class="tx" style="width:56px" type="text" data-m="'+s.id+'" data-f="buyUnit" value="'+String(s.buyUnit||'').replace(/"/g,'&quot;')+'"></td>'
       +'<td><input class="sm" style="width:80px" type="number" data-m="'+s.id+'" data-f="packQty" value="'+s.packQty+'"> <span class="muted">'+s.useUnit+'</span></td>'
@@ -2209,7 +2226,7 @@ function wire(){
    2026-08-31 t 批：移除「📈 月趨勢」分段（shTrendView＋.shbars 系列 CSS 全刪）；排行欄名「次數」→「下單次數」；品項排行可點列展開該品項每一次下單（日期／單號／數量／單價／金額，依訂單號合併故列數＝下單次數）；採購參考改混合口徑（期間內統計＋全歷史上次下單；未訂天數以資料截止日計非今天；期間內未訂僅列 ⚠️ 者）；預設期間近 6 個月。
    2026-08-31 t 批（第一步）：gviz/gvizQ 改走 gvCore：成功存 localStorage 快取（dpc:*），逾時/失敗改用快取並亮 #gvWarn 橘色警示列；無快取回 [] 帶 __failed。loadAnalDims 失敗不再快取空表（AN_FAILED）；查詢頁摘要標示資料來源。
    2026-08-31 t 批（反饋 0831）：Q1 表頭「🔄 更新」重讀全表（bootstrap(keep) 保留門市/分頁）；Q3 查詢頁物料用量換到「使用單位」（anConv 加別名回退）；Q4 單位對照頁標出使用單位≠基準單位；Q7 鑽取新增「各店使用量」「各店採購量」（lazy 查 POS by 店與 fact_shopline，大平台品名啟發式配對）；Q8 移除查詢頁「跨店比較」「容器用量」（viewCompare/runCompare/lastWeeks/weekMonday/isoWeekOf 刪除）。追加：用量附第二單位（anAlt/anQty：匙↔g 互附）。追加：總部按「🔄 更新」＝重讀＋自動立即重算＋完成自動重讀（rbInWindow 避開 07:00–07:45；店長僅重讀）。追加：單位對照頁每列 🗑 刪除（獨立 GAS diybc-conv-api，網址貼 dim_unitconv F1 自動偵測；樂觀移除＋4 秒回讀驗證）。
-   2026-09-01 u 批：matchQ 改比 品名／自訂名／廠商／編號／別名、不分大小寫、空白多關鍵字（盤點／建議／店別參數／主檔）；查詢頁物料搜尋加廠商。主檔「套用」改一鍵寫回；建議價自動套用由獨立 GAS diybc-price-sync 每日 07:50 執行。
+   2026-09-01 u 批：matchQ 改比 品名／自訂名／廠商／編號／別名、不分大小寫、空白多關鍵字（盤點／建議／店別參數／主檔）；查詢頁物料搜尋加廠商。主檔「套用」改一鍵寫回；建議價自動套用由獨立 GAS diybc-price-sync 每日 07:50 執行。主檔頁加「🆕 待確認」篩選＋草稿列標示（獨立 GAS diybc-sku-autodraft 每日 06:xx 建草稿，dim_sku 新欄「來源」）。各店使用量：「換算採購」→「換算單位」、採購大平台下單量欄常駐（統計期間往前推 AN_PLAT_LEAD=15 天）、採購單位 g/ml≠使用單位時走換算表不硬除內容量。
    ❗ 命名邊界：本頁＝fact_shopline（已向出貨中心下過的單、月檔 Sheet、總部每月貼）；
       採購系統自己的下單紀錄是 fact_order（BOM 本、店長按「複製訂貨單」時寫入），兩者勿混。
    資料源：月檔 Sheet（MONTH_SHEET_ID）fact_shopline 分頁，gvizQ 按店 lazy 載入＋快取。
