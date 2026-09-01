@@ -7,7 +7,7 @@
 <link rel="manifest" href="purchase-manifest.json">
 <title>自己做 · 採購系統</title>
 <!-- 2026-07-25 全站字級下限修正：9 處 11px→12px（.badge/.pill/.tagnew/.lock/.own/header 更新時間/兩個檔期徽章/建議採購表副行）。無其他改動。 -->
-<!-- 2026-09-01 w 批（調整提出 0901）：①dim_sku 新欄 適用店／狀態／最後有效日 → liveItems 全站過濾（skuForStore／skuExpired）②盤點頁「🗓 過季」籤 ③店別參數「安全庫存」改採購單位輸入（顯示÷內容量、寫入×內容量）④主檔頁 建議價＝單價時不顯示套用 ⑤總覽頁移除「立即重算」卡，重算完成後清 RB.msg ⑥主檔頁列顯示 狀態／適用店／過季 徽章 ⑦重算輪詢上限 4→6 分鐘。計算層零改動。 -->
+<!-- 2026-09-01 w 批（調整提出 0901）：①dim_sku 新欄 適用店／狀態／最後有效日 → liveItems 全站過濾（skuForStore／skuExpired）②盤點頁「🗓 過季」籤 ③店別參數「安全庫存」改採購單位輸入（顯示÷內容量、寫入×內容量）④主檔頁 建議價＝單價時不顯示套用 ⑤總覽頁移除「立即重算」卡，重算完成後清 RB.msg ⑥主檔頁列顯示 狀態／適用店／過季 徽章 ⑦重算輪詢上限 4→6 分鐘 ⑧查詢頁各店使用量：有分類篩選時標警語、上週用量欄灰掉（口徑不同）。計算層零改動。 -->
 <!-- 2026-09-01 v 批（盤點頁）：①卡片移除品類標籤，改以分區內「品類分隔列」呈現 ②分區內排序 品類(食材→耗材→器具→模具)→店別自訂順序→品名 ③包材耗材區併入烘烤區（autoZone 耗材→烘烤區；Sheet 殘留的「包材耗材區」由 zoneAlias 對映，不動資料）④新籤「🏬 出貨中心」（廠商含出貨中心）⑤新籤「💤 零需求」：訂貨點/標配 0 的品項移出「全部」、不計進度與未盤；訂貨單「本輪未盤點 N 項」同步排除。計算層 rowFor 零改動。 -->
 <!-- 2026-07-27 盤點體驗改版（純前端）：①移除 需關注/接近/久未盤 快篩與燈號/推估/未盤點估算標籤（estOnHand/invLight/invTag 保留備用）②搜尋拆二：品項 datalist 可點選＋廠商下拉，AND 疊加 ③盤點 session：延續/新的一週彈窗、localStorage invSession_/invDraft_（草稿防遺失，不動 Sheet 歷史）、進度條、本次未盤快篩、下一個未盤浮動鈕 ④分區可收合(invZC_)、控制列 sticky、輸入框 42px/16px 防 iOS 縮放 ⑤儲存盤點後清草稿並跳訂貨單。 -->
 <!-- 2026-07-27 店長自助調整基準值：盤點頁/訂貨單頁每列「⚙ 調整」→ 對話框輸入本店實際週用量（採購單位），永久寫回 dim_store_par。寫哪欄依品項型態自動判定：POS推算品項→權數(=目標÷POS推算)、備品→手動週用量、器具模具→標配數量。同時 post type:'plog' 寫軌跡（需 GAS 端 handler，未部署時靜默忽略）。新增總部/經營者「🧾 參數軌跡」分頁讀 fact_param_log，變動≥20%橘、≥50%紅。依經營者決策：不設上下限護欄。 -->
@@ -1246,12 +1246,15 @@ function anDrillStores(m,h){
   var plat=ANRES.plat?ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);}):null;
   var pq={};if(plat)plat.forEach(function(x){pq[x.st]=(pq[x.st]||0)+x.qty;});
   var pfrom=ANRES.platFrom||anPlatFrom();
+  /* 2026-09-01 w 批：查詢有主類別／次類別篩選時，「期間用量」只含篩選內甜點，「上週用量」卻是引擎全甜點值——2026-09-01 杏仁片 28 g vs 55 g 誤判實例（次類別篩 2026 中秋節，漏掉南瓜子杏仁瓦片 40 g/份）。有篩選就標警語、上週用量欄灰掉。 */
+  var anFilt=!!(ANRES.c1||ANRES.c2);
+  if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[ANRES.c1,ANRES.c2].filter(Boolean).join('／')+'）：期間用量與週平均<b>只含篩選內的甜點</b>；「上週用量」是引擎全甜點的值，兩者不可直接相比。要比對請把篩選清成「全部」再查一次。</div>';
   h+='<div class="sub" style="margin:4px 0">共 <b>'+nUsed+'</b> 店有用量　·　用量期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算單位依各店內容量':'')+'　·　<b>採購大平台下單量統計期間 '+pfrom+'〜'+ANRES.to+'</b>（往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）'+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
-  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">引擎上一完整週</div></th><th class="right">採購大平台下單量</th></tr>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right"'+(anFilt?' style="color:#94a3b8"':'')+'>上週用量<div class="sub" style="font-weight:400">引擎上一完整週'+(anFilt?'・全甜點，不受篩選':'')+'</div></th><th class="right">採購大平台下單量</th></tr>';
   sts.forEach(function(st){var u=us[st]||0;
     var lw=m.sku?aggOf(st,m.sku).week:null;
     var pqs=m.sku?pqOf(st,m.sku):0,pqNote=(m.sku&&pqs>0&&pqs!==m.sku.packQty)?' <span class="muted" style="font-size:11px">(店別 '+fmt(pqs)+')</span>':'';
-    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right">'+(lw==null?'<span class="muted">–</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?fmt(pq[st]):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td></tr>';});
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+(anFilt?' style="color:#94a3b8"':'')+'>'+(lw==null?'<span class="muted">–</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?fmt(pq[st]):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td></tr>';});
   var lwTot=0;if(m.sku)sts.forEach(function(st){lwTot+=aggOf(st,m.sku).week||0;});
   h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku?anBuyTxt("",m,tot):'–')+'</td><td class="right">'+(function(){var d=0;Object.keys(us).forEach(function(st){var x=anStoreDays(m,st);if(x>d)d=x;});return d?fmt(tot/d*7):fmt(tot/wk);})()+'</td><td class="right">'+(m.sku?fmt(lwTot)+' '+(m.unit||''):'–')+'</td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td></tr></table></div>';
   if(!nUsed)h+='<div class="sub">此期間各店都沒有用量。</div>';
