@@ -1169,6 +1169,29 @@ function anStoreLoad(){
       var fd=gvDate(r["f"]);if(fd){var fy=ymd(fd);var fs=(first[st]=first[st]||{});if(!fs[cn]||fy<fs[cn])fs[cn]=fy;}});
     R.byStore=by;R.byStoreFirst=first;R.byStoreFail=!!rs.__failed;delete R.byStoreLoad;});
   return R.byStoreLoad;}
+/* 2026-09-01 w 批：各店使用量的「上週用量」原取 aggOf(st).week＝引擎全甜點值，與左邊受篩選的欄位並排會誤導
+   （杏仁片實例：篩 2026 中秋節 28 g vs 引擎 55 g，差額是被篩掉的南瓜子杏仁瓦片）。改為自己查上一完整週（週一~週日）
+   並套用與本次查詢完全相同的店／主類別／次類別條件，口徑就一致；引擎值改放 title 供對照。 */
+function anLastWeekRange(){var t=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
+  var mon=new Date(t.getTime()-(((t.getDay()+6)%7)+7)*864e5);
+  return {from:ymd(mon),to:ymd(new Date(mon.getTime()+6*864e5))};}
+function anLwLoad(){
+  if(!ANRES||ANRES==="loading"||ANRES.lw)return Promise.resolve();
+  if(ANRES.lwLoad)return ANRES.lwLoad;
+  var R=ANRES,rg=anLastWeekRange();R.lwFrom=rg.from;R.lwTo=rg.to;
+  var w="C >= date '"+rg.from+"' and C <= date '"+rg.to+"'";
+  if(R.store)w+=" and A="+(+R.store);
+  if(R.c1)w+=" and E='"+R.c1+"'";
+  if(R.c2)w+=" and F='"+R.c2+"'";
+  var tq="select A, D, sum(H) where "+w+" group by A, D label A 's', D 'p', sum(H) 'q'";
+  R.lwLoad=gvizQ("POS資料",tq).then(function(rs){
+    var by={};rs.forEach(function(r){var st=String(r["s"]==null?"":r["s"]).trim(),pn=String(r["p"]||"").trim(),q=num(r["q"]);
+      if(!st||st==="13"||!pn||!(q>0))return;var cn=((ANMAP||{})[pn]||{cn:pn}).cn;((by[st]=by[st]||{})[cn]=(by[st][cn]||0)+q);});
+    R.lw=by;R.lwFail=!!rs.__failed;delete R.lwLoad;});
+  return R.lwLoad;}
+function anLwUsage(m){var by=ANRES.lw||{},out={};
+  Object.keys(by).forEach(function(st){var u=0;Object.keys(m.dess||{}).forEach(function(dn){var dz=m.dess[dn];if(!(dz.portions>0))return;var q=by[st][dn]||0;if(q>0)u+=q*(dz.qty/dz.portions);});out[st]=u;});
+  return out;}
 /* 2026-09-01 u 批：大平台下單量的統計期間＝指定期間往前推 AN_PLAT_LEAD 天。
    理由（經營者）：新品開賣前 10–15 天就要進貨，8/23 開賣的中秋品，叫貨發生在 8/8 起；只看指定期間會漏掉備貨那一批。 */
 var AN_PLAT_LEAD=15;
@@ -1243,20 +1266,25 @@ function anDrillStores(m,h){
   var pdays=Math.round((new Date(ANRES.to+"T00:00:00")-new Date(ANRES.from+"T00:00:00"))/864e5)+1;
   function wkCell(u,days){var v=fmt(u/days*7);if(days>=pdays)return v;var warn=days<7;return v+' <span class="muted" style="font-size:11.5px'+(warn?';color:#b3261e':'')+'">('+days+' 天'+(warn?'，樣本不足':'')+')</span>';}
   if(!ANRES.plat&&!ANRES.platLoad)anPlatLoad().then(function(){render();});
+  if(!ANRES.lw&&!ANRES.lwLoad)anLwLoad().then(function(){render();});
+  var lwu=ANRES.lw?anLwUsage(m):null;
   var plat=ANRES.plat?ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);}):null;
   var pq={};if(plat)plat.forEach(function(x){pq[x.st]=(pq[x.st]||0)+x.qty;});
   var pfrom=ANRES.platFrom||anPlatFrom();
   /* 2026-09-01 w 批：查詢有主類別／次類別篩選時，「期間用量」只含篩選內甜點，「上週用量」卻是引擎全甜點值——2026-09-01 杏仁片 28 g vs 55 g 誤判實例（次類別篩 2026 中秋節，漏掉南瓜子杏仁瓦片 40 g/份）。有篩選就標警語、上週用量欄灰掉。 */
   var anFilt=!!(ANRES.c1||ANRES.c2);
-  if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[ANRES.c1,ANRES.c2].filter(Boolean).join('／')+'）：期間用量與週平均<b>只含篩選內的甜點</b>；「上週用量」是引擎全甜點的值，兩者不可直接相比。要比對請把篩選清成「全部」再查一次。</div>';
+  if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[ANRES.c1,ANRES.c2].filter(Boolean).join('／')+'）：本表所有欄位（含上週用量）都<b>只含篩選內的甜點</b>。訂貨引擎用的是全甜點值，游標移到上週用量的數字可看引擎值。</div>';
   h+='<div class="sub" style="margin:4px 0">共 <b>'+nUsed+'</b> 店有用量　·　用量期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算單位依各店內容量':'')+'　·　<b>採購大平台下單量統計期間 '+pfrom+'〜'+ANRES.to+'</b>（往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）'+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
-  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right"'+(anFilt?' style="color:#94a3b8"':'')+'>上週用量<div class="sub" style="font-weight:400">引擎上一完整週'+(anFilt?'・全甜點，不受篩選':'')+'</div></th><th class="right">採購大平台下單量</th></tr>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">'+(ANRES.lwFrom?ANRES.lwFrom.slice(5)+'〜'+ANRES.lwTo.slice(5):'上一完整週')+(anFilt?'・同篩選':'')+'</div></th><th class="right">採購大平台下單量</th></tr>';
   sts.forEach(function(st){var u=us[st]||0;
-    var lw=m.sku?aggOf(st,m.sku).week:null;
+    var lwE=m.sku?aggOf(st,m.sku).week:null;          /* 引擎值：全甜點，放 title 對照 */
+    var lw=lwu?lwu[st]:null;                          /* 同篩選值：本表口徑 */
+    var lwT=(lwE!=null&&m.sku)?' title="訂貨引擎（全甜點、含損耗）：'+fmt(lwE)+' '+(m.unit||'')+'"':'';
     var pqs=m.sku?pqOf(st,m.sku):0,pqNote=(m.sku&&pqs>0&&pqs!==m.sku.packQty)?' <span class="muted" style="font-size:11px">(店別 '+fmt(pqs)+')</span>':'';
-    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+(anFilt?' style="color:#94a3b8"':'')+'>'+(lw==null?'<span class="muted">–</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?fmt(pq[st]):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td></tr>';});
-  var lwTot=0;if(m.sku)sts.forEach(function(st){lwTot+=aggOf(st,m.sku).week||0;});
-  h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku?anBuyTxt("",m,tot):'–')+'</td><td class="right">'+(function(){var d=0;Object.keys(us).forEach(function(st){var x=anStoreDays(m,st);if(x>d)d=x;});return d?fmt(tot/d*7):fmt(tot/wk);})()+'</td><td class="right">'+(m.sku?fmt(lwTot)+' '+(m.unit||''):'–')+'</td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td></tr></table></div>';
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+lwT+'>'+(lw==null?'<span class="muted">讀取中…</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?fmt(pq[st]):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td></tr>';});
+  var lwTot=0,lwETot=0;if(m.sku)sts.forEach(function(st){lwTot+=(lwu?(lwu[st]||0):0);lwETot+=aggOf(st,m.sku).week||0;});
+  h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku?anBuyTxt("",m,tot):'–')+'</td><td class="right">'+(function(){var d=0;Object.keys(us).forEach(function(st){var x=anStoreDays(m,st);if(x>d)d=x;});return d?fmt(tot/d*7):fmt(tot/wk);})()+'</td><td class="right">'+(!lwu?'<span class="muted">讀取中…</span>':(m.sku?'<span title="訂貨引擎（全甜點、含損耗）：'+fmt(lwETot)+' '+(m.unit||'')+'">'+fmt(lwTot)+' '+(m.unit||'')+'</span>':'–'))+'</td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td></tr></table></div>';
+  h+='<div class="sub" style="margin-top:6px">上週用量＝上一個完整週（週一〜週日）'+(anFilt?'、<b>同樣套用目前的分類篩選</b>':'')+'，與左邊各欄同口徑；訂貨引擎另用全甜點值（游標移到數字可看）。</div>';
   if(!nUsed)h+='<div class="sub">此期間各店都沒有用量。</div>';
   if(plat&&!plat.length)h+='<div class="sub" style="margin-top:4px">大平台 '+pfrom+'〜'+ANRES.to+' 找不到對應此品項的下單（可能自購、未上架，或品名差異太大）。</div>';
   else if(plat)h+='<div class="sub" style="margin-top:4px">下單量單位＝大平台品項的單位（包/組/件…），與換算單位不一定相同；明細見「各店採購量」。</div>';
