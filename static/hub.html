@@ -2,6 +2,7 @@
 <!-- 2026-07-30 goTo 加 ?v= 時間戳防快取；同日第二批：hub 與 10 子頁密碼全數移出 repo，改由「權限中心」GAS 驗證 -->
 <!-- 2026-07-31 新增第 11 張卡「食譜成本」(dashboard-recipe-cost.html)；標題 10→11 個營運系統；新增 BOM_SHEET 與 loadRecipeStat() -->
 <!-- 2026-08-19 食譜成本卡補 🔒 需要密碼 徽章（與 pnl／月會卡片一致；該頁 DASH_ID=recipe 已有閘門） -->
+<!-- 2026-09-02 Phase 1 合併：移除「2026 預算達成」卡（併入 P&L 分頁 dashboard-pnl.html#budget，舊頁 budget-2026.html 藍綠保留）；標題 11→10；移除 BUDGET_API / loadBudgetStat() -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -165,7 +166,7 @@ cursor: pointer; transition: background .15s;
 <div class="header">
 <div class="header-left">
 <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
-<p>整合 11 個營運系統 ｜ 12 間門市</p>
+<p>整合 10 個營運系統 ｜ 12 間門市</p>
 </div>
 <div class="header-badge" id="updateBadge">載入中…</div>
 </div>
@@ -210,12 +211,12 @@ cursor: pointer; transition: background .15s;
 <div class="hub-card pnl" onclick="goTo('dashboard-pnl.html')">
 <div class="card-icon">📊</div>
 <div class="card-title">P&L 損益 <span class="upd upd-month">🟡 每月手動</span></div>
-<div class="card-desc">月度損益分析<br>各店盈虧・費用拆解</div>
+<div class="card-desc">月度損益分析<br>各店盈虧・費用拆解・預算達成</div>
 <div class="lock-overlay">
 <div class="lock-badge">🔒 需要財務密碼</div>
 <div class="card-stat-label" style="margin-top:6px;">點擊解鎖</div>
 </div>
-<div class="upd-hint">每月：轉檔上傳 Drive → ⚙️ 匯入 commit → ⬆️ 更新總分類帳</div>
+<div class="upd-hint">每月：轉檔上傳 Drive → ⚙️ 匯入 commit → ⬆️ 更新總分類帳 → 🎯 同步實際數</div>
 <div class="card-arrow">→</div>
 </div>
 
@@ -227,17 +228,6 @@ cursor: pointer; transition: background .15s;
 <div class="card-stat" id="statSchedule"><span class="spin-sm"></span></div>
 <div class="card-stat-label" id="statScheduleLabel">本週工時</div>
 <div class="upd-hint">每月：拖放上傳 12 店班表 xlsx</div>
-<div class="card-arrow">→</div>
-</div>
-
-<!-- 2026 預算達成 -->
-<div class="hub-card budget" onclick="goTo('budget-2026.html')">
-<div class="card-icon">📈</div>
-<div class="card-title">2026 預算達成 <span class="upd upd-month">🟡 每月手動</span></div>
-<div class="card-desc">銷貨達成・淨利率<br>12 店預算追蹤</div>
-<div class="card-stat" id="statBudget"><span class="spin-sm"></span></div>
-<div class="card-stat-label" id="statBudgetLabel">已過月銷貨達成</div>
-<div class="upd-hint">每月：P&L 完成後按 🔄 同步實際數</div>
 <div class="card-arrow">→</div>
 </div>
 
@@ -307,7 +297,6 @@ const REVIEWS_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
 const MEMBER_SHEET = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const BOM_SHEET = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
 const SCHEDULE_API = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
-const BUDGET_API = 'https://script.google.com/macros/s/AKfycbyF6tShTC6O4dpdDTcBSurABM_g_EIE6jAuhq7a4l10fsvk2BqdthJ-u4CTp3Z4yw4T/exec';
 const RESERVATION_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
 
 // ── 權限中心（2026-07-30：密碼移出 repo，改由 GAS + Sheet dim_auth 集中管理）──
@@ -476,9 +465,6 @@ document.getElementById('statPosLabel').textContent = '待接 POS 資料源';
 // ── 排班:本週總工時 vs 上週 ±% ──
 loadScheduleStat();
 
-// ── 2026 預算:已過月銷貨達成率 ──
-loadBudgetStat();
-
 // ── 訂位分析:本月有效訂位數 ──
 loadReservationStat();
 
@@ -525,43 +511,6 @@ scriptEl.src = SCHEDULE_API + '?action=getWeekKpiData&callback=' + cbName;
 scriptEl.onerror = () => {
 document.getElementById('statSchedule').textContent = '—';
 document.getElementById('statScheduleLabel').textContent = '無法取得';
-};
-document.head.appendChild(scriptEl);
-}
-
-function loadBudgetStat() {
-const cbName = 'budget_cb_' + Date.now();
-window[cbName] = function(res) {
-delete window[cbName];
-try { document.head.removeChild(scriptEl); } catch(e) {}
-if (!res || res.error) {
-document.getElementById('statBudget').textContent = '—';
-document.getElementById('statBudgetLabel').textContent = '無法取得';
-return;
-}
-const pct = (res.revenue && typeof res.revenue.achievement_pct === 'number') ? res.revenue.achievement_pct : null;
-const months = res.active_months || [];
-if (pct === null || !res.actual_data_available) {
-// 預算 OK 但實際還沒匯入
-document.getElementById('statBudget').textContent = '—';
-document.getElementById('statBudgetLabel').textContent = '實際數待匯入';
-return;
-}
-document.getElementById('statBudget').textContent = pct.toFixed(1) + '%';
-if (months.length > 0) {
-const range = months.length === 1
-? months[0]
-: months[0].slice(5) + '~' + months[months.length - 1].slice(5);
-document.getElementById('statBudgetLabel').textContent = range + ' 銷貨達成';
-} else {
-document.getElementById('statBudgetLabel').textContent = '已過月銷貨達成';
-}
-};
-const scriptEl = document.createElement('script');
-scriptEl.src = BUDGET_API + '?action=get_summary&callback=' + cbName + '&denominator=passed';
-scriptEl.onerror = () => {
-document.getElementById('statBudget').textContent = '—';
-document.getElementById('statBudgetLabel').textContent = '無法取得';
 };
 document.head.appendChild(scriptEl);
 }
