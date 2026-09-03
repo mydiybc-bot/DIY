@@ -1498,24 +1498,44 @@ function platSpecG(name){             /* 從大平台品名解析每包多少 g/
   var mm=t.match(/(\d+(?:\.\d+)?)\s*[包入個條支片張]\s*[\/／]\s*[組箱盒]/);   /* 「10包/組」之類的組裝倍數 */
   if(mm&&+mm[1]>1)base=base*(+mm[1]);
   return base>0?base:null;}
-function shipUnitG(st,m,name){        /* 回 {g:每包量, est:是否為退回主檔的估算} */
-  var uu=String(m.unit||"").trim();
-  if(uu==="g"||uu==="ml"){var v=platSpecG(name);if(v)return {g:v,est:false};}
-  var pq=m.sku?pqOf(st,m.sku):0;
-  return {g:(pq>0?pq:1),est:true};}
+/* 2026-09-03 ae 批修正（經營者實測抓到）：舊版只在使用單位是 g/ml 時解析大平台規格，
+   計數單位（包/個/張…）一律退回主檔內容量。櫻花翻糖主檔是「包／包／內容量 1」，大平台是「10包/組」，
+   於是 1 號店下單 2 組（＝20 包）被算成 2 包，扣掉用量 6 包後帳面剩 −4 包。**這是硬錯。**
+   規格寫法的通則是「N<使用單位>／<售賣單位>」：10包/組＝1 組有 10 包、2kg/原包裝＝1 包裝有 2000 g、
+   50組/箱＝1 箱有 50 組。所以只要拿「數字＋使用單位＋斜線」去比對就正確，不分重量或計數。 */
+function platSpecCount(name,unit){
+  var t=String(name||""),u=String(unit||"").trim();if(!u)return null;
+  var esc=u.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  var m=t.match(new RegExp("(\\d+(?:\\.\\d+)?)\\s*"+esc+"\\s*[\\/／]"));
+  if(m&&+m[1]>0)return +m[1];
+  if(/^(個|入|張|片|支|條|組|包|捲|卷|把|對|只|顆|件)$/.test(u)){      /* 入/個 是泛用計數詞，互通 */
+    var m2=t.match(/(\d+(?:\.\d+)?)\s*(?:入|個)\s*[\/／]/);
+    if(m2&&+m2[1]>0)return +m2[1];}
+  return null;}
+function shipUnitG(st,m,name){   /* 回 {g:每個平台單位含多少使用單位, src:來源, hq:主檔內容量, mis:是否不一致} */
+  var uu=String(m.unit||"").trim(),pq=m.sku?pqOf(st,m.sku):0;
+  var v=(uu==="g"||uu==="ml")?platSpecG(name):platSpecCount(name,uu);
+  if(v>0)return {g:v,src:"plat",hq:pq,mis:(pq>0&&Math.abs(pq-v)>0.001)};
+  return {g:(pq>0?pq:1),src:"hq",hq:pq,mis:false};}
 function shipCalc(st,m,rows,usage,weekly){
   if(!rows||!rows.length)return null;
-  var g=0,est=false,packs=0,detail=[];
+  var g=0,est=false,mis=false,hq=0,spec=0,packs=0,detail=[];
   rows.forEach(function(r){var u=shipUnitG(st,m,r.name);
-    g+=num(r.qty)*u.g;packs+=num(r.qty);if(u.est)est=true;
+    g+=num(r.qty)*u.g;packs+=num(r.qty);
+    if(u.src==="hq")est=true; else spec=u.g;
+    if(u.mis){mis=true;hq=u.hq;}
     detail.push(shEsc(r.name)+' ×'+fmt(r.qty)+(u.g!==1?'（'+fmt(u.g)+' '+(m.unit||'')+'/單位）':''));});
   var stock=g-num(usage);
-  var noUse=!(weekly>0)&&stock>0;                 /* 期間內完全沒用量卻有下單：另立一類，不算週數 */
+  /* 2026-09-03 ae 批：帳面剩為負＝下單量少於已用量，換算一定有問題（多半是主檔規格與大平台規格不一致）。
+     舊版讓它落進「週數 ≤ 門檻」的分支被標成 ✅ 正常——經營者實測抓到，已獨立成一類。負數永遠不是正常。 */
+  var bad=stock<0;
+  var noUse=!bad&&!(weekly>0)&&stock>0;
   var wks=(weekly>0)?(stock/weekly):0;
-  var lv=noUse?"nouse":((wks>SHIP_WARN_W)?"over":((wks>SHIP_OK_W)?"warn":"ok"));
-  return {g:g,packs:packs,est:est,stock:stock,wks:wks,lv:lv,noUse:noUse,detail:detail};}
+  var lv=bad?"bad":(noUse?"nouse":((wks>SHIP_WARN_W)?"over":((wks>SHIP_OK_W)?"warn":"ok")));
+  return {g:g,packs:packs,est:est,mis:mis,hq:hq,spec:spec,stock:stock,wks:wks,lv:lv,bad:bad,noUse:noUse,detail:detail};}
 function shipBadge(k){
   if(!k)return '';
+  if(k.lv==="bad")return '<span class="badge" style="background:#8A5A00">⚠️ 換算對不上</span>';
   if(k.lv==="nouse")return '<span class="badge" style="background:#B3261E">本期無用量卻已下單</span>';
   if(k.lv==="over")return '<span class="badge" style="background:#B3261E">已下單過多</span>';
   if(k.lv==="warn")return '<span class="badge" style="background:#B45309">偏多</span>';
@@ -1541,7 +1561,7 @@ function anDrillStores(m,h){
   if(plat)plat.forEach(function(x){pnAll[x.name]=(pnAll[x.name]||0)+x.qty;
     ((pnBy[x.st]=pnBy[x.st]||{})[x.name]=(pnBy[x.st][x.name]||0)+x.qty);});
   /* 2026-09-03 ac 批：出貨中心判讀——每店把下單量換算成使用單位，扣掉同期用量，換算成可用週數 */
-  var shipK={},shipOver=[],shipWarn=[];
+  var shipK={},shipOver=[],shipWarn=[],shipBad=[],shipMis=[];
   if(plat)sts.forEach(function(st){
     var mp=pnBy[st];if(!mp)return;
     var rws=Object.keys(mp).map(function(n){return {name:n,qty:mp[n]};});
@@ -1550,7 +1570,9 @@ function anDrillStores(m,h){
     shipK[st]=k;
     if(k.lv==="over")shipOver.push(storeName(st)+'（'+dec(k.wks)+' 週）');
     else if(k.lv==="nouse")shipOver.push(storeName(st)+'（本期無用量）');
-    else if(k.lv==="warn")shipWarn.push(storeName(st));});
+    else if(k.lv==="warn")shipWarn.push(storeName(st));
+    if(k.lv==="bad")shipBad.push(storeName(st));
+    if(k.mis&&shipMis.indexOf(''+k.hq+'/'+k.spec)<0)shipMis.push(''+k.hq+'/'+k.spec);});
   var pnList=Object.keys(pnAll).sort(function(a,b){return pnAll[b]-pnAll[a];});
   function pnCell(st){var m=pnBy[st];if(!m)return '';
     var ks=Object.keys(m).sort(function(a,b){return m[b]-m[a];});
@@ -1572,16 +1594,20 @@ function anDrillStores(m,h){
       +'<td class="right">'+(function(){var k=shipK[st];
           if(!plat)return '<span class="muted">讀取中…</span>';
           if(!k)return '<span class="muted">—</span>';
-          var col=((k.lv==="over"||k.lv==="nouse")?"#B3261E":(k.lv==="warn"?"#B45309":"#2E7D32"));
+          var col=(k.lv==="bad"?"#8A5A00":((k.lv==="over"||k.lv==="nouse")?"#B3261E":(k.lv==="warn"?"#B45309":"#2E7D32")));
           return '<div style="color:'+col+';font-weight:700">'+shipBadge(k)+(k.lv==="ok"?'✅ 正常':'')+'</div>'
-            +'<div class="sub">帳面剩 '+fmt(k.stock)+' '+(m.unit||'')+(k.noUse?'':' ≈ <b style="color:'+col+'">'+dec(k.wks)+' 週</b>用量')+'</div>'
-            +'<div class="sub muted">'+fmt(k.packs)+' 單位 × 規格 ＝ '+fmt(k.g)+' '+(m.unit||'')+(k.est?'【估：用主檔內容量】':'')+'</div>'
-            +(k.lv==="nouse"?'<div class="sub" style="color:#B3261E">本店這段期間<b>完全沒有用量</b>——是還沒上架、還是不做這款？<b>建議暫緩出貨</b>並與門市確認</div>'
-             :(k.lv==="over"?'<div class="sub" style="color:#B3261E">建議<b>暫緩出貨</b>並與門市確認</div>':''));})()+'</td></tr>';});
+            +'<div class="sub">帳面剩 '+fmt(k.stock)+' '+(m.unit||'')+((k.noUse||k.bad)?'':' ≈ <b style="color:'+col+'">'+dec(k.wks)+' 週</b>用量')+'</div>'
+            +'<div class="sub muted">'+fmt(k.packs)+' 單位 × 規格 ＝ '+fmt(k.g)+' '+(m.unit||'')+(k.est?'【估：用主檔內容量 '+fmt(k.hq||1)+'】':'【依大平台品名規格】')+'</div>'
+            +(k.mis?'<div class="sub" style="color:#8A5A00">⚠️ 主檔內容量 <b>'+fmt(k.hq)+'</b> ≠ 大平台規格 <b>'+fmt(k.spec)+'</b>（已用大平台規格計算）——請總部到主檔頁把採購單位與內容量改成與大平台一致</div>':'')
+            +(k.lv==="bad"?'<div class="sub" style="color:#8A5A00">下單量（'+fmt(k.g)+'）<b>少於同期用量</b>（'+fmt(num(us[st]||0))+'），換算一定有問題。常見原因：①主檔採購規格與大平台不一致 ②這批貨是統計期間之前下的 ③品名沒配到。<b>請先確認規格再決定出貨</b>。</div>'
+             :(k.lv==="nouse"?'<div class="sub" style="color:#B3261E">本店這段期間<b>完全沒有用量</b>——是還沒上架、還是不做這款？<b>建議暫緩出貨</b>並與門市確認</div>'
+             :(k.lv==="over"?'<div class="sub" style="color:#B3261E">建議<b>暫緩出貨</b>並與門市確認</div>':'')));})()+'</td></tr>';});
   var lwTot=0,lwETot=0;if(m.sku)sts.forEach(function(st){lwTot+=(lwu?(lwu[st]||0):0);lwETot+=aggOf(st,m.sku).week||0;});
   h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku?anBuyTxt("",m,tot):'–')+'</td><td class="right">'+(function(){var d=0;Object.keys(us).forEach(function(st){var x=anStoreDays(m,st);if(x>d)d=x;});return d?fmt(tot/d*7):fmt(tot/wk);})()+'</td><td class="right">'+(!lwu?'<span class="muted">讀取中…</span>':(m.sku?'<span title="訂貨引擎（全甜點、含損耗）：'+fmt(lwETot)+' '+(m.unit||'')+'">'+fmt(lwTot)+' '+(m.unit||'')+'</span>':'–'))+'</td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td><td class="right">'+(shipOver.length?('<span style="color:#B3261E;font-weight:700">'+shipOver.length+' 店過多</span>'):(plat?'<span class="muted">—</span>':''))+'</td></tr></table></div>';
-  if(plat&&(shipOver.length||shipWarn.length))h+='<div class="card" style="border:2px solid #C8A15A;background:#FFFBF2;padding:8px 12px;margin:8px 0">'
+  if(plat&&(shipOver.length||shipWarn.length||shipBad.length))h+='<div class="card" style="border:2px solid #C8A15A;background:#FFFBF2;padding:8px 12px;margin:8px 0">'
     +'<div style="font-weight:800">🏬 給出貨中心：這個品項有 <span style="color:#B3261E">'+shipOver.length+'</span> 家店已下單過多</div>'
+    +(shipMis.length?'<div class="sub" style="color:#8A5A00">⚠️ <b>主檔規格與大平台不一致</b>（主檔內容量／大平台規格：'+shipMis.join('、')+'）。已用大平台規格計算，但請總部到主檔頁修正，否則訂貨建議量也會錯。</div>':'')
+    +(shipBad.length?'<div class="sub" style="color:#8A5A00"><b>換算對不上、請先確認規格再出貨：</b>'+shipBad.join('、')+'</div>':'')
     +(shipOver.length?'<div class="sub" style="color:#B3261E"><b>建議暫緩出貨並與門市確認：</b>'+shipOver.join('、')+'</div>':'')
     +(shipWarn.length?'<div class="sub" style="color:#B45309">偏多、可再觀察：'+shipWarn.join('、')+'</div>':'')
     +'<div class="sub muted">判準：帳面剩（統計期間下單量換算 − 同期用量）÷ 該店週平均用量 &gt; '+SHIP_WARN_W+' 週＝過多、&gt; '+SHIP_OK_W+' 週＝偏多。一般品項訂貨週期約 1 週＋交期 3–5 天，'+SHIP_OK_W+' 週已相當寬鬆。<b>大包裝品項（如 2kg 原包裝）一包就可能超過門檻，屬包裝限制，請看「單位 × 規格」那行自行判斷。</b>帳面 ≠ 實盤：下單窗比用量窗多往前推 '+AN_PLAT_LEAD+' 天，也無法分辨是否已出貨，故僅供出貨前確認用。</div></div>';
