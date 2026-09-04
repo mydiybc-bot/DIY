@@ -1362,14 +1362,17 @@ function anLwLoad(){
   var R=ANRES,rg=anLastWeekRange();R.lwFrom=rg.from;R.lwTo=rg.to;
   var w="C >= date '"+rg.from+"' and C <= date '"+rg.to+"'";
   if(R.store)w+=" and A="+(+R.store);
-  if(R.c1)w+=" and E='"+R.c1+"'";
-  if(R.c2)w+=" and F='"+R.c2+"'";
+  /* 2026-09-03 aj 批：不套 c1/c2（同 ai 批 anStoreLoad）。篩選內口徑由 anLwUsage 依 m.dess 過濾，另提供 anLwUsageAll 全甜點口徑 */
   var tq="select A, D, sum(H) where "+w+" group by A, D label A 's', D 'p', sum(H) 'q'";
   R.lwLoad=gvizQ("POS資料",tq).then(function(rs){
     var by={};rs.forEach(function(r){var st=String(r["s"]==null?"":r["s"]).trim(),pn=String(r["p"]||"").trim(),q=num(r["q"]);
       if(!st||st==="13"||!pn||!(q>0))return;var cn=((ANMAP||{})[pn]||{cn:pn}).cn;((by[st]=by[st]||{})[cn]=(by[st][cn]||0)+q);});
     R.lw=by;R.lwFail=!!rs.__failed;delete R.lwLoad;});
   return R.lwLoad;}
+function anLwUsageAll(m){var by=(ANRES&&ANRES.lw)||{},out={},cache={},idx=anSkuIdx();
+  Object.keys(by).forEach(function(st){var u=0;Object.keys(by[st]).forEach(function(dn){
+    var per=(dn in cache)?cache[dn]:(cache[dn]=anPerPortion(m,dn,idx));if(per>0)u+=by[st][dn]*per;});out[st]=u;});
+  return out;}
 function anLwUsage(m){var by=ANRES.lw||{},out={};
   Object.keys(by).forEach(function(st){var u=0;Object.keys(m.dess||{}).forEach(function(dn){var dz=m.dess[dn];if(!(dz.portions>0))return;var q=by[st][dn]||0;if(q>0)u+=q*(dz.qty/dz.portions);});out[st]=u;});
   return out;}
@@ -1644,7 +1647,8 @@ function anDrillStores(m,h){
   /* 2026-09-03 af 批：①只判讀「廠商＝出貨中心」的品項（大平台才是它的供給來源）
      ②下單量視窗與用量視窗對齊（不用往前推 15 天那個窗，否則比率被灌水）
      ③檔期限定品導向檔期備料進度 */
-  var usAll=(plat&&m.sku)?anStoreUsageAll(m):{};   /* 出貨中心判讀一律用全甜點口徑 */
+  var usAll=m.sku?anStoreUsageAll(m):{};              /* 全甜點口徑：出貨中心判讀用，篩選時也並列在用量欄 */
+  var lwAll=(anFilt&&m.sku&&ANRES.lw)?anLwUsageAll(m):null;
   if(plat&&m.sku){
     shipCamp=isCampSku(m.sku);
     var pnAlign={};
@@ -1669,15 +1673,19 @@ function anDrillStores(m,h){
   var pfrom=ANRES.platFrom||anPlatFrom();
   /* 2026-09-01 w 批：查詢有主類別／次類別篩選時，「期間用量」只含篩選內甜點，「上週用量」卻是引擎全甜點值——2026-09-01 杏仁片 28 g vs 55 g 誤判實例（次類別篩 2026 中秋節，漏掉南瓜子杏仁瓦片 40 g/份）。有篩選就標警語、上週用量欄灰掉。 */
   var anFilt=!!(ANRES.c1||ANRES.c2);
-  if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[(ANRES.c1?ANRES.c1+anPerTxt("c1",ANRES.c1):""),(ANRES.c2?ANRES.c2+anPerTxt("c2",ANRES.c2):"")].filter(Boolean).join('／')+'）：本表所有欄位（含上週用量）都<b>只含篩選內的甜點</b>。檔期期間取自「產品名稱對照表」的起訖有效日。訂貨引擎用的是全甜點值，游標移到上週用量的數字可看引擎值。</div>';
+  if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[(ANRES.c1?ANRES.c1+anPerTxt("c1",ANRES.c1):""),(ANRES.c2?ANRES.c2+anPerTxt("c2",ANRES.c2):"")].filter(Boolean).join('／')+'）：用量欄的<b>大數字只含篩選內的甜點</b>，下方橘色的「<b>全甜點</b>」才是門市實際消耗。<b>出貨／供貨判斷一律看全甜點</b>——篩選只是你看報表的視角，門市不會因為你篩了中秋就少用料。檔期期間取自「產品名稱對照表」的起訖有效日。</div>';
   h+='<div class="sub" style="margin:4px 0">共 <b>'+nUsed+'</b> 店有用量　·　用量期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算單位依各店內容量':'')+'　·　<b>採購大平台下單量統計期間 '+pfrom+'〜'+ANRES.to+'</b>（往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）'+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
-  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">'+(ANRES.lwFrom?ANRES.lwFrom.slice(5)+'〜'+ANRES.lwTo.slice(5):'上一完整週')+(anFilt?'・同篩選':'')+'</div></th><th class="right">採購大平台下單量<div class="sub" style="font-weight:400">'+(plat?(pnList.length?('規格見品名：'+pnList.slice(0,3).map(function(n){return shEsc(n)+anPlatTag(n);}).join('、')+(pnList.length>3?' 等 '+pnList.length+' 種':'')):'無配對品名'):'讀取中…')+'</div></th><th class="right">🏬 出貨中心判讀<div class="sub" style="font-weight:400">'+(m.sku&&!shipDC?'非出貨中心供貨':('同期下單 ÷ 同期用量'+(anFilt?'<br><b style="color:#7a4a00">全甜點口徑・不受篩選影響</b>':'')))+'</div></th></tr>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量'+(anFilt?'<div class="sub" style="font-weight:400;color:#7a4a00">篩選內／全甜點</div>':'')+'</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">'+(ANRES.lwFrom?ANRES.lwFrom.slice(5)+'〜'+ANRES.lwTo.slice(5):'上一完整週')+(anFilt?'<br><span style="color:#7a4a00">篩選內／全甜點</span>':'')+'</div></th><th class="right">採購大平台下單量<div class="sub" style="font-weight:400">'+(plat?(pnList.length?('規格見品名：'+pnList.slice(0,3).map(function(n){return shEsc(n)+anPlatTag(n);}).join('、')+(pnList.length>3?' 等 '+pnList.length+' 種':'')):'無配對品名'):'讀取中…')+'</div></th><th class="right">🏬 出貨中心判讀<div class="sub" style="font-weight:400">'+(m.sku&&!shipDC?'非出貨中心供貨':('同期下單 ÷ 同期用量'+(anFilt?'<br><b style="color:#7a4a00">全甜點口徑・不受篩選影響</b>':'')))+'</div></th></tr>';
   sts.forEach(function(st){var u=us[st]||0;
     var lwE=m.sku?aggOf(st,m.sku).week:null;          /* 引擎值：全甜點，放 title 對照 */
     var lw=lwu?lwu[st]:null;                          /* 同篩選值：本表口徑 */
     var lwT=(lwE!=null&&m.sku)?' title="訂貨引擎（全甜點、含損耗）：'+fmt(lwE)+' '+(m.unit||'')+'"':'';
     var pqs=m.sku?pqOf(st,m.sku):0,pqNote=(m.sku&&pqs>0&&pqs!==m.sku.packQty)?' <span class="muted" style="font-size:11px">(店別 '+fmt(pqs)+')</span>':'';
-    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+lwT+'>'+(lw==null?'<span class="muted">讀取中…</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?(fmt(pq[st])+pnCell(st)):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td>'
+    /* 2026-09-03 aj 批：有篩選時，用量欄下方直接並列「全甜點」值——出貨中心的人看的是整張表，不會只看最右邊那格。
+       經營者實例：篩中秋看寒天QQ，4 號店上週 40 g（只是中秋那份）、實際 1,125 g；只標在判讀欄不夠，他們照樣會看到 40 就停貨。 */
+    var allP=(anFilt&&usAll[st]>0&&Math.abs(usAll[st]-u)>0.5)?'<div class="sub" style="color:#7a4a00;white-space:nowrap">全甜點 <b>'+fmt(usAll[st])+'</b></div>':'';
+    var allL=(anFilt&&lwAll&&lwAll[st]>0)?'<div class="sub" style="color:#7a4a00;white-space:nowrap">全甜點 <b>'+fmt(lwAll[st])+'</b></div>':'';
+    h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+allP+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+lwT+'>'+(lw==null?'<span class="muted">讀取中…</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?(fmt(pq[st])+pnCell(st)):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td>'
       +'<td class="right">'+(function(){var k=shipK[st];
           if(!plat)return '<span class="muted">讀取中…</span>';
           if(m.sku&&!isDC(st,m.sku))return '<span class="muted" title="本品項廠商不是出貨中心，大平台不是它的供給來源，不做判讀">—</span>';
@@ -2965,7 +2973,13 @@ function shWire(){
 /* ===== 啟動 ===== */
 $("#roleSel").onchange=function(){ST.role=this.value;ST.exp={};render();};
 $("#storeSel").onchange=function(){ST.storeId=this.value;lsSet("lastStore",this.value);ST.exp={};ST.orderEdit={};ST.orderOff={};ST.q="";ST.vq="";render();loadStoreFlow(ST.storeId).then(function(){render();});};
-if(typeof window!=="undefined"){var __rb=document.getElementById("refreshBtn");if(__rb)__rb.onclick=function(){refreshAll();};}
+/* 2026-09-03 aj 批：頁首「更新」對總部＝重讀＋立即重算，經營者一天按多次就排隊到 20 分鐘（GAS 執行記錄：每次 RB_run 2–3 分鐘，正常）。
+   改成先問：改主檔／店別參數／標配只需要重讀；改了 BOM／檔期／單位對照才需要重算。 */
+if(typeof window!=="undefined"){var __rb=document.getElementById("refreshBtn");if(__rb)__rb.onclick=function(){
+  if(ST.role==="總部"&&typeof confirm==="function"){
+    var go=confirm("要順便重算後端嗎？\n\n【確定】重讀 ＋ 重算（後端跑 2–3 分鐘）\n　→ 改了 BOM、檔期、單位對照、預約之後才需要\n\n【取消】只重讀最新資料（幾秒）\n　→ 改主檔、店別參數、標配、盤點之後用這個就夠");
+    refreshAll(!go);return;}
+  refreshAll();};}
 if(typeof window!=="undefined"&&!window.__TEST__) bootstrap();
 </script>
 </body>
