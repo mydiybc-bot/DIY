@@ -1684,7 +1684,11 @@ function shipVerdict(k){
   if(k.lv==="camp") return {t:"檔期品",c:"#6F4E45",sub:"看檔期備料進度"};
   if(k.lv==="minpack")return {t:"✅ 正常",c:"#2E7D32",sub:"最小包裝"};
   return {t:"✅ 正常",c:"#2E7D32",sub:""};}
-function shipTip(k,unit){
+/* 2026-09-04 am 批：把 al 批塞在原生 title 裡的算式改成「點一下展開」。
+   原因：瀏覽器原生 tooltip 要滑鼠停住不動 1～2 秒才跳、稍微移動就消失、平板完全不會出現，
+         把「需要被讀到的資訊」藏在原生 tooltip 裡等於沒給。title 保留當附加，但不再是唯一入口。
+   拆成逐行陣列，供「展開」時逐行顯示；shipTip 仍存在，只是改成把同一份內容串起來。 */
+function shipTipLines(k,unit){
   var L=[];
   L.push("同期下單 "+fmt(k.g)+" "+unit+" ÷ 同期用量 "+fmt(k.use)+(k.ratio!=null?" ＝ "+dec(k.ratio)+" 倍":""));
   L.push("換算："+fmt(k.packs)+" 單位 × "+fmt(k.per)+" ＝ "+fmt(k.g)+" "+unit+(k.est?"【主檔內容量】":"【大平台規格】"));
@@ -1696,7 +1700,8 @@ function shipTip(k,unit){
   else if(k.lv==="warn")L.push("略高於同期用量，可再觀察。");
   else L.push("在合理範圍（≤1.5 倍）。小於 1 倍是正常的消化既有庫存，不是缺貨。");
   L.push("這是期間進出比，不是庫存——系統不知道門市期初有多少貨。");
-  return L.join("　");}
+  return L;}
+function shipTip(k,unit){return shipTipLines(k,unit).join("　");}
 function anDrillStores(m,h){
   if(!ANRES.byStore){anStoreLoad().then(function(){render();});return h+'<div class="sub" style="margin:4px 0">讀取各店銷量中…</div>';}
   var us=anStoreUsage(m),wk=anPeriodWeeks();
@@ -1724,7 +1729,11 @@ function anDrillStores(m,h){
      ③檔期限定品導向檔期備料進度 */
   var usAll=m.sku?anStoreUsageAll(m):{};              /* 全甜點口徑：出貨中心判讀用，篩選時也並列在用量欄 */
   var lwAll=(anFilt&&m.sku&&ANRES.lw)?anLwUsageAll(m):null;
-  if(plat&&m.sku){
+  /* 2026-09-04 an 批：器具／模具不判「下單 ÷ 用量」。
+     它們可重複使用，用量是「使用次數」不是消耗——小矽膠模一週用 300 次不代表要補 300 個，補貨看標配。
+     al 批的「🔵 偏少」把 12 店的小矽膠模全標成偏少就是這個洞（配對失敗只是導火線）。 */
+  var shipDur=!!(m.sku&&isDur(m.sku));
+  if(plat&&m.sku&&!shipDur){
     shipCamp=isCampSku(m.sku);
     var pnAlign={};
     plat.forEach(function(x){if(x.date>=ANRES.from&&x.date<=ANRES.to)((pnAlign[x.st]=pnAlign[x.st]||{})[x.name]=(pnAlign[x.st][x.name]||0)+x.qty);});
@@ -1752,7 +1761,7 @@ function anDrillStores(m,h){
   var anFilt=!!(ANRES.c1||ANRES.c2);
   if(anFilt)h+='<div class="note" style="margin:4px 0;color:#7a4a00;background:#FFF6E5">⚠️ 目前有分類篩選（'+[(ANRES.c1?ANRES.c1+anPerTxt("c1",ANRES.c1):""),(ANRES.c2?ANRES.c2+anPerTxt("c2",ANRES.c2):"")].filter(Boolean).join('／')+'）：用量欄的<b>大數字只含篩選內的甜點</b>，下方橘色的「<b>全甜點</b>」才是門市實際消耗。<b>出貨／供貨判斷一律看全甜點</b>——篩選只是你看報表的視角，門市不會因為你篩了中秋就少用料。檔期期間取自「產品名稱對照表」的起訖有效日。</div>';
   h+='<div class="sub" style="margin:4px 0">共 <b>'+nUsed+'</b> 店有用量　·　用量期間 '+ANRES.from+'〜'+ANRES.to+'（'+dec(wk)+' 週）　·　用量＝POS 銷量 × BOM 單份用量'+(m.sku?'　·　換算單位依各店內容量':'')+'　·　<b>採購大平台下單量統計期間 '+pfrom+'〜'+ANRES.to+'</b>（往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）'+(ANRES.byStoreFail?'　·　<span style="color:#b3261e">⚠️ 銷量資料源沒回應</span>':'')+'</div>';
-  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量'+(anFilt?'<div class="sub" style="font-weight:400;color:#7a4a00">篩選內／全甜點</div>':'')+'</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">'+(ANRES.lwFrom?ANRES.lwFrom.slice(5)+'〜'+ANRES.lwTo.slice(5):'上一完整週')+(anFilt?'<br><span style="color:#7a4a00">篩選內／全甜點</span>':'')+'</div></th><th class="right">採購大平台下單量<div class="sub" style="font-weight:400">'+(plat?(pnList.length?('規格見品名：'+pnList.slice(0,3).map(function(n){return shEsc(n)+anPlatTag(n);}).join('、')+(pnList.length>3?' 等 '+pnList.length+' 種':'')):'無配對品名'):'讀取中…')+'</div></th><th class="right">🏬 出貨中心判讀<div class="sub" style="font-weight:400">'+(m.sku&&!shipDC?'非出貨中心供貨':('下單正常／偏多／偏少　·　游標移到 ⓘ 看算式'+(anFilt?'<br><b style="color:#7a4a00">全甜點口徑・不受篩選影響</b>':'')))+'</div></th></tr>';
+  h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th class="right">期間用量'+(anFilt?'<div class="sub" style="font-weight:400;color:#7a4a00">篩選內／全甜點</div>':'')+'</th><th class="right">期間用量換算單位<div class="sub" style="font-weight:400">'+spec+'</div></th><th class="right">週平均<div class="sub" style="font-weight:400">依實際使用天數</div></th><th class="right">上週用量<div class="sub" style="font-weight:400">'+(ANRES.lwFrom?ANRES.lwFrom.slice(5)+'〜'+ANRES.lwTo.slice(5):'上一完整週')+(anFilt?'<br><span style="color:#7a4a00">篩選內／全甜點</span>':'')+'</div></th><th class="right">採購大平台下單量<div class="sub" style="font-weight:400">'+(plat?(pnList.length?('規格見品名：'+pnList.slice(0,3).map(function(n){return shEsc(n)+anPlatTag(n);}).join('、')+(pnList.length>3?' 等 '+pnList.length+' 種':'')):'無配對品名'):'讀取中…')+'</div></th><th class="right">🏬 出貨中心判讀<div class="sub" style="font-weight:400">'+(shipDur?'器具／模具：看標配，不判進出比':(m.sku&&!shipDC?'非出貨中心供貨':('下單正常／偏多／偏少<br><span data-shipall style="cursor:pointer;text-decoration:underline;color:#2E6B4F">'+(ST.shipAll?'⊖ 收合全部算式':'⊕ 展開全部算式')+'</span>'+(anFilt?'<br><b style="color:#7a4a00">全甜點口徑・不受篩選影響</b>':''))))+'</div></th></tr>';
   sts.forEach(function(st){var u=us[st]||0;
     var lwE=m.sku?aggOf(st,m.sku).week:null;          /* 引擎值：全甜點，放 title 對照 */
     var lw=lwu?lwu[st]:null;                          /* 同篩選值：本表口徑 */
@@ -1763,17 +1772,27 @@ function anDrillStores(m,h){
     var allP=(anFilt&&usAll[st]>0&&Math.abs(usAll[st]-u)>0.5)?'<div class="sub" style="color:#7a4a00;white-space:nowrap">全甜點 <b>'+fmt(usAll[st])+'</b></div>':'';
     var allL=(anFilt&&lwAll&&lwAll[st]>0)?'<div class="sub" style="color:#7a4a00;white-space:nowrap">全甜點 <b>'+fmt(lwAll[st])+'</b></div>':'';
     h+='<tr><td><b>'+storeName(st)+'</b></td><td class="right">'+(u?anQty(m,u,true):'<span class="muted">0</span>')+allP+'</td><td class="right">'+(u?anBuyTxt(st,m,u)+pqNote:'<span class="muted">–</span>')+'</td><td class="right">'+(u?wkCell(u,anStoreDays(m,st)):'<span class="muted">–</span>')+'</td><td class="right"'+lwT+'>'+(lw==null?'<span class="muted">讀取中…</span>':(lw>0?fmt(lw)+' '+(m.unit||''):'<span class="muted">0</span>'))+'</td><td class="right">'+(plat?(pq[st]?(fmt(pq[st])+pnCell(st)):'<span class="muted">0</span>'):'<span class="muted">讀取中…</span>')+'</td>'
-      +'<td class="right">'+(function(){var k=shipK[st],uu=(m.unit||'');
+      +'<td class="right">'+(function(){var k=shipK[st],uu=(m.unit||''),xk=String(m.key||'')+'|'+st;
           if(!plat)return '<span class="muted">讀取中…</span>';
+          if(shipDur)return '<span class="muted" title="器具／模具可重複使用，用量是使用次數不是消耗，下單÷用量沒有意義。補不補看店別參數的標配。">看標配</span>';
           if(m.sku&&!isDC(st,m.sku))return '<span class="muted" title="本品項廠商不是出貨中心，大平台不是它的供給來源，不做判讀">—</span>';
+          /* 2026-09-04 am 批：結論仍只有一行，算式改成點一下展開（不再只靠原生 title）。
+             ST.shipAll＝表頭的「展開全部算式」；ST.shipX[品項|店]＝單格展開。 */
+          var opX=!!(ST.shipAll||(ST.shipX&&ST.shipX[xk]));
+          function box(txt,col,sub,lines,tip){
+            return '<div data-shipx="'+escA(xk)+'" style="color:'+col+';font-weight:700;cursor:pointer" title="'+escA(tip)+'">'+txt+' <span class="muted" style="font-weight:400">'+(opX?'▴ 收合':'▾ 算式')+'</span></div>'
+              +(sub?'<div class="sub muted">'+sub+'</div>':'')
+              +(opX?'<div class="sub" style="margin-top:3px;padding-top:3px;border-top:1px dashed #D8D2C6;line-height:1.5">'+lines.map(function(L){return '<div>'+L+'</div>';}).join('')+'</div>':'');}
           if(!k){
             var uA=num(usAll[st]||0);
-            if(!shipCamp&&uA>0)return '<div style="color:#0B4A6F;font-weight:700" title="'+escA('本期用掉 '+fmt(uA)+' '+uu+'，但這段期間一張單都沒下。多半是在消化既有庫存（訂貨週期比統計期間長），只有門市反映不足時才要處理。')+'">🔵 偏少 <span class="muted">ⓘ</span></div><div class="sub muted">本期未下單</div>';
+            if(!shipCamp&&uA>0)return box('🔵 偏少','#0B4A6F','本期未下單',
+              ['本期用掉 '+fmt(uA)+' '+uu+'，但這段期間<b>一張單都沒下</b>。',
+               '多半是在消化既有庫存（訂貨週期比統計期間長），',
+               '只有門市反映不足時才要處理。'],'點一下看說明');
             return '<span class="muted" title="這段期間沒有下單紀錄">本期未下單</span>';}
           var v=shipVerdict(k);
-          return '<div style="color:'+v.c+';font-weight:700" title="'+escA(shipTip(k,uu))+'">'+v.t+' <span class="muted">ⓘ</span></div>'
-            +(v.sub?'<div class="sub muted">'+v.sub+'</div>':'')
-            +((k.mis&&k.hq>0&&k.spec>0)?'<div class="sub" style="color:#8A5A00" title="'+escA('主檔內容量 '+fmt(k.hq)+' ≠ 大平台規格 '+fmt(k.spec)+'，已用大平台規格計算。請總部到主檔頁改成一致，否則訂貨建議量也會錯。')+'">⚠️ 規格不符</div>':'');})()+'</td></tr>';});
+          return box(v.t,v.c,v.sub,shipTipLines(k,uu),'點一下看算式')
+            +((k.mis&&k.hq>0&&k.spec>0)?'<div class="sub" style="color:#8A5A00">⚠️ 規格不符</div>':'');})()+'</td></tr>';});
   var lwTot=0,lwETot=0;if(m.sku)sts.forEach(function(st){lwTot+=(lwu?(lwu[st]||0):0);lwETot+=aggOf(st,m.sku).week||0;});
   h+='<tr><td><b>合計</b></td><td class="right">'+anQty(m,tot,true)+'</td><td class="right">'+(m.sku?anBuyTxt("",m,tot):'–')+'</td><td class="right">'+(function(){var d=0;Object.keys(us).forEach(function(st){var x=anStoreDays(m,st);if(x>d)d=x;});return d?fmt(tot/d*7):fmt(tot/wk);})()+'</td><td class="right">'+(!lwu?'<span class="muted">讀取中…</span>':(m.sku?'<span title="訂貨引擎（全甜點、含損耗）：'+fmt(lwETot)+' '+(m.unit||'')+'">'+fmt(lwTot)+' '+(m.unit||'')+'</span>':'–'))+'</td><td class="right">'+(plat?fmt(plat.reduce(function(a,x){return a+x.qty;},0)):'')+'</td><td class="right">'+(plat?(shipDC?((shipOver.length?'<div style="color:#B3261E;font-weight:700">'+shipOver.length+' 店過多</div>':'')+(shipWarn.length?'<div style="color:#B45309">'+shipWarn.length+' 店偏多</div>':'')+(shipUnder.length?'<div style="color:#0B4A6F">'+shipUnder.length+' 店偏少</div>':'')+((!shipOver.length&&!shipWarn.length&&!shipUnder.length)?'<span style="color:#2E7D32">✅ 都正常</span>':'')):'<span class="muted">—</span>'):'')+'</td></tr></table></div>';
   if(plat&&shipDC)h+='<div class="card" style="border:2px solid #C8A15A;background:#FFFBF2;padding:8px 12px;margin:8px 0">'
@@ -1783,7 +1802,7 @@ function anDrillStores(m,h){
     +(shipWarn.length?'<div class="sub" style="color:#B45309">略偏多、可再觀察：'+shipWarn.join('、')+'</div>':'')
     +(shipUnder.length?'<div class="sub" style="color:#0B4A6F">🔵 <b>有用量卻本期未下單</b>（可能偏少，也可能只是在消化既有庫存）：'+shipUnder.join('、')+'</div>':'')
     +(shipCamp?'<div class="sub">本品項是<b>檔期限定品</b>，到期比率在檔期初期本來就偏高，請以上方「🥮 檔期備料進度」為準。</div>':'')
-    +'<div class="sub muted">每一格只寫結論（✅ 正常／🟠 偏多／🔴 過多／🔵 偏少），<b>算式與建議放在游標提示（ⓘ）裡</b>，不佔版面。判準：<b>同期下單量（換算成'+(m.unit||'使用單位')+'）÷ 同期用量</b>，兩者取同一個統計期間；'+(anFilt?'<b>用量一律取全甜點，不受上方分類篩選影響</b>（篩選只會讓左邊的用量欄變小，門市實際消耗不會變）。':'')+'&gt;3 倍＝過多、1.5–3 倍＝偏多、≤1.5 倍＝正常。<b>「偏少」只用在「有用量但整個期間一張單都沒下」</b>——<b>比率小於 1 倍不算偏少</b>，那是正常的「消化既有庫存」（訂貨是週期性的，期間內用掉的貨大多是期間之前訂的）。'
+    +'<div class="sub muted">每一格只寫結論（✅ 正常／🟠 偏多／🔴 過多／🔵 偏少），<b>點格子裡的「▾ 算式」可展開算式與建議</b>；要一次全開請按上方欄位標題的「⊕ 展開全部算式」。判準：<b>同期下單量（換算成'+(m.unit||'使用單位')+'）÷ 同期用量</b>，兩者取同一個統計期間；'+(anFilt?'<b>用量一律取全甜點，不受上方分類篩選影響</b>（篩選只會讓左邊的用量欄變小，門市實際消耗不會變）。':'')+'&gt;3 倍＝過多、1.5–3 倍＝偏多、≤1.5 倍＝正常。<b>「偏少」只用在「有用量但整個期間一張單都沒下」</b>——<b>比率小於 1 倍不算偏少</b>，那是正常的「消化既有庫存」（訂貨是週期性的，期間內用掉的貨大多是期間之前訂的）。'
     +'三種情況不判讀：①廠商不是出貨中心（大平台不是供給來源）②本期只訂 1 個包裝單位（最小訂購量，屬包裝限制）③檔期限定品（看檔期備料進度）。'
     +'這是<b>期間進出比</b>，不是庫存——系統不知道門市期初有多少貨，所以文案一律是「建議與門市確認」。</div></div>';
   /* 2026-09-04 ak 批：ab 批寫的註解有誤——畫面上的「上週用量」自 u 批起就是 POS×BOM 純配方量（與左欄同口徑、不加損耗），
@@ -2684,6 +2703,14 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-dmode]"),function(el){el.onclick=function(ev){
     if(ev&&ev.stopPropagation)ev.stopPropagation();
     ST.anDrillMode=el.getAttribute("data-dmode")||"規格";render();};});
+  /* 2026-09-04 am 批：出貨中心判讀「算式」展開／收合 */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-shipx]"),function(el){el.onclick=function(ev){
+    if(ev&&ev.stopPropagation)ev.stopPropagation();
+    if(!ST.shipX)ST.shipX={};
+    var k=el.getAttribute("data-shipx")||"";ST.shipX[k]=!ST.shipX[k];render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-shipall]"),function(el){el.onclick=function(ev){
+    if(ev&&ev.stopPropagation)ev.stopPropagation();
+    ST.shipAll=!ST.shipAll;ST.shipX={};render();};});
   var tf=$("#totFrom");if(tf)tf.onchange=function(){ST.totFrom=tf.value;};
   var tt=$("#totTo");if(tt)tt.onchange=function(){ST.totTo=tt.value;};
   var tr=$("#totRun");if(tr)tr.onclick=runRank;
