@@ -1138,8 +1138,23 @@ function viewCampHQ(){
   var ws=EVCV[ev],nd=EVND[ev]||{};
   var estTot=0,soldTot=0;ws.forEach(function(w){estTot+=w.cEst;soldTot+=w.cSold;});
   var wn=evWeekNow(ev);
-  var h='<div class="note">🥮 <b>檔期備貨總表</b>　依<b>去年同檔期逐週曲線</b>推估各店整檔期需求，對照大平台已出貨量，算出<b>出貨中心還要準備多少</b>。每日 07:31 隨 EventLayer 重算。'
-    +'<br><span class="muted">「已出貨」來自大平台下單紀錄（總部每月貼一次，檔期中建議改每週貼）；「估計在店」假設檔期前沒有舊庫存，有的話尚需會偏高——寧可多備不缺。</span></div>';
+  var winFrom=(function(){var w0=ws[0];return w0?ymd(new Date(new Date(w0.cFrom+"T00:00:00").getTime()-CAMPHQ_LEAD*864e5)):"";})();
+  var h='<div class="note">🥮 <b>檔期備貨總表</b>　依<b>去年同檔期逐週曲線</b>推估各店整檔期需求，對照大平台已出貨量，<b>先跨店調撥、不夠的才採購</b>。每日 07:31 重算。'
+    +'　<a href="#" data-chhelp="1" style="color:#1e4e8c;font-weight:700">'+(ST.chHelp?'▴ 收起算式':'ⓘ 這些數字怎麼算')+'</a></div>';
+  if(ST.chHelp)h+='<div class="card" style="background:#f7fbff;border-color:#bcd7f5;font-size:13.5px;line-height:1.7">'
+    +'<b>每一欄的意思（以「冰皮粉」為例，單位跟著品項的使用單位走）</b>'
+    +'<table style="margin-top:6px"><tr><th style="width:120px">欄</th><th>怎麼算</th></tr>'
+    +'<tr><td><b>推估總份數</b>（份）</td><td>這家店整個檔期預計會賣出、<b>會用到這個料</b>的限定甜點份數 ＝ 全公司推估總量 × 該店今年至今的實售份額。全公司推估總量 ＝ 今年已售 ÷ 去年同位置的累積佔比（上方曲線表）。</td></tr>'
+    +'<tr><td><b>已售份數</b>（份）</td><td>POS 到昨天為止實際賣出的份數。</td></tr>'
+    +'<tr><td><b>推估總需求</b></td><td>推估總份數 × 每份用量（BOM 配方）＝ 已用 ＋ 剩餘推估。</td></tr>'
+    +'<tr><td><b>已用</b></td><td>已售份數 × 每份用量。</td></tr>'
+    +'<tr><td><b>剩餘推估</b></td><td>接下來到檔期結束還會用掉的量。</td></tr>'
+    +'<tr><td><b>已出貨</b></td><td>大平台下單紀錄裡，自 <b>'+winFrom+'</b>（曲線第一週前 15 天）起出給這家店的量；括號是大平台的包數。<span class="muted">只到最後一次上傳的報表為止，每週上傳才準。</span></td></tr>'
+    +'<tr><td><b>估計在店</b></td><td>已出貨 − 已用（<b>假設檔期前店裡沒有舊庫存</b>，有的話這個數會偏低、尚需會偏高）。</td></tr>'
+    +'<tr><td><b>尚需</b></td><td>剩餘推估 − 估計在店。正數＝這家店缺；負數＝多了（顯示為「可調出」）。</td></tr>'
+    +'<tr><td><b>🔁 調撥</b></td><td>同一品項，有店多、有店缺 → 先從多的店調給缺的店（先調最多的那家）。調得到的部分不用買。</td></tr>'
+    +'<tr><td><b>建議備</b>（採購單位）</td><td>調撥後仍缺的量 ÷ 每包內容量，進位。<b>這才是出貨中心要花錢買的</b>。</td></tr></table>'
+    +'<div class="sub muted" style="margin-top:6px">品項列的「尚需」與「建議備」＝各店調撥後合計；「可調撥」＝能靠內部調度解決的量。列表依採購金額高→低排序。</div></div>';
   if(evs.length>1)h+='<div class="card" style="padding:8px 12px"><span class="seg">'+evs.map(function(e){return '<div class="'+(e===ev?"on":"")+'" data-chev="'+escA(e)+'">'+e+'</div>';}).join('')+'</span></div>';
   /* 曲線摘要 */
   h+='<div class="card"><div style="font-weight:700;font-size:15px">📈 '+ev+'　推估總量 <b>'+fmt(Math.round(estTot))+'</b> 份　已售 <b>'+fmt(Math.round(soldTot))+'</b>　<span style="color:#B3261E">還沒賣 <b>'+fmt(Math.round(Math.max(0,estTot-soldTot)))+'</b>（'+(estTot?Math.round(Math.max(0,estTot-soldTot)/estTot*100):0)+'%）</span>'+(wn?'　<span class="muted">現在是檔期第 '+wn.n+' 週 ×'+relTxt(wn.cur.rel)+'</span>':'')+'</div>'
@@ -1151,40 +1166,63 @@ function viewCampHQ(){
   var q=(ST.chQ||"").toLowerCase();
   var rowsAll=SHIST.ALL||null;
   var items=Object.keys(nd).map(function(id){var s=SKU[id];if(!s)return null;
-    var per={},sumRem=0,sumUsed=0,sumShip=0,sumNeed=0,sumPacks=0,dc=false,anyNeed=false;
+    var per={},sumRem=0,sumUsed=0,sumShip=0,sumOn=0,sumNeed=0,sumEst=0,sumSold=0,dc=false;
     Object.keys(nd[id]).forEach(function(st){var x=nd[id][st];var isdc=isDC(st,s);if(isdc)dc=true;
       var sh=(rowsAll&&isdc)?campHQShipped(ev,s,rowsAll.filter(function(r){return String(r.st)===st;})):null;
-      var shipped=sh?sh.g:0,onhand=sh?Math.max(0,shipped-x.used):0,need=Math.max(0,x.rem-onhand);
-      var pq=pqEff(st,s),packs=Math.max(0,pq>0?Math.ceil(need/pq-1e-9):Math.round(need));   /* max(0,…)：need=0 時 ceil(-1e-9) 會回 -0 顯示成「-0」 */
-      per[st]={rem:x.rem,used:x.used,sold:x.sold,est:x.est,shipped:shipped,packs0:sh?sh.packs:0,onhand:onhand,need:need,packs:packs,dc:isdc,pq:pq,noShip:!sh};
-      sumRem+=x.rem;sumUsed+=x.used;sumShip+=shipped;sumNeed+=need;sumPacks+=packs;if(need>0)anyNeed=true;});
-    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumNeed:sumNeed,sumPacks:sumPacks,dc:dc,anyNeed:anyNeed,who:(nd[id][Object.keys(nd[id])[0]]||{}).who||""};
+      var shipped=sh?sh.g:0,onhand=sh?Math.max(0,shipped-x.used):0,gap=x.rem-onhand;   /* gap 正＝缺、負＝多 */
+      per[st]={rem:x.rem,used:x.used,sold:x.sold,est:x.est,shipped:shipped,packs0:sh?sh.packs:0,onhand:onhand,gap:gap,need:Math.max(0,gap),surplus:Math.max(0,-gap),pq:pqEff(st,s),dc:isdc,noShip:!sh,xin:[],xout:[],buy:0,packs:0};
+      sumRem+=x.rem;sumUsed+=x.used;sumShip+=shipped;sumOn+=onhand;sumNeed+=Math.max(0,gap);sumEst+=x.est;sumSold+=x.sold;});
+    /* ★ 2026-09-05 ar 批：跨店調撥。缺的店先從多的店調（多的先調），調完還缺的才採購。只在有出貨紀錄的店之間算（自購品沒有在店估計，不調）。 */
+    var short=Object.keys(per).filter(function(st){return per[st].dc&&!per[st].noShip&&per[st].need>0;}).sort(function(a,b){return per[b].need-per[a].need;});
+    var surp=Object.keys(per).filter(function(st){return per[st].dc&&!per[st].noShip&&per[st].surplus>0;}).map(function(st){return {st:st,left:per[st].surplus};}).sort(function(a,b){return b.left-a.left;});
+    var sumXfer=0;
+    short.forEach(function(st){var p=per[st],left=p.need;
+      surp.forEach(function(sp){if(left<=0||sp.left<=0)return;var take=Math.min(left,sp.left);if(take<1)return;p.xin.push({from:sp.st,qty:take});per[sp.st].xout.push({to:st,qty:take});sp.left-=take;left-=take;sumXfer+=take;});
+      p.buy=left;});
+    Object.keys(per).forEach(function(st){var p=per[st];if(!p.dc)p.buy=p.need;   /* 自購／非出貨中心：沒有調撥資訊，尚需即需求 */
+      p.packs=Math.max(0,p.pq>0?Math.ceil(p.buy/p.pq-1e-9):Math.round(p.buy));});
+    var sumBuy=0,sumPacks=0;Object.keys(per).forEach(function(st){sumBuy+=per[st].buy;sumPacks+=per[st].packs;});
+    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumBuy:sumBuy,sumPacks:sumPacks,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||""};
   }).filter(Boolean);
   var shown=items.filter(function(it){if(q&&(it.s.name+" "+it.s.vendor+" "+it.id+" "+it.who).toLowerCase().indexOf(q)<0)return false;if(ST.chNeedOnly&&!it.anyNeed)return false;return true;});
-  shown.sort(function(a,b){return (b.sumNeed*(b.s.price||0)/Math.max(1,b.s.packQty||1))-(a.sumNeed*(a.s.price||0)/Math.max(1,a.s.packQty||1))||(b.sumNeed-a.sumNeed);});
+  var cost=function(it){return it.sumBuy*(it.s.price||0)/Math.max(1,it.s.packQty||1);};
+  shown.sort(function(a,b){return (cost(b)-cost(a))||(b.sumBuy-a.sumBuy)||(b.sumXfer-a.sumXfer);});
   h+='<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">'
     +'<input id="chQ" class="ipt" style="flex:1;min-width:160px" placeholder="搜品項／廠商／甜點" value="'+escA(ST.chQ||"")+'">'
     +'<span class="seg">'+[["1","只看還要備的"],["0","全部"]].map(function(o){return '<div class="'+((ST.chNeedOnly?"1":"0")===o[0]?"on":"")+'" data-chneed="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
     +'<span class="muted">'+shown.length+' / '+items.length+' 品項'+(rowsAll?'':'　<span style="color:#B45309">大平台紀錄載入中，已出貨暫顯示 —</span>')+'</span></div>';
   if(!shown.length){h+='<div class="muted">沒有符合的品項。</div></div>';return h;}
-  h+='<div style="overflow-x:auto"><table><thead><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">尚需</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
-  shown.forEach(function(it){var s=it.s,open=!!ST.chExp[it.id];
+  h+='<div style="overflow-x:auto"><table><thead><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
+  shown.forEach(function(it){var s=it.s,open=!!ST.chExp[it.id],u=s.useUnit;
     h+='<tr class="shoh" data-chexp="'+escA(it.id)+'" style="cursor:pointer"><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+escA(s.name)+'</b> <span class="muted">'+escA(s.vendor)+'</span> '+(open?'▴':'▾')+'<div class="sub muted">'+escA(it.who)+'</div></td>'
-      +'<td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+' '+s.useUnit+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumRem))+'</td>'
-      +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip)):'—'):'<span class="muted">自購</span>')+'</td>'
-      +'<td class="right" style="color:'+(it.sumNeed>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(it.sumNeed))+'</td>'
+      +'<td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumRem))+' '+u+'</td>'
+      +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購</span>')+'</td>'
+      +'<td class="right muted">'+(it.dc&&rowsAll?'≈ '+fmt(Math.round(it.sumOn))+' '+u:'—')+'</td>'
+      +'<td class="right" style="color:#1e4e8c;font-weight:700">'+(it.sumXfer>0?fmt(Math.round(it.sumXfer))+' '+u:'<span class="muted">—</span>')+'</td>'
+      +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(it.sumBuy))+' '+u+'</td>'
       +'<td class="right"><b>'+fmt(it.sumPacks)+'</b> '+s.buyUnit+'</td></tr>';
     if(open){
-      h+='<tr><td colspan="7" style="background:#fffdf2;padding:4px 10px"><table style="font-size:12.5px"><thead><tr><th>店</th><th class="right">推估總份數</th><th class="right">已售份數</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">尚需</th><th class="right">建議備</th></tr></thead><tbody>';
+      h+='<tr><td colspan="9" style="background:#fffdf2;padding:4px 10px"><table style="font-size:12.5px"><thead><tr><th>店</th><th class="right">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（包數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
       Object.keys(it.per).sort(function(a,b){return (+a)-(+b);}).forEach(function(st){var p=it.per[st];
+        var xf=p.xin.length?('<span style="color:#1e4e8c">自 '+p.xin.map(function(x){return escA(storeName(x.from))+' 調 '+fmt(Math.round(x.qty));}).join('、')+'</span>'):(p.xout.length?('<span style="color:#2E7D32">調出 '+p.xout.map(function(x){return fmt(Math.round(x.qty))+' 給 '+escA(storeName(x.to));}).join('、')+'</span>'):(p.dc&&!p.noShip&&p.surplus>0?'<span class="muted">可調出 '+fmt(Math.round(p.surplus))+'</span>':'<span class="muted">—</span>'));
         h+='<tr><td><b>'+escA(storeName(st))+'</b></td><td class="right">'+fmt(Math.round(p.est))+'</td><td class="right">'+fmt(Math.round(p.sold))+'</td><td class="right">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
-          +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+' 單位)</span>')):'<span class="muted">自購</span>')+'</td>'
+          +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+')</span>')):'<span class="muted">自購</span>')+'</td>'
           +'<td class="right muted">'+(p.dc&&!p.noShip?'≈ '+fmt(Math.round(p.onhand)):'—')+'</td>'
-          +'<td class="right" style="color:'+(p.need>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(p.need))+'</td>'
-          +'<td class="right"><b>'+fmt(p.packs)+'</b> '+s.buyUnit+(p.pq>0?' <span class="muted">(每'+s.buyUnit+' '+fmt(p.pq)+' '+s.useUnit+')</span>':'')+'</td></tr>';});
+          +'<td class="right" style="font-weight:700;color:'+(p.need>0?'#B3261E':(p.surplus>0?'#2E7D32':'#6b7280'))+'">'+(p.need>0?fmt(Math.round(p.need)):(p.dc&&!p.noShip&&p.surplus>0?'多 '+fmt(Math.round(p.surplus)):'0'))+'</td>'
+          +'<td>'+xf+'</td>'
+          +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))+'</td>'
+          +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';});
+      var sumSurp=0;Object.keys(it.per).forEach(function(st){var p=it.per[st];if(p.dc&&!p.noShip)sumSurp+=p.surplus;});
+      h+='<tr style="background:#fff3cd;font-weight:700"><td>合計</td><td class="right">'+fmt(Math.round(it.sumEst))+'</td><td class="right">'+fmt(Math.round(it.sumSold))+'</td><td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumRem))+'</td>'
+        +'<td class="right">'+(it.dc?fmt(Math.round(it.sumShip)):'—')+'</td><td class="right">'+(it.dc?'≈ '+fmt(Math.round(it.sumOn)):'—')+'</td>'
+        +'<td class="right" style="color:#B3261E">'+fmt(Math.round(it.sumNeed))+(sumSurp>0?' <span style="color:#2E7D32;font-weight:400">／多 '+fmt(Math.round(sumSurp))+'</span>':'')+'</td>'
+        +'<td style="color:#1e4e8c">'+(it.sumXfer>0?'調撥可補 '+fmt(Math.round(it.sumXfer)):'—')+'</td>'
+        +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(it.sumBuy))+'</td><td class="right">'+fmt(it.sumPacks)+' '+s.buyUnit+'</td></tr>';
+      if(it.dc&&it.sumOn>0&&it.sumOn>=it.sumRem&&it.sumBuy<=0)h+='<tr><td colspan="12" style="background:#eef8ee;color:#2E7D32;font-weight:700;padding:6px 10px">✅ 全公司在店 ≈ '+fmt(Math.round(it.sumOn))+' '+u+' ≥ 剩餘推估 '+fmt(Math.round(it.sumRem))+' '+u+'：靠調撥就夠，不用再買。</td></tr>';
+      else if(it.dc&&it.sumOn>it.sumRem&&it.sumBuy>0)h+='<tr><td colspan="12" style="background:#fff8e1;color:#B45309;padding:6px 10px">ℹ️ 全公司在店（'+fmt(Math.round(it.sumOn))+' '+u+'）其實多於剩餘推估（'+fmt(Math.round(it.sumRem))+' '+u+'），仍需採購 '+fmt(Math.round(it.sumBuy))+' '+u+' 是因為多的貨集中在沒有缺口的店以外……請看各店「調撥」欄。</td></tr>';
       h+='</tbody></table></td></tr>';}
   });
-  h+='</tbody></table></div><div class="sub muted" style="margin-top:6px">排序＝尚需金額高→低。推估總需求＝已用＋剩餘推估（曲線法，各店依今年實售份額拆分）；尚需＝剩餘推估 − 估計在店（已出貨 − 已用，最低 0）；建議備＝尚需 ÷ 店內容量進位。點品項展開各店。</div></div>';
+  h+='</tbody></table></div><div class="sub muted" style="margin-top:6px">排序＝需採購金額高→低。需採購＝各店缺口扣掉可調撥後的合計；點品項展開各店與調撥建議；點上方「ⓘ 這些數字怎麼算」看每欄定義。</div></div>';
   return h;}
 /* ===== 🥮 檔期備料進度（2026-09-03 z 批）=====
    問題：檔期限定原料（月餅冰皮粉之類）最容易「一次訂滿整檔期」→ 檔期結束變呆料。
@@ -2820,6 +2858,7 @@ function wire(){
   /* 2026-09-05 ao 批：檔期備貨總表 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-chexp]"),function(el){el.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();var k=el.getAttribute("data-chexp")||"";ST.chExp[k]=!ST.chExp[k];render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-chneed]"),function(el){el.onclick=function(){ST.chNeedOnly=el.getAttribute("data-chneed")==="1";render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chhelp]"),function(el){el.onclick=function(ev){if(ev&&ev.preventDefault)ev.preventDefault();ST.chHelp=!ST.chHelp;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-chev]"),function(el){el.onclick=function(){ST.chEv=el.getAttribute("data-chev")||"";ST.chExp={};render();};});
   var chq=$("#chQ");if(chq){chq.oninput=function(){ST.chQ=this.value;clearTimeout(chq._t);chq._t=setTimeout(function(){var v=$("#view").innerHTML;render();var e2=$("#chQ");if(e2){e2.focus();try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(e){}}},250);};}
   /* 2026-09-04 am 批：出貨中心判讀「算式」展開／收合 */
