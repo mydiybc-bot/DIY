@@ -271,7 +271,7 @@
   <header>
     <div class="h-top"><a href="hub.html" class="home">⬅ 回首頁</a><span class="logo">🛒</span><h1>採購系統</h1><span id="upd" class="muted" style="color:#cfeacd;font-size:12px"></span><button id="refreshBtn" title="總部：重讀＋立即重算（約 2–3 分鐘，完成自動載入）／店長：重讀最新資料" style="margin-left:8px;border:1px solid #cfeacd;background:transparent;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer">🔄 更新</button></div>
     <div class="selrow">
-      <select id="roleSel"><option value="店長">店長</option><option value="總部">總部／經營者</option></select>
+      <select id="roleSel"><option value="店長">店長</option><option value="總部">總部／經營者</option></select><button id="hqOut" title="登出總部／經營者，這台裝置回到店長模式（下次切換要再輸密碼）" style="display:none;border:1px solid #cfeacd;background:transparent;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer">🔒 鎖回店長</button>
       <select id="storeSel"></select>
     </div>
   </header>
@@ -3406,7 +3406,54 @@ function shWire(){
 }
 
 /* ===== 啟動 ===== */
-$("#roleSel").onchange=function(){ST.role=this.value;ST.exp={};render();};
+/* 2026-09-05 at 批：總部／經營者角色加第二道密碼（防店長誤切到總部改主檔、重算後端）。
+   密碼一樣由「權限中心」dim_auth 管：新增一列 dashboard_id＝purchase_hq（不用改 GAS、不用重部署）。
+   通過後存 localStorage dash_auth_purchase_hq（效期＝該列 ttl_hours），效期內同一台裝置切總部免再輸；
+   「🔒 鎖回店長」立刻清掉。與頁面本身的閘門（purchase）互不影響：店長只拿 purchase 密碼，經營者兩組都有。 */
+var HQ_AUTH_API='https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+var HQ_AUTH_ID='purchase_hq',HQ_KEY='dash_auth_'+HQ_AUTH_ID;
+function hqOk(){try{var o=JSON.parse(lsGet(HQ_KEY)||'null');if(o&&o.exp&&Date.now()<o.exp)return true;}catch(e){}lsDel(HQ_KEY);return false;}
+function hqVerify(pwd,cb){
+  var name='__hqcb'+Date.now(),s=document.createElement('script');
+  var to=setTimeout(function(){done({ok:false,error:'連線逾時，請重試'});},30000);
+  function done(d){clearTimeout(to);try{delete window[name];}catch(e){}if(s.parentNode)s.parentNode.removeChild(s);cb(d);}
+  window[name]=done;s.onerror=function(){done({ok:false,error:'連線失敗，請重試'});};
+  s.src=HQ_AUTH_API+'?action=verify&callback='+name+'&dashboard='+encodeURIComponent(HQ_AUTH_ID)+'&pwd='+encodeURIComponent(pwd);
+  document.head.appendChild(s);}
+function hqGate(onOk,onCancel){
+  if(hqOk()){onOk();return;}
+  var old=document.getElementById('hqGate');if(old)old.parentNode.removeChild(old);
+  var d=document.createElement('div');d.id='hqGate';
+  d.style.cssText='position:fixed;inset:0;z-index:99998;background:rgba(74,50,40,.85);display:flex;align-items:center;justify-content:center';
+  d.innerHTML='<div style="background:#fff;border-radius:14px;padding:26px 24px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+    +'<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 總部／經營者</div>'
+    +'<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">此角色可改主檔、季節、單位對照並重算後端，請輸入總部密碼</div>'
+    +'<div style="position:relative"><input id="hqPwd" type="password" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+    +'<button type="button" id="hqEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button></div>'
+    +'<div id="hqErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+    +'<button id="hqBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+    +'<button id="hqCancel" style="width:100%;margin-top:8px;padding:8px;border:1px solid #D8C8BE;border-radius:8px;background:#fff;color:#6F4E45;font-size:13px;cursor:pointer">取消，維持店長</button></div>';
+  document.body.appendChild(d);
+  var inp=d.querySelector('#hqPwd'),btn=d.querySelector('#hqBtn'),err=d.querySelector('#hqErr'),eye=d.querySelector('#hqEye');
+  function close(){if(d.parentNode)d.parentNode.removeChild(d);}
+  eye.onclick=function(){var sh=inp.type==='password';inp.type=sh?'text':'password';eye.textContent=sh?'🙈':'👁';inp.focus();};
+  d.querySelector('#hqCancel').onclick=function(){close();if(onCancel)onCancel();};
+  function go(){var v=inp.value;if(!v)return;btn.disabled=true;btn.textContent='驗證中…';
+    hqVerify(v,function(r){
+      if(r&&r.ok){lsSet(HQ_KEY,JSON.stringify({exp:Date.now()+(Number(r.ttl_hours)||12)*3600*1000}));close();onOk();}
+      else{err.textContent=(r&&r.error)||'驗證失敗';btn.disabled=false;btn.textContent='進入';inp.value='';if(inp.type!=='password'){inp.type='password';eye.textContent='👁';}inp.focus();}});}
+  btn.onclick=go;inp.addEventListener('keydown',function(e){if(e.key==='Enter')go();});
+  setTimeout(function(){inp.focus();},150);}
+function hqSetRole(role){ST.role=role;var sel=$("#roleSel");if(sel)sel.value=role;var b=$("#hqOut");if(b)b.style.display=(role==="總部")?"":"none";
+  if(role==="總部")lsSet("lastRole","總部");else lsDel("lastRole");ST.exp={};ST.shAll=false;render();}
+function hqLogout(){lsDel(HQ_KEY);hqSetRole("店長");toast("已鎖回店長模式");}
+$("#roleSel").onchange=function(){var v=this.value;
+  if(v==="總部"){if(!hqOk())this.value="店長";hqGate(function(){hqSetRole("總部");},function(){hqSetRole("店長");});}
+  else hqSetRole("店長");};
+(function(){var b=$("#hqOut");if(b)b.onclick=hqLogout;})();
+/* 同一台裝置：上次是總部且密碼效期未過 → 開頁直接回到總部（經營者不用每次切）；否則一律店長 */
+if(lsGet("lastRole")==="總部"&&hqOk()){ST.role="總部";var __rs=$("#roleSel");if(__rs)__rs.value="總部";var __hb=$("#hqOut");if(__hb)__hb.style.display="";}
+else{lsDel("lastRole");}
 $("#storeSel").onchange=function(){ST.storeId=this.value;lsSet("lastStore",this.value);ST.exp={};ST.orderEdit={};ST.orderOff={};ST.q="";ST.vq="";render();loadStoreFlow(ST.storeId).then(function(){render();});};
 /* 2026-09-03 aj 批：頁首「更新」對總部＝重讀＋立即重算，經營者一天按多次就排隊到 20 分鐘（GAS 執行記錄：每次 RB_run 2–3 分鐘，正常）。
    改成先問：改主檔／店別參數／標配只需要重讀；改了 BOM／檔期／單位對照才需要重算。 */
