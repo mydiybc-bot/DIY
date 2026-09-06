@@ -19,6 +19,7 @@
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
+<!-- 2026-09-06 aw 批：①跨店調撥改「同地區優先」（STORE_REGION／regionOf／sameRegion，同區給不完才跨區，欄位標同區/跨區，合計列顯示同區量）②「🥮 檔期備貨」開放給店長（唯讀全店總表：找同區調貨＋比較自己叫貨量），店長專屬說明列、本店列反白＋「本店」徽章、店名旁顯示地區 -->
 <!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清尾貨」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清尾貨・手動 ③主檔頁清尾貨徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
 <!-- 2026-09-05 at 批：①matchQ 搜尋加「類別」（盤點／建議／店別參數／主檔四頁共用） ②總部分頁隱藏「建議採購」「用量對帳」（viewSuggest／viewRecon 函式保留，TABS_BY_ROLE 加回即恢復） ③三處指向建議頁的說明文字改指訂貨單 -->
 <style>
@@ -890,7 +891,13 @@ function post(payload,silent){ if(!GAS_URL||GAS_URL.indexOf("__")===0){if(!silen
 /* ===== 框架 ===== */
 /* 2026-08-20 p 批：總部＋經營者合併為單一管理角色（值沿用「總部」，全站 ed/isHQ 判斷不動）；
    合併清單＝兩者聯集＋效期；預設分頁「總覽」。店長加「效期」籤。renderTabs 加 fallback 防殘留舊角色值。 */
-var TABS_BY_ROLE={"店長":["盤點","訂貨單","大平台","效期","查詢","預約","店別參數"],"總部":["總覽","查詢","大平台","檔期備貨","效期","預約","店別參數","主檔","季節","單位對照","軌跡"]};
+var TABS_BY_ROLE={"店長":["盤點","訂貨單","大平台","檔期備貨","效期","查詢","預約","店別參數"],"總部":["總覽","查詢","大平台","檔期備貨","效期","預約","店別參數","主檔","季節","單位對照","軌跡"]};   /* 2026-09-06 aw 批：檔期備貨開放給店長（唯讀總表，方便找同區調貨、對照自己叫貨是否過量） */
+/* 2026-09-06 aw 批：門市地區。調撥優先同地區（車程近、當天可互送），同區調不到才跨區。
+   獨立店（5／6／12 各地區只有一家）沒有同區夥伴，一律算跨區。
+   ⚠️ 這是前端常數，開新店或搬遷要改這裡；dim_sku／dim_store_par 都沒有地區欄位。 */
+var STORE_REGION={"1":"台中","2":"台中","3":"台北","4":"台北","7":"台北","8":"台北","11":"台北","9":"桃園","10":"桃園"};
+function regionOf(st){return STORE_REGION[String(st)]||"";}
+function sameRegion(a,b){var ra=regionOf(a);return !!ra&&ra===regionOf(b);}
 function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點","查詢":"🔎 查詢","訂貨單":"📑 訂貨單","效期":"🕐 食材效期","主檔":"🗂 主檔","季節":"📈 季節","單位對照":"📐 單位對照","店別參數":"⚙️ 店別參數","預約":"🎉 預約包館","總覽":"📊 總覽","軌跡":"🧾 參數軌跡","對帳":"🔍 用量對帳","大平台":"🏬 採購大平台","檔期備貨":"🥮 檔期備貨"}[t];}
 function renderTabs(){var list=TABS_BY_ROLE[ST.role]||TABS_BY_ROLE["總部"];if(list.indexOf(ST.tab)<0)ST.tab=list[0];
   $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+'</div>';}).join("");
@@ -1145,7 +1152,7 @@ function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台�
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
   var evs=Object.keys(EVCV);
-  if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線（agg_evcurve 為空）。EventLayer v1.6 在檔期開賣滿 3 天、累積佔比達 10% 後才會產出曲線；未開賣的檔期走「首批級距」，請切換店長角色看各店訂貨單。</div>';
+  if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線（agg_evcurve 為空）。EventLayer v1.6 在檔期開賣滿 3 天、累積佔比達 10% 後才會產出曲線；未開賣的檔期走「首批級距」，請看各店訂貨單。</div>';
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}
   if(!SHIST.ALL){loadShistAll().then(function(){if(ST.tab==="檔期備貨")render();});}
   var ev=ST.chEv&&EVCV[ST.chEv]?ST.chEv:evs[0];ST.chEv=ev;
@@ -1153,7 +1160,8 @@ function viewCampHQ(){
   var estTot=0,soldTot=0;ws.forEach(function(w){estTot+=w.cEst;soldTot+=w.cSold;});
   var wn=evWeekNow(ev);
   var winFrom=(function(){var w0=ws[0];return w0?ymd(new Date(new Date(w0.cFrom+"T00:00:00").getTime()-CAMPHQ_LEAD*864e5)):"";})();
-  var h='<div class="note">🥮 <b>檔期備貨總表</b>　依<b>去年同檔期逐週曲線</b>推估各店整檔期需求，對照大平台已出貨量，<b>先跨店調撥、不夠的才採購</b>。每日 07:31 重算。'
+  var h=(ST.role==="店長"?'<div class="note" style="background:#eaf3ff;border-color:#7FB3DA">👀 這頁是<b>全公司 12 店</b>的檔期狀況（唯讀）。用途：①自己缺料時先看「🔁 調撥」欄，同地區的店有多就直接聯絡對方調貨，不用等叫貨　②比較自己店的「估計在店」與「剩餘推估」，看叫貨量是否偏多。你的店那一列會標「本店」並反白。實際下單仍在「📑 訂貨單」。</div>':'')
+    +'<div class="note">🥮 <b>檔期備貨總表</b>　依<b>去年同檔期逐週曲線</b>推估各店整檔期需求，對照大平台已出貨量，<b>先跨店調撥、不夠的才採購</b>（調撥<b>同地區優先</b>：台中 1,2／台北 3,4,7,8,11／桃園 9,10；5、6、12 為獨立店）。每日 07:31 重算。'
     +'　<a href="#" data-chhelp="1" style="color:#1e4e8c;font-weight:700">'+(ST.chHelp?'▴ 收起算式':'ⓘ 這些數字怎麼算')+'</a></div>';
   if(ST.chHelp)h+='<div class="card" style="background:#f7fbff;border-color:#bcd7f5;font-size:13.5px;line-height:1.7">'
     +'<b>每一欄的意思（以「冰皮粉」為例，單位跟著品項的使用單位走）</b>'
@@ -1166,7 +1174,7 @@ function viewCampHQ(){
     +'<tr><td><b>已出貨</b></td><td>大平台下單紀錄裡，自 <b>'+winFrom+'</b>（曲線第一週前 15 天）起出給這家店的量；括號是大平台的包數。<span class="muted">只到最後一次上傳的報表為止，每週上傳才準。</span></td></tr>'
     +'<tr><td><b>估計在店</b></td><td>已出貨 − 已用（<b>假設檔期前店裡沒有舊庫存</b>，有的話這個數會偏低、尚需會偏高）。</td></tr>'
     +'<tr><td><b>尚需</b></td><td>剩餘推估 − 估計在店。正數＝這家店缺；負數＝多了（顯示為「可調出」）。</td></tr>'
-    +'<tr><td><b>🔁 調撥</b></td><td>同一品項，有店多、有店缺 → 先從多的店調給缺的店（先調最多的那家）。調得到的部分不用買。</td></tr>'
+    +'<tr><td><b>🔁 調撥</b></td><td>同一品項，有店多、有店缺 → 先從多的店調給缺的店。<b>同地區優先</b>（台中 1,2／台北 3,4,7,8,11／桃園 9,10 車程近、當天可互送），同區給不完才跨區，標「（同區）／（跨區）」。調得到的部分不用買。</td></tr>'
     +'<tr><td><b>建議備</b>（採購單位）</td><td>調撥後仍缺的量 ÷ 每包內容量，進位。<b>這才是出貨中心要花錢買的</b>。</td></tr></table>'
     +'<div class="sub muted" style="margin-top:6px">品項列的「尚需」與「建議備」＝各店調撥後合計；「可調撥」＝能靠內部調度解決的量。列表依採購金額高→低排序。</div></div>';
   if(evs.length>1)h+='<div class="card" style="padding:8px 12px"><span class="seg">'+evs.map(function(e){return '<div class="'+(e===ev?"on":"")+'" data-chev="'+escA(e)+'">'+e+'</div>';}).join('')+'</span></div>';
@@ -1192,14 +1200,24 @@ function viewCampHQ(){
     /* ★ 2026-09-05 ar 批：跨店調撥。缺的店先從多的店調（多的先調），調完還缺的才採購。只在有出貨紀錄的店之間算（自購品沒有在店估計，不調）。 */
     var short=Object.keys(per).filter(function(st){return per[st].dc&&!per[st].noShip&&per[st].need>0;}).sort(function(a,b){return per[b].need-per[a].need;});
     var surp=Object.keys(per).filter(function(st){return per[st].dc&&!per[st].noShip&&per[st].surplus>0;}).map(function(st){return {st:st,left:per[st].surplus};}).sort(function(a,b){return b.left-a.left;});
-    var sumXfer=0;
-    short.forEach(function(st){var p=per[st],left=p.need;
-      surp.forEach(function(sp){if(left<=0||sp.left<=0)return;var take=Math.min(left,sp.left);if(take<1)return;p.xin.push({from:sp.st,qty:take});per[sp.st].xout.push({to:st,qty:take});sp.left-=take;left-=take;sumXfer+=take;});
-      p.buy=left;});
+    var sumXfer=0,sumXfarSame=0;
+    /* 2026-09-06 aw 批：調撥改「同地區優先」，且是兩輪配、不是單輪。
+       單輪（缺最多的店先挑）會發生：2 號店（台中）的多餘量被 3 號店（台北，缺更多）先搶走，1 號店（同在台中）反而要採購。
+       第 1 輪只配同區（台中 1,2／台北 3,4,7,8,11／桃園 9,10），第 2 輪才把剩下的跨區配掉；
+       兩輪內都是缺口大的店先拿、多的店先給。獨立店（5／6／12）沒有同區夥伴，只會在第 2 輪拿到並標「跨區」。 */
+    short.forEach(function(st){per[st].left=per[st].need;});
+    [true,false].forEach(function(sameOnly){
+      short.forEach(function(st){var p=per[st];if(p.left<=0)return;
+        surp.forEach(function(sp){if(p.left<=0||sp.left<=0)return;
+          var same=sameRegion(st,sp.st);if(sameOnly&&!same)return;if(!sameOnly&&same)return;
+          var take=Math.min(p.left,sp.left);if(take<1)return;
+          p.xin.push({from:sp.st,qty:take,cross:!same});per[sp.st].xout.push({to:st,qty:take,cross:!same});
+          sp.left-=take;p.left-=take;sumXfer+=take;if(same)sumXfarSame+=take;});});});
+    short.forEach(function(st){per[st].buy=per[st].left;});
     Object.keys(per).forEach(function(st){var p=per[st];if(!p.dc)p.buy=p.need;   /* 自購／非出貨中心：沒有調撥資訊，尚需即需求 */
       p.packs=Math.max(0,p.pq>0?Math.ceil(p.buy/p.pq-1e-9):Math.round(p.buy));});
     var sumBuy=0,sumPacks=0;Object.keys(per).forEach(function(st){sumBuy+=per[st].buy;sumPacks+=per[st].packs;});
-    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumBuy:sumBuy,sumPacks:sumPacks,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||""};
+    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumXfarSame:sumXfarSame,sumBuy:sumBuy,sumPacks:sumPacks,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||""};
   }).filter(Boolean);
   var shown=items.filter(function(it){if(q&&(it.s.name+" "+it.s.vendor+" "+it.id+" "+it.who).toLowerCase().indexOf(q)<0)return false;if(ST.chNeedOnly&&!it.anyNeed)return false;return true;});
   var cost=function(it){return it.sumBuy*(it.s.price||0)/Math.max(1,it.s.packQty||1);};
@@ -1222,8 +1240,10 @@ function viewCampHQ(){
     if(open){
       h+='<tr><td colspan="9" style="background:#fffdf2;padding:4px 10px"><table style="font-size:12.5px"><thead><tr><th>店</th><th class="right">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（包數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
       Object.keys(it.per).sort(function(a,b){return (+a)-(+b);}).forEach(function(st){var p=it.per[st];
-        var xf=p.xin.length?('<span style="color:#1e4e8c">自 '+p.xin.map(function(x){return escA(storeName(x.from))+' 調 '+fmt(Math.round(x.qty));}).join('、')+'</span>'):(p.xout.length?('<span style="color:#2E7D32">調出 '+p.xout.map(function(x){return fmt(Math.round(x.qty))+' 給 '+escA(storeName(x.to));}).join('、')+'</span>'):(p.dc&&!p.noShip&&p.surplus>0?'<span class="muted">可調出 '+fmt(Math.round(p.surplus))+'</span>':'<span class="muted">—</span>'));
-        h+='<tr><td><b>'+escA(storeName(st))+'</b></td><td class="right">'+fmt(Math.round(p.est))+'</td><td class="right">'+fmt(Math.round(p.sold))+'</td><td class="right">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
+        var _rg=function(x){return x.cross?'<span class="muted" style="font-size:11.5px">（跨區）</span>':'<span style="color:#2E7D32;font-size:11.5px">（同區）</span>';};   /* aw 批 */
+        var xf=p.xin.length?('<span style="color:#1e4e8c">自 '+p.xin.map(function(x){return escA(storeName(x.from))+_rg(x)+' 調 '+fmt(Math.round(x.qty));}).join('、')+'</span>'):(p.xout.length?('<span style="color:#2E7D32">調出 '+p.xout.map(function(x){return fmt(Math.round(x.qty))+' 給 '+escA(storeName(x.to))+_rg(x);}).join('、')+'</span>'):(p.dc&&!p.noShip&&p.surplus>0?'<span class="muted">可調出 '+fmt(Math.round(p.surplus))+'</span>':'<span class="muted">—</span>'));
+        var _me=(String(st)===String(ST.storeId));   /* aw 批：店長看總表時標出自己的店 */
+        h+='<tr'+(_me?' style="background:#eaf3ff"':'')+'><td><b>'+escA(storeName(st))+'</b>'+(_me?'<span class="badge" style="background:#1e4e8c">本店</span>':'')+(regionOf(st)?'<span class="muted" style="font-size:11.5px">　'+regionOf(st)+'</span>':'')+'</td><td class="right">'+fmt(Math.round(p.est))+'</td><td class="right">'+fmt(Math.round(p.sold))+'</td><td class="right">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
           +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+')</span>')):'<span class="muted">自購</span>')+'</td>'
           +'<td class="right muted">'+(p.dc&&!p.noShip?'≈ '+fmt(Math.round(p.onhand)):'—')+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.need>0?'#B3261E':(p.surplus>0?'#2E7D32':'#6b7280'))+'">'+(p.need>0?fmt(Math.round(p.need)):(p.dc&&!p.noShip&&p.surplus>0?'多 '+fmt(Math.round(p.surplus)):'0'))+'</td>'
@@ -1234,7 +1254,7 @@ function viewCampHQ(){
       h+='<tr style="background:#fff3cd;font-weight:700"><td>合計</td><td class="right">'+fmt(Math.round(it.sumEst))+'</td><td class="right">'+fmt(Math.round(it.sumSold))+'</td><td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumRem))+'</td>'
         +'<td class="right">'+(it.dc?fmt(Math.round(it.sumShip)):'—')+'</td><td class="right">'+(it.dc?'≈ '+fmt(Math.round(it.sumOn)):'—')+'</td>'
         +'<td class="right" style="color:#B3261E">'+fmt(Math.round(it.sumNeed))+(sumSurp>0?' <span style="color:#2E7D32;font-weight:400">／多 '+fmt(Math.round(sumSurp))+'</span>':'')+'</td>'
-        +'<td style="color:#1e4e8c">'+(it.sumXfer>0?'調撥可補 '+fmt(Math.round(it.sumXfer)):'—')+'</td>'
+        +'<td style="color:#1e4e8c">'+(it.sumXfer>0?('調撥可補 '+fmt(Math.round(it.sumXfer))+(it.sumXfarSame>0?'<span class="muted" style="font-size:11.5px">（同區 '+fmt(Math.round(it.sumXfarSame))+'）</span>':'')):'—')+'</td>'
         +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(it.sumBuy))+'</td><td class="right">'+fmt(it.sumPacks)+' '+s.buyUnit+'</td></tr>';
       if(it.dc&&it.sumOn>0&&it.sumOn>=it.sumRem&&it.sumBuy<=0)h+='<tr><td colspan="12" style="background:#eef8ee;color:#2E7D32;font-weight:700;padding:6px 10px">✅ 全公司在店 ≈ '+fmt(Math.round(it.sumOn))+' '+u+' ≥ 剩餘推估 '+fmt(Math.round(it.sumRem))+' '+u+'：靠調撥就夠，不用再買。</td></tr>';
       else if(it.dc&&it.sumOn>it.sumRem&&it.sumBuy>0)h+='<tr><td colspan="12" style="background:#fff8e1;color:#B45309;padding:6px 10px">ℹ️ 全公司在店（'+fmt(Math.round(it.sumOn))+' '+u+'）其實多於剩餘推估（'+fmt(Math.round(it.sumRem))+' '+u+'），仍需採購 '+fmt(Math.round(it.sumBuy))+' '+u+' 是因為多的貨集中在沒有缺口的店以外……請看各店「調撥」欄。</td></tr>';
