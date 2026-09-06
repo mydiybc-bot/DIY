@@ -19,7 +19,7 @@
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
-<!-- 2026-09-06 au 批：EXPIRE_GRACE_DAYS 7→14（檔期後清尾貨期通常 7–14 天） -->
+<!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清尾貨」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清尾貨・手動 ③主檔頁清尾貨徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
 <!-- 2026-09-05 at 批：①matchQ 搜尋加「類別」（盤點／建議／店別參數／主檔四頁共用） ②總部分頁隱藏「建議採購」「用量對帳」（viewSuggest／viewRecon 函式保留，TABS_BY_ROLE 加回即恢復） ③三處指向建議頁的說明文字改指訂貨單 -->
 <style>
   :root{--blue:#2E7D32;--blue2:#3a8f3f;--bg:#f4f6f9;--card:#fff;--line:#e3e8ef;--ink:#1f2937;--mut:#6b7280;
@@ -591,7 +591,7 @@ function okSet(st,id,on){if(!INVOK[st])okLoad(st);if(on)INVOK[st][id]=Date.now()
 function okClearAll(st){INVOK[st]={};lsDel("invOK_"+st);}
 function countedNow(st,s){var ss=sessStart(st);if(ss==null)return false;if(okOf(st,s))return true;var iv=ivOf(st,s);return iv.t!=null&&iv.t>=ss&&iv.onHand!=null;}
 /* 訂貨單文字／複製／fact_order 共用的唯一入口：本輪盤點過＋有建議量＋未標足夠＋未取消勾選 */
-function orderNeed(store){return liveItems(store).filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0&&!ST.orderOff[x.s.id];});}
+function orderNeed(store){return liveItems(store).filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;}).concat(tailManual(store)).filter(function(x){return !ST.orderOff[x.s.id];});}   /* av 批：末段併入清尾貨手動填量 */
 /* g/g/1 這類「採購單位＝使用單位、內容量 1」的品項不顯示「1 g/g」規格噪音 */
 function pqNoise(st,s){return s.useUnit===s.buyUnit&&pqOf(st,s)===1;}
 function countedForOrder(st,s){var iv=ivOf(st,s);if(iv.onHand==null)return false;   // 從未盤過
@@ -872,7 +872,14 @@ function rowFor(st,s){return computeRow(s,bundle(st,s));}
 function skuForStore(st,s){return !s.stores||!s.stores.length||s.stores.indexOf(String(st))>=0;}
 var EXPIRE_GRACE_DAYS=14;  /* 檔期結束後寬限 N 天才視為過季。2026-09-06 au 批 7→14：經營者確認檔期結束後通常再賣 7–14 天清食材耗材，7 天會在清尾貨期間把料藏起來 */
 function skuExpired(s){return !!s.lastValid&&s.lastValid<ymd(new Date(TODAY.getTime()-EXPIRE_GRACE_DAYS*864e5));}
-function liveItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售"&&!s.status&&skuForStore(st,s)&&!skuExpired(s);});}
+/* 2026-09-06 av 批：「🧹 清尾貨」狀態。最後有效日已過、但還在寬限期（EXPIRE_GRACE_DAYS）內＝檔期結束後清剩料的 7–14 天。
+   經營者：這段期間系統若照近 4 週均（含檔期高峰）或標配建議採購，會叫店長去買一個已經要下架的東西。
+   規則：看得到、不建議買。liveItems 排除 → 訂貨單／建議／總覽／檔期備貨全部不列；盤點頁另立「🧹 清尾貨」籤，
+   建議量固定 0、不算進度與未盤；店長真的不夠可在卡片填「仍需補」→ 進 ST.orderEdit → 訂貨單標「清尾貨・手動」。寬限期過 → 現有「🗓 過季」籤。計算引擎零改動。 */
+function skuTail(s){return !!s.lastValid&&s.lastValid<ymd(TODAY)&&!skuExpired(s);}
+function tailItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售"&&!s.status&&skuForStore(st,s)&&skuTail(s);});}
+function tailManual(st){return tailItems(st).filter(function(s){return num(ST.orderEdit[s.id])>0;}).map(function(s){return {s:s,r:rowFor(st,s),tail:true};});}
+function liveItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售"&&!s.status&&skuForStore(st,s)&&!skuExpired(s)&&!skuTail(s);});}
 function expiredItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售"&&!s.status&&skuForStore(st,s)&&skuExpired(s);});}
 function exclItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)==="已停售"&&aggOf(st,s).week>0;});}
 function upInfo(st,s){var a=aggOf(st,s);if(!a.launch)return null;var d=new Date(String(a.launch).replace(/\//g,"-"));return {days:Math.max(0,Math.ceil((d-TODAY)/864e5))};}
@@ -968,11 +975,12 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   var live=liveAll.filter(function(s){return !zeroDemand(store,s);}),zero=liveAll.filter(function(s){return zeroDemand(store,s);});
   var allZ=zero.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
   var allX=expiredItems(store).filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
+  var allT=tailItems(store).filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});   /* av 批：清尾貨 */
   var all=live.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
   var nEv=all.filter(function(s){return !!markOf(store,s);}).length;
   var nUn=all.filter(function(s){return !countedNow(store,s);}).length;
   var nDC=all.filter(function(s){return isDC(store,s);}).length;
-  var items=(ST.invFilter==="零需求"?allZ:ST.invFilter==="過季"?allX:all).filter(function(s){var f=ST.invFilter;
+  var items=(ST.invFilter==="零需求"?allZ:ST.invFilter==="過季"?allX:ST.invFilter==="清尾貨"?allT:all).filter(function(s){var f=ST.invFilter;
     if(f==="本次未盤")return !countedNow(store,s);
     if(f==="檔期")return !!markOf(store,s);
     if(f==="出貨中心")return isDC(store,s);
@@ -993,11 +1001,12 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
       +(sw.net?'目前連不上資料表，無法確認。':(sw.bad+' / '+sw.total+' 筆在資料表中查不到。'))
       +'請確認網路後<b>再按一次「儲存盤點」</b>。在確認成功前，你填的數字都還在，離開或重整也不會消失。</div></div>';}
   html+='<div class="stickyctl">'+catChips();
-  html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat(nDC?[["出貨中心","🏬 出貨中心("+nDC+")"]]:[]).concat(allZ.length?[["零需求","💤 零需求("+allZ.length+")"]]:[]).concat(allX.length?[["過季","🗓 過季("+allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
+  html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat(nDC?[["出貨中心","🏬 出貨中心("+nDC+")"]]:[]).concat(allZ.length?[["零需求","💤 零需求("+allZ.length+")"]]:[]).concat(allT.length?[["清尾貨","🧹 清尾貨("+allT.length+")"]]:[]).concat(allX.length?[["過季","🗓 過季("+allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
   html+=searchBar(store)+'</div>';
   if(ST.invFilter==="零需求")html+='<div class="note">💤 這些品項目前<b>訂貨點／標配為 0</b>（近 4 週無用量、無手動週用、無預約或檔期需求；器具模具＝標配未設），盤了也不會產生訂貨，所以不列在「全部」。若已停售，請回報總部在主檔處理；若本店確實不用，可到「店別參數」取消啟用；若是器具模具，請在店別參數填標配。</div>';
   if(ST.invFilter==="出貨中心")html+='<div class="note">🏬 廠商為出貨中心的品項。盤完後到「訂貨單」的出貨中心區塊即可整批下單。</div>';
-  if(ST.invFilter==="過季")html+='<div class="note">🗓 用到這些品項的甜點，在「產品名稱對照表」的結束有效日都已過 7 天以上，系統不再為它們建議訂貨、也不列進「全部」。剩料用完即可；若甜點回鍋，對照表更新有效日後隔天自動回到清單。</div>';
+  if(ST.invFilter==="清尾貨")html+='<div class="note" style="background:#FFF6E5;border-color:#F0B35A">🧹 這些品項的檔期已結束，正在<b>用完剩餘庫存</b>（結束後 '+EXPIRE_GRACE_DAYS+' 天內）。系統<b>不建議採購</b>、不列進「全部」、不算進度。不用刻意盤；真的不夠用才在卡片填「仍需補」，填了才會進訂貨單。'+EXPIRE_GRACE_DAYS+' 天後自動移到「🗓 過季」。</div>';
+  if(ST.invFilter==="過季")html+='<div class="note">🗓 用到這些品項的甜點，在「產品名稱對照表」的結束有效日都已過 '+EXPIRE_GRACE_DAYS+' 天以上，系統不再為它們建議訂貨、也不列進「全部」。剩料用完即可；若甜點回鍋，對照表更新有效日後隔天自動回到清單。</div>';
   if(!items.length)html+='<div class="note">此篩選目前沒有品項 ✅</div>';
   html+='<div class="groups">';
   groups.forEach(function(gp){var zc=!!ZC[gp.name];var zDone=gp.items.filter(function(o){return countedNow(store,o.s);}).length;
@@ -1006,12 +1015,12 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
     var lastCat="";
     gp.items.forEach(function(o){var s=o.s,iv=ivOf(store,s),dur=isDur(s),r=rowFor(store,s);
       if(s.cat!==lastCat){lastCat=s.cat;html+='<div class="catsep">'+s.cat+'</div>';}
-      var xv=(ST.invFilter==="過季"&&s.lastValid)?'<span class="muted" style="margin-left:6px;font-size:12px">最後有效 '+s.lastValid+'</span>':'';
+      var xv=((ST.invFilter==="過季"||ST.invFilter==="清尾貨")&&s.lastValid)?'<span class="muted" style="margin-left:6px;font-size:12px">最後有效 '+s.lastValid+'</span>':'';
       var _cv2=(pqEff(store,s)>0?pqOf(store,s):1),_u2=(pqEff(store,s)>0?s.buyUnit:s.useUnit);
       var rpP=dec((r.reorderPoint==null?0:r.reorderPoint)/_cv2);
-      var ref=dur?('標配 '+fmt(parOf(store,s))+' '+s.useUnit):(r.reorderPoint==null?('標配 '+dec(parOf(store,s)/_cv2)+' '+_u2+'（本店設定）'):('訂貨點 '+rpP+' '+_u2));
-      var psp=packSpec(store,s);if(psp)ref+='　📦 '+psp;
-      ref+=adjLink(s.id);
+      var ref=skuTail(s)?('<span style="color:#8A5A00">🧹 檔期結束 '+s.lastValid+'，清剩料中</span>'):dur?('標配 '+fmt(parOf(store,s))+' '+s.useUnit):(r.reorderPoint==null?('標配 '+dec(parOf(store,s)/_cv2)+' '+_u2+'（本店設定）'):('訂貨點 '+rpP+' '+_u2));   /* av 批：清尾貨不顯示訂貨點／標配，免得被當成要補 */
+      var psp=skuTail(s)?'':packSpec(store,s);if(psp)ref+='　📦 '+psp;
+      if(!skuTail(s))ref+=adjLink(s.id);
       var ok=okOf(store,s),numed=(((DIRTY[store]||{})[s.id])||(countedNow(store,s)&&!ok));
       var vOn=(numed&&iv.onHand!=null)?iv.onHand:"";
       var vBr=(numed&&iv.breakage!=null)?iv.breakage:"";
@@ -1045,7 +1054,10 @@ function lastWkTxt(store,s){
              :'上一完整週（週一〜週日）由 POS 銷量 × BOM 配方推算，含訂貨引擎的安全緩衝，與本卡片的訂貨點同一個口徑。查詢頁的「各店使用量」是純配方量，會比這裡低約 5%。';
   return '<div class="sub" style="color:#5B6B5E">📉 '+lbl+' <b>'+fmt(w)+'</b> '+s.useUnit+' '+pk+'<span class="muted" style="cursor:help" title="'+escA(tip)+'"> ⓘ</span></div>';}
 /* 2026-09-02 x 批：卡片「建議」行。器具模具以使用單位顯示（與訂貨單同單位）；✓ 足夠 顯示綠字 */
-function invSugHtml(store,s){var ok=okOf(store,s);if(ok)return '<div class="sub" style="color:#2E7D32;font-weight:600">✅ 目視足夠，本輪不訂</div>';
+function invSugHtml(store,s){
+  if(skuTail(s)){var tq=num(ST.orderEdit[s.id]),tu=isDur(s)?s.useUnit:s.buyUnit;   /* av 批：清尾貨＝不建議採購，只留手動填量 */
+    return '<div class="sub" style="color:#8A5A00;font-weight:600">🧹 檔期已結束，用完剩餘庫存即可，不建議採購</div><div class="sub">真的不夠才填 → 仍需補 <input class="sm" type="text" inputmode="decimal" data-tailord="'+s.id+'" value="'+(tq>0?tq:'')+'" placeholder="0" style="width:64px;display:inline-block;vertical-align:middle"> '+tu+' <span class="muted">（填了才會出現在訂貨單）</span></div>';}
+  var ok=okOf(store,s);if(ok)return '<div class="sub" style="color:#2E7D32;font-weight:600">✅ 目視足夠，本輪不訂</div>';
   var seen=(((DIRTY[store]||{})[s.id])||countedNow(store,s));if(!seen)return '';
   var r=rowFor(store,s),dur=isDur(s);
   return '<div class="sub" style="color:'+(r.packs>0?'#C0392B':'#2E7D32')+';font-weight:600">'+(r.packs>0?('建議 '+(dur?(r.suggested+' '+s.useUnit):(r.packs+' '+s.buyUnit))):'庫存足')+'</div>';}
@@ -1333,7 +1345,7 @@ function viewOrder(){var store=ST.storeId,live=liveItems(store);
   mergeDraft(store);
   var skipped=live.filter(function(s){return !countedForOrder(store,s)&&!zeroDemand(store,s)&&!okOf(store,s);}).length;   /* 2026-09-01 v 批：零需求不算「未盤」；x 批：✓ 足夠不算 */
   var nOk=live.filter(function(s){return okOf(store,s);}).length;
-  var need=live.filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;});   /* 含已取消勾選者，供畫面列出可再勾回 */
+  var need=live.filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;}).concat(tailManual(store));   /* 含已取消勾選者，供畫面列出可再勾回；av 批：＋清尾貨手動填量 */
   var skipNote=(skipped>0?('<div class="note">🔕 有 <b>'+skipped+'</b> 項本輪未盤點，未列入訂貨單（未盤點＝本次不需採購）。若其中有該訂的，請回盤點頁填入現有數量。</div>'):'')
     +(nOk>0?('<div class="note" style="background:#eef8ee">✅ 有 <b>'+nOk+'</b> 項本輪標記「目視足夠」，不列入訂貨單。</div>'):'');
   var campH='';   /* 2026-09-05 aq 批：訂貨單不再顯示「🥮 檔期備料進度」（經營者要求只看訂貨單）；曲線版總表在總部「檔期備貨」分頁 */
@@ -1342,12 +1354,12 @@ function viewOrder(){var store=ST.storeId,live=liveItems(store);
   var html=campH+seasonStrip()+'<div class="note">門市：'+storeName(store)+'　·　可調量/取消勾選，再複製給廠商。　·　〈本頁＝系統算出「這次該訂多少」；想看過去實際向出貨中心下過的單，請看「🏬 採購大平台」〉</div>'+skipNote;
   Object.keys(byV).sort().forEach(function(vd){html+='<div class="vh"><span class="vn">'+(vd||"未指定廠商")+'</span><span class="vl"></span></div><div class="card" style="padding:4px 12px">';
     byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,off=ST.orderOff[s.id],unit=dur?s.useUnit:s.buyUnit;if(!off)total+=(dur?qty/pqOf(store,s):qty)*s.price;   /* x 批：器具模具數量是使用單位，單價是每採購單位 */
-      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+supplyBadge(store,s)+'<div class="sub">建議 '+def+' '+unit+(!dur&&pqEff(store,s)>0&&!pqNoise(store,s)?'（'+fmt(pqOf(store,s))+' '+s.useUnit+'/'+s.buyUnit+'）':'')+adjLink(s.id)+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
+      html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'><div class="nm"><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+supplyBadge(store,s)+'<div class="sub">'+(x.tail?'<span style="color:#8A5A00;font-weight:600">🧹 清尾貨・店長手動填（檔期已結束，系統不建議採購）</span>':('建議 '+def+' '+unit+(!dur&&pqEff(store,s)>0&&!pqNoise(store,s)?'（'+fmt(pqOf(store,s))+' '+s.useUnit+'/'+s.buyUnit+'）':'')+adjLink(s.id)))+'</div></div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
     html+='</div>';});
   html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>'+(ST.adjSku?adjModal(store):'');return html;}
 function orderText(store){var need=orderNeed(store);
   var byV={};need.forEach(function(x){var vd=vendorOf(store,x.s);(byV[vd]=byV[vd]||[]).push(x);});var lines=["【"+storeName(store)+" 訂貨單】 "+new Date().toLocaleDateString("zh-TW")];
-  Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def;lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?("（"+fmt(pqOf(store,s))+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
+  Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def;lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+(x.tail?"(清尾貨・手動)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?("（"+fmt(pqOf(store,s))+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
 
 /* ===== 參數軌跡（總部／經營者）：讀 fact_param_log ===== */
 var PLOG=null,PLOGST=0;
@@ -2335,7 +2347,7 @@ function viewMaster(){var ed=ST.role==="總部";
     if(!ed){html+='<tr><td><b>'+s.name+'</b>'+(s.status?' <span class="badge" style="background:#8B0000">'+s.status+'</span>':'')+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td>'+s.vendor+'</td><td>'+s.buyUnit+'</td><td>'+fmt(s.packQty)+' '+s.useUnit+'</td><td>'+fmt(s.price)+'</td>'+(showRef?refCellM(s,false):'')+'</tr>';return;}
     var catSel='<select class="sm" data-m="'+s.id+'" data-f="cat">'+["食材","耗材","器具","模具"].map(function(c){return '<option'+(c===s.cat?' selected':'')+'>'+c+'</option>';}).join('')+'</select>';
     var dr=s.src.indexOf("自動草稿")===0;var miss=[];if(dr){if(!String(s.vendor||"").trim())miss.push("廠商");if(!(s.packQty>1||(s.buyUnit&&s.buyUnit!==s.useUnit)))miss.push("內容量/採購單位");if(!(s.price>0))miss.push("單價");}
-    var flag=(s.status?'<span class="badge" style="background:#8B0000">'+s.status+'</span>':'')+((s.stores||[]).length?'<span class="badge" style="background:#0369a1">只給 '+s.stores.join(',')+' 店</span>':'')+(skuExpired(s)?'<span class="badge" style="background:#8A7466">過季 '+s.lastValid+'</span>':'');
+    var flag=(s.status?'<span class="badge" style="background:#8B0000">'+s.status+'</span>':'')+((s.stores||[]).length?'<span class="badge" style="background:#0369a1">只給 '+s.stores.join(',')+' 店</span>':'')+(skuExpired(s)?'<span class="badge" style="background:#8A7466">過季 '+s.lastValid+'</span>':skuTail(s)?'<span class="badge" style="background:#B7791F">🧹 清尾貨 '+s.lastValid+'</span>':'');
     html+='<tr'+(dr?' style="background:#FFFBF0"':'')+'><td><b>'+s.name+'</b>'+(flag?' '+flag:'')+(dr?'<div class="sub" style="color:#8A5A00">🆕 '+s.src+(miss.length?'｜還缺：'+miss.join('、'):'｜三格已填，隔天自動轉正式')+'</div>':'')+'</td><td>'+catSel+'</td>'
       +'<td><input class="tx" style="width:78px" type="text" data-m="'+s.id+'" data-f="vendor" value="'+String(s.vendor||'').replace(/"/g,'&quot;')+'"></td>'
       +'<td><input class="tx" style="width:56px" type="text" data-m="'+s.id+'" data-f="buyUnit" value="'+String(s.buyUnit||'').replace(/"/g,'&quot;')+'"></td>'
@@ -2813,6 +2825,7 @@ function bindQ(el,apply){
   }
 }
 function wire(){
+  Array.prototype.forEach.call(document.querySelectorAll("[data-tailord]"),function(el){el.onchange=function(){var v=num(el.value);if(v>0)ST.orderEdit[el.dataset.tailord]=v;else delete ST.orderEdit[el.dataset.tailord];};});   /* av 批：清尾貨手動填量，不重繪免失焦 */
   Array.prototype.forEach.call(document.querySelectorAll(".chip"),function(el){el.onclick=function(){ST.cat=el.dataset.cat;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-period]"),function(el){el.onclick=function(){ST.period=el.dataset.period;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-need]"),function(el){el.onclick=function(){ST.needOnly=el.dataset.need==="1";render();};});
