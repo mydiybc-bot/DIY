@@ -42,8 +42,15 @@
       ・🚨 次類別命名不一致（「2025 草莓季」有空格 vs「2026草莓季」無空格）：normSub() 移除所有空白後才比對，顯示仍用原字串。
       ・店別：此 endpoint 無店別維度 → 本頁不出現店別篩選器、也不吃上方店別/區域；已選則顯示「品項分析為全公司合計，不分店」。
       ・coverage.minYm 晚於期間起點 → 顯示「品項明細僅涵蓋 {minYm} 起」。
-      ・品項範圍切換「僅 DIY 甜點 / 全品項」：僅 DIY 甜點＝排除 GAS EXCLUDED_CATEGORIES
-        （加價購/入場&共廚&其他/特約廠商/冰淇淋/活動），預設開啟；舊 productRank 是含陪同入場費的全品項。
+      ・品項範圍切換「僅 DIY 甜點 / 全品項」（預設僅甜點）：舊 productRank 是含陪同入場費、加價購的全品項，
+        混進品項排行會誤導（入場費不是品項）。
+        🚨 判定一律引用後端 DESSERT_CATEGORIES 白名單（PM_DESSERT_CATEGORIES，17 項含主類別空白），
+        不得另立黑名單——黑名單在白名單變動時會靜默不同步。GAS 白名單一改，此常數必須同步改。
+        白名單排他 → 另備本頁哨兵 PM_KNOWN_EXCLUDED（＝GAS EXCLUDED_CATEGORIES），
+        白名單外且不在已知排除清單者跳紅色警示帶，避免新類別靜默消失。
+      ・不排除生日蛋糕（經營者裁定）：該濾掉的是「不是商品的東西」（入場費／加價購／券），
+        不是「賣得便宜的商品」。莓果伯爵、我的生日蛋糕是客人實作產出，佔材料/檯面/工時，
+        砍掉會讓備料規劃失真；低均價已在銷售額排行自動降權，兩個榜各自誠實。
     App 內 filteredProducts（讀 rawData.productRank）已移除；GAS 未動、快取版號不變（V20）。
 -->
 
@@ -1393,10 +1400,19 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
    ⚠️ 只用於「比對」，畫面顯示一律用原字串，不得改寫使用者看到的名稱。 */
 function normSub(s){ return String(s==null?'':s).replace(/\s+/g,''); }
 
-/* 非甜點主類別＝GAS EXCLUDED_CATEGORIES（地雷 3）。
-   預設排除，讓「TOP 20 暢銷甜點」是甜點；使用者可自行關閉看全品項。
-   ⚠️ 白名單外的新類別不在此清單 → 預設「會顯示」（寧可看得到，不要靜默消失）。 */
-const PM_NON_DESSERT_CATS = ['加價購','入場&共廚&其他','特約廠商','冰淇淋','活動'];
+/* 🚨 地雷 3：甜點判定「只有一套真相」＝後端 DESSERT_CATEGORIES 白名單。
+   本頁「僅 DIY 甜點」必須用這份白名單，不得另立黑名單——
+   兩套現在算出來一樣，但白名單一改（如 v18 加吳寶春麵包），黑名單會悄悄不同步且不報錯。
+   ⚠️ 鐵則：GAS discount_aggregator.gs 的 DESSERT_CATEGORIES 一改，這裡必須同步改。
+   ⚠️ 白名單是排他的 → 新主類別預設「不算甜點」會靜默消失，故本頁自帶哨兵
+      PM_KNOWN_EXCLUDED（＝GAS EXCLUDED_CATEGORIES，已確認不計人的類別）：
+      白名單外且不在已知排除清單的主類別，會在本頁跳警示帶要求回報。 */
+const PM_DESSERT_CATEGORIES = [
+  '乳酪&奶蓋&慕斯','巧克力','裝飾蛋糕','限定甜點','水果','生日蛋糕','慶祝蛋糕','其他',
+  '主題活動＆群友限定','雙層蛋糕','蛋糕','點心&餅乾','塔派','找不到',
+  '吳寶春大獎麵包','吳寶春麵包',''   /* ''＝主類別空白，新品建類別前的慣例，屬 DIY（地雷 3）*/
+];
+const PM_KNOWN_EXCLUDED = ['加價購','入場&共廚&其他','特約廠商','冰淇淋','活動'];
 
 /* ---------- 模組層 JSONP 取數（每次載入頁面只抓一次；含 GAS 冷啟動重試，地雷 18）---------- */
 let PM_PROMISE = null;
@@ -1469,10 +1485,22 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
 
   const allRows = (pm && pm.rows) || [];
 
-  /* 甜點/全品項切換後的基底 */
+  /* 甜點/全品項切換後的基底（僅甜點＝白名單納入制，與後端計人口徑同一套） */
   const baseRows = useMemo(()=>(
-    dessertOnly ? allRows.filter(r=>PM_NON_DESSERT_CATS.indexOf(r.m) < 0) : allRows
+    dessertOnly ? allRows.filter(r=>PM_DESSERT_CATEGORIES.indexOf(r.m) >= 0) : allRows
   ),[pm, dessertOnly]);
+
+  /* 本頁未分類哨兵：白名單外、又不在已知排除清單的主類別＝白名單漏了，必須回報 */
+  const pmUnknownCats = useMemo(()=>{
+    const map = {};
+    allRows.forEach(r=>{
+      if(PM_DESSERT_CATEGORIES.indexOf(r.m) >= 0) return;
+      if(PM_KNOWN_EXCLUDED.indexOf(r.m) >= 0) return;
+      if(!map[r.m]) map[r.m] = {cat:r.m, qty:0, revenue:0};
+      map[r.m].qty += (r.q||0); map[r.m].revenue += (r.r||0);
+    });
+    return Object.keys(map).map(k=>map[k]);
+  },[pm]);
 
   /* 下拉選項（全期，不隨期間變動，避免選項忽然消失） */
   const mainOptions = useMemo(()=>{
@@ -1591,6 +1619,13 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
       </div>
 
       {/* ---------- 提示帶 ---------- */}
+      {pmUnknownCats.length > 0 && (
+        <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:8,fontSize:12,color:'#991B1B',lineHeight:1.7}}>
+          ⚠️ 偵測到 {pmUnknownCats.length} 個白名單外主類別（「僅 DIY 甜點」模式會看不到它們）：
+          {pmUnknownCats.map(u=>u.cat===''?'（空白）':u.cat).join('、')}
+          ｜請回報 Chat 判定是否納入 GAS DESSERT_CATEGORIES，並同步本頁 PM_DESSERT_CATEGORIES
+        </div>
+      )}
       {storeFilterActive && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:8,fontSize:12,color:'#1E40AF',lineHeight:1.7}}>
           ℹ️ <b>品項分析為全公司合計，不分店</b>——資料源無店別維度，上方的區域／分店篩選對本頁不生效。
@@ -1658,7 +1693,7 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
           </div>
         </div>
         <div style={{marginTop:8,fontSize:12,color:'#6F4E45',lineHeight:1.7}}>
-          範圍：<b>{periodTxt}</b>｜{dessertOnly?'僅 DIY 甜點（已排除陪同入場費／加價購／冰淇淋／特約廠商／活動）':'全品項（含陪同入場費、加價購等非甜點）'}
+          範圍：<b>{periodTxt}</b>｜{dessertOnly?'僅 DIY 甜點（＝後端計人白名單 DESSERT_CATEGORIES，不含陪同入場費／加價購／冰淇淋／特約廠商／活動）':'全品項（含陪同入場費、加價購等非商品項目）'}
           ｜品項數 <b>{fmt.number(ranked.length)}</b>｜銷售額合計 <b>{fmt.currency(totals.r)}</b>｜份數合計 <b>{fmt.number(totals.q)}</b>
           <div style={{color:'#A0786E',marginTop:3}}>
             次類別「無」＝常態品項。比對次類別時會自動忽略空白（「2025 草莓季」＝「2025草莓季」），顯示仍用原始名稱。
