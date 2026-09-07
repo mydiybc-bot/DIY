@@ -29,6 +29,22 @@
     移除 Tab 0「目標達成」（TabTarget 整個函式、BUDGET_API_URL、POS_NAME_TO_STORE_ID 僅它使用，一併移除）；
     tabs 由 8 → 7，activeTab 索引全部 -1，預設分頁改「營收趨勢」（activeTab=0）。
     預算達成率改看 dashboard-pnl.html#budget（實際數＝P&L 銷貨收入，非 POS 淨營收）。
+  【v29】（2026-09-07）品項分析分頁改吃期間篩選（解地雷 7）。
+    後端 2026-09-07 部署 GAS v22，新增獨立 endpoint action=product_monthly
+    （月 × 品項 × 主類別 × 次類別，1,634 列 / 約 112KB），本頁據此重寫 TabProductAnalysis：
+      ・獨立 JSONP + 獨立 loading state，不阻塞主 payload；模組層 memo，切分頁不重抓；
+        沿用冷啟動 onerror 重試一次（地雷 18）。
+      ・吃上方「期間」篩選（依 ym）＋本頁主類別 / 次類別篩選；排序切換 銷售額 / 銷售量（預設銷售額）。
+      ・表格 7 欄：排名 / 品項 / 主類別 / 次類別 / 銷售額 / 份數 / 均價（r÷q 四捨五入）；新增 CSV 匯出（匯出全部，非只前 100）。
+      ・🚨 檔期跨年：次類別採「跨年往前掛」命名（2024-12 掛「2025 聖誕節」「2025 草莓季」），
+        故「2026 草莓季」有一段落在 2025-12。UI 分兩種問法：依期間(ym) vs.「檔期整檔模式」(忽略期間、只用次類別)；
+        同時套用 ym + 次類別時顯示跨年提示。
+      ・🚨 次類別命名不一致（「2025 草莓季」有空格 vs「2026草莓季」無空格）：normSub() 移除所有空白後才比對，顯示仍用原字串。
+      ・店別：此 endpoint 無店別維度 → 本頁不出現店別篩選器、也不吃上方店別/區域；已選則顯示「品項分析為全公司合計，不分店」。
+      ・coverage.minYm 晚於期間起點 → 顯示「品項明細僅涵蓋 {minYm} 起」。
+      ・品項範圍切換「僅 DIY 甜點 / 全品項」：僅 DIY 甜點＝排除 GAS EXCLUDED_CATEGORIES
+        （加價購/入場&共廚&其他/特約廠商/冰淇淋/活動），預設開啟；舊 productRank 是含陪同入場費的全品項。
+    App 內 filteredProducts（讀 rawData.productRank）已移除；GAS 未動、快取版號不變（V20）。
 -->
 
 <link rel="preconnect" href="https://script.google.com" crossorigin>
@@ -768,11 +784,9 @@ function App(){
     return Object.values(map).sort((a,b)=>b.revenue-a.revenue);
   },[filtered]);
 
-  // Product rank (all products)
-  const filteredProducts = useMemo(()=>{
-    if(!rawData) return [];
-    return rawData.productRank;
-  },[rawData]);
+  /* v29（2026-09-07）：品項分析改吃 action=product_monthly（月×品項粒度），
+     原 filteredProducts（後端全域預聚合 rawData.productRank，無時間維度）已無人讀取，移除。
+     rawData.productRank 後端仍照常回傳，未動 GAS。 */
 
   // Sub-category (limited edition) totals — based on subCategory within 限定甜點
   const subCatTotals = useMemo(()=>{
@@ -990,7 +1004,7 @@ function App(){
         {/* TAB CONTENT */}
         {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
         {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} monthlyByStoreNoDate={monthlyByStoreNoDate} storesInData={storesInData} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
-        {activeTab===2 && <TabProductAnalysis catTotals={catTotals} filteredProducts={filteredProducts}/>}
+        {activeTab===2 && <TabProductAnalysis dateStart={dateStart} dateEnd={dateEnd} storeFilterActive={selStores.length>0 || selRegion!=='全部'}/>}
         {activeTab===3 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
         {activeTab===4 && <TabSeasonal data={rawData}/>}
         {activeTab===5 && <TabDiscount rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
@@ -1367,50 +1381,300 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
 }
 
 /* ================================================================
-   TAB 3: 品項分析
+   TAB 3: 品項分析（v29 — 改吃 action=product_monthly，支援期間篩選）
+   ----------------------------------------------------------------
+   資料源：GAS action=product_monthly（月 × 品項 × 主類別 × 次類別，約 1,634 列）
+   ・獨立 loading，不阻塞主 payload；模組層 memo，切分頁不重抓
+   ・本頁「無店別維度」——上方店別/區域篩選器對本頁一律不生效（僅顯示提示）
+   ・銷售額＝牌價 × 數量，非營業額（折扣為訂單層事件，無法切至品項層。地雷 15.2）
    ================================================================ */
-function TabProductAnalysis({catTotals, filteredProducts}){
-  const [rankMode, setRankMode] = useState('revenue'); // revenue | qty
-  const [searchTerm, setSearchTerm] = useState('');
-  const [sortCol, setSortCol] = useState('totalRevenue');
-  const [sortDir, setSortDir] = useState('desc');
 
-  const top20 = useMemo(()=>{
-    const sorted = [...filteredProducts].sort((a,b)=>rankMode==='revenue'?b.totalRevenue-a.totalRevenue:b.totalQty-a.totalQty);
-    return sorted.slice(0,20).reverse(); // reverse for horizontal bar
-  },[filteredProducts, rankMode]);
+/* 次類別正規化：全形/半形空白一律移除後再比對（「2025 草莓季」與「2026草莓季」並存）。
+   ⚠️ 只用於「比對」，畫面顯示一律用原字串，不得改寫使用者看到的名稱。 */
+function normSub(s){ return String(s==null?'':s).replace(/\s+/g,''); }
+
+/* 非甜點主類別＝GAS EXCLUDED_CATEGORIES（地雷 3）。
+   預設排除，讓「TOP 20 暢銷甜點」是甜點；使用者可自行關閉看全品項。
+   ⚠️ 白名單外的新類別不在此清單 → 預設「會顯示」（寧可看得到，不要靜默消失）。 */
+const PM_NON_DESSERT_CATS = ['加價購','入場&共廚&其他','特約廠商','冰淇淋','活動'];
+
+/* ---------- 模組層 JSONP 取數（每次載入頁面只抓一次；含 GAS 冷啟動重試，地雷 18）---------- */
+let PM_PROMISE = null;
+function fetchProductMonthly(){
+  if(PM_PROMISE) return PM_PROMISE;
+  PM_PROMISE = new Promise((resolve, reject)=>{
+    const cb = '_pmCb_' + Date.now();
+    let done = false;
+    const timeout = setTimeout(()=>{
+      if(done) return; done = true;
+      delete window[cb];
+      reject(new Error('品項資料逾時（120 秒），請按重新載入'));
+    }, 120000);
+    window[cb] = (d)=>{
+      if(done) return; done = true;
+      clearTimeout(timeout); delete window[cb];
+      if(!d || !Array.isArray(d.rows) || !d.rows.length) reject(new Error('品項資料回傳為空'));
+      else resolve(d);
+    };
+    let retried = false;
+    const mount = ()=>{
+      const s = document.createElement('script');
+      s.src = API_URL + (API_URL.includes('?')?'&':'?') + 'action=product_monthly&callback=' + cb;
+      s.onerror = ()=>{
+        if(s.parentNode) s.parentNode.removeChild(s);
+        if(!retried){ retried = true; setTimeout(mount, 3000); return; }  /* 冷啟動：靜默重試一次 */
+        if(done) return; done = true;
+        clearTimeout(timeout); delete window[cb];
+        reject(new Error('品項資料載入失敗（已自動重試一次）'));
+      };
+      document.body.appendChild(s);
+    };
+    mount();
+  });
+  PM_PROMISE.catch(()=>{ PM_PROMISE = null; });   /* 失敗後允許重新載入 */
+  return PM_PROMISE;
+}
+
+function exportProductCSV(rows, rankMode, scopeNote){
+  const headers = ['排名','品項','主類別','次類別','銷售額（牌價×數量，非營業額）','份數','均價','排序依據','篩選範圍'];
+  const modeTxt = rankMode==='revenue' ? '銷售額' : '銷售量';
+  const body = (rows||[]).map(p=>[
+    p.rank, p.product, p.mainCategory, p.subCategory,
+    p.revenue, p.qty, p.avgPrice, modeTxt, scopeNote
+  ]);
+  downloadCSV(headers, body, 'POS品項分析');
+}
+
+function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
+  const [pm, setPm]             = useState(null);
+  const [pmLoading, setPmLoading] = useState(true);
+  const [pmErr, setPmErr]       = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  const [rankMode, setRankMode]       = useState('revenue');  // revenue | qty（預設銷售額）
+  const [dessertOnly, setDessertOnly] = useState(true);
+  const [selMain, setSelMain]         = useState('全部');
+  const [subQuery, setSubQuery]       = useState('');
+  const [wholeCampaign, setWholeCampaign] = useState(false);
+  const [searchTerm, setSearchTerm]   = useState('');
+
+  useEffect(()=>{
+    let alive = true;
+    setPmLoading(true); setPmErr(null);
+    fetchProductMonthly()
+      .then(d=>{ if(alive){ setPm(d); setPmLoading(false); } })
+      .catch(e=>{ if(alive){ setPmErr(e.message||'載入失敗'); setPmLoading(false); } });
+    return ()=>{ alive = false; };
+  },[reloadTick]);
+
+  const allRows = (pm && pm.rows) || [];
+
+  /* 甜點/全品項切換後的基底 */
+  const baseRows = useMemo(()=>(
+    dessertOnly ? allRows.filter(r=>PM_NON_DESSERT_CATS.indexOf(r.m) < 0) : allRows
+  ),[pm, dessertOnly]);
+
+  /* 下拉選項（全期，不隨期間變動，避免選項忽然消失） */
+  const mainOptions = useMemo(()=>{
+    const m = {};
+    baseRows.forEach(r=>{ m[r.m] = (m[r.m]||0) + (r.r||0); });
+    return Object.keys(m).sort((a,b)=>m[b]-m[a]);
+  },[baseRows]);
+  const subOptions = useMemo(()=>{
+    const seen = {}, out = [];
+    baseRows.forEach(r=>{
+      const s = r.s;
+      if(!s || s==='無' || s==='找不到') return;
+      if(seen[s]) return;
+      seen[s] = 1; out.push(s);
+    });
+    return out.sort();
+  },[baseRows]);
+
+  /* 檔期整檔模式：僅在有次類別條件時才允許忽略期間 */
+  const subActive = !!subQuery.trim();
+  const ignoreYm  = wholeCampaign && subActive;
+
+  const scoped = useMemo(()=>{
+    const nq = normSub(subQuery);
+    return baseRows.filter(r=>{
+      if(!ignoreYm){
+        if(dateStart && r.ym < dateStart) return false;
+        if(dateEnd   && r.ym > dateEnd)   return false;
+      }
+      if(selMain!=='全部' && r.m !== selMain) return false;
+      if(nq && normSub(r.s).indexOf(nq) < 0) return false;
+      return true;
+    });
+  },[baseRows, dateStart, dateEnd, selMain, subQuery, ignoreYm]);
+
+  /* 品項聚合（品項 ↔ 主/次類別為一對一，聚合鍵含三者僅為保險） */
+  const ranked = useMemo(()=>{
+    const map = {};
+    scoped.forEach(r=>{
+      const k = r.p + '||' + r.m + '||' + r.s;
+      if(!map[k]) map[k] = {product:r.p, mainCategory:r.m, subCategory:r.s, revenue:0, qty:0};
+      map[k].revenue += (r.r||0);
+      map[k].qty     += (r.q||0);
+    });
+    return Object.keys(map).map(k=>{
+      const x = map[k];
+      x.avgPrice = x.qty>0 ? Math.round(x.revenue / x.qty) : 0;
+      return x;
+    })
+    .sort((a,b)=> rankMode==='revenue' ? (b.revenue-a.revenue) : (b.qty-a.qty))
+    .map((x,i)=>{ x.rank = i+1; return x; });
+  },[scoped, rankMode]);
+
+  /* 主類別佔比甜甜圈：只吃期間（不吃主/次類別選擇，否則單選後會變成 100%） */
+  const catMix = useMemo(()=>{
+    const map = {};
+    baseRows.forEach(r=>{
+      if(dateStart && r.ym < dateStart) return;
+      if(dateEnd   && r.ym > dateEnd)   return;
+      if(r.m==='找不到') return;
+      map[r.m] = (map[r.m]||0) + (r.r||0);
+    });
+    return Object.keys(map).map(c=>({cat:c, revenue:map[c]})).sort((a,b)=>b.revenue-a.revenue);
+  },[baseRows, dateStart, dateEnd]);
+
+  const top20 = useMemo(()=>ranked.slice(0,20).slice().reverse(),[ranked]);
 
   const tableData = useMemo(()=>{
-    let data = filteredProducts;
-    if(searchTerm){
-      const term = searchTerm.toLowerCase();
-      data = data.filter(p=>p.product.toLowerCase().includes(term)||p.mainCategory.toLowerCase().includes(term)||p.subCategory.toLowerCase().includes(term));
-    }
-    data = [...data].sort((a,b)=>{
-      const av=a[sortCol], bv=b[sortCol];
-      if(typeof av==='string') return sortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);
-      return sortDir==='asc'?av-bv:bv-av;
-    });
+    const term = searchTerm.trim().toLowerCase();
+    const data = term
+      ? ranked.filter(p=>(p.product+' '+p.mainCategory+' '+p.subCategory).toLowerCase().indexOf(term) >= 0)
+      : ranked;
     return data.slice(0,100);
-  },[filteredProducts, searchTerm, sortCol, sortDir]);
+  },[ranked, searchTerm]);
 
-  function handleSort(col){ if(sortCol===col) setSortDir(d=>d==='asc'?'desc':'asc'); else { setSortCol(col); setSortDir('desc'); } }
-  const sortIcon = (col)=> sortCol===col ? (sortDir==='asc'?' ▲':' ▼') : '';
+  const totals = useMemo(()=>ranked.reduce((a,p)=>{a.r+=p.revenue;a.q+=p.qty;return a;},{r:0,q:0}),[ranked]);
+
+  const coverageMin = pm && pm.coverage ? pm.coverage.minYm : null;
+  const coverageWarn = !!(coverageMin && dateStart && coverageMin > dateStart);
+  const periodTxt = ignoreYm ? '全期（檔期整檔模式）' : ((dateStart||'—') + ' ~ ' + (dateEnd||'—'));
+  const scopeNote = periodTxt
+    + '｜' + (dessertOnly?'僅 DIY 甜點':'全品項')
+    + '｜主類別:' + selMain
+    + (subActive ? ('｜次類別含:' + subQuery.trim()) : '');
+  const showSub = (s)=> (!s || s==='無' || s==='找不到') ? '—' : s;
+
+  /* ---------- 載入 / 錯誤（獨立於主 payload） ---------- */
+  if(pmLoading) return (
+    <div className="charts-grid cols-2">
+      <div className="chart-card full-width" style={{textAlign:'center',padding:'48px 20px'}}>
+        <div className="spinner" style={{margin:'0 auto 14px'}}/>
+        <div style={{fontSize:14,color:'#6F4E45',fontWeight:700}}>正在載入品項明細…</div>
+        <div style={{fontSize:12,color:'#A0786E',marginTop:6}}>月 × 品項聚合（約 1,600 列），首次較慢，其他分頁不受影響</div>
+      </div>
+    </div>
+  );
+  if(pmErr) return (
+    <div className="charts-grid cols-2">
+      <div className="chart-card full-width" style={{textAlign:'center',padding:'40px 20px'}}>
+        <div style={{fontSize:'1.6rem',color:'#C4412F',marginBottom:10}}>⚠</div>
+        <div style={{fontSize:14,color:'#C4412F',fontWeight:700}}>品項明細載入失敗</div>
+        <div style={{fontSize:12,color:'#6F4E45',margin:'8px 0 14px'}}>{pmErr}</div>
+        <button className="csv-btn" onClick={()=>setReloadTick(t=>t+1)}>重新載入</button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="charts-grid cols-2">
-      {/* Disclaimer */}
+
+      {/* ---------- 口徑標註（不可省略，會造成誤判） ---------- */}
       <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8}}>
-        <div style={{fontSize:12,color:'#92400e'}}>※ 本頁「銷售額」＝品項牌價 × 數量，用來比較品項貢獻度，<b>不等於營業額</b>（折扣打在訂單層，切不到單一品項）。營業額請看營收趨勢／分店比較分頁。</div>
+        <div style={{fontSize:12,color:'#92400e',lineHeight:1.7}}>
+          ※ 本頁<b>銷售額＝牌價 × 數量，非營業額</b>（折扣為訂單層事件，無法切至品項層）。營業額請看營收趨勢／分店比較分頁。
+        </div>
       </div>
-      {/* 1. Category donut */}
+
+      {/* ---------- 提示帶 ---------- */}
+      {storeFilterActive && (
+        <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:8,fontSize:12,color:'#1E40AF',lineHeight:1.7}}>
+          ℹ️ <b>品項分析為全公司合計，不分店</b>——資料源無店別維度，上方的區域／分店篩選對本頁不生效。
+        </div>
+      )}
+      {coverageWarn && (
+        <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:8,fontSize:12,color:'#9A3412',lineHeight:1.7}}>
+          ⚠️ 品項明細僅涵蓋 <b>{coverageMin}</b> 起，所選期間較早的部分沒有品項資料。
+        </div>
+      )}
+      {subActive && !ignoreYm && (
+        <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:8,fontSize:12,color:'#92400e',lineHeight:1.7}}>
+          ⚠️ <b>檔期可能跨年，目前僅顯示所選期間內的部分。</b>
+          次類別採「跨年往前掛」命名（例：<b>2026 草莓季</b>有一段銷售落在 <b>2025-12</b>），
+          用期間篩「2026 全年」會少算檔期頭段。
+          <button className="csv-btn" style={{marginLeft:8}} onClick={()=>setWholeCampaign(true)}>看整檔（忽略期間）</button>
+        </div>
+      )}
+      {ignoreYm && (
+        <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:8,fontSize:12,color:'#065F46',lineHeight:1.7}}>
+          ✅ <b>檔期整檔模式</b>：已忽略上方期間，顯示次類別含「{subQuery.trim()}」的<b>全部期間</b>資料（回答「這檔整檔賣了多少」）。
+          <button className="csv-btn" style={{marginLeft:8}} onClick={()=>setWholeCampaign(false)}>改回依期間</button>
+        </div>
+      )}
+
+      {/* ---------- 本頁篩選列 ---------- */}
+      <div className="chart-card full-width">
+        <div className="chart-title">
+          <span>品項篩選</span>
+          <div className="chart-toggle">
+            <button className={rankMode==='revenue'?'active':''} onClick={()=>setRankMode('revenue')}>依銷售額</button>
+            <button className={rankMode==='qty'?'active':''} onClick={()=>setRankMode('qty')}>依銷售量</button>
+          </div>
+        </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'10px 18px',alignItems:'flex-end',padding:'4px 0 2px'}}>
+          <div>
+            <label style={{display:'block',fontSize:12,color:'#6F4E45',fontWeight:700,marginBottom:4}}>主類別</label>
+            <select value={selMain} onChange={e=>setSelMain(e.target.value)} style={{fontSize:12,padding:'6px 8px',minWidth:160}}>
+              <option value="全部">全部</option>
+              {mainOptions.map(c=><option key={c} value={c}>{c===''?'（主類別空白）':c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{display:'block',fontSize:12,color:'#6F4E45',fontWeight:700,marginBottom:4}}>次類別（檔期）</label>
+            <input list="pmSubList" value={subQuery} onChange={e=>setSubQuery(e.target.value)}
+                   placeholder="留空＝不限；輸入「草莓季」跨年份全撈"
+                   style={{fontSize:12,padding:'6px 8px',minWidth:230}}/>
+            <datalist id="pmSubList">
+              {subOptions.map(s=><option key={s} value={s}/>)}
+            </datalist>
+          </div>
+          <div>
+            <label style={{display:'block',fontSize:12,color:'#6F4E45',fontWeight:700,marginBottom:4}}>品項範圍</label>
+            <div className="chart-toggle">
+              <button className={dessertOnly?'active':''} onClick={()=>setDessertOnly(true)}>僅 DIY 甜點</button>
+              <button className={!dessertOnly?'active':''} onClick={()=>setDessertOnly(false)}>全品項</button>
+            </div>
+          </div>
+          <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+            <button className="csv-btn" onClick={()=>exportProductCSV(
+              (searchTerm.trim()
+                ? ranked.filter(p=>(p.product+' '+p.mainCategory+' '+p.subCategory).toLowerCase().indexOf(searchTerm.trim().toLowerCase())>=0)
+                : ranked),
+              rankMode, scopeNote)} title="匯出目前篩選後的全部品項（不只前 100 筆）">⬇ 匯出 CSV</button>
+          </div>
+        </div>
+        <div style={{marginTop:8,fontSize:12,color:'#6F4E45',lineHeight:1.7}}>
+          範圍：<b>{periodTxt}</b>｜{dessertOnly?'僅 DIY 甜點（已排除陪同入場費／加價購／冰淇淋／特約廠商／活動）':'全品項（含陪同入場費、加價購等非甜點）'}
+          ｜品項數 <b>{fmt.number(ranked.length)}</b>｜銷售額合計 <b>{fmt.currency(totals.r)}</b>｜份數合計 <b>{fmt.number(totals.q)}</b>
+          <div style={{color:'#A0786E',marginTop:3}}>
+            次類別「無」＝常態品項。比對次類別時會自動忽略空白（「2025 草莓季」＝「2025草莓季」），顯示仍用原始名稱。
+          </div>
+        </div>
+      </div>
+
+      {/* ---------- 1. 主類別佔比 ---------- */}
       <div className="chart-card">
         <div className="chart-title">主類別銷售佔比</div>
+        <div style={{fontSize:12,color:'#A0786E',padding:'0 0 4px'}}>依上方期間；不受本頁主／次類別選擇影響</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
-              <Pie data={catTotals} dataKey="revenue" nameKey="cat" cx="50%" cy="50%" innerRadius={60} outerRadius={110} paddingAngle={2} label={({cat,percent})=>`${cat} ${(percent*100).toFixed(0)}%`} labelLine={true} style={{fontSize:12}}>
-                {catTotals.map((c,i)=><Cell key={i} fill={CATEGORY_COLORS[i%CATEGORY_COLORS.length]}/>)}
+              <Pie data={catMix} dataKey="revenue" nameKey="cat" cx="50%" cy="50%" innerRadius={60} outerRadius={110} paddingAngle={2} label={({cat,percent})=>`${cat===''?'（空白）':cat} ${(percent*100).toFixed(0)}%`} labelLine={true} style={{fontSize:12}}>
+                {catMix.map((c,i)=><Cell key={i} fill={CATEGORY_COLORS[i%CATEGORY_COLORS.length]}/>)}
               </Pie>
               <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
             </PieChart>
@@ -1418,14 +1682,11 @@ function TabProductAnalysis({catTotals, filteredProducts}){
         </div>
       </div>
 
-      {/* 2. Top 20 products bar */}
+      {/* ---------- 2. TOP 20 ---------- */}
       <div className="chart-card">
         <div className="chart-title">
-          <span>TOP 20 暢銷甜點</span>
-          <div className="chart-toggle">
-            <button className={rankMode==='revenue'?'active':''} onClick={()=>setRankMode('revenue')}>依銷售額</button>
-            <button className={rankMode==='qty'?'active':''} onClick={()=>setRankMode('qty')}>依銷量</button>
-          </div>
+          <span>TOP 20 暢銷品項</span>
+          <span style={{fontSize:12,color:'#A0786E',fontWeight:400}}>{rankMode==='revenue'?'依銷售額':'依銷售量'}</span>
         </div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={Math.max(300,top20.length*24)}>
@@ -1434,41 +1695,49 @@ function TabProductAnalysis({catTotals, filteredProducts}){
               <XAxis type="number" stroke="#B89E97" tick={{fontSize:12}} tickFormatter={rankMode==='revenue'?fmt.short:fmt.number}/>
               <YAxis type="category" dataKey="product" width={186} stroke="#B89E97" tick={{fontSize:12}}/>
               <Tooltip content={<CustomTooltip formatter={rankMode==='revenue'?fmt.currency:fmt.number}/>}/>
-              <Bar dataKey={rankMode==='revenue'?'totalRevenue':'totalQty'} name={rankMode==='revenue'?'銷售額':'銷量'} fill="#D4654F" radius={[0,4,4,0]}/>
+              <Bar dataKey={rankMode==='revenue'?'revenue':'qty'} name={rankMode==='revenue'?'銷售額':'份數'} fill="#D4654F" radius={[0,4,4,0]}/>
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* 3. Product table */}
+      {/* ---------- 3. 明細表 ---------- */}
       <div className="chart-card full-width">
-        <div className="chart-title">甜點明細表</div>
-        <input className="search-input" placeholder="搜尋商品名稱、主類別、次類別…" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
+        <div className="chart-title">
+          <span>品項明細表</span>
+          <span style={{fontSize:12,color:'#A0786E',fontWeight:400}}>
+            排名依{rankMode==='revenue'?'銷售額':'銷售量'}｜表格最多顯示前 100 筆，CSV 匯出全部
+          </span>
+        </div>
+        <input className="search-input" placeholder="搜尋品項、主類別、次類別…" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
         <div className="data-table-wrap">
           <table className="data-table">
             <thead>
               <tr>
-                <th onClick={()=>handleSort('product')}>商品名稱{sortIcon('product')}</th>
-                <th onClick={()=>handleSort('mainCategory')}>主類別{sortIcon('mainCategory')}</th>
-                <th onClick={()=>handleSort('subCategory')}>次類別{sortIcon('subCategory')}</th>
-                <th onClick={()=>handleSort('avgPrice')}>均價{sortIcon('avgPrice')}</th>
-                <th onClick={()=>handleSort('totalQty')}>銷量{sortIcon('totalQty')}</th>
-                <th onClick={()=>handleSort('totalRevenue')}>銷售額{sortIcon('totalRevenue')}</th>
-                <th onClick={()=>handleSort('storeCount')}>門市數{sortIcon('storeCount')}</th>
+                <th style={{cursor:'default'}}>排名</th>
+                <th style={{cursor:'default'}}>品項</th>
+                <th style={{cursor:'default'}}>主類別</th>
+                <th style={{cursor:'default'}}>次類別</th>
+                <th style={{cursor:'default'}}>銷售額<span style={{fontWeight:400,color:'#A0786E'}}>（牌價×數量）</span></th>
+                <th style={{cursor:'default'}}>份數</th>
+                <th style={{cursor:'default'}}>均價</th>
               </tr>
             </thead>
             <tbody>
               {tableData.map((p,i)=>(
-                <tr key={i}>
+                <tr key={p.product+'|'+p.mainCategory+'|'+p.subCategory+'|'+i}>
+                  <td style={{textAlign:'center',color:'#A0786E'}}>{p.rank}</td>
                   <td>{p.product}</td>
-                  <td>{p.mainCategory}</td>
-                  <td>{p.subCategory||'—'}</td>
+                  <td>{p.mainCategory===''?'（空白）':p.mainCategory}</td>
+                  <td>{showSub(p.subCategory)}</td>
+                  <td style={{textAlign:'right'}}>{fmt.currency(p.revenue)}</td>
+                  <td style={{textAlign:'right'}}>{fmt.number(p.qty)}</td>
                   <td style={{textAlign:'right'}}>{fmt.currency(p.avgPrice)}</td>
-                  <td style={{textAlign:'right'}}>{fmt.number(p.totalQty)}</td>
-                  <td style={{textAlign:'right'}}>{fmt.currency(p.totalRevenue)}</td>
-                  <td style={{textAlign:'center'}}>{p.storeCount}</td>
                 </tr>
               ))}
+              {!tableData.length && (
+                <tr><td colSpan={7} style={{textAlign:'center',color:'#A0786E',padding:'18px 0'}}>目前條件下沒有品項資料</td></tr>
+              )}
             </tbody>
           </table>
         </div>
