@@ -2236,15 +2236,66 @@ function parseBookingCsv(buf){var txt="";
     else if(DESSERTS.indexOf(r.dessert)<0)r.err="甜點不在清單";
     else if(!(r.qty>0))r.err="數量需>0";});
   return rows;}
+/* 待送出清單：同一場次（同日期＋同備註）可以先累積多筆，最後一次送出 */
+function bkDraftHtml(){
+  var d=ST.bkDraft||[];
+  if(!d.length)return '';
+  var rows=d.map(function(x,i){
+    return '<tr><td>'+shEsc(x.dessert)+'</td><td class="right"><b>'+fmt(x.qty)+'</b></td>'
+      +'<td class="right"><span class="why" data-bkdrop="'+i+'">移除</span></td></tr>';}).join('');
+  return '<div style="margin-top:10px;padding:8px 10px;background:#EAF3FB;border:1px solid #7FB3DA;border-radius:8px">'
+    +'<div style="font-weight:700;color:#0B4A6F;margin-bottom:4px">待送出　'+d.length+' 筆</div>'
+    +'<table style="width:100%">'+rows+'</table>'
+    +'<div class="toolbar" style="margin-top:6px"><button class="btn" id="bkSubmitAll">✓ 全部送出 '+d.length+' 筆</button>'
+    +'<button class="btn ghost" id="bkClearAll" style="margin-left:6px">清空</button></div></div>';}
+/* ===== 2026-09-08 bj 批：預約包館三個實測痛點 =====
+   經營者用 11 號店實際登記時發現：
+   ① 甜點下拉一長串（DESSERTS 有數百項），只能捲，不能打字找
+   ② 下拉顯示的是 dim_dessert ＝ BOM 表的甜點名，但店長腦中／客人口中是 POS 的品名
+   ③ 一場包館常有多種甜點，但每加一筆就要重選日期、重填備註，等於同一場輸入 N 次
+
+   對照關係（已查證 Code.gs 的 computeAgg）：
+     bookAgg 用 `posToCanon[b.dessert] || b.dessert` 再查 bomBy
+     ⇒ **存 POS 名或存 BOM 名，GAS 都展開得到配方**。所以直接存店長看到的那個名字最好，
+        下方預約清單也就顯示店長認得的名字。
+   BKMAP：POS 品名 → BOM 甜點名（只用來驗證「這個名字系統認得」，不做轉換）。 */
+var BKMAP=null,BKMAPLD=null;
+function loadBkMap(){
+  if(BKMAP)return Promise.resolve(BKMAP);
+  if(BKMAPLD)return BKMAPLD;
+  BKMAPLD=gvizQ("產品名稱對照表","select A,B label A 'pn', B 'cn'").then(function(rs){
+    var m={};
+    rs.forEach(function(r){var pn=String(r["pn"]==null?"":r["pn"]).trim();
+      if(!pn)return; m[pn]=String(r["cn"]==null?"":r["cn"]).trim()||pn;});
+    BKMAP=m;return m;
+  }).catch(function(){BKMAP={};return BKMAP;});
+  return BKMAPLD;}
+/* 可選清單＝POS 品名（店長熟的）∪ BOM 甜點名（沒有對照列的補上），去重後排序 */
+function bkOptions(){
+  var set={};
+  if(BKMAP)Object.keys(BKMAP).forEach(function(k){set[k]=1;});
+  DESSERTS.forEach(function(d){if(d&&!set[d])set[d]=1;});
+  return Object.keys(set).sort();}
+function bkKnown(name){name=String(name||"").trim();if(!name)return false;
+  if(BKMAP&&BKMAP[name])return true;
+  return DESSERTS.indexOf(name)>=0;}
 function viewBooking(){var store=ST.storeId;
-  var opts=DESSERTS.slice().sort().map(function(d){return '<option value="'+d+'">'+d+'</option>';}).join('');
+  if(BKMAP===null){loadBkMap().then(function(){if(ST.tab==="預約")render();});}
+  var opts=bkOptions().map(function(d){return '<option value="'+shEsc(d)+'"></option>';}).join('');
   var h='<div class="note">門市：'+storeName(store)+'　·　登記未來的預約/包館甜點需求，系統會把所需原料<b>直接加進建議訂貨量</b>（每日重算生效；急件請總部立即重算）。</div>';
-  h+='<div class="card"><div class="muted" style="margin-bottom:6px">新增預約/包館</div><div style="display:flex;gap:6px;flex-wrap:wrap">'
-    +'<input class="sm" type="date" id="bkDate" min="'+ymd(TODAY)+'">'
-    +'<select class="sm" id="bkDessert" style="max-width:200px"><option value="">— 選甜點 —</option>'+opts+'</select>'
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">新增預約/包館　<span style="font-size:12px">先設定日期與場次，再逐一加甜點</span></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
+    +'<input class="sm" type="date" id="bkDate" min="'+ymd(TODAY)+'" value="'+(ST.bkDate||'')+'">'
+    +'<input class="sm" id="bkNote" style="width:190px" placeholder="備註(公司名/場次)" value="'+shEsc(ST.bkNote||'')+'">'
+    +'<span class="muted" style="font-size:12px">這兩格加完不會清空</span></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+    +'<input class="sm" id="bkDessert" list="bkDsList" style="width:240px" placeholder="🔍 打字搜尋甜點…" autocomplete="off">'
+    +'<datalist id="bkDsList">'+opts+'</datalist>'
     +'<input class="sm" type="number" id="bkQty" style="width:80px" placeholder="數量">'
-    +'<input class="sm" id="bkNote" style="width:150px" placeholder="備註(公司名/場次)">'
-    +'<button class="btn" id="bkAdd">新增</button></div></div>';
+    +'<button class="btn" id="bkAdd">＋ 加入清單</button></div>'
+    +(BKMAP===null?'<div class="muted" style="font-size:12px;margin-top:6px">甜點清單載入中…</div>':'')
+    +bkDraftHtml()
+    +'</div>';
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">📄 CSV 批次匯入（大型活動）</div>'
     +'<div class="muted" style="font-size:12px;margin-bottom:6px">格式：每行「甜點名稱,數量,備註」（UTF-8、無表頭、備註可空）。選活動日期→選檔案→核對預覽→確認匯入。</div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" type="date" id="bkCsvDate" min="'+ymd(TODAY)+'" value="'+(ST.csvDate||'')+'"><input class="sm" type="file" id="bkCsvFile" accept=".csv,text/csv"></div>';
@@ -3035,12 +3086,34 @@ function wire(){
   var nu=$("#nextUn");if(nu)nu.onclick=function(){var els=document.querySelectorAll('input[data-inv][data-f="onHand"]');
     for(var i=0;i<els.length;i++){if(els[i].value===""&&!els[i].getAttribute("data-ok")){try{els[i].scrollIntoView({block:"center",behavior:"smooth"});}catch(e){els[i].scrollIntoView();}els[i].focus();return;}}
     toast("畫面上都盤完了 🎉（收合的分區請先展開）");};
-  var ba=$("#bkAdd");if(ba)ba.onclick=function(){var d=$("#bkDate").value,ds=$("#bkDessert").value,q=+$("#bkQty").value,no=$("#bkNote").value||"";
-    if(!d||!ds||!(q>0)){toast("請填日期、甜點、數量");return;}
-    var id="BK"+Date.now();
-    post({type:"booking",id:id,store:ST.storeId,date:d,dessert:ds,qty:q,note:no});
-    BOOKINGS.push({id:id,store:String(ST.storeId),date:d,dessert:ds,qty:q,note:no,status:""});
-    toast("已登記，建議量每日重算後生效");render();};
+  /* 日期與備註隨打隨存進 ST，render 後不會被清掉 */
+  var bd=$("#bkDate");if(bd)bd.onchange=function(){ST.bkDate=bd.value;};
+  var bn=$("#bkNote");if(bn)bn.oninput=function(){ST.bkNote=bn.value;};
+  var ba=$("#bkAdd");if(ba)ba.onclick=function(){
+    var d=$("#bkDate").value,ds=String($("#bkDessert").value||"").trim(),q=+$("#bkQty").value,no=$("#bkNote").value||"";
+    if(!d){toast("請先選日期");return;}
+    if(!ds){toast("請選甜點");return;}
+    if(!bkKnown(ds)){toast("「"+ds+"」不在甜點清單裡，請從下拉選"); return;}
+    if(!(q>0)){toast("請填數量");return;}
+    ST.bkDate=d;ST.bkNote=no;
+    ST.bkDraft=(ST.bkDraft||[]).concat([{dessert:ds,qty:q}]);
+    render();
+    var nx=$("#bkDessert");if(nx){nx.value="";try{nx.focus();}catch(e){}}   /* 游標回甜點欄，連續加下一項 */
+  };
+  Array.prototype.forEach.call(document.querySelectorAll("[data-bkdrop]"),function(el){el.onclick=function(){
+    var i=+el.dataset.bkdrop;(ST.bkDraft||[]).splice(i,1);render();};});
+  var bca=$("#bkClearAll");if(bca)bca.onclick=function(){ST.bkDraft=[];render();};
+  var bsa=$("#bkSubmitAll");if(bsa)bsa.onclick=function(){
+    var d=ST.bkDate,no=ST.bkNote||"",list=(ST.bkDraft||[]).slice();
+    if(!d){toast("請先選日期");return;}
+    if(!list.length)return;
+    var base=Date.now();
+    list.forEach(function(x,i){
+      var id="BK"+(base+i);
+      post({type:"booking",id:id,store:ST.storeId,date:d,dessert:x.dessert,qty:x.qty,note:no});
+      BOOKINGS.push({id:id,store:String(ST.storeId),date:d,dessert:x.dessert,qty:x.qty,note:no,status:""});});
+    ST.bkDraft=[];
+    toast("已登記 "+list.length+" 筆，建議量每日重算後生效");render();};
   Array.prototype.forEach.call(document.querySelectorAll("[data-bkdel]"),function(el){el.onclick=function(){var id=el.dataset.bkdel;
     post({type:"bookingDel",id:id});BOOKINGS.forEach(function(b){if(b.id===id)b.status="取消";});toast("已取消預約");render();};});
   // CSV 匯入
