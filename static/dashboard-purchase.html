@@ -456,7 +456,7 @@ async function bootstrap(keep){ try {
   /* 2026-08-31 t 批：單位對照頁「網頁上刪除」走獨立 GAS 專案 diybc-conv-api（與 shelfApi 同模式）。網址貼在 dim_unitconv 第 1 列任一空白表頭格（建議 F1），這裡從表頭鍵名偵測。 */
   CONV_API="";if(dU[0]){Object.keys(dU[0]).forEach(function(k){if(String(k).trim().indexOf("https://script.google.com/")===0)CONV_API=String(k).trim();});}
   // fact_inventory：取每店每料最新一筆
-  INV={};var ts={};fInv.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"],dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;var k=st+"|"+id;if(!(k in ts)||t>=ts[k]){ts[k]=t;((INV[st]=INV[st]||{})[id]={onHand:num(r["現有量"]),breakage:num(r["破損量"]),t:(t||null)});}});
+  INV={};var ts={};fInv.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"],dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;var k=st+"|"+id;if(!(k in ts)||t>=ts[k]){ts[k]=t;((INV[st]=INV[st]||{})[id]={onHand:num(r["現有量"]),enough:num(r["足夠"]!=null?r["足夠"]:r["破損量"]),t:(t||null)});}});
   /* 2026-08-20 p 批：13 號店已結束營業，全站排除（來源含歷史資料仍會帶出該店號）。 */
   delete storeSet["13"];
   STORES=Object.keys(storeSet).sort(function(a,b){var na=+a,nb=+b;if(!isNaN(na)&&!isNaN(nb))return na-nb;return String(a).localeCompare(String(b));}).map(function(id){return {id:id,name:id+"號店"};});
@@ -582,14 +582,28 @@ function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
 function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 function escA(v){return String(v==null?"":v).replace(/"/g,'&quot;');}
 function sessStart(st){var v=lsGet("invSession_"+st);if(v==null||v==="")return null;var n=+v;return isNaN(n)?null:n;}
-function setSess(st,t){lsSet("invSession_"+st,String(t));}
+function setSess(st,t){lsSet("invSession_"+st,String(t>0?t-2000:t));}   /* 2026-09-08 bb 批：回退 2 秒。fact_inventory 時間戳經 gviz 回來只到「秒」（Date(y,m,d,h,mi,s) 無毫秒），
+   若店長按下「新的一週」與存檔落在同一秒，iv.t 被截到 .000 會小於 ss ⇒ 剛存的盤點被判成「不是本輪」。延續模式 t=0 不動。 */
 /* 2026-09-02 x 批：「✓ 足夠」＝店長目視庫存明顯高於訂貨點、不數也不訂。session 級旗標存本機 localStorage（invOK_店號），
    與盤點輪次同壽命；填入數字即自動取消；重新盤點時清空。不寫 Sheet（fact_inventory 只放真數字）。 */
 var INVOK={};
-function okLoad(st){var raw=lsGet("invOK_"+st);try{INVOK[st]=raw?(JSON.parse(raw)||{}):{};}catch(e){INVOK[st]={};}}
-function okOf(st,s){if(!INVOK[st])okLoad(st);var t=+INVOK[st][s.id]||0,ss=sessStart(st);return !!t&&ss!=null&&t>=ss;}
-function okSet(st,id,on){if(!INVOK[st])okLoad(st);if(on)INVOK[st][id]=Date.now();else delete INVOK[st][id];lsSet("invOK_"+st,JSON.stringify(INVOK[st]));}
-function okClearAll(st){INVOK[st]={};lsDel("invOK_"+st);}
+/* ===== 2026-09-08 bb 批：「✓ 足夾」從本機搬到雲端 =====
+   事故：6 號店同一時間，平板顯示「本次已盤 99/217」、電腦顯示「23/217」。
+   原因＝「✓ 足夠」只寫 localStorage（invOK_<店>），永遠不進 fact_inventory。
+   差的 76 項就是店長在平板上按過的勾，換一台裝置等於從沒按過。
+   連帶後果比進度數字嚴重：orderNeed 用 !okOf 排除已標足夠的品項 ⇒
+   在平板複製訂貨單少 76 項（正確），換到電腦複製就全部跑回來（多訂）。
+   修法：改存 fact_inventory 第 5 欄（原「破損量」，ay 批後已是死欄，經營者 2026-09-08 改名「足夠」）。
+   GAS applyWrite_ 的 invBatch 是 setValues 固定 7 欄、不看欄名，所以 GAS 不必改也不必重新部署。
+   INVOK/okLoad 保留為「本機草稿相容層」，真相一律以 INV[st][id].enough 為準。 */
+function okLoad(st){if(!INVOK[st])INVOK[st]={};}
+function okOf(st,s){var ss=sessStart(st);if(ss==null)return false;var iv=ivOf(st,s);
+  return num(iv.enough)===1&&iv.t!=null&&iv.t>=ss;}
+function okSet(st,id,on){INV[st]=INV[st]||{};INV[st][id]=INV[st][id]||{onHand:null,t:null};
+  INV[st][id].enough=on?1:0;INV[st][id].t=Date.now();
+  DIRTY[st]=DIRTY[st]||{};DIRTY[st][id]=true;saveDraft(st,id);}   /* 進 DIRTY 才會隨「💾 儲存盤點」送上雲端 */
+function okClearAll(st){INVOK[st]={};lsDel("invOK_"+st);
+  var m=INV[st]||{};Object.keys(m).forEach(function(id){if(m[id])m[id].enough=0;});}   /* 「新的一週」：本機先歸零；雲端舊值因 t<ss 自然失效 */
 function countedNow(st,s){var ss=sessStart(st);if(ss==null)return false;if(okOf(st,s))return true;var iv=ivOf(st,s);return iv.t!=null&&iv.t>=ss&&iv.onHand!=null;}
 /* 訂貨單文字／複製／fact_order 共用的唯一入口：本輪盤點過＋有建議量＋未標足夠＋未取消勾選 */
 function orderNeed(store){return liveItems(store).filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;}).concat(tailManual(store)).filter(function(x){return !ST.orderOff[x.s.id];});}   /* av 批：末段併入清貨尾手動填量 */
@@ -604,11 +618,11 @@ function mergeDraft(st){if(DRAFTED[st])return;DRAFTED[st]=true;
   Object.keys(d).forEach(function(id){var o=d[id]||{};INV[st]=INV[st]||{};var cur=INV[st][id]||{};
     if(cur.t!=null&&o.t!=null&&cur.t>o.t)return; // Sheet 已有更新資料（草稿已送出過）
     INV[st][id]={onHand:(o.onHand==null||o.onHand==="")?null:+o.onHand,
-      breakage:(o.breakage==null||o.breakage==="")?(cur.breakage!=null?cur.breakage:null):+o.breakage,
+      enough:(o.enough==null||o.enough==="")?(cur.enough!=null?cur.enough:0):+o.enough,
       t:(o.t||Date.now())};
     DIRTY[st]=DIRTY[st]||{};DIRTY[st][id]=true;});}
 function saveDraft(st,id){var raw=lsGet("invDraft_"+st),d={};if(raw){try{d=JSON.parse(raw)||{};}catch(e){d={};}}
-  var iv=(INV[st]||{})[id]||{};d[id]={onHand:iv.onHand,breakage:iv.breakage,t:iv.t||Date.now()};
+  var iv=(INV[st]||{})[id]||{};d[id]={onHand:iv.onHand,enough:(iv.enough==null?0:iv.enough),t:iv.t||Date.now()};
   lsSet("invDraft_"+st,JSON.stringify(d));}
 function clearDraft(st){lsDel("invDraft_"+st);}
 var ZC={},ZCST=""; // 分區收合狀態
@@ -2585,7 +2599,7 @@ function rbPoll(){rbJsonp("status",function(err,res){RB.pollN++;
   if(RB.pollN>=18){RB.busy=false;rbBtnEnable(true);   /* 2026-09-01 w 批：12→18 次（約 6 分鐘，對齊 GAS 上限）；曾在 4 分鐘時差 8 秒誤報 */
     rbSet("⏱ 超過 6 分鐘未確認完成。請重新整理看資料是否已更新；異常請查 GAS 執行紀錄。","err");RB.fromRefresh=false;return;}
   RB.pollT=setTimeout(rbPoll,RB.POLL_MS);});}
-function viewOverview(){var rowsByStore=STORES.map(function(st){var need=liveItems(st.id).map(function(s){return {s:s,r:rowFor(st.id,s)};}).filter(function(x){return x.r.packs>0;});return {st:st,need:need.length,val:need.reduce(function(a,x){return a+x.r.packs*x.s.price;},0)};});
+function viewOverview(){var rowsByStore=STORES.map(function(st){var need=liveItems(st.id).filter(function(s){return !okOf(st.id,s);}).map(function(s){return {s:s,r:rowFor(st.id,s)};}).filter(function(x){return x.r.packs>0;});   /* bb 批：「✓ 足夠」上雲端後總部也看得到，金額口徑要與訂貨單一致（訂貨單 orderNeed 早就排除） */return {st:st,need:need.length,val:need.reduce(function(a,x){return a+x.r.packs*x.s.price;},0)};});
   var maxv=Math.max.apply(null,rowsByStore.map(function(r){return r.val;}).concat([1])),totV=rowsByStore.reduce(function(a,r){return a+r.val;},0);
   var html='<div class="summary"><div class="stat"><div class="n">$'+fmt(totV)+'</div><div class="l">本週全店預估採購</div></div><div class="stat"><div class="n">'+STORES.length+'</div><div class="l">門市</div></div></div><div class="card"><div class="muted" style="margin-bottom:6px">各店預估採購金額</div>';
   rowsByStore.forEach(function(r){html+='<div style="margin:9px 0"><div style="display:flex;justify-content:space-between;font-size:13px"><b>'+r.st.name+'</b><span>$'+fmt(r.val)+'　·　'+r.need+' 項</span></div><div class="barbg" style="margin-top:4px"><div class="bar" style="width:'+(r.val/maxv*100)+'%"></div></div></div>';});
@@ -3076,8 +3090,7 @@ function wire(){
     if(sessStart(st)==null){toast("請先選擇「延續」或「新的一週」");return;}
     var on=!okOf(st,s);okSet(st,id,on);
     if(on){var inp=document.querySelector('input[data-inv="'+id+'"][data-f="onHand"]');if(inp)inp.value="";
-      if(DIRTY[st]&&DIRTY[st][id]){delete DIRTY[st][id];var raw=lsGet("invDraft_"+st),d={};try{d=raw?(JSON.parse(raw)||{}):{};}catch(e){}delete d[id];lsSet("invDraft_"+st,JSON.stringify(d));}
-      if(INV[st]&&INV[st][id]&&INV[st][id].t>=sessStart(st)){INV[st][id].t=sessStart(st)-1;}}   /* 本輪已填的數字退回「歷史值」地位，✓ 生效 */
+      if(INV[st]&&INV[st][id])INV[st][id].onHand=null;saveDraft(st,id);}   /* bb 批：清掉本輪數字但「保留在 DIRTY」——足夠旗標要跟著儲存盤點送上雲端，不能像舊版那樣把整項從待送清單移除 */
     if(!invPatch(st,id))render();};});
   var sc=$("#saveCount");if(sc)sc.onclick=function(){var store=ST.storeId,iv=INV[store]||{},dirty=DIRTY[store]||{},ids=Object.keys(dirty);
     if(!ids.length){toast("沒有變更的盤點");return;}
@@ -3087,7 +3100,7 @@ function wire(){
     /* 2026-09-05 ap 批：整批一次送（type invBatch，GAS 端一次 setValues 寫兩個檔）。
        原本每項一個請求、5 個並行：一店 100 項＝100 個請求，6 店同時存就撞 GAS 30 並行上限。現在一店＝1 個請求。
        verifySave 回讀對帳邏輯不變——沒對上就保留草稿。 */
-    var items=ids.map(function(id){return {sku_id:id,onHand:iv[id]?iv[id].onHand:null,breakage:null};});   /* ay 批：破損欄已移除，不再回寫 */
+    var items=ids.map(function(id){return {sku_id:id,onHand:iv[id]?iv[id].onHand:null,breakage:(iv[id]&&num(iv[id].enough)===1)?1:0};});   /* ay 批：破損欄已移除。bb 批：第 5 欄改承載「足夠」旗標（GAS 端 Number(it.breakage)||0，送 1/0 即可） */
     post({type:"invBatch",store:store,user:ST.role,items:items},true).then(function(){toast("送出完成，確認寫入中…");verifySave(store,expect,0,sc);});};
   // 店別參數
   Array.prototype.forEach.call(document.querySelectorAll("[data-p]"),function(el){el.onchange=function(){var id=el.dataset.p,f=el.dataset.f;var isTxt=(f==="zone"||f==="custName"||f==="custVendor");var v=isTxt?el.value:(el.value===""?"":+el.value);
