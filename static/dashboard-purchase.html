@@ -1027,7 +1027,10 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   if(ss!=null){
     var sTxt;if(ss===0){sTxt="延續歷史盤點中";}else{var sd=new Date(ss);sTxt="本次盤點開始於 "+(sd.getMonth()+1)+"/"+sd.getDate()+" "+("0"+sd.getHours()).slice(-2)+":"+("0"+sd.getMinutes()).slice(-2);}
     var pct=tot?Math.round(done/tot*100):0;
-    html+='<div class="card" style="padding:10px 12px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:14px">📋 '+sTxt+'</b><span class="pill" id="invPill">本次已盤 '+done+' / '+tot+' 項</span><span class="lock" id="invLock"'+(dn?'':' style="display:none"')+'>✍️ '+dn+' 筆已填未送出</span>'+'<span style="flex:1"></span><button class="btn ghost sm" id="sessReset">🔄 重新盤點</button></div><div class="barbg" style="margin-top:8px;height:8px"><div class="bar" id="invBar" style="height:8px;width:'+pct+'%"></div></div></div>';
+    html+='<div class="card" style="padding:10px 12px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:14px">📋 '+sTxt+'</b><span class="pill" id="invPill">本次已盤 '+done+' / '+tot+' 項</span>'
+      +(function(){var mine=myStore();if(!mine)return '<span class="pill" id="myStBtn" style="cursor:pointer;background:#FDECEA;color:#B3261E;font-weight:700">⚠️ 尚未設定本機門市（點此設定）</span>';
+        if(mine!==store)return '<span class="pill" id="myStBtn" style="cursor:pointer;background:#FDECEA;color:#B3261E;font-weight:700">⚠️ 這裡是 '+storeName(store)+'，本機門市是 '+storeName(mine)+'</span>';
+        return '<span class="pill" id="myStBtn" style="cursor:pointer" title="點此更改本機門市">🏬 本機門市：'+storeName(mine)+'</span>';})()+'<span class="lock" id="invLock"'+(dn?'':' style="display:none"')+'>✍️ '+dn+' 筆已填未送出</span>'+'<span style="flex:1"></span><button class="btn ghost sm" id="sessReset">🔄 重新盤點</button></div><div class="barbg" style="margin-top:8px;height:8px"><div class="bar" id="invBar" style="height:8px;width:'+pct+'%"></div></div></div>';
   }
   if(ST.saveWarn){var sw=ST.saveWarn;
     html+='<div class="card" style="background:#FDECEA;border:1px solid #f5b5ae;padding:10px 12px">'
@@ -2985,8 +2988,18 @@ function wire(){
   var skx=$("#skuQx");if(skx)skx.onclick=function(){ST.q="";render();};
   var vv=$("#vsel");if(vv)vv.onchange=function(){ST.vq=vv.value;render();};
   // 盤點 session
+  var mSb=$("#myStBtn");if(mSb)mSb.onclick=function(){askStore(true);};
   var sCt=$("#sessCont");if(sCt)sCt.onclick=function(){setSess(ST.storeId,0);render();};
-  var sNw=$("#sessNew");if(sNw)sNw.onclick=function(){setSess(ST.storeId,Date.now());clearDraft(ST.storeId);okClearAll(ST.storeId);DIRTY[ST.storeId]={};render();};
+  var sNw=$("#sessNew");if(sNw)sNw.onclick=function(){
+    /* 2026-09-08 bf 批 B：原本這個按鈕沒有任何二次確認（旁邊的 sessReset 反而有）。
+       店長第一次開頁預設落在 1 號店，手一滑就把 1 號店整輪盤點的「本輪」起點推掉，
+       該裝置上 1 號店會全部變未盤、訂貨單變空。Sheet 資料不會掉，但當天叫不了貨。
+       把門市名寫進確認句，選錯店的人當場看得出來。 */
+    var st=ST.storeId, mine=myStore();
+    var msg="確定要對「"+storeName(st)+"」開始新的一週嗎？\n盤點欄位會清空重新清點（歷史紀錄完整保留）。";
+    if(mine&&mine!==st)msg="⚠️ 你正在「"+storeName(st)+"」，不是本機門市「"+storeName(mine)+"」。\n\n"+msg;
+    if(typeof confirm==="function"&&!confirm(msg))return;
+    setSess(st,Date.now());clearDraft(st);okClearAll(st);DIRTY[st]={};render();};
   var sRs=$("#sessReset");if(sRs)sRs.onclick=function(){var dnn=Object.keys(DIRTY[ST.storeId]||{}).length;
     var msg=dnn>0?("尚有 "+dnn+" 筆已填未送出，重新盤點將捨棄這些數值並重新載入頁面。確定開始新的一週？"):"確定開始新的一週嗎？欄位將清空重新清點（歷史紀錄完整保留）。";
     if(!confirm(msg))return;setSess(ST.storeId,Date.now());clearDraft(ST.storeId);okClearAll(ST.storeId);
@@ -3109,6 +3122,13 @@ function wire(){
     if(!invPatch(st,id))render();};});
   var sc=$("#saveCount");if(sc)sc.onclick=function(){var store=ST.storeId,iv=INV[store]||{},dirty=DIRTY[store]||{},ids=Object.keys(dirty);
     if(!ids.length){toast("沒有變更的盤點");return;}
+    /* 2026-09-08 bf 批 C：跨店存檔是唯一會真的污染資料的路徑——店長沒注意到自己停在 1 號店，
+       填完數字直接存，就寫進 1 號店的 fact_inventory。原本只有一句平鋪直敘的確認，很容易被按過去。
+       與本機門市不同時，把警告放到第一行並要求再確認一次。 */
+    var mine=myStore();
+    if(mine&&mine!==store){
+      if(typeof confirm==="function"&&!confirm("⚠️ 門市不對？\n\n這台裝置的本機門市是「"+storeName(mine)+"」，\n但你正要把 "+ids.length+" 筆盤點存到「"+storeName(store)+"」。\n\n存錯會污染該店的庫存與訂貨量。\n確定要存到「"+storeName(store)+"」嗎？"))return;
+    }
     if(typeof confirm==="function"&&!confirm("確定把這 "+ids.length+" 筆盤點存到「"+storeName(store)+"」？\n（門市選錯請先取消，到上方切換門市）"))return;
     var expect={};ids.forEach(function(id){expect[id]=iv[id]?num(iv[id].onHand):0;});
     sc.disabled=true;ST.saveWarn=null;toast("送出中… "+ids.length+" 筆");
@@ -3556,7 +3576,43 @@ if(typeof window!=="undefined"){var __rb=document.getElementById("refreshBtn");i
     var go=confirm("要順便重算後端嗎？\n\n【確定】重讀 ＋ 重算（後端跑 2–3 分鐘）\n　→ 改了 BOM、檔期、單位對照、預約之後才需要\n\n【取消】只重讀最新資料（幾秒）\n　→ 改主檔、店別參數、標配、盤點之後用這個就夠");
     refreshAll(!go);return;}
   refreshAll();};}
-if(typeof window!=="undefined"&&!window.__TEST__) bootstrap();
+/* ===== 2026-09-08 bf 批 A：本機門市 =====
+   事故情境（經營者提出）：每位店長第一次開頁都落在「1 號店」的盤點頁，並立刻被問「新盤點／延續」。
+   實測後果分兩層——
+     ① 按「新的一週」：Sheet 完全沒被寫，只是這台裝置上 1 號店的本輪起點被推掉（可回復）
+     ② 沒發現自己在 1 號店就填數字並儲存：**直接寫進 1 號店的 fact_inventory，這才是真的污染**
+   根治法＝不要有預設門市。第一次開頁先讓店長選自己的店，選了才進得去，之後記在本機。
+   `myStore` 與既有的 `lastStore` 分開存：lastStore 每次切換都會更新（總部要跨店看），
+   myStore 只在這裡設定，當作「這台裝置屬於哪一店」的錨，跨店存檔時用它比對。 */
+function myStore(){var v=lsGet("myStore");return (v&&STORES.some(function(s){return s.id===v;}))?v:"";}
+function setMyStore(id){lsSet("myStore",String(id));lsSet("lastStore",String(id));ST.storeId=String(id);
+  var sel=$("#storeSel");if(sel)sel.value=String(id);}
+function askStore(force){
+  if(document.getElementById("stGate"))return;
+  if(!force&&myStore())return;
+  if(!STORES||!STORES.length)return;
+  var d=document.createElement("div");d.id="stGate";
+  d.style.cssText="position:fixed;inset:0;z-index:99997;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px";
+  d.innerHTML='<div style="background:#fff;border-radius:14px;padding:22px 20px;width:min(420px,92vw);max-height:86vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:18px;font-weight:800;margin-bottom:4px;text-align:center">🏬 請選擇你的門市</div>'
+    +'<div style="font-size:13px;color:#666;margin-bottom:14px;line-height:1.6;text-align:center">盤點與訂貨都會存到你選的這一店。<br>選錯會把數字寫進別人的店，請確認清楚。</div>'
+    +'<div id="stList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
+    + STORES.map(function(s){return '<button class="btn ghost" data-pickst="'+s.id+'" style="padding:12px 4px;font-size:15px;font-weight:700">'+s.name+'</button>';}).join('')
+    +'</div>'
+    +(force?'<div style="margin-top:12px"><button class="btn ghost" id="stCancel" style="width:100%">取消</button></div>':'')
+    +'</div>';
+  document.body.appendChild(d);
+  function close(){if(d.parentNode)d.parentNode.removeChild(d);}
+  var cx=d.querySelector("#stCancel");if(cx)cx.onclick=close;
+  Array.prototype.forEach.call(d.querySelectorAll("[data-pickst]"),function(b){
+    b.onclick=function(){var id=b.getAttribute("data-pickst");
+      if(typeof confirm==="function"&&!confirm("確定這台裝置是「"+storeName(id)+"」嗎？\n（之後可在盤點頁右上角更改）"))return;
+      setMyStore(id);close();
+      ST.exp={};ST.orderEdit={};ST.orderOff={};
+      try{render();}catch(e){}
+      loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
+      toast("本機門市已設為 "+storeName(id));};});}
+if(typeof window!=="undefined"&&!window.__TEST__) bootstrap().then(function(){ askStore(false); });
 </script>
 </body>
 </html>
