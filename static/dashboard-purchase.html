@@ -879,7 +879,13 @@ function matchQ(s){var st=ST.storeId;
   return q.split(/\s+/).every(function(k){return k&&hay.indexOf(k)>=0;});}
 function isManual(st,s){return !isDur(s)&&!periodWeekly(st,s)&&manualOf(st,s)>0;}
 function forecastWeekly(st,s){if(statusOf(st,s)==="已停售")return 0;var w=periodWeekly(st,s);if(!w&&!isDur(s)&&manualOf(st,s)>0)w=manualOf(st,s);return w*demandAdj(st,s).adj;}
-function bundle(st,s){var sp=pOf(st,s),iv=ivOf(st,s);return {forecastWeekly:forecastWeekly(st,s),manual:isManual(st,s),weight:sp.weight,leadDays:(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),orderCycleWeeks:sp.orderCycleWeeks,safety:sp.safety,par:sp.par,onHand:num(iv.onHand)*(isDur(s)?1:pqOf(st,s)),breakage:0,booking:bookOf(st,s)   /* 2026-09-07 ay 批：破損欄已移除（現有量只數還能用的）。固定 0，避免 fact_inventory 舊破損值永遠默默加量 */,newitem:newOf(st,s),packQty:pqEff(st,s),parMode:parMode(st,s)};}
+function bundle(st,s){var sp=pOf(st,s),iv=ivOf(st,s);return {forecastWeekly:forecastWeekly(st,s),manual:isManual(st,s),weight:sp.weight,leadDays:(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),orderCycleWeeks:sp.orderCycleWeeks,safety:sp.safety,par:sp.par,onHand:num(iv.onHand)*(isDur(s)?1:pqOf(st,s)),breakage:0,booking:bookOf(st,s)   /* 2026-09-07 ay 批：破損欄已移除（現有量只數還能用的）。固定 0，避免 fact_inventory 舊破損值永遠默默加量 */,newitem:(isDur(s)?0:newOf(st,s))   /* 2026-09-08 bg 批（經營者裁示 A 案）：器具／模具不吃 agg_newitem。
+     EventLayer 產 agg_newitem 時對器具用的是跟食材同一套「預估份數 × BOM 用量」，
+     所以「湯匙 34」的意思是「這個檔期會用到 34 次」，不是「要有 34 支」——湯匙洗一洗就能再用。
+     實測 6 號店還出現「磅秤 9 台」。全 12 店 309 格受影響、被當成要買的金額 $204,915。
+     器具的需求本來就是「同時最多要幾支」＝標配，與賣幾份無關；檔期真的要多買模具，
+     由總部在檔期上架時把標配從 8 改成 12，不該讓系統從銷量推。🎉 檔期徽章保留（提示這檔會用到），但不影響數量。 */
+   ,packQty:pqEff(st,s),parMode:parMode(st,s)};}
 function rowFor(st,s){return computeRow(s,bundle(st,s));}
 /* 2026-09-01 w 批：dim_sku 三個新欄（總部直接在 Sheet 填）
    適用店：填 9,10,12 ＝只有這三店出現；空白＝全店。  狀態：停售／不盤點 ＝全站不出現在盤點、建議、訂貨單。
@@ -1078,8 +1084,12 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
    softPar（食材/耗材填了標配）走同一條 par 分支，同樣要顯示生效基準。 */
 function parRefTxt(store,s){
   var dur=isDur(s),cv=(!dur&&pqEff(store,s)>0)?pqOf(store,s):1,u=dur?s.useUnit:(pqEff(store,s)>0?s.buyUnit:s.useUnit);
-  var pb=parOf(store,s),ni=num(newOf(store,s)),eff=Math.max(pb,ni);
-  if(ni>pb)return '需備 '+dec(eff/cv)+' '+u+'<span class="muted" style="font-size:12px">（🎉 檔期需求 '+dec(ni/cv)+' ＞ 標配 '+dec(pb/cv)+'，檔期結束自動回歸標配）</span>';
+  var pb=parOf(store,s);
+  /* 2026-09-08 bg 批：器具／模具改為只看標配（見 bundle 的說明），不再顯示「需備 N（檔期需求 ＞ 標配）」。
+     標配未設時直接講白話，因為那正是目前 1,164 格裡 1,161 格的狀態。 */
+  if(dur&&pb<=0)return '<span style="color:#8A5A00">標配未設定</span><span class="muted" style="font-size:12px">（器具／模具靠標配補貨。設好標配後，低於標配才會建議補）</span>';
+  var ni=num(newOf(store,s)),eff=Math.max(pb,ni);
+  if(!dur&&ni>pb)return '需備 '+dec(eff/cv)+' '+u+'<span class="muted" style="font-size:12px">（🎉 檔期需求 '+dec(ni/cv)+' ＞ 標配 '+dec(pb/cv)+'，檔期結束自動回歸標配）</span>';
   return '標配 '+dec(pb/cv)+' '+u+(dur?'':'（本店設定）');}
 /* ===== 2026-09-08 az 批 ②：權數離群守門 =====
    2026-07 週用量系統性低估 50% 的時期，各店在 ⚙ 設了補償權數；7/27 對照表表頭修好後用量已正確，
@@ -1117,9 +1127,10 @@ function lastWkTxt(store,s){
   var lbl=dur?"上週使用":"上週用量";
   if(!(w>0))return '<div class="sub" style="color:#8A8178">📉 '+lbl+' <b>0</b> '+s.useUnit+'<span class="muted">（上一完整週沒有銷售紀錄）</span></div>';
   var pk=(cv>0)?('<span class="muted">（≈ '+dec(w/cv)+' '+s.buyUnit+'）</span>'):'';
-  var tip=dur?'上一完整週 POS 銷售推算的使用次數。器具／模具可重複使用，這個數字不代表要補貨，補貨看標配。'
-             :'上一完整週（週一〜週日）由 POS 銷量 × BOM 配方推算，含訂貨引擎的安全緩衝，與本卡片的訂貨點同一個口徑。查詢頁的「各店使用量」是純配方量，會比這裡低約 5%。';
-  return '<div class="sub" style="color:#5B6B5E">📉 '+lbl+' <b>'+fmt(w)+'</b> '+s.useUnit+' '+pk+'<span class="muted" style="cursor:help" title="'+escA(tip)+'"> ⓘ</span></div>';}
+  /* 2026-09-08 bg 批：拿掉 ⓘ 技術口徑說明。那段是寫給我跟經營者看的（引擎口徑 vs 查詢頁口徑），
+     放在店長的盤點卡片上只是噪音；店長要知道的就是「上週用了多少」。
+     同批 GAS 已取消統一損耗率（食材 1.05／耗材 1.03 → 1），原本那句「含安全緩衝、比查詢頁高 5%」也不再成立。 */
+  return '<div class="sub" style="color:#5B6B5E">📉 '+lbl+' <b>'+fmt(w)+'</b> '+s.useUnit+' '+pk+'</div>';}
 /* 2026-09-02 x 批：卡片「建議」行。器具模具以使用單位顯示（與訂貨單同單位）；✓ 足夠 顯示綠字 */
 function invSugHtml(store,s){
   if(skuTail(s)){var tq=num(ST.orderEdit[s.id]),tu=isDur(s)?s.useUnit:s.buyUnit;   /* av 批：清貨尾＝不建議採購，只留手動填量 */
