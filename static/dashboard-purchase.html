@@ -885,6 +885,9 @@ function rowFor(st,s){return computeRow(s,bundle(st,s));}
    適用店：填 9,10,12 ＝只有這三店出現；空白＝全店。  狀態：停售／不盤點 ＝全站不出現在盤點、建議、訂貨單。
    最後有效日：由 diybc-sku-autodraft v1.1 每日 06:00 依 BOM×對照表結束有效日算出；小於今天＝過季，盤點頁進「🗓 過季」籤。 */
 function skuForStore(st,s){return !s.stores||!s.stores.length||s.stores.indexOf(String(st))>=0;}
+var EXPIRE_WINDOW_DAYS=90;   /* 2026-09-08 bc 批：「🗓 過季」只看最近 N 天內結束的檔期。
+   全開會有 208 項、其中 2025 年就佔 139 項，店長不會看；90 天內＝14 項，是真的會走一趟後場確認的量。
+   要改就改這一個數字（0 或負數＝不設窗、全部顯示）。 */
 var EXPIRE_GRACE_DAYS=14;  /* 檔期結束後寬限 N 天才視為過季。2026-09-06 au 批 7→14：經營者確認檔期結束後通常再賣 7–14 天清食材耗材，7 天會在清貨尾期間把料藏起來 */
 function skuExpired(s){return !!s.lastValid&&s.lastValid<ymd(new Date(TODAY.getTime()-EXPIRE_GRACE_DAYS*864e5));}
 /* 2026-09-06 av 批：「🧹 清貨尾」狀態。最後有效日已過、但還在寬限期（EXPIRE_GRACE_DAYS）內＝檔期結束後清剩料的 7–14 天。
@@ -899,7 +902,14 @@ function skuTail(s){return !!s.lastValid&&s.lastValid<ymd(TODAY)&&!skuExpired(s)
 function tailItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&!s.status&&skuForStore(st,s)&&skuTail(s);});}
 function tailManual(st){return tailItems(st).filter(function(s){return num(ST.orderEdit[s.id])>0;}).map(function(s){return {s:s,r:rowFor(st,s),tail:true};});}
 function liveItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&(statusOf(st,s)!=="已停售"||num(newOf(st,s))>0||num(bookOf(st,s))>0)&&!s.status&&skuForStore(st,s)&&!skuExpired(s)&&!skuTail(s);});}   /* 2026-09-08 az 批：引擎的「已停售」＝近 4 週 POS 沒賣。檔期品在開賣前 14 天的備料期正好是這個狀態，會連同 EventLayer 已經算好的備料需求一起被藏掉（同 ay 批清貨尾的根因，換一個方向）。有 agg_newitem／agg_booking 需求就代表「未來要用」，必須看得到 */
-function expiredItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)!=="已停售"&&!s.status&&skuForStore(st,s)&&skuExpired(s);});}
+/* 2026-09-08 bc 批：修 ay 批留下的同一個 bug（第三次踩「已停售」這個閘門）。
+   原本排除 statusOf==="已停售"。但 aggOf 對「agg_purchase 沒有這一列」的品項回傳預設值「販售中」，
+   於是過季籤實際顯示的是「這家店從來沒賣過」的 65~79 項（沒賣過＝店裡沒東西＝沒得清），
+   而真正該清的 143 項（曾經賣過、現在停了、主檔也過期）反而全被藏起來。
+   改為不看該旗標，改用 EXPIRE_WINDOW_DAYS 控制清單長度：12 店一致 208 → 14 項。 */
+function expiredWin(s){if(!(EXPIRE_WINDOW_DAYS>0))return true;
+  return s.lastValid>=ymd(new Date(TODAY.getTime()-EXPIRE_WINDOW_DAYS*864e5));}
+function expiredItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&!s.status&&skuForStore(st,s)&&skuExpired(s)&&expiredWin(s);});}
 function exclItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)==="已停售"&&aggOf(st,s).week>0;});}
 function upInfo(st,s){var a=aggOf(st,s);if(!a.launch)return null;var d=new Date(String(a.launch).replace(/\//g,"-"));return {days:Math.max(0,Math.ceil((d-TODAY)/864e5))};}
 function toast(m){var t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove("on");},1500);}
@@ -1031,7 +1041,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   if(ST.invFilter==="零需求")html+='<div class="note">💤 這些品項目前<b>訂貨點／標配為 0</b>（近 4 週無用量、無手動週用、無預約或檔期需求；器具模具＝標配未設），盤了也不會產生訂貨，所以不列在「全部」。若已停售，請回報總部在主檔處理；若本店確實不用，可到「店別參數」取消啟用；若是器具模具，請在店別參數填標配。</div>';
   if(ST.invFilter==="出貨中心")html+='<div class="note">🏬 廠商為出貨中心的品項。盤完後到「訂貨單」的出貨中心區塊即可整批下單。</div>';
   if(ST.invFilter==="清貨尾")html+='<div class="note" style="background:#FFF6E5;border-color:#F0B35A">🧹 這些品項的檔期已結束，正在<b>用完剩餘庫存</b>（結束後 '+EXPIRE_GRACE_DAYS+' 天內）。系統<b>不建議採購</b>、不列進「全部」、不算進度。不用刻意盤；真的不夠用才在卡片填「仍需補」，填了才會進訂貨單。'+EXPIRE_GRACE_DAYS+' 天後自動移到「🗓 過季」。</div>';
-  if(ST.invFilter==="過季")html+='<div class="note">🗓 用到這些品項的甜點，在「產品名稱對照表」的結束有效日都已過 '+EXPIRE_GRACE_DAYS+' 天以上，系統不再為它們建議訂貨、也不列進「全部」。剩料用完即可；若甜點回鍋，對照表更新有效日後隔天自動回到清單。</div>';
+  if(ST.invFilter==="過季")html+='<div class="note">🗓 用到這些品項的甜點，結束有效日都已過 '+EXPIRE_GRACE_DAYS+' 天以上，系統不再為它們建議訂貨、也不列進「全部」。<b>只列最近 '+EXPIRE_WINDOW_DAYS+' 天內結束的檔期</b>（更早的不再提醒，免得清單長到沒人看）。剩料用完、該退該報廢就處理掉；若甜點回鍋，對照表更新有效日後隔天自動回到清單。</div>';
   if(!items.length)html+='<div class="note">此篩選目前沒有品項 ✅</div>';
   html+='<div class="groups">';
   groups.forEach(function(gp){var zc=!!ZC[gp.name];var zDone=gp.items.filter(function(o){return countedNow(store,o.s);}).length;
