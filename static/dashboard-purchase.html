@@ -2277,9 +2277,38 @@ function parseBookingCsv(buf){var txt="";
    相容五種寫法：後台整段（含付款期限等雜訊）、只複製品項區塊、舊 CSV「品名,數量,備註」、
    「品名 x 6」、「品名   6 份」。 */
 var BK_SKIPKW=/(日期|人數|份數|金額|電話|Email|信箱|訂金|總計|低消|付款|時段|分店|類別|已付|帳號|姓名|回訂位|修改訂位)/;
+/* ===== 2026-09-09 bn 批：解析要吃 POS 品名，對不到也不擋匯入 =====
+   起因：預約後台貼過來的是 POS 結帳品名（例：齁齁豬冰皮月餅材料包），BOM 表是「齁齁豬冰皮月餅【F82】」。
+   bk 批的判定是「bkKnown 完全相符才准匯入」，只要對照表剛加的列還沒鏡像到專用檔、或名字差個空格／全形括號，
+   整筆就被擋掉。改法：
+   ① loadBkMap 同時讀 BOM 本＋專用檔的對照表，聯集（新加的列不用等 07:05 鏡像）
+   ② bkResolve 三層對應：完全相符 → 去空格／全形括號／【編號】後相符 → 再去(葷)(素)尾巴或包含關係，唯一才採用（標「≈」）
+   ③ 對不到的也匯入（保留客人真的訂了什麼），但標「⚠️未對應」＝不會產生備料需求，核對區可直接改名 */
+function bkNorm(s,lvl){
+  var t=String(s==null?"":s).replace(/[\s\u3000]+/g,"").replace(/（/g,"(").replace(/）/g,")").replace(/／/g,"/").toLowerCase();
+  if(lvl>=2)t=t.replace(/【[^】]*】/g,"").replace(/\((葷|素|全素|蛋奶素|奶素|蛋素|限)\)$/,"").replace(/-限$/,"").replace(/限定$/,"");
+  return t;}
+var BKIDX=null,BKIDXN=-1;
+function bkIndex(){var opts=bkOptions();if(BKIDX&&BKIDXN===opts.length)return BKIDX;
+  var ix={l1:{},l2:{},all:opts};
+  opts.forEach(function(n){var k1=bkNorm(n,1),k2=bkNorm(n,2);(ix.l1[k1]=ix.l1[k1]||[]).push(n);(ix.l2[k2]=ix.l2[k2]||[]).push(n);});
+  BKIDX=ix;BKIDXN=opts.length;return ix;}
+/* 候選若都指向同一個 BOM 甜點（POS 名與 BOM 名各一個），視為唯一；優先回傳 POS 名（店長認得） */
+function bkUniq(arr){if(!arr||!arr.length)return null;var byC={},order=[];
+  arr.forEach(function(n){var c=(BKMAP&&BKMAP[n])||n;if(!byC[c]){byC[c]=n;order.push(c);}else if(BKMAP&&BKMAP[n]&&BKMAP[n]!==n)byC[c]=n;});
+  return order.length===1?byC[order[0]]:null;}
+function bkResolve(name){name=String(name||"").trim();
+  if(!name)return {name:name,ok:false,approx:false};
+  if(bkKnown(name))return {name:name,ok:true,approx:false};
+  var ix=bkIndex(),k1=bkNorm(name,1),k2=bkNorm(name,2),hit;
+  hit=bkUniq(ix.l1[k1]);if(hit)return {name:hit,ok:true,approx:hit!==name};
+  hit=bkUniq(ix.l2[k2]);if(hit)return {name:hit,ok:true,approx:true};
+  if(k2.length>=3){var cand=ix.all.filter(function(n){var nk=bkNorm(n,2);return nk.length>=3&&(nk.indexOf(k2)>=0||k2.indexOf(nk)>=0);});
+    hit=bkUniq(cand);if(hit)return {name:hit,ok:true,approx:true};}
+  return {name:name,ok:false,approx:false};}
 function parseBookingPaste(txt){
   var lines=String(txt||"").split(/\r?\n/).map(function(l){return l.replace(/\u3000/g," ").trim();}).filter(Boolean);
-  var date="",name="";
+  var date="",name="",phone="";
   /* 後台一頁有多個日期（付款期限、訂位日期…）。優先取「訂位日期」標籤下那一個，
      明確排除付款／建立日，都找不到才退回第一個。 */
   for(var i=0;i<lines.length;i++){
@@ -2292,7 +2321,8 @@ function parseBookingPaste(txt){
     if(/付款期限|付款日|建立日|下單日|成立日/.test(ctx))continue;
     if(!date)date=d;
   }
-  lines.forEach(function(l){if(!name){var nm=l.match(/姓\s*名\s*[：:]\s*([^\s\/／|｜]+)/);if(nm)name=nm[1];}});
+  lines.forEach(function(l){if(!name){var nm=l.match(/姓\s*名\s*[：:]\s*([^\s\/／|｜]+)/);if(nm)name=nm[1];}
+    if(!phone){var pm=l.match(/(?:電\s*話|手機|聯絡電話|Tel|TEL|tel)\s*[：:]?\s*(\+?[\d\-\s()]{8,})/);if(pm){var dg=pm[1].replace(/[^\d]/g,"");if(dg.length>=8)phone=dg;}}});
   var rows=[];
   lines.forEach(function(l){
     if(BK_SKIPKW.test(l))return;
@@ -2303,9 +2333,10 @@ function parseBookingPaste(txt){
     if(!m)return;
     var nm2=String(m[1]).replace(/^[-•・*\s]+/,"").replace(/\s+$/,""),q=+m[2];
     if(!nm2||!(q>0))return;
-    rows.push({dessert:nm2,qty:q,note:(m[3]||"").trim(),err:bkKnown(nm2)?"":"清單查無此甜點"});
+    var rs=bkResolve(nm2);
+    rows.push({raw:nm2,dessert:rs.name,qty:q,note:(m[3]||"").trim(),approx:rs.approx,miss:!rs.ok,err:""});
   });
-  return {date:date,name:name,rows:rows};}
+  return {date:date,name:name,phone:phone,rows:rows};}
 /* 待送出清單：同一場次（同日期＋同備註）可以先累積多筆，最後一次送出 */
 function bkDraftHtml(){
   var d=ST.bkDraft||[];
@@ -2333,11 +2364,16 @@ var BKMAP=null,BKMAPLD=null;
 function loadBkMap(){
   if(BKMAP)return Promise.resolve(BKMAP);
   if(BKMAPLD)return BKMAPLD;
-  BKMAPLD=gvizQ("產品名稱對照表","select A,B label A 'pn', B 'cn'").then(function(rs){
+  /* 2026-09-09 bn 批：同時讀 BOM 本（經營者剛加的列）與專用檔（鏡像），聯集。任一邊失敗不影響另一邊。 */
+  var q="select A,B label A 'pn', B 'cn'";
+  BKMAPLD=Promise.all([
+    gvizQ("產品名稱對照表",q).catch(function(){return [];}),
+    gvizQ("產品名稱對照表",q,SHEET_ID).catch(function(){return [];})
+  ]).then(function(arr){
     var m={};
-    rs.forEach(function(r){var pn=String(r["pn"]==null?"":r["pn"]).trim();
-      if(!pn)return; m[pn]=String(r["cn"]==null?"":r["cn"]).trim()||pn;});
-    BKMAP=m;return m;
+    (arr[0]||[]).concat(arr[1]||[]).forEach(function(r){var pn=String(r["pn"]==null?"":r["pn"]).trim();
+      if(!pn)return; var cn=String(r["cn"]==null?"":r["cn"]).trim(); if(cn||!m[pn])m[pn]=cn||pn;});
+    BKMAP=m;BKIDX=null;return m;
   }).catch(function(){BKMAP={};return BKMAP;});
   return BKMAPLD;}
 /* 可選清單＝POS 品名（店長熟的）∪ BOM 甜點名（沒有對照列的補上），去重後排序 */
@@ -2349,6 +2385,56 @@ function bkOptions(){
 function bkKnown(name){name=String(name||"").trim();if(!name)return false;
   if(BKMAP&&BKMAP[name])return true;
   return DESSERTS.indexOf(name)>=0;}
+/* ===== 2026-09-09 bn 批：預約 × BOM 展開抽成純函式，期間備料與客人查詢共用 =====
+   同時修 bj 批留下的洞：期間備料用 b.dessert 直接查 BOM 表，預約若存的是 POS 品名會落「BOM 查無」。
+   這裡照 GAS 的 posToCanon 邏輯先轉 BOM 名，再用 bkNorm 寬鬆比對一次。 */
+function bkExpand(sel,rs){
+  var byD={};sel.forEach(function(b){byD[b.dessert]=(byD[b.dessert]||0)+b.qty;});
+  var byName={};SKUS.forEach(function(sk){byName[sk.name]=sk;});
+  var bomByD={},bomIdx={};rs.forEach(function(r){var dn=String(r["甜點名稱"]||"").trim();if(!dn)return;(bomByD[dn]=bomByD[dn]||[]).push({item:String(r["食材/器具名稱"]||"").trim(),qty:num(r["數量"]),unit:String(r["單位"]||"").trim(),cont:String(r["容器"]||"").trim()});});
+  Object.keys(bomByD).forEach(function(k){var kk=bkNorm(k,1);if(!bomIdx[kk])bomIdx[kk]=k;});
+  function rowsOf(dn){if(bomByD[dn])return bomByD[dn];var cn=BKMAP&&BKMAP[dn];if(cn&&bomByD[cn])return bomByD[cn];
+    var k=bomIdx[bkNorm(dn,1)]||(cn?bomIdx[bkNorm(cn,1)]:null);return k?bomByD[k]:null;}
+  var need={},cont={},unknown=[],CSET2={};Object.keys(CT_BASE).forEach(function(k){CSET2[k]=1;});
+  Object.keys(bomByD).forEach(function(dn){bomByD[dn].forEach(function(r){var c=contName(r.cont);if(c)CSET2[c]=1;});});
+  Object.keys(byD).forEach(function(dn){var n=byD[dn],rows=rowsOf(dn);
+    if(!rows||!rows.length){unknown.push(dn);return;}
+    rows.forEach(function(r){if(!r.item)return;
+      var k=r.item+"|"+r.unit;(need[k]=need[k]||{name:r.item,unit:r.unit,qty:0}).qty+=r.qty*n;
+      var c=contName(r.cont);if(c)cont[c]=(cont[c]||0)+n;
+      var mn=contName(r.item);
+      if(!CSET2[mn]){var sx=byName[r.item];mn=sx?contName(sx.name):"";}
+      if(mn&&CSET2[mn]&&mn!==c)cont[mn]=(cont[mn]||0)+n*(num(r.qty)||1);});});
+  var items=Object.keys(need).map(function(k){var x=need[k],sk=byName[x.name];
+    return {name:x.name,unit:x.unit,qty:x.qty,sku:sk||null,cat:sk?sk.cat:"未對應"};});
+  items.sort(function(a,b){return b.qty-a.qty;});
+  return {total:sel.reduce(function(a,b){return a+b.qty;},0),
+    desserts:Object.keys(byD).map(function(d){return {name:d,qty:byD[d]};}).sort(function(a,b){return b.qty-a.qty;}),
+    items:items,unknownDessert:unknown,
+    containers:Object.keys(cont).map(function(c){return {name:c,qty:cont[c]};}).sort(function(a,b){return b.qty-a.qty;})};}
+function bkNeedHtml(N){
+  var h='<div style="overflow-x:auto"><table><tr><th>甜點</th><th class="right">份數</th></tr>'+N.desserts.map(function(d){return '<tr><td><b>'+shEsc(d.name)+'</b></td><td class="right">'+fmt(d.qty)+'</td></tr>';}).join('')+'</table></div>';
+  var CATS=["食材","耗材","器具","模具","未對應"];
+  CATS.forEach(function(cat){var rows=N.items.filter(function(x){return x.cat===cat;});if(!rows.length)return;
+    h+='<div class="vh" style="margin-top:8px"><span class="vn">'+cat+(cat==="器具"||cat==="模具"?'（同場同時使用量）':'')+'</span><span class="vl"></span><span class="muted">'+rows.length+' 項</span></div>';
+    h+='<div style="overflow-x:auto"><table><tr><th>品項</th><th class="right">需求量</th><th class="right">換算採購</th></tr>'
+      +rows.map(function(x){var pk=(x.sku&&x.sku.packQty>0&&x.unit===x.sku.useUnit)?dec(x.qty/x.sku.packQty)+' '+x.sku.buyUnit:'—';
+        return '<tr><td><b>'+shEsc(x.name)+'</b></td><td class="right"><b>'+fmt(Math.round(x.qty*100)/100)+'</b> '+shEsc(x.unit)+'</td><td class="right">'+pk+'</td></tr>';}).join('')+'</table></div>';});
+  if(N.containers.length){h+='<div class="vh" style="margin-top:8px"><span class="vn">容器（逐食材計＋直接領用）</span><span class="vl"></span></div><div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">需求數</th></tr>'+N.containers.map(function(c){return '<tr><td><b>'+shEsc(c.name)+'</b></td><td class="right">'+fmt(c.qty)+'</td></tr>';}).join('')+'</table></div>';}
+  return h;}
+/* 客人查詢：姓名或電話（純數字≥4 碼視為電話，只比對備註裡的數字）。含過去的預約，回頭客再訂時可查上次點了什麼。 */
+function bkSessions(q,store){
+  q=String(q||"").trim();if(!q)return [];
+  var isTel=/^\d{4,}$/.test(q),ql=q.toLowerCase();
+  var hit=BOOKINGS.filter(function(b){if(b.store!==String(store)||b.status==="取消")return false;
+    var nt=String(b.note||"");
+    if(isTel)return nt.replace(/[^\d]/g,"").indexOf(q)>=0;
+    return nt.toLowerCase().indexOf(ql)>=0||String(b.dessert||"").toLowerCase().indexOf(ql)>=0;});
+  var g={},order=[];
+  hit.forEach(function(b){var k=b.date+"|"+(b.note||"");if(!g[k]){g[k]={date:b.date,note:b.note||"",rows:[],total:0};order.push(k);}
+    g[k].rows.push(b);g[k].total+=b.qty;});
+  return order.map(function(k){return g[k];}).sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;});}
+var BKQ=null;   /* 客人查詢展開結果：null／"loading"／{label,need} */
 function viewBooking(){var store=ST.storeId;
   if(BKMAP===null){loadBkMap().then(function(){if(ST.tab==="預約")render();});}
   var opts=bkOptions().map(function(d){return '<option value="'+shEsc(d)+'"></option>';}).join('');
@@ -2367,20 +2453,27 @@ function viewBooking(){var store=ST.storeId;
     +bkDraftHtml()
     +'</div>';
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">📋 從預約後台整段貼上（大型活動最快）</div>'
-    +'<div class="muted" style="font-size:12px;margin-bottom:6px">在預約後台把<b>訂位日期、姓名、品項清單</b>一起選取複製，貼進下面的框，按「解析」。系統自動抓出日期、姓名與每一項的數量，核對後一次匯入。也吃「甜點名稱,數量」這種舊格式。</div>'
+    +'<div class="muted" style="font-size:12px;margin-bottom:6px">在預約後台把<b>訂位日期、姓名、電話、品項清單</b>一起選取複製，貼進下面的框，按「解析」。系統自動抓出日期、姓名、電話與每一項的數量，核對後一次匯入。也吃「甜點名稱,數量」這種舊格式。</div>'
     +'<textarea class="sm" id="bkPaste" style="width:100%;min-height:96px;font-family:inherit" placeholder="例：&#10;姓名：陳佳樺 / 電話：0975851268&#10;訂位日期&#10;2026/09/10&#10;汪汪狗蛋黃酥 $750 * 9 份&#10;老奶奶檸檬蛋糕 $620 * 2 份"></textarea>'
     +'<div class="toolbar" style="margin-top:6px"><button class="btn" id="bkPaseGo">解析</button>'
     +'<button class="btn ghost" id="bkPasteClr" style="margin-left:6px">清空</button></div>';
-  if(ST.csvRows&&ST.csvRows.length){var ok=ST.csvRows.filter(function(r){return !r.err;}).length,bad=ST.csvRows.length-ok;
+  if(ST.csvRows&&ST.csvRows.length){var miss=ST.csvRows.filter(function(r){return r.miss;}).length,apx=ST.csvRows.filter(function(r){return r.approx&&!r.miss;}).length;
     h+='<div style="margin-top:10px;padding:8px 10px;background:#EAF3FB;border:1px solid #7FB3DA;border-radius:8px">'
       +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">'
       +'<b style="color:#0B4A6F">核對</b>'
       +'<input class="sm" type="date" id="bkCsvDate" min="'+ymd(TODAY)+'" value="'+(ST.csvDate||'')+'">'
-      +'<input class="sm" id="bkCsvNote" style="width:190px" placeholder="備註(公司名/場次)" value="'+shEsc(ST.csvNote||'')+'">'
-      +'<span class="muted" style="font-size:12px">解析出來的日期與姓名已自動填入，可以改</span></div>'
-      +'<div style="overflow-x:auto"><table><tr><th>#</th><th>甜點</th><th class="right">數量</th><th>狀態</th></tr>'
-      +ST.csvRows.map(function(r,i){return '<tr><td>'+(i+1)+'</td><td>'+shEsc(r.dessert)+'</td><td class="right"><b>'+r.qty+'</b></td><td>'+(r.err?'<span style="color:#C0392B">❌ '+r.err+'</span>':'✅')+'</td></tr>';}).join('')+'</table></div>'
-      +'<div class="toolbar" style="margin-top:6px"><button class="btn" id="bkCsvGo"'+(ok?'':' disabled')+'>確認匯入 '+ok+' 筆</button>'+(bad?'<span class="muted" style="margin-left:8px">'+bad+' 筆對不到甜點清單，不會匯入</span>':'')+'</div></div>';}
+      +'<input class="sm" id="bkCsvNote" style="width:230px" placeholder="備註(姓名 電話)" value="'+shEsc(ST.csvNote||'')+'">'
+      +'<span class="muted" style="font-size:12px">解析出來的日期、姓名與電話已自動填入，可以改；之後用姓名或電話就查得到這場</span></div>'
+      +'<div style="overflow-x:auto"><table><tr><th>#</th><th>貼上的品名</th><th>對應到系統的甜點</th><th class="right">數量</th><th>狀態</th></tr>'
+      +ST.csvRows.map(function(r,i){
+        var cell=(r.miss||r.approx)
+          ?'<input class="sm" list="bkDsList" data-bkfix="'+i+'" value="'+shEsc(r.dessert)+'" style="width:220px" autocomplete="off" placeholder="從清單挑一個">'
+          :shEsc(r.dessert);
+        var stt=r.miss?'<span style="color:#C0392B">⚠️ 未對應（會匯入，但不會產生備料需求）</span>':(r.approx?'<span style="color:#B45309">≈ 近似對應，請核對</span>':'✅');
+        return '<tr><td>'+(i+1)+'</td><td>'+shEsc(r.raw)+'</td><td>'+cell+'</td><td class="right"><b>'+r.qty+'</b></td><td>'+stt+'</td></tr>';}).join('')+'</table></div>'
+      +'<div class="toolbar" style="margin-top:6px"><button class="btn" id="bkCsvGo">確認匯入 '+ST.csvRows.length+' 筆</button>'
+      +(miss?'<span style="margin-left:8px;color:#C0392B">'+miss+' 筆未對應——可以先在上面改成清單裡的名字，或直接匯入（備料需求會少算這幾筆）</span>':'')
+      +(apx&&!miss?'<span class="muted" style="margin-left:8px">'+apx+' 筆是近似對應，請看一下有沒有對錯</span>':'')+'</div></div>';}
   h+='</div>';
   var t0=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
   var list=BOOKINGS.filter(function(b){return b.store===String(store)&&b.status!=="取消"&&new Date(b.date)>=t0;}).sort(function(a,b){return a.date<b.date?-1:1;});
@@ -2394,22 +2487,35 @@ function viewBooking(){var store=ST.storeId;
         +'<td><input class="sm" id="beNote" value="'+shEsc(e.note||'')+'" style="width:130px"></td>'
         +'<td><span class="why" id="beSave"><b>儲存</b></span>　<span class="why" id="beCancel">放棄</span></td></tr>';
       return;}
-    h+='<tr><td><b>'+b.date+'</b></td><td>'+shEsc(b.dessert)+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="muted">'+shEsc(b.note||'')+'</td><td><span class="why" data-bkedit="'+b.id+'">編輯</span>　<span class="why" data-bkdel="'+b.id+'">取消</span></td></tr>';});
+    var unk=(BKMAP&&!bkKnown(b.dessert))?' <span style="color:#C0392B;font-size:12px" title="系統對不到配方，這筆不會產生備料需求。按「編輯」改成清單裡的名字。">⚠️未對應</span>':'';
+    h+='<tr><td><b>'+b.date+'</b></td><td>'+shEsc(b.dessert)+unk+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="muted">'+shEsc(b.note||'')+'</td><td><span class="why" data-bkedit="'+b.id+'">編輯</span>　<span class="why" data-bkdel="'+b.id+'">取消</span></td></tr>';});
   if(!list.length)h+='<tr><td colspan="5" class="muted">尚無未來預約</td></tr>';
   h+='</table></div><div class="note">超過 14 天後的預約會保留，進入 14 天窗口才計入建議量。</div>';
+  /* 2026-09-09 bn 批：查客人備料 */
+  h+='<div class="card"><div class="muted" style="margin-bottom:6px">🔎 查客人備料（用姓名或電話找到那場包館，展開食材／耗材／器具／模具）</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="bkQ" style="width:220px" placeholder="姓名或電話…" value="'+shEsc(ST.bkQ||'')+'"><button class="btn" id="bkQGo">查詢</button>'
+    +(ST.bkQ?'<button class="btn ghost" id="bkQClr" style="margin-left:6px">清除</button>':'')+'</div>';
+  if(ST.bkQ){var ss=bkSessions(ST.bkQ,store);
+    if(!ss.length)h+='<div class="note" style="margin-top:6px">找不到「'+shEsc(ST.bkQ)+'」的預約（本門市；已取消的不列）。</div>';
+    else{
+      h+='<div style="overflow-x:auto;margin-top:6px"><table><tr><th>日期</th><th>備註（客人）</th><th class="right">甜點種類</th><th class="right">總份數</th><th></th></tr>'
+        +ss.map(function(s,i){var past=s.date<ymd(TODAY);
+          return '<tr'+(past?' style="color:#888"':'')+'><td><b>'+s.date+'</b>'+(past?' <span style="font-size:11px">(已過)</span>':'')+'</td><td>'+shEsc(s.note)+'</td><td class="right">'+s.rows.length+'</td><td class="right"><b>'+fmt(s.total)+'</b></td><td><span class="why" data-bkqx="'+i+'">展開備料</span></td></tr>';}).join('')
+        +'</table></div>';
+      if(ss.length>1)h+='<div class="toolbar" style="margin-top:6px"><button class="btn ghost" id="bkQAll">'+ss.length+' 場合計展開</button></div>';}
+    if(BKQ==="loading")h+='<div class="note">計算中…</div>';
+    else if(BKQ&&BKQ.q===ST.bkQ){var N=BKQ.need;
+      h+='<div style="margin-top:8px;padding:8px 10px;background:#FFFBF2;border:1px solid #E8D8A8;border-radius:8px">'
+        +'<div style="font-weight:700;color:#7a4a00;margin-bottom:4px">'+shEsc(BKQ.label)+'　·　'+N.desserts.length+' 種甜點 共 '+fmt(N.total)+' 份'
+        +(N.unknownDessert.length?('　·　<span style="color:#C0392B">⚠️ BOM 查無：'+shEsc(N.unknownDessert.join('、'))+'</span>'):'')+'</div>'
+        +bkNeedHtml(N)+'</div>';}}
+  h+='</div>';
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">🧺 期間備料需求（依預約 × BOM 展開，提前備妥食材與器具）</div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" type="date" id="bnFrom" value="'+(ST.bnFrom||ymd(TODAY))+'">〜<input class="sm" type="date" id="bnTo" value="'+(ST.bnTo||ymd(new Date(TODAY.getTime()+14*864e5)))+'"><button class="btn" id="bnRun">計算備料</button></div>';
   if(BKNEED==="loading")h+='<div class="note">計算中…</div>';
   else if(BKNEED){
-    h+='<div class="note" style="margin-top:6px">'+BKNEED.from+' 〜 '+BKNEED.to+'　·　'+BKNEED.desserts.length+' 種甜點 共 '+fmt(BKNEED.total)+' 份'+(BKNEED.unknownDessert.length?('　·　<span style="color:#C0392B">⚠️ BOM 查無：'+BKNEED.unknownDessert.join('、')+'</span>'):'')+'</div>';
-    h+='<div style="overflow-x:auto"><table><tr><th>甜點</th><th class="right">份數</th></tr>'+BKNEED.desserts.map(function(d){return '<tr><td><b>'+d.name+'</b></td><td class="right">'+fmt(d.qty)+'</td></tr>';}).join('')+'</table></div>';
-    var CATS=["食材","耗材","器具","模具","未對應"];
-    CATS.forEach(function(cat){var rows=BKNEED.items.filter(function(x){return x.cat===cat;});if(!rows.length)return;
-      h+='<div class="vh" style="margin-top:8px"><span class="vn">'+cat+(cat==="器具"||cat==="模具"?'（同場同時使用量）':'')+'</span><span class="vl"></span><span class="muted">'+rows.length+' 項</span></div>';
-      h+='<div style="overflow-x:auto"><table><tr><th>品項</th><th class="right">需求量</th><th class="right">換算採購</th></tr>'
-        +rows.map(function(x){var pk=(x.sku&&x.sku.packQty>0&&x.unit===x.sku.useUnit)?dec(x.qty/x.sku.packQty)+' '+x.sku.buyUnit:'—';
-          return '<tr><td><b>'+x.name+'</b></td><td class="right"><b>'+fmt(Math.round(x.qty*100)/100)+'</b> '+x.unit+'</td><td class="right">'+pk+'</td></tr>';}).join('')+'</table></div>';});
-    if(BKNEED.containers.length){h+='<div class="vh" style="margin-top:8px"><span class="vn">容器（逐食材計＋直接領用）</span><span class="vl"></span></div><div style="overflow-x:auto"><table><tr><th>容器</th><th class="right">需求數</th></tr>'+BKNEED.containers.map(function(c){return '<tr><td><b>'+c.name+'</b></td><td class="right">'+fmt(c.qty)+'</td></tr>';}).join('')+'</table></div>';}
+    h+='<div class="note" style="margin-top:6px">'+BKNEED.from+' 〜 '+BKNEED.to+'　·　'+BKNEED.desserts.length+' 種甜點 共 '+fmt(BKNEED.total)+' 份'+(BKNEED.unknownDessert.length?('　·　<span style="color:#C0392B">⚠️ BOM 查無：'+shEsc(BKNEED.unknownDessert.join('、'))+'</span>'):'')+'</div>';
+    h+=bkNeedHtml(BKNEED);
     if(!BKNEED.desserts.length)h+='<div class="note">此期間無預約。</div>';
   }else h+='<div class="note" style="margin-top:6px">選起訖日按「計算備料」；含食材、耗材、器具模具與容器需求。</div>';
   h+='</div>';
@@ -3181,7 +3287,8 @@ function wire(){
     var d=$("#bkDate").value,ds=String($("#bkDessert").value||"").trim(),q=+$("#bkQty").value,no=$("#bkNote").value||"";
     if(!d){toast("請先選日期");return;}
     if(!ds){toast("請選甜點");return;}
-    if(!bkKnown(ds)){toast("「"+ds+"」不在甜點清單裡，請從下拉選"); return;}
+    var rsv=bkResolve(ds);if(!rsv.ok){toast("「"+ds+"」不在甜點清單裡，請從下拉選"); return;}
+    if(rsv.approx)toast("「"+ds+"」已對應為「"+rsv.name+"」");ds=rsv.name;
     if(!(q>0)){toast("請填數量");return;}
     ST.bkDate=d;ST.bkNote=no;
     ST.bkDraft=(ST.bkDraft||[]).concat([{dessert:ds,qty:q}]);
@@ -3209,16 +3316,33 @@ function wire(){
   var bpg=$("#bkPaseGo");if(bpg)bpg.onclick=function(){
     var ta=$("#bkPaste");var txt=ta?ta.value:"";
     if(!String(txt).trim()){toast("請先貼上內容");return;}
+    if(BKMAP===null){toast("甜點清單還在載入，請稍後再按一次「解析」");return;}
     var r=parseBookingPaste(txt);
     if(!r.rows.length){toast("這段文字裡找不到「品名 × 數量」，請確認有把品項清單一起複製");return;}
     ST.csvRows=r.rows;
     if(r.date)ST.csvDate=r.date;
-    if(r.name)ST.csvNote=r.name;
-    var okN=r.rows.filter(function(x){return !x.err;}).length;
-    toast("解析出 "+r.rows.length+" 筆（可匯入 "+okN+" 筆）"+(r.date?"　日期 "+r.date:"　⚠️ 沒抓到日期，請手動選"));
+    if(r.name||r.phone)ST.csvNote=[r.name,r.phone].filter(Boolean).join(" ");
+    var missN=r.rows.filter(function(x){return x.miss;}).length;
+    toast("解析出 "+r.rows.length+" 筆"+(missN?("，"+missN+" 筆對不到甜點清單"):"")+(r.date?"　日期 "+r.date:"　⚠️ 沒抓到日期，請手動選"));
     render();};
   var bpc=$("#bkPasteClr");if(bpc)bpc.onclick=function(){ST.csvRows=null;var ta=$("#bkPaste");if(ta)ta.value="";render();};
   var cnt=$("#bkCsvNote");if(cnt)cnt.oninput=function(){ST.csvNote=cnt.value;};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-bkfix]"),function(el){el.onchange=function(){
+    var r=(ST.csvRows||[])[+el.dataset.bkfix];if(!r)return;var v=String(el.value||"").trim();
+    var rs=bkResolve(v);r.dessert=rs.ok?rs.name:(v||r.raw);r.miss=!rs.ok;r.approx=rs.ok&&rs.name!==r.raw;render();};});
+  /* 客人備料查詢 */
+  var bq=$("#bkQ"),bqg=$("#bkQGo");
+  function bkQRun(){ST.bkQ=String(bq?bq.value:"").trim();BKQ=null;render();}
+  if(bqg)bqg.onclick=bkQRun;
+  if(bq)bq.onkeydown=function(ev){if(ev.key==="Enter")bkQRun();};
+  var bqc=$("#bkQClr");if(bqc)bqc.onclick=function(){ST.bkQ="";BKQ=null;render();};
+  function bkQExpand(sessions,label){var q=ST.bkQ;BKQ="loading";render();
+    (BOMROWS?Promise.resolve(BOMROWS):gvizQ("BOM表","select A,B,C,D,E").then(function(rs){BOMROWS=rs;return rs;})).then(function(rs){
+      var sel=[];sessions.forEach(function(s){sel=sel.concat(s.rows);});
+      BKQ={q:q,label:label,need:bkExpand(sel,rs)};render();});}
+  Array.prototype.forEach.call(document.querySelectorAll("[data-bkqx]"),function(el){el.onclick=function(){
+    var ss=bkSessions(ST.bkQ,ST.storeId),s=ss[+el.dataset.bkqx];if(!s)return;bkQExpand([s],s.date+"　"+s.note);};});
+  var bqa=$("#bkQAll");if(bqa)bqa.onclick=function(){var ss=bkSessions(ST.bkQ,ST.storeId);if(ss.length)bkQExpand(ss,"「"+ST.bkQ+"」共 "+ss.length+" 場合計");};
   /* 編輯已登記的預約：改為「取消舊筆＋新增一筆」，不必改 GAS，也保留異動軌跡 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-bkedit]"),function(el){el.onclick=function(){
     var id=el.dataset.bkedit,b=null;BOOKINGS.forEach(function(x){if(x.id===id)b=x;});
@@ -3228,7 +3352,8 @@ function wire(){
     var e=ST.bkEdit;if(!e)return;
     var d=$("#beDate").value,ds=String($("#beDessert").value||"").trim(),q=+$("#beQty").value,no=$("#beNote").value||"";
     if(!d){toast("請選日期");return;}
-    if(!bkKnown(ds)){toast("「"+ds+"」不在甜點清單裡");return;}
+    var rsv2=bkResolve(ds);if(!rsv2.ok){toast("「"+ds+"」不在甜點清單裡");return;}
+    ds=rsv2.name;
     if(!(q>0)){toast("請填數量");return;}
     post({type:"bookingDel",id:e.id});
     BOOKINGS.forEach(function(x){if(x.id===e.id)x.status="取消";});
@@ -3238,7 +3363,9 @@ function wire(){
     ST.bkEdit=null;toast("已更新");render();};
   var cvg=$("#bkCsvGo");if(cvg)cvg.onclick=function(){var d=ST.csvDate;if(!d){toast("請先選活動日期");return;}
     var gnote=ST.csvNote||"";
-    var ok=(ST.csvRows||[]).filter(function(r){return !r.err;});if(!ok.length)return;
+    var ok=(ST.csvRows||[]).slice();if(!ok.length)return;
+    var missN=ok.filter(function(r){return r.miss;}).length;
+    if(missN&&!confirm(missN+" 筆對不到甜點清單，匯入後這幾筆不會產生備料需求（清單上會標 ⚠️未對應，之後可用「編輯」改名）。\n仍要匯入全部 "+ok.length+" 筆嗎？"))return;
     cvg.disabled=true;var done=0;toast("匯入中… 0/"+ok.length);
     (function chunk(i){ if(i>=ok.length){ST.csvRows=null;toast("已匯入 "+ok.length+" 筆預約");render();return;}
       var batch=ok.slice(i,i+5);
@@ -3255,26 +3382,7 @@ function wire(){
     BKNEED="loading";render();
     (BOMROWS?Promise.resolve(BOMROWS):gvizQ("BOM表","select A,B,C,D,E").then(function(rs){BOMROWS=rs;return rs;})).then(function(rs){
       var sel=BOOKINGS.filter(function(b){return b.store===String(ST.storeId)&&b.status!=="取消"&&b.date>=f&&b.date<=t;});
-      var byD={};sel.forEach(function(b){byD[b.dessert]=(byD[b.dessert]||0)+b.qty;});
-      var byName={};SKUS.forEach(function(sk){byName[sk.name]=sk;});
-      var bomByD={};rs.forEach(function(r){var dn=String(r["甜點名稱"]||"").trim();if(!dn)return;(bomByD[dn]=bomByD[dn]||[]).push({item:String(r["食材/器具名稱"]||"").trim(),qty:num(r["數量"]),unit:String(r["單位"]||"").trim(),cont:String(r["容器"]||"").trim()});});
-      var need={},cont={},unknown=[],CSET2={};Object.keys(CT_BASE).forEach(function(k){CSET2[k]=1;});
-      Object.keys(bomByD).forEach(function(dn){bomByD[dn].forEach(function(r){var c=contName(r.cont);if(c)CSET2[c]=1;});});
-      Object.keys(byD).forEach(function(dn){var n=byD[dn],rows=bomByD[dn];
-        if(!rows||!rows.length){unknown.push(dn);return;}
-        rows.forEach(function(r){if(!r.item)return;
-          var k=r.item+"|"+r.unit;(need[k]=need[k]||{name:r.item,unit:r.unit,qty:0}).qty+=r.qty*n;
-          var c=contName(r.cont);if(c)cont[c]=(cont[c]||0)+n;
-          var mn=contName(r.item);
-          if(!CSET2[mn]){var sx=byName[r.item];mn=sx?contName(sx.name):"";}
-          if(mn&&CSET2[mn]&&mn!==c)cont[mn]=(cont[mn]||0)+n*(num(r.qty)||1);});});
-      var items=Object.keys(need).map(function(k){var x=need[k],sk=byName[x.name];
-        return {name:x.name,unit:x.unit,qty:x.qty,sku:sk||null,cat:sk?sk.cat:"未對應"};});
-      items.sort(function(a,b){return b.qty-a.qty;});
-      BKNEED={from:f,to:t,total:sel.reduce(function(a,b){return a+b.qty;},0),
-        desserts:Object.keys(byD).map(function(d){return {name:d,qty:byD[d]};}).sort(function(a,b){return b.qty-a.qty;}),
-        items:items,unknownDessert:unknown,
-        containers:Object.keys(cont).map(function(c){return {name:c,qty:cont[c]};}).sort(function(a,b){return b.qty-a.qty;})};
+      var N=bkExpand(sel,rs);N.from=f;N.to=t;BKNEED=N;   /* 2026-09-09 bn 批：抽成 bkExpand，並修 POS 名查不到 BOM 的洞 */
       render();});};
   // 事件層
   Array.prototype.forEach.call(document.querySelectorAll("[data-evtoggle]"),function(el){el.onclick=function(){var ev=EVENTS[+el.dataset.evtoggle];if(!ev)return;
