@@ -500,8 +500,29 @@ function statusOf(st,s){return aggOf(st,s).status||"販售中";}
 function storeName(id){for(var i=0;i<STORES.length;i++)if(STORES[i].id==id)return STORES[i].name;return id;}
 function srcMonth(){return TODAY.getMonth()+1;}
 function tgtMonth(){return new Date(TODAY.getTime()+10*864e5).getMonth()+1;}
-function seasonAdj(){var m=ST.seasonMode;if(m==="關")return 1;if(m==="淡季")return SFACT.low;if(m==="旺季")return SFACT.high;return (SIDX[tgtMonth()]||1)/(SIDX[srcMonth()]||1);}
-function seasonLabel(){var m=ST.seasonMode;if(m==="淡季")return "淡季手動 ×"+SFACT.low;if(m==="旺季")return "旺季手動 ×"+SFACT.high;return "季節 "+seasonAdj().toFixed(2)+"（"+srcMonth()+"月→"+tgtMonth()+"月）";}
+/* 2026-09-08 bl 批：季節調整分母改用「近 4 週資料所屬期間的加權指數」。
+   agg_purchase.近4週均 是過去四個完整 ISO 週（週一～週日）的資料，月初時幾乎全屬上個月。
+   舊版拿「今天所在的月」當分母 ⇒ 每月 1 號 tgtMonth 與 srcMonth 幾乎同月，seasonAdj 恆等於 1.00，
+   季節調整在月初完全失效（24 個月初實測 24 次都是 1.000）。
+   窗口與 GAS Code.gs 的 aggWin 對齊：today 往前第 4~1 個 ISO 週共 28 天。 */
+function srcIsoWin(){
+  function isoW(d){var t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+    var day=t.getUTCDay()||7;var mon=new Date(t);mon.setUTCDate(t.getUTCDate()-day+1);
+    var sun=new Date(mon);sun.setUTCDate(mon.getUTCDate()+6);return [mon,sun];}
+  return {from:isoW(new Date(TODAY.getTime()-4*7*864e5))[0],to:isoW(new Date(TODAY.getTime()-1*7*864e5))[1]};}
+function srcIdxParts(){var w=srcIsoWin(),cnt={},out=[],d;
+  for(d=new Date(w.from);d<=w.to;d=new Date(d.getTime()+864e5)){var k=d.getUTCMonth()+1;cnt[k]=(cnt[k]||0)+1;}
+  for(var m=1;m<=12;m++)if(cnt[m])out.push({m:m,days:cnt[m],idx:(num(SIDX[m])||1)});
+  return out;}
+function srcIdxWeighted(){var p=srcIdxParts(),s=0,n=0;
+  for(var i=0;i<p.length;i++){s+=p[i].idx*p[i].days;n+=p[i].days;}
+  return n?s/n:1;}
+function srcWinTxt(){return srcIdxParts().map(function(p){return p.m+"月"+p.days+"天×"+p.idx;}).join("＋");}
+function seasonWhy(){var tm=tgtMonth();return "近4週加權 ×"+srcIdxWeighted().toFixed(2)+" → 備貨 "+tm+"月 ×"+(SIDX[tm]||1);}
+function seasonAdj(){var m=ST.seasonMode;if(m==="關")return 1;if(m==="淡季")return SFACT.low;if(m==="旺季")return SFACT.high;
+  var den=srcIdxWeighted();return den>0?((SIDX[tgtMonth()]||1)/den):1;}
+function seasonLabel(){var m=ST.seasonMode;if(m==="淡季")return "淡季手動 ×"+SFACT.low;if(m==="旺季")return "旺季手動 ×"+SFACT.high;
+  return "季節 "+seasonAdj().toFixed(2)+"（"+seasonWhy()+"）";}
 /* ===== 節慶事件層（dim_event）：以備貨覆蓋窗重疊比例攤入，逾期自動失效 ===== */
 function ymdShort(d){return (d.getMonth()+1)+"/"+d.getDate();}
 function coverWin(st,s){var sp=pOf(st,s),lead=(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),days=Math.max(1,Math.round((sp.orderCycleWeeks||1)*7));
@@ -521,7 +542,7 @@ function activeEvents(){var lim=new Date(TODAY.getFullYear(),TODAY.getMonth(),TO
   return EVENTS.filter(function(ev){return ev.on&&ev.to>=TODAY&&ev.from<=lim;});}
 function seasonStrip(){var m=ST.seasonMode,txt;
   if(m==="淡季")txt="🍃 手動淡季 ×"+SFACT.low;else if(m==="旺季")txt="🔥 手動旺季 ×"+SFACT.high;else if(m==="關")txt="季節調整已關閉";
-  else txt="季節（自動）×"+seasonAdj().toFixed(2)+"（"+srcMonth()+"月→"+tgtMonth()+"月）";
+  else txt="季節（自動）×"+seasonAdj().toFixed(2)+"（"+seasonWhy()+"）";
   var evs=activeEvents().map(function(ev){return "🎉 "+ev.name+" "+ymdShort(ev.from)+"–"+ymdShort(ev.to)+" ×"+ev.coef+(ev.scope&&ev.scope!=="全部"?"（"+ev.scope+"）":"");});
   var ni=newActive(ST.storeId);var niTxt=ni?'　｜　🆕 檔期新品備料生效中（'+ni+'）':'';
   return '<div class="banner" style="background:#f0f7ff;border-color:#cfe3ff;color:#1e4e8c">📈 需求調整：'+txt+(evs.length?'　｜　'+evs.join('　'):'')+niTxt+'</div>';}
@@ -958,7 +979,7 @@ function seasonBar(){var adj=seasonAdj(),pct=Math.round((adj-1)*100);
   if(m==="關")msg='📈 季節調整：已關閉（不建議長期關閉）。';
   else if(m==="淡季")msg='🍃 手動淡季檔：建議量一律 ×'+SFACT.low+'（覆蓋月指數）。';
   else if(m==="旺季")msg='🔥 手動旺季檔：建議量一律 ×'+SFACT.high+'（覆蓋月指數）。';
-  else msg=(Math.abs(pct)>=5?('📈 季節（自動）：本月 '+srcMonth()+' 月（'+(SIDX[srcMonth()]||1)+'）→ 備貨期 '+tgtMonth()+' 月（'+(SIDX[tgtMonth()]||1)+'），建議量'+(pct>0?'上調 +'+pct+'%（旺季將至）':(pct+'%（淡季將至）'))):'📈 季節（自動）：本月與備貨期相近，未調整。');
+  else msg=(Math.abs(pct)>=5?('📈 季節（自動）：近4週用量落在 '+srcWinTxt()+'＝加權 ×'+srcIdxWeighted().toFixed(2)+' → 備貨期 '+tgtMonth()+' 月（'+(SIDX[tgtMonth()]||1)+'），建議量'+(pct>0?'上調 +'+pct+'%（旺季將至）':(pct+'%（淡季將至）'))):'📈 季節（自動）：近4週水準（加權 ×'+srcIdxWeighted().toFixed(2)+'）與備貨期 '+tgtMonth()+' 月（'+(SIDX[tgtMonth()]||1)+'）相近，未調整。');
   var evs=activeEvents();if(evs.length)msg+='<br>🎉 節慶檔期：'+evs.map(function(ev){return ev.name+' '+ymdShort(ev.from)+'–'+ymdShort(ev.to)+' ×'+ev.coef+(ev.scope&&ev.scope!=="全部"?'（'+ev.scope+'）':'');}).join('、')+'（依重疊天數自動攤入，逾期自動失效）';
   var pal={"自動":["#e8f5e9","#2E7D32"],"淡季":["#e3f2fd","#1565c0"],"旺季":["#fdecea","#c62828"],"關":["#f1f1f1","#555"]};
   var seg=["自動","淡季","旺季","關"].map(function(x){var on=ST.seasonMode===x,c=pal[x];return '<span class="why" data-smode="'+x+'" style="display:inline-block;padding:2px 10px;border-radius:12px;margin:2px 4px 2px 0;background:'+(on?c[0]:'#fff')+';color:'+(on?c[1]:'#7a5b00')+';border:1px solid '+(on?c[1]:'#e8ddb8')+';font-weight:'+(on?'800':'400')+'">'+(x==="淡季"?"🌱 ":(x==="旺季"?"🔥 ":""))+x+'</span>';}).join('');
@@ -1130,8 +1151,22 @@ function lastWkTxt(store,s){
   var pk=(cv>0)?('<span class="muted">（≈ '+dec(w/cv)+' '+s.buyUnit+'）</span>'):'';
   /* 2026-09-08 bg 批：拿掉 ⓘ 技術口徑說明。那段是寫給我跟經營者看的（引擎口徑 vs 查詢頁口徑），
      放在店長的盤點卡片上只是噪音；店長要知道的就是「上週用了多少」。
-     同批 GAS 已取消統一損耗率（食材 1.05／耗材 1.03 → 1），原本那句「含安全緩衝、比查詢頁高 5%」也不再成立。 */
-  return '<div class="sub" style="color:#5B6B5E">📉 '+lbl+' <b>'+fmt(w)+'</b> '+s.useUnit+' '+pk+'</div>';}
+     同批 GAS 已取消統一損耗率（食材 1.05／耗材 1.03 → 1），原本那句「含安全緩衝、比查詢頁高 5%」也不再成立。
+     ── 2026-09-09 bm 批（經營者指出）──
+     卡片顯示「上週用量 10 罐」，訂貨點卻是用「近4週均 × 季節」的 10.3 罐推的。兩個數字並排出現、
+     名稱都沒錯，但沒有任何地方說它們是不同的東西 ⇒ 店長必然問「我上週才用 10 罐，為什麼要訂這麼多」。
+     這正是經營者本人踩到的第一個疑問。把引擎實際採用的那個數字也印出來，兩者並排就不用再猜。
+     bl 批修好季節分母之後，這兩個數字會很接近（實測 7 號店蛋白液 10.0 vs 10.3，差 3%），
+     並排顯示反而是最好的正確性證明。 */
+  var fw=forecastWeekly(store,s),eng='';
+  if(fw>0&&Math.abs(fw-w)/Math.max(w,1)>=0.05){
+    var epk=(cv>0)?('<span class="muted">（≈ '+dec(fw/cv)+' '+s.buyUnit+'）</span>'):'';
+    var why=parMode(store,s)?'標配模式：本欄不進計算'
+           :(isManual(store,s)?'本店手填的週用量'
+           :'近4週均 × '+demandLabel(store,s));
+    eng='<div class="sub" style="color:#5B6B5E">📊 引擎採用 <b>'+fmt(Math.round(fw))+'</b> '+s.useUnit+' '+epk
+       +'<span class="muted" style="font-size:11.5px"> · '+why+'</span></div>';}
+  return '<div class="sub" style="color:#5B6B5E">📉 '+lbl+' <b>'+fmt(w)+'</b> '+s.useUnit+' '+pk+'</div>'+eng;}
 /* 2026-09-02 x 批：卡片「建議」行。器具模具以使用單位顯示（與訂貨單同單位）；✓ 足夠 顯示綠字 */
 function invSugHtml(store,s){
   if(skuTail(s)){var tq=num(ST.orderEdit[s.id]),tu=isDur(s)?s.useUnit:s.buyUnit;   /* av 批：清貨尾＝不建議採購，只留手動填量 */
@@ -2448,16 +2483,17 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   html+='<div class="muted">共 '+items.length+' 項</div>';return html;}
 
 /* ===== 季節 ===== */
-function viewSeason(){var ed=ST.role==="總部",sm=srcMonth(),tm=tgtMonth();
-  var html='<div class="toolbar"><span class="lock">🔒 季節指數（總部）</span></div><div class="note">1.0＝年平均，>1 旺季。預測＝近期週平均 ×（備貨月 ÷ 本月）。改完按「存」寫回 dim_season。下方另可設「手動淡旺季檔」係數，供各店臨時切換（活動/連假等，覆蓋月指數）。</div>';
-  html+='<div class="card" style="overflow-x:auto"><table><tr><th>月</th>';for(var m=1;m<=12;m++)html+='<th class="right">'+m+'月'+(m==sm?'(本)':(m==tm?'(備)':''))+'</th>';html+='</tr><tr><td><b>指數</b></td>';
-  for(var k=1;k<=12;k++)html+='<td class="right" '+((k==sm||k==tm)?'style="background:#fff7e6"':'')+'>'+(ed?'<input class="sm" style="width:60px" type="number" step="0.05" data-si="'+k+'" value="'+(SIDX[k]||1)+'">':(SIDX[k]||1))+'</td>';
+function viewSeason(){var ed=ST.role==="總部",tm=tgtMonth(),parts=srcIdxParts(),srcD={},pi;
+  for(pi=0;pi<parts.length;pi++)srcD[parts[pi].m]=parts[pi].days;
+  var html='<div class="toolbar"><span class="lock">🔒 季節指數（總部）</span></div><div class="note">1.0＝年平均，>1 旺季。預測＝近期週平均 ×（備貨月指數 ÷ <b>近4週加權指數</b>）。<br>分母是「近4週用量實際落在哪幾個月」的加權值，不是「今天是幾月」——月初時近4週幾乎全屬上個月，用今天的月份當分母會讓季節調整失效。改完按「存」寫回 dim_season。下方另可設「手動淡旺季檔」係數，供各店臨時切換（活動/連假等，覆蓋月指數）。</div>';
+  html+='<div class="card" style="overflow-x:auto"><table><tr><th>月</th>';for(var m=1;m<=12;m++)html+='<th class="right">'+m+'月'+(srcD[m]?'(源'+srcD[m]+'天)':'')+(m==tm?'(備)':'')+'</th>';html+='</tr><tr><td><b>指數</b></td>';
+  for(var k=1;k<=12;k++)html+='<td class="right" '+((srcD[k]||k==tm)?'style="background:#fff7e6"':'')+'>'+(ed?'<input class="sm" style="width:60px" type="number" step="0.05" data-si="'+k+'" value="'+(SIDX[k]||1)+'">':(SIDX[k]||1))+'</td>';
   html+='</tr></table></div>';
   html+='<div class="card"><div class="muted" style="margin-bottom:6px">手動淡旺季檔係數（店長臨時切換用）</div><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+'<span class="ipt-lbl">🍃 淡季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfLow" value="'+SFACT.low+'">':'<b>'+SFACT.low+'</b>')+'<span class="ipt-lbl">🔥 旺季 ×</span>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.05" id="sfHigh" value="'+SFACT.high+'">':'<b>'+SFACT.high+'</b>')+'</div></div>';
   html+='<div class="card"><div class="muted" style="margin-bottom:6px">🎉 節慶事件層（係數依「備貨覆蓋窗與事件重疊天數」按比例攤入，逾期自動失效）</div>'+(EVENTS.length?('<div style="overflow-x:auto"><table><tr><th>事件</th><th>期間</th><th class="right">係數</th><th>適用</th><th>狀態</th>'+(ed?'<th></th>':'')+'</tr>'+EVENTS.map(function(ev,i){var past=ev.to<TODAY;return '<tr><td>'+ev.name+'</td><td>'+ymd(ev.from)+' ~ '+ymd(ev.to)+'</td><td class="right">×'+ev.coef+'</td><td>'+(ev.scope||'全部')+'</td><td>'+(ev.on?(past?'⏳ 已過期':'✅ 啟用'):'⛔ 停用')+'</td>'+(ed?'<td><span class="why" data-evtoggle="'+i+'">'+(ev.on?'停用':'啟用')+'</span></td>':'')+'</tr>';}).join('')+'</table></div>'):'<div class="note">尚未設定節慶事件。</div>');
   if(ed)html+='<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="evName" style="width:110px" placeholder="事件名(如中秋節)"><input class="sm" type="date" id="evFrom"><input class="sm" type="date" id="evTo"><input class="sm" type="number" step="0.05" id="evCoef" style="width:70px" placeholder="係數1.3"><select class="sm" id="evScope"><option value="全部">全部</option><option value="食材">食材</option><option value="耗材">耗材</option><option value="器具">器具</option><option value="模具">模具</option></select><button class="btn" id="evAdd">新增事件</button></div>';
   html+='</div>';
-  html+=(ed?'<div class="toolbar"><button class="btn" id="saveSeason">儲存季節指數</button></div>':'')+'<div class="note">本月 '+sm+'月（'+(SIDX[sm]||1)+'）→ 備貨 '+tm+'月（'+(SIDX[tm]||1)+'）＝×'+((SIDX[tm]||1)/(SIDX[sm]||1)).toFixed(2)+'。</div>';return html;}
+  html+=(ed?'<div class="toolbar"><button class="btn" id="saveSeason">儲存季節指數</button></div>':'')+'<div class="note">近4週加權＝'+srcWinTxt()+'＝×'+srcIdxWeighted().toFixed(2)+' → 備貨 '+tm+'月（'+(SIDX[tm]||1)+'）＝×'+seasonAdj().toFixed(2)+'。</div>';return html;}
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
 function viewUnitConv(){var ed=ST.role==="總部";
