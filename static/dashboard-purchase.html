@@ -544,8 +544,14 @@ function seasonStrip(){var m=ST.seasonMode,txt;
   if(m==="淡季")txt="🍃 手動淡季 ×"+SFACT.low;else if(m==="旺季")txt="🔥 手動旺季 ×"+SFACT.high;else if(m==="關")txt="季節調整已關閉";
   else txt="季節（自動）×"+seasonAdj().toFixed(2)+"（"+seasonWhy()+"）";
   var evs=activeEvents().map(function(ev){return "🎉 "+ev.name+" "+ymdShort(ev.from)+"–"+ymdShort(ev.to)+" ×"+ev.coef+(ev.scope&&ev.scope!=="全部"?"（"+ev.scope+"）":"");});
-  var ni=newActive(ST.storeId);var niTxt=ni?'　｜　🆕 檔期新品備料生效中（'+ni+'）':'';
-  return '<div class="banner" style="background:#f0f7ff;border-color:#cfe3ff;color:#1e4e8c">📈 需求調整：'+txt+(evs.length?'　｜　'+evs.join('　'):'')+niTxt+'</div>';}
+  var ni=newActive(ST.storeId);var niTxt=ni?'🆕 檔期新品備料生效中（'+ni+'）':'';
+  /* 2026-09-10 bp 批（經營者裁示）：店長不需要看季節係數怎麼算——那是總部調參數的資訊，對現場只是雜訊。
+     店長只留「檔期新品備料生效中」與進行中的節慶檔期；總部維持完整算式。 */
+  if(ST.role!=="總部"){
+    var only=(evs.length?evs.join('　')+(niTxt?'　｜　':''):'')+niTxt;
+    if(!only)return '';
+    return '<div class="banner" style="background:#f0f7ff;border-color:#cfe3ff;color:#1e4e8c">'+only+'</div>';}
+  return '<div class="banner" style="background:#f0f7ff;border-color:#cfe3ff;color:#1e4e8c">📈 需求調整：'+txt+(evs.length?'　｜　'+evs.join('　'):'')+(niTxt?'　｜　'+niTxt:'')+'</div>';}
 function newOf(st,s){var m=(NEWAGG[st]||{})[s.id];return m?m.qty:0;}
 function markOf(st,s){return (NEWAGG[st]||{})[s.id]||null;}
 function newBadge(st,s){var m=markOf(st,s);if(!m)return '';
@@ -716,6 +722,77 @@ function postParam(store,skuId,fields,cb){     // 寫參數的唯一入口：送
     st.pending--;if(!ok)st.fail++;
     if(st.pending<=0){st.done=true;if(cb)cb(st.fail===0,st.fail);}
   });});}
+/* ===== 2026-09-10 bp 批：店別參數三件事（經營者要求）=====
+   ① 近 3 個月有使用的品項排前面並標記（過季／清貨尾不列入）
+   ② 每張卡顯示採購規格，店長用上週用量推「安全庫存／標配」該填幾件
+   ③ 右上一顆「儲存並更新」取代逐列按存＋再按更新
+   近 3 個月用量走月檔 agg_usage_month（gvizQ 一次查詢、店別 lazy 快取）。
+   ⚠️ agg_usage_month 是 POS×BOM 展開的用量，器具／模具本來就少有列（實測 12 號店近 3 個月僅 4 項），
+      所以器具／模具多半落在後段，這是資料本質不是壞掉。 */
+var P3M={},P3MLD={};
+function ym3ago(){var d=new Date(TODAY.getFullYear(),TODAY.getMonth()-2,1);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");}
+function loadP3M(st){
+  st=String(st);
+  if(P3MLD[st])return P3MLD[st];
+  P3MLD[st]=gvizQ("agg_usage_month","select B, sum(D) where A="+(+st)+" and C>='"+ym3ago()+"' group by B",MONTH_SHEET_ID).then(function(rs){
+    var m={};(rs||[]).forEach(function(r){var id=r["sku_id"];if(id==null)return;var q=null;
+      Object.keys(r).forEach(function(k){if(k!=="sku_id"&&q==null&&r[k]!=null&&!isNaN(+r[k]))q=+r[k];});
+      if(q&&q>0)m[String(id)]=q;});
+    P3M[st]=m;return m;
+  }).catch(function(){P3M[st]=null;return null;});
+  return P3MLD[st];}
+function used3m(st,s){var m=P3M[String(st)];if(!m)return false;
+  if(skuTail(s)||skuExpired(s))return false;   /* 經營者指定：過季／清貨尾不算「3 個月有使用」 */
+  return num(m[s.id])>0;}
+
+/* 批次寫入：一次 post 全部異動列，只做「一次」dim_store_par 回讀對帳（最多 3 輪），
+   避免沿用 savePRow 的逐欄回讀（每欄一次全表 gviz，30 列就是 90 次）。 */
+var SAVEALL={busy:false,n:0};
+function paramFields(id){
+  var e=EDIT[id]||{},f={};
+  if("zone"in e)f["盤點分區"]=e.zone; if("ord"in e)f["盤點順序"]=e.ord; if("par"in e)f["標配數量"]=e.par;
+  if("weight"in e)f["權數"]=e.weight; if("leadDays"in e)f["交期天"]=e.leadDays;
+  if("manualWeekly"in e)f["手動週用量"]=e.manualWeekly; if("safety"in e)f["安全庫存"]=e.safety;
+  if("使用中"in e)f["使用中"]=e["使用中"]; if("custName"in e)f["店品名"]=e.custName;
+  if("custVendor"in e)f["店廠商"]=e.custVendor; if("custPackQty"in e)f["店內容量"]=e.custPackQty;
+  return f;}
+function paramDirty(){var out=[];Object.keys(EDIT).forEach(function(id){var f=paramFields(id);if(Object.keys(f).length)out.push({id:id,fields:f});});return out;}
+function paramFieldOk(label,cur,exp){
+  if(label==="使用中")return toBool(cur)===toBool(exp);
+  if(label==="盤點分區"||label==="店品名"||label==="店廠商")return String(cur==null?"":cur).trim()===String(exp==null?"":exp).trim();
+  return Math.abs(num(cur)-num(exp))<1e-6;}
+function saveAllParams(){
+  if(SAVEALL.busy)return;
+  var list=paramDirty();
+  if(!list.length){toast("目前沒有待儲存的變更");return;}
+  var store=ST.storeId;
+  SAVEALL.busy=true;SAVEALL.n=list.length;
+  list.forEach(function(x){post({type:"param",store:store,sku_id:x.id,fields:x.fields},true);PSTATE[x.id]={pending:1,fail:0,done:false};});
+  toast("送出 "+list.length+" 項，確認寫入中…");render();
+  verifyParamBatch(store,list,0,list.length);}
+function verifyParamBatch(store,list,attempt,total){
+  var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)];
+  setTimeout(function(){
+    fetchFresh("dim_store_par").then(function(rows){
+      var by={};rows.forEach(function(r){if(String(r["店號"])===String(store))by[String(r["sku_id"])]=r;});
+      var bad=[];
+      list.forEach(function(x){
+        var hit=by[String(x.id)],ok=!!hit;
+        if(hit)Object.keys(x.fields).forEach(function(lb){if(!paramFieldOk(lb,hit[lb],x.fields[lb]))ok=false;});
+        if(ok){Object.keys(x.fields).forEach(function(lb){pruneWarn(store,x.id,lb);});
+          PSTATE[x.id]={pending:0,fail:0,done:true};delete EDIT[x.id];}
+        else bad.push(x);});
+      if(bad.length&&attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,bad,attempt+1,total);return;}
+      bad.forEach(function(x){Object.keys(x.fields).forEach(function(lb){pushWarn(store,x.id,lb,x.fields[lb]);});PSTATE[x.id]={pending:0,fail:1,done:true};});
+      SAVEALL.busy=false;
+      if(bad.length){toast("⚠ "+bad.length+" 項未寫入，請看上方紅色提示重做");render();return;}
+      toast(total+" 項已寫入，重新讀取中…");
+      if(typeof refreshAll==="function")refreshAll(true);else render();
+    }).catch(function(){
+      if(attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,list,attempt+1,total);return;}
+      list.forEach(function(x){Object.keys(x.fields).forEach(function(lb){pushWarn(store,x.id,lb,x.fields[lb]);});PSTATE[x.id]={pending:0,fail:1,done:true};});
+      SAVEALL.busy=false;toast("⚠ 無法確認寫入結果，請檢查網路後重做");render();});
+  },d);}
 function savePRow(id){
   var e=EDIT[id]||{},fields={};
   if("zone"in e)fields["盤點分區"]=e.zone;if("ord"in e)fields["盤點順序"]=e.ord;if("par"in e)fields["標配數量"]=e.par;
@@ -732,6 +809,11 @@ function savePRow(id){
   if("custVendor"in e)pp[id].custVendor=String(e.custVendor||"").trim();
   if("custPackQty"in e)pp[id].custPackQty=num(e.custPackQty);
   refreshPstBtn(id);}                            // 立即顯示「確認中…」，不整頁重繪以免捲動跳位
+function refreshSaveAllBtn(){
+  var b=document.getElementById("pSaveAll");if(!b)return;
+  var n=paramDirty().length;
+  b.disabled=SAVEALL.busy||!n;b.style.opacity=(SAVEALL.busy||!n)?".45":"";
+  b.textContent=SAVEALL.busy?("確認寫入中…（"+SAVEALL.n+"）"):("💾 儲存並更新"+(n?"（"+n+" 項）":""));}
 function refreshPstBtn(id){
   var sp=document.querySelector('[data-pst="'+id+'"]');if(!sp)return;
   sp.innerHTML=pstBtn(id);
@@ -957,7 +1039,18 @@ function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點"
 function renderTabs(){var list=TABS_BY_ROLE[ST.role]||TABS_BY_ROLE["總部"];if(list.indexOf(ST.tab)<0)ST.tab=list[0];
   $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+'</div>';}).join("");
   Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(el){el.onclick=function(){ST.tab=el.dataset.tab;render();};});}
-function render(){renderTabs();
+function dsbRole(){
+  /* 2026-09-10 bp 批：店長版把「ⓘ 更新方式」收掉，改成一句「什麼時候需要按更新」的直述句。
+     總部維持原本的三步驟展開（總部才會去按會觸發後端重算的那顆更新）。 */
+  var bar=document.querySelector('.dsb-auto');if(!bar)return;
+  var hq=(ST.role==="總部");
+  var btn=bar.querySelector('.dsb-info'),sop=bar.querySelector('#dsbSop'),sp=bar.querySelector('span');
+  if(btn)btn.style.display=hq?'':'none';
+  if(sop&&!hq)sop.classList.remove('open');
+  if(sp)sp.innerHTML=hq
+    ?'今天存的盤點，明早 07:05 後建議量會重新計算'
+    :'今天存的盤點，明早 07:05 後建議量會重新計算　·　<b>平常不用按更新</b>；只有<b>改完店別參數</b>、或<b>換一台裝置／別人剛存過盤點</b>想立刻看到最新數字時，才按右上「🔄 更新」。';}
+function render(){renderTabs();dsbRole();
   $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡"||ST.tab==="效期"||ST.tab==="檔期備貨")?"none":"block";
   var __sy=(window.pageYOffset||document.documentElement.scrollTop||0);
   $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"效期":viewShelf,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog,"對帳":viewRecon,"大平台":viewShist,"檔期備貨":viewCampHQ}[ST.tab])();wire();
@@ -1088,7 +1181,8 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
       if(!skuTail(s))ref+=adjLink(s.id);
       var ok=okOf(store,s),numed=(((DIRTY[store]||{})[s.id])||(countedNow(store,s)&&!ok));
       var vOn=(numed&&iv.onHand!=null)?iv.onHand:"";
-      html+='<div class="row" data-invrow="'+s.id+'"><div><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?'<div class="ipt-lbl" style="color:#0369a1">1 '+s.buyUnit+'='+fmt(pqOf(store,s))+s.useUnit+(pqCust(store,s)?'（本店）':'')+'</div>':'')+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填"'+(ok?' data-ok="1"':'')+'>'+'<div style="margin-top:5px"><button class="btn ghost sm okbtn'+(ok?' on':'')+'" data-ok-btn="'+s.id+'" type="button">'+(ok?'↩ 取消足夠':'✓ 足夠')+'</button></div></div></div>';});
+      html+='<div class="row" data-invrow="'+s.id+'"><div><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'/* 2026-09-10 bp 批：同一張卡上「📦 600 g／罐」（packSpec）與右上「1 罐=600g」是同一件事，重複。
+   packSpec 本來就含（本店）標記，資訊零損失，右上這行移除。 */+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填"'+(ok?' data-ok="1"':'')+'>'+'<div style="margin-top:5px"><button class="btn ghost sm okbtn'+(ok?' on':'')+'" data-ok-btn="'+s.id+'" type="button">'+(ok?'↩ 取消足夠':'✓ 足夠')+'</button></div></div></div>';});
     html+='</div>';}
     html+='</div>';});
   html+='</div>';
@@ -1226,6 +1320,16 @@ function supplyEnsure(st){   /* 盤點頁開啟時載入本店下單紀錄；載
    ⚠️ 兩個誠實邊界：①「估計在店」假設檔期前沒有舊庫存（有的話會高估尚需，寧可多備不缺）
                      ②「已出貨」來自 fact_shopline，總部每月貼一次——檔期中要看得準，請改成每週貼。 */
 var CAMPHQ_LEAD=15;
+/* 2026-09-10 bp 批（經營者第 10 題查出的真 bug）：
+   原本一律用「曲線第一週前 15 天」當已出貨起算日。2026 中秋曲線第一週＝08-14 ⇒ 視窗自 07-30 起，
+   但出貨中心的第一批備貨是 07-26／07-27 出的 —— 12 家店的第一批全部被排除在「已出貨」之外。
+   柚子果肉實測：視窗內 9,000 g，視窗外還有 6,120 g（17 罐）沒算到 ⇒ 需採購被灌成 3,146 g（建議備 12 罐），
+   把第一批算進來之後全公司在店 8,520 g ＞ 剩餘推估 6,346 g，正確答案是「不用再買、調撥即可」。
+   修法：檔期專屬品（只有這檔甜點會用到，agg_newitem 專屬欄）把視窗拉到 90 天——反正沒有別的產品會訂它，
+   期間內每一筆下單都是這檔的備貨；非專屬的共用品維持 15 天（放寬會把日常補貨誤當檔期供給，方向相反更危險）。
+   另外 campHQShipped 現在會回報「視窗外還有多少」，畫面上直接標示，不再靜默。 */
+var CAMPHQ_LEAD_EXCL=90;
+function campExcl(id){var k=Object.keys(NEWAGG);for(var i=0;i<k.length;i++){var m=NEWAGG[k[i]][id];if(m)return !!m.excl;}return false;}
 function loadEvNeed(){
   if(EVND)return Promise.resolve(EVND);
   if(EVNDLD)return EVNDLD;
@@ -1237,14 +1341,19 @@ function loadEvNeed(){
     EVND=m;EVNDLD=null;return m;
   }).catch(function(){EVND={};EVNDLD=null;return EVND;});
   return EVNDLD;}
-function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台下單量（使用單位）與包數 */
-  var ws=EVCV[ev]||[],from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-CAMPHQ_LEAD*864e5)):"";
-  var g=0,packs=0,names={};
-  (rows||[]).forEach(function(r){if(from&&r.date<from)return;if(!anPlatMatch(r.name,s))return;
-    var u=shipUnitG(String(r.st),{unit:s.useUnit,sku:s},r.name);g+=num(r.qty)*u.g;packs+=num(r.qty);names[r.name]=1;});
-  return {g:g,packs:packs,from:from,names:Object.keys(names)};}
+function campLead(s){return campExcl(s.id)?CAMPHQ_LEAD_EXCL:CAMPHQ_LEAD;}
+function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台下單量（使用單位）與包數；另回報視窗外還有多少 */
+  var ws=EVCV[ev]||[],lead=campLead(s);
+  var from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-lead*864e5)):"";
+  var g=0,packs=0,names={},preG=0,prePacks=0,preFirst="";
+  (rows||[]).forEach(function(r){if(!anPlatMatch(r.name,s))return;
+    var u=shipUnitG(String(r.st),{unit:s.useUnit,sku:s},r.name);
+    if(from&&r.date<from){preG+=num(r.qty)*u.g;prePacks+=num(r.qty);if(!preFirst||r.date<preFirst)preFirst=r.date;return;}
+    g+=num(r.qty)*u.g;packs+=num(r.qty);names[r.name]=1;});
+  return {g:g,packs:packs,from:from,lead:lead,preG:preG,prePacks:prePacks,preFirst:preFirst,names:Object.keys(names)};}
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
+  if(ST.chExclOnly===undefined)ST.chExclOnly=false;
   var evs=Object.keys(EVCV);
   if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線（agg_evcurve 為空）。EventLayer v1.6 在檔期開賣滿 3 天、累積佔比達 10% 後才會產出曲線；未開賣的檔期走「首批級距」，請看各店訂貨單。</div>';
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}
@@ -1266,7 +1375,8 @@ function viewCampHQ(){
     +'<tr><td><b>已用</b></td><td>已售份數 × 每份用量。</td></tr>'
     +'<tr><td><b>剩餘推估</b></td><td>接下來到檔期結束還會用掉的量。</td></tr>'
     +'<tr><td><b>已出貨</b></td><td>大平台下單紀錄裡，自 <b>'+winFrom+'</b>（曲線第一週前 15 天）起出給這家店的量；括號是大平台的包數。<span class="muted">只到最後一次上傳的報表為止，每週上傳才準。</span></td></tr>'
-    +'<tr><td><b>估計在店</b></td><td>已出貨 − 已用（<b>假設檔期前店裡沒有舊庫存</b>，有的話這個數會偏低、尚需會偏高）。</td></tr>'
+    +'<tr><td><b>估計在店</b></td><td><b>各店</b>「已出貨 − 已用」，<b>負的以 0 計</b>（庫存不會是負的）。所以品項合計不會剛好等於「已出貨合計 − 已用合計」——展開後會標出差多少、是哪幾家店造成的。假設檔期前店裡沒有舊庫存。</td></tr>'
+    +'<tr><td><b>已出貨的起算日</b></td><td><b>檔期專屬品回推 '+CAMPHQ_LEAD_EXCL+' 天，共用品回推 '+CAMPHQ_LEAD+' 天。</b>專屬品沒有別的產品會訂，期間內每一筆都是這檔的備貨；共用品放寬會把日常補貨誤當檔期供給。若起算日之前還有下單紀錄，展開後會紅字列出未計入的量。</td></tr>'
     +'<tr><td><b>尚需</b></td><td>剩餘推估 − 估計在店。正數＝這家店缺；負數＝多了（顯示為「可調出」）。</td></tr>'
     +'<tr><td><b>🔁 調撥</b></td><td>同一品項，有店多、有店缺 → 先從多的店調給缺的店。<b>同地區優先</b>（台中 1,2／台北 3,4,7,8,11／桃園 9,10 車程近、當天可互送），同區給不完才跨區，標「（同區）／（跨區）」。調得到的部分不用買。</td></tr>'
     +'<tr><td><b>建議備</b>（採購單位）</td><td>調撥後仍缺的量 ÷ 每包內容量，進位。<b>這才是出貨中心要花錢買的</b>。</td></tr></table>'
@@ -1285,11 +1395,14 @@ function viewCampHQ(){
      但主檔品類別改了要等下次重算才會反映；這裡用「現在的品類別」把關，改主檔立刻生效。 */
   var hiddenDur=Object.keys(nd).filter(function(id){var s=SKU[id];return s&&isDur(s);});
   var items=Object.keys(nd).map(function(id){var s=SKU[id];if(!s||isDur(s))return null;
-    var per={},sumRem=0,sumUsed=0,sumShip=0,sumOn=0,sumNeed=0,sumEst=0,sumSold=0,dc=false;
+    var per={},sumRem=0,sumUsed=0,sumShip=0,sumOn=0,sumNeed=0,sumEst=0,sumSold=0,dc=false,sumPre=0,sumPrePacks=0,preFirst="",nOver=0;
     Object.keys(nd[id]).forEach(function(st){var x=nd[id][st];var isdc=isDC(st,s);if(isdc)dc=true;
       var sh=(rowsAll&&isdc)?campHQShipped(ev,s,rowsAll.filter(function(r){return String(r.st)===st;})):null;
       var shipped=sh?sh.g:0,onhand=sh?Math.max(0,shipped-x.used):0,gap=x.rem-onhand;   /* gap 正＝缺、負＝多 */
-      per[st]={rem:x.rem,used:x.used,sold:x.sold,est:x.est,shipped:shipped,packs0:sh?sh.packs:0,onhand:onhand,gap:gap,need:Math.max(0,gap),surplus:Math.max(0,-gap),pq:pqEff(st,s),dc:isdc,noShip:!sh,xin:[],xout:[],buy:0,packs:0};
+      per[st]={rem:x.rem,used:x.used,sold:x.sold,est:x.est,shipped:shipped,packs0:sh?sh.packs:0,onhand:onhand,gap:gap,need:Math.max(0,gap),surplus:Math.max(0,-gap),pq:pqEff(st,s),dc:isdc,noShip:!sh,xin:[],xout:[],buy:0,packs:0,
+        preG:sh?sh.preG:0,prePacks:sh?sh.prePacks:0,preFirst:sh?sh.preFirst:"",win:sh?sh.from:""};
+      if(sh&&sh.preG>0){sumPre+=sh.preG;sumPrePacks+=sh.prePacks;if(!preFirst||(sh.preFirst&&sh.preFirst<preFirst))preFirst=sh.preFirst;}
+      if(isdc&&sh&&shipped-x.used<0)nOver++;   /* 已用 ＞ 期間內已出貨：檔期前就有庫存，或更早的出貨不在視窗 */
       sumRem+=x.rem;sumUsed+=x.used;sumShip+=shipped;sumOn+=onhand;sumNeed+=Math.max(0,gap);sumEst+=x.est;sumSold+=x.sold;});
     /* ★ 2026-09-05 ar 批：跨店調撥。缺的店先從多的店調（多的先調），調完還缺的才採購。只在有出貨紀錄的店之間算（自購品沒有在店估計，不調）。 */
     var short=Object.keys(per).filter(function(st){return per[st].dc&&!per[st].noShip&&per[st].need>0;}).sort(function(a,b){return per[b].need-per[a].need;});
@@ -1311,20 +1424,25 @@ function viewCampHQ(){
     Object.keys(per).forEach(function(st){var p=per[st];if(!p.dc)p.buy=p.need;   /* 自購／非出貨中心：沒有調撥資訊，尚需即需求 */
       p.packs=Math.max(0,p.pq>0?Math.ceil(p.buy/p.pq-1e-9):Math.round(p.buy));});
     var sumBuy=0,sumPacks=0;Object.keys(per).forEach(function(st){sumBuy+=per[st].buy;sumPacks+=per[st].packs;});
-    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumXfarSame:sumXfarSame,sumBuy:sumBuy,sumPacks:sumPacks,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||""};
+    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumXfarSame:sumXfarSame,sumBuy:sumBuy,sumPacks:sumPacks,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||"",
+      excl:campExcl(id),sumPre:sumPre,sumPrePacks:sumPrePacks,preFirst:preFirst,nOver:nOver,lead:campLead(s)};
   }).filter(Boolean);
-  var shown=items.filter(function(it){if(q&&(it.s.name+" "+it.s.vendor+" "+it.id+" "+it.who).toLowerCase().indexOf(q)<0)return false;if(ST.chNeedOnly&&!it.anyNeed)return false;return true;});
+  var shown=items.filter(function(it){if(q&&(it.s.name+" "+it.s.vendor+" "+it.id+" "+it.who).toLowerCase().indexOf(q)<0)return false;if(ST.chNeedOnly&&!it.anyNeed)return false;if(ST.chExclOnly&&!it.excl)return false;return true;});
+  var nExcl=items.filter(function(it){return it.excl;}).length;
   var cost=function(it){return it.sumBuy*(it.s.price||0)/Math.max(1,it.s.packQty||1);};
   shown.sort(function(a,b){return (cost(b)-cost(a))||(b.sumBuy-a.sumBuy)||(b.sumXfer-a.sumXfer);});
   h+='<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">'
     +'<input id="chQ" class="ipt" style="flex:1;min-width:160px" placeholder="搜品項／廠商／甜點" value="'+escA(ST.chQ||"")+'">'
     +'<span class="seg">'+[["1","只看還要備的"],["0","全部"]].map(function(o){return '<div class="'+((ST.chNeedOnly?"1":"0")===o[0]?"on":"")+'" data-chneed="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
+    +'<span class="seg">'+[["0","不限"],["1","🎯 檔期專屬"+(nExcl?" "+nExcl:"")]].map(function(o){return '<div class="'+((ST.chExclOnly?"1":"0")===o[0]?"on":"")+'" data-chexcl="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
     +'<span class="muted">'+shown.length+' / '+items.length+' 品項'+(rowsAll?'':'　<span style="color:#B45309">大平台紀錄載入中，已出貨暫顯示 —</span>')+'</span></div>'
     +(hiddenDur.length?'<div class="sub muted" style="margin-bottom:6px">🔧 器具／模具可重複使用、依各店標配，不列入檔期備貨（已隱藏 '+hiddenDur.length+' 項：'+hiddenDur.map(function(id){return escA(SKU[id].name);}).join('、')+'）</div>':'');
   if(!shown.length){h+='<div class="muted">沒有符合的品項。</div></div>';return h;}
   h+='<div style="overflow-x:auto"><table><thead><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
   shown.forEach(function(it){var s=it.s,open=!!ST.chExp[it.id],u=s.useUnit;
-    h+='<tr class="shoh" data-chexp="'+escA(it.id)+'" style="cursor:pointer"><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+escA(s.name)+'</b> <span class="muted">'+escA(s.vendor)+'</span> '+(open?'▴':'▾')+'<div class="sub muted">'+escA(it.who)+'</div></td>'
+    h+='<tr class="shoh" data-chexp="'+escA(it.id)+'" style="cursor:pointer"><td><span class="badge b-'+s.cat+'">'+s.cat+'</span>'
+      +(it.excl?'<span style="display:inline-block;margin-right:4px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#c62828;border:1px solid #c62828;font-size:12px;font-weight:700" title="只有本檔期的甜點會用到這個料，檔期結束就沒有其他產品消化">🎯'+escA(ev)+'·專屬</span>':'')
+      +'<b>'+escA(s.name)+'</b> <span class="muted">'+escA(s.vendor)+'</span> '+(open?'▴':'▾')+'<div class="sub muted">'+escA(it.who)+'</div></td>'
       +'<td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumRem))+' '+u+'</td>'
       +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購</span>')+'</td>'
       +'<td class="right muted">'+(it.dc&&rowsAll?'≈ '+fmt(Math.round(it.sumOn))+' '+u:'—')+'</td>'
@@ -1344,6 +1462,9 @@ function viewCampHQ(){
           +'<td>'+xf+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))+'</td>'
           +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';});
+      /* 2026-09-10 bp 批：兩件事以前是靜默的，現在直接寫在展開區 */
+      if(it.dc&&it.sumPre>0)h+='<tr><td colspan="12" style="background:#FDECEA;color:#8B0000;padding:6px 10px">⚠️ 這個品項在 <b>'+((it.per[Object.keys(it.per)[0]]||{}).win||'')+'</b> 之前另有 <b>'+fmt(it.sumPrePacks)+'</b> 包（約 '+fmt(Math.round(it.sumPre))+' '+u+'，最早 '+(it.preFirst||'—')+'）已出貨，<b>沒有</b>計入上面的「已出貨」——統計視窗只回推 '+it.lead+' 天。若那批貨確實是這檔的備貨，實際在店會比這裡多、需採購會比這裡少。</td></tr>';
+      if(it.dc&&it.nOver>0)h+='<tr><td colspan="12" style="background:#FFF8E1;color:#B45309;padding:6px 10px">ℹ️ 有 <b>'+it.nOver+'</b> 家店「已用」大於「已出貨」（表示檔期前店裡就有庫存，或更早的出貨不在統計視窗）。這些店的<b>估計在店以 0 計、不倒扣</b>，所以合計的「估計在店 '+fmt(Math.round(it.sumOn))+'」<b>不等於</b>「已出貨 '+fmt(Math.round(it.sumShip))+' − 已用 '+fmt(Math.round(it.sumUsed))+' ＝ '+fmt(Math.round(it.sumShip-it.sumUsed))+'」，差 '+fmt(Math.round(it.sumOn-(it.sumShip-it.sumUsed)))+' '+u+'。庫存不會是負的，以 0 計是對的。</td></tr>';
       var sumSurp=0;Object.keys(it.per).forEach(function(st){var p=it.per[st];if(p.dc&&!p.noShip)sumSurp+=p.surplus;});
       h+='<tr style="background:#fff3cd;font-weight:700"><td>合計</td><td class="right">'+fmt(Math.round(it.sumEst))+'</td><td class="right">'+fmt(Math.round(it.sumSold))+'</td><td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+'</td><td class="right">'+fmt(Math.round(it.sumRem))+'</td>'
         +'<td class="right">'+(it.dc?fmt(Math.round(it.sumShip)):'—')+'</td><td class="right">'+(it.dc?'≈ '+fmt(Math.round(it.sumOn)):'—')+'</td>'
@@ -2508,7 +2629,13 @@ function viewBooking(){var store=ST.storeId;
   h+='</div>';
   return h;}
 function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
-  var html='<div class="toolbar"><span class="own">✎ 店別參數（各店維護）</span></div>'
+  if(P3M[String(store)]===undefined&&!P3MLD[String(store)])loadP3M(store).then(function(){if(ST.tab==="店別參數")render();});
+  var _dn=paramDirty().length;
+  var html='<div class="toolbar"><span class="own">✎ 店別參數（各店維護）</span>'
+  +'<span style="margin-left:auto"></span>'
+  +'<button class="btn" id="pSaveAll"'+(SAVEALL.busy?' disabled style="opacity:.55"':(_dn?'':' disabled style="opacity:.45"'))+'>'
+  +(SAVEALL.busy?('確認寫入中…（'+SAVEALL.n+'）'):('💾 儲存並更新'+(_dn?'（'+_dn+' 項）':'')))+'</button></div>'
+  +(_dn?'<div class="banner" style="background:#FFF8E7;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">✏️ 有 <b>'+_dn+'</b> 項改了還沒存。全部改完後按右上「💾 儲存並更新」一次送出即可，不用逐列按「存」。</div>':'')
   +'<details class="pdet"><summary>📖 填寫說明（點開）</summary><div class="note" style="margin-top:6px">'
   +'門市：'+storeName(store)
   +'<br>① <b>有銷售推算</b>的品項：週用量由 POS 自動計算（綠字），只需視情況調「權」與「交」，<b>「週用」免填、填了也不生效</b>。'
@@ -2523,7 +2650,18 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   +'<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項／廠商／編號，空白分隔可多關鍵字" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
   var _spN=SKUS.filter(function(s){return !isDur(s)&&num(pOf(store,s).par)>0;});
   if(_spN.length)html+='<div class="banner" style="background:#EAF3FB;border-color:#7FB3DA;color:#0B4A6F;margin-bottom:8px">📌 本店有 <b>'+_spN.length+'</b> 項食材／耗材已改走<b>標配</b>（不看 POS 用量）：'+_spN.slice(0,12).map(function(s){return shEsc(dispName(store,s));}).join('、')+(_spN.length>12?' 等':'')+'。要改回用量預測，把該項「標配」填 0。</div>';
+  /* 2026-09-10 bp 批：500+ 品項要店長維護，預設順序等於沒有順序。
+     排序①近 3 個月有使用（過季／清貨尾除外）②品名 ③分區。 */
+  var _p3ready=!!P3M[String(store)];
   var items=SKUS.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
+  items.sort(function(a,b){
+    var ua=used3m(store,a)?0:1,ub=used3m(store,b)?0:1;if(ua!==ub)return ua-ub;
+    var na=String(a.name||""),nb=String(b.name||"");if(na!==nb)return na.localeCompare(nb,"zh-Hant");
+    return String(zoneOf(store,a)||"").localeCompare(String(zoneOf(store,b)||""),"zh-Hant");});
+  var _n3=_p3ready?items.filter(function(s){return used3m(store,s);}).length:0;
+  html+='<div class="sub muted" style="margin:-2px 0 8px">'
+    +(_p3ready?('排序：<b>🟢 3 個月有使用（'+_n3+' 項）</b>排最前 → 品名 → 分區。過季／清貨尾不列入「有使用」。'):'排序：讀取近 3 個月用量中…（先照品名排）')
+    +'</div>';
   html+='<datalist id="zoneDL">'+ZONE_ORDER.filter(function(z){return z!=="其他";}).map(function(z){return '<option value="'+z+'">';}).join('')+'</datalist>';
   items.forEach(function(s){
     var sp=pOf(store,s),dur=isDur(s);
@@ -2533,7 +2671,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
     g.push('<span class="pf"><b>廠商</b>'+inT("p",s.id,"custVendor",sp.custVendor||"",76,(s.vendor||"未指定"),"淺字＝總部主檔（"+(s.vendor||"未指定")+"）。只有本店改用別家盤商時才填。")+'</span>');
     g.push('<span class="pf"><b>分區</b><input class="tx" style="width:88px" type="text" list="zoneDL" data-p="'+s.id+'" data-f="zone" value="'+zOwn+'" placeholder="'+zEff+'" title="空白＝用系統預設分區（'+zEff+'）"></span>');
     if(!dur)g.push('<span class="pf"><b>內容量</b><input class="sm" style="width:82px" type="number" step="0.1" min="0" data-p="'+s.id+'" data-f="custPackQty" value="'+pqOwn+'" placeholder="'+(pqHQ>0?fmt(pqHQ):'')+'" title="每 1 '+(s.buyUnit||'採購單位')+' 含多少 '+(s.useUnit||'g')+'。淺字＝總部主檔。改內容量會重新換算現有庫存克數與訂貨點。">'
-      +(pqOwn!==""?'<span class="warn2">本店</span>':'<span class="hq">'+(pqHQ>0?fmt(pqHQ)+' '+s.useUnit:'')+'</span>')+'</span>');
+      +(pqOwn!==""?'<span class="warn2">'+fmt(num(pqOwn))+' '+s.useUnit+'（本店）</span>':'<span class="hq">'+(pqHQ>0?fmt(pqHQ)+' '+s.useUnit:'')+'</span>')+'</span>');   /* 2026-09-10 bp 批：本店覆蓋時原本只印「本店」兩個字，把單位數量吃掉了（12 店擠花袋實例） */
     if(isHQ){
       g.push('<span class="pf"><b>店品名</b>'+inT("p",s.id,"custName",sp.custName||"",90)+'</span>');
       g.push('<span class="pf"><b>順序</b>'+inN("p",s.id,"ord",sp.ord||"",48)+'</span>');}
@@ -2568,8 +2706,16 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
       var sfPq=pqEff(store,s)>0?pqOf(store,s):1,sfU=pqEff(store,s)>0?s.buyUnit:s.useUnit,sfV=sp.safety?Math.round(sp.safety/sfPq*100)/100:0;
       /* 2026-09-08 bi 批：安全庫存在標配模式下同樣不進計算（computeRow 的 par 分支只用 par/newitem/onHand）。 */
       g.push('<span class="pf"><b title="'+(_spm?'標配模式：建議量＝標配−現有，安全庫存不列入計算':'額外緩衝，加在訂貨點上。以採購單位填：擠花袋 1 件＝2000 個就填 1')+'">安全庫存</b>'+inN("p",s.id,"safety",sfV,64)+' '+sfU+(sfPq>1&&sfV>0?'<span class="muted">（＝'+fmt(Math.round(sfV*sfPq))+' '+s.useUnit+'）</span>':'')+(_spm?'<span class="warn2" style="margin-left:3px">不生效</span>':'')+'</span>');}
+    /* 2026-09-10 bp 批：規格（1 件＝2,000 個）直接印在卡上，店長才有辦法把「上週用了幾個」換算成「安全庫存要填幾件」 */
+    var _spec=(!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?('<span class="muted" style="font-size:12px">1 '+s.buyUnit+'＝'+fmt(pqOf(store,s))+' '+s.useUnit+'</span>'):'';
+    var _u3=used3m(store,s);
+    var _wk=(!dur)?(num(aggOf(store,s).avg4)||num(aggOf(store,s).week)):0;
+    var _wkP=(_wk>0&&pqEff(store,s)>0)?('<span class="muted" style="font-size:12px">週用 ≈'+dec(_wk/pqOf(store,s))+' '+s.buyUnit+'</span>'):'';
     html+='<div class="pcard" data-prow="'+s.id+'">'
       +'<div class="pc-top"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+s.name+'</b>'
+      +(_u3?'<span class="badge" style="background:#2E7D32">🟢 3個月有使用</span>':'')
+      +(skuTail(s)?'<span class="badge" style="background:#B7791F">🧹 清貨尾</span>':(skuExpired(s)?'<span class="badge" style="background:#8A7466">🗓 過季</span>':''))
+      +_spec+_wkP
       +'<span class="pc-right"><span class="pf"><b>啟用</b><input type="checkbox" class="ck" data-puse="'+s.id+'" title="取消勾選＝本店不使用此品項，不出現在盤點與建議" '+(usedOf(store,s)?"checked":"")+'></span>'
       +'<span data-pst="'+s.id+'">'+pstBtn(s.id)+'</span></span></div>'
       +'<div class="pc-grid">'+g.join('')+'</div>'+parLine+'</div>';});
@@ -2650,7 +2796,7 @@ function convBaseOf(s){var names=[s.name].concat(s.aliases||[]);
   return "";}
 function viewMaster(){var ed=ST.role==="總部";
   var html='<div class="toolbar"><span class="own">✎ 主檔 dim_sku（總部維護）</span></div>'
-  +'<div class="note">品項定義全店共用，改完按「存」即寫回、立即生效（用量重算隔日生效）。<b>狀態／適用店／最後有效日</b>三欄在 dim_sku 分頁直接填：狀態填「停售」或「不盤點」＝全站不出現；適用店填「9,10,12」＝只給這幾店；最後有效日由系統每日 06:00 依對照表結束有效日自動算（結束後寬限 14 天才算過季），不用填。<b>品名不可在此修改</b>——品名是 BOM/POS 對應鍵，改名會使用量推算斷鏈，如需改名請聯絡系統管理。<b>內容量（食譜使用單位）</b>＝每 1 採購單位含多少使用單位（如 1 箱 = 20000 g；圓紙墊 1 件 = 500 張）。旁邊的<b>單位可以直接改</b>（例：個 → 張），改完按「存」；若該品項在單位對照表有基準單位而兩者不一致，會當場標紅（不一致會讓建議量整組算錯）。<br>編號由系統自動流水編（新增品項時直接帶出，不必再去 Sheet 查）。<br>「單價參考」欄預設隱藏（按上方「$ 單價參考」可展開）：資料來源 Shopline 商品目錄與 2025–2026 銷售報表（ref_sku_price 分頁），每季更新；<b>建議價每日 07:50 自動套用到單價</b>（🔴 提醒的不自動套；手動改過的不會被覆蓋，想重新跟著建議價走就把單價清空）。</div>';
+  +'<div class="note">品項定義全店共用，改完按「存」即寫回、立即生效（用量重算隔日生效）。<b>狀態／適用店／最後有效日</b>三欄在 dim_sku 分頁直接填：狀態填「停售」或「不盤點」＝全站不出現；適用店填「9,10,12」＝只給這幾店；最後有效日由系統每日 06:00 依對照表結束有效日自動算（結束後寬限 14 天才算過季），不用填。<b>品名不可在此修改</b>——品名是 BOM/POS 對應鍵，改名會使用量推算斷鏈，如需改名請聯絡系統管理。<b>內容量（食譜使用單位）</b>＝每 1 採購單位含多少使用單位（如 1 箱 = 20000 g；圓紙墊 1 件 = 500 張）。旁邊的<b>單位可以直接改</b>（例：個 → 張），改完按「存」；若該品項在單位對照表有基準單位而兩者不一致，會當場標紅（不一致會讓建議量整組算錯）。<br>編號由系統自動流水編（新增品項時直接帶出，不必再去 Sheet 查）。</div>';
   if(ed)html+='<details class="card" style="padding:10px 12px;margin-bottom:8px"><summary style="cursor:pointer;font-weight:800;font-size:13px">🆕 新品上架檢查單（四格都完成才算上架，漏一格系統無感）</summary>'
     +'<ol style="margin:8px 0 2px;padding-left:20px;font-size:13px;line-height:1.9">'
     +'<li><b>POS 建品項</b>：檔期品「次類別」必填「YYYY 節名」（例：2026 中秋）。漏填＝檔期備料層完全抓不到。</li>'
@@ -2669,15 +2815,13 @@ function viewMaster(){var ed=ST.role==="總部";
   var draftN=SKUS.filter(function(s){return s.src.indexOf("自動草稿")===0;}).length;
   if(draftN&&mf!=="待確認")html+='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">🆕 有 <b>'+draftN+'</b> 項是系統從 BOM 自動建的草稿，類別是推測的、廠商／內容量／單價還沒填。<a href="#" data-mfilter="待確認" style="color:#8A5A00;font-weight:700">點這裡只看草稿</a></div>';
   html+='<div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項／廠商／編號／類別（耗材、器具…），空白分隔可多關鍵字" value="'+(ST.q||'').replace(/"/g,'&quot;')+'">'
-    +["全部","待確認","單價未填","有警示","有建議價"].map(function(x){var lb=x==="待確認"?("🆕 待確認"+(draftN?" "+draftN:"")):x;return '<button class="btn sm'+(mf===x?'':' ghost')+(x==="待確認"&&draftN?' style="border-color:#F0B35A"':'')+'" data-mfilter="'+x+'">'+lb+'</button>';}).join('')
-    +'<button class="btn sm'+(ST.mRef?'':' ghost')+'" id="mRefTgl" title="單價參考／建議價欄，平常用不到就收起來">'+(ST.mRef?'隱藏單價參考':'$ 單價參考')+'</button></div>';
+    +["全部","待確認","單價未填"].map(function(x){var lb=x==="待確認"?("🆕 待確認"+(draftN?" "+draftN:"")):x;return '<button class="btn sm'+(mf===x?'':' ghost')+(x==="待確認"&&draftN?' style="border-color:#F0B35A"':'')+'" data-mfilter="'+x+'">'+lb+'</button>';}).join('')
+    +'</div>';   /* 2026-09-10 bp 批（經營者裁示）：警示／建議價／單價參考三個都拿掉——真實單價由經營者自己查核，參考層只是雜訊。refCellM／REFP 保留未刪，日後要開回來只要把這裡與 showRef 改回。 */
   var items=SKUS.filter(function(s){if(!matchQ(s))return false;
     if(mf==="待確認")return s.src.indexOf("自動草稿")===0;
     if(mf==="單價未填")return !(s.price>0);
-    if(mf==="有警示"){var rp=REFP[s.id];if(!rp)return false;var w=String(rp.warn||"").trim();return w.indexOf("🔴")===0||w.indexOf("⚠")===0;}
-    if(mf==="有建議價")return REFP[s.id]&&REFP[s.id].sug!=null;
     return true;});
-  var showRef=!!ST.mRef||mf==="有警示"||mf==="有建議價";
+  var showRef=false;   /* 2026-09-10 bp 批：單價參考欄永久隱藏 */
   html+='<div class="card" style="overflow-x:auto"><table><tr><th>品名</th><th>類別</th><th>廠商</th><th>採購單位</th><th>內容量（食譜使用單位）</th><th>單價</th>'+(showRef?'<th>單價參考</th>':'')+(ed?'<th></th>':'')+'</tr>';
   items.forEach(function(s){
     if(!ed){html+='<tr><td><b>'+s.name+'</b>'+(s.status?' <span class="badge" style="background:#8B0000">'+s.status+'</span>':'')+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td>'+s.vendor+'</td><td>'+s.buyUnit+'</td><td>'+fmt(s.packQty)+' '+s.useUnit+'</td><td>'+fmt(s.price)+'</td>'+(showRef?refCellM(s,false):'')+'</tr>';return;}
@@ -3419,6 +3563,7 @@ function wire(){
     SKUS.push(ns);SKU[id]=ns;toast("已新增 "+nm+"（記得到店別參數頁設定啟用店）");render();};
   Array.prototype.forEach.call(document.querySelectorAll(".why[data-why]"),function(el){el.onclick=function(){ST.exp[el.dataset.why]=!ST.exp[el.dataset.why];render();};});
   var tg=$('[data-toggleexcl]');if(tg)tg.onclick=function(){ST.showExcl=!ST.showExcl;render();};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chexcl]"),function(el){el.onclick=function(){ST.chExclOnly=(el.dataset.chexcl==="1");render();};});   /* 2026-09-10 bp 批 */
   Array.prototype.forEach.call(document.querySelectorAll('[data-smode]'),function(el){el.onclick=function(){ST.seasonMode=el.dataset.smode;ST.season=(ST.seasonMode!=='關');render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-inv]"),function(el){el.onchange=function(){var id=el.dataset.inv,f=el.dataset.f;INV[ST.storeId]=INV[ST.storeId]||{};INV[ST.storeId][id]=INV[ST.storeId][id]||{};INV[ST.storeId][id][f]=el.value===""?null:+el.value;INV[ST.storeId][id].t=Date.now();DIRTY[ST.storeId]=DIRTY[ST.storeId]||{};DIRTY[ST.storeId][id]=true;saveDraft(ST.storeId,id);if(SKU[id]&&okOf(ST.storeId,SKU[id]))okSet(ST.storeId,id,false);if(ST.tab==="盤點"){if(!invPatch(ST.storeId,id))render();}};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-ok-btn]"),function(el){el.onclick=function(){var id=el.getAttribute("data-ok-btn"),st=ST.storeId,s=SKU[id];if(!s)return;
@@ -3451,7 +3596,8 @@ function wire(){
       v=nz.val;el.value=(nz.val===""?"":nz.val);}
     if(f==="safety"&&v!==""){var sk0=SKU[id];if(sk0&&pqEff(ST.storeId,sk0)>0)v=Math.round(+v*pqOf(ST.storeId,sk0)*100)/100;}   /* 2026-09-01 w 批：安全庫存以採購單位輸入，存回使用單位 */
     if(f==="parB"){var sk1=SKU[id];if(v!==""&&sk1&&pqEff(ST.storeId,sk1)>0)v=Math.round(+v*pqOf(ST.storeId,sk1)*100)/100;if(v==="")v=0;f="par";}   /* 2026-09-03 y 批：食材/耗材標配以採購單位輸入，存回使用單位 */
-    EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id]){delete PSTATE[id];refreshPstBtn(id);}PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);};});
+    EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id]){delete PSTATE[id];refreshPstBtn(id);}PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);
+    refreshSaveAllBtn();};});   /* 2026-09-10 bp 批：只更新按鈕，整頁重繪會讓捲動位置跳掉 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-puse]"),function(el){el.onchange=function(){var id=el.dataset.puse,on=el.checked;
     PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id].used=on;
     if(EDIT[id])delete EDIT[id]["使用中"];            // 已即時送出，不重複附在「存」裡
@@ -3459,6 +3605,7 @@ function wire(){
     postParam(ST.storeId,id,{"使用中":on?"TRUE":"FALSE"},function(ok){
       toast(ok?((SKU[id]?SKU[id].name:"品項")+(on?" 已啟用":" 已停用")+"（已確認）"):("⚠ "+(SKU[id]?SKU[id].name:"品項")+" 設定未寫入，請再操作一次"));});};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-psave]"),function(el){el.onclick=function(){savePRow(el.dataset.psave);};});
+  var _psa=$("#pSaveAll");if(_psa)_psa.onclick=function(){saveAllParams();};   /* 2026-09-10 bp 批 */
   // 季節
   Array.prototype.forEach.call(document.querySelectorAll("[data-si]"),function(el){el.onchange=function(){SIDX[+el.dataset.si]=+el.value;};});
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});var lo=$("#sfLow"),hi=$("#sfHigh");if(lo&&+lo.value>0){SFACT.low=+lo.value;post({type:"season",month:"淡季係數",idx:SFACT.low});}if(hi&&+hi.value>0){SFACT.high=+hi.value;post({type:"season",month:"旺季係數",idx:SFACT.high});}toast("已送出季節指數與淡旺季係數");};
@@ -3506,6 +3653,7 @@ function wire(){
    純唯讀顯示層：不寫任何 Sheet、不動引擎、computeRow 零改動。 */
 var SHIST={},SHLOAD={},SHVST="";
 function shInit(){if(ST.shMode==="趨勢")ST.shMode="訂單";if(!ST.shRexp)ST.shRexp={};if(ST.shMode===undefined){ST.shMode="訂單";ST.shPer="6";ST.shoQ="";ST.shSort="amt";ST.shPage=0;ST.shExp={};ST.shRexp={};}
+  if(ST.shFrom===undefined){ST.shFrom="";ST.shTo="";}   /* 2026-09-10 bp 批 */
   if(ST.shAll===undefined)ST.shAll=false;
   if(ST.shAll&&ST.role!=="總部")ST.shAll=false;}   /* 全店模式僅總部／經營者，店長只看自己店 */
 /* 2026-09-04 al 批 ②：全店模式用到的店號清單（排除已歇業的 13 號店，與 bootstrap 同一條規則） */
@@ -3546,15 +3694,23 @@ function loadShistAll(){
   return SHLOAD.ALL;
 }
 function shScopeRows(){return ST.shAll?(SHIST.ALL||[]):(SHIST[String(ST.storeId)]||[]);}
+/* 2026-09-10 bp 批：期間選單多一個「自訂日期」。四個既有選項的行為完全不變（起日仍以資料截止日回推整月），
+   自訂則同時支援起日與迄日；三個計算點與兩處標籤文字統一走 shWin()，不再各算一次。 */
+function shWin(all){
+  var mx=(all&&all.length)?all[all.length-1].date:"";
+  if(ST.shPer==="custom"){
+    var f=ST.shFrom||"",t=ST.shTo||"";
+    return {from:f||null,to:t||null,label:"自訂 "+(f||"最早")+" ～ "+(t||mx||"最新")};}
+  if(ST.shPer==="all"||!mx)return {from:null,to:null,label:"全部歷史"};
+  var d=new Date(mx+"T00:00:00");d.setMonth(d.getMonth()-(+ST.shPer)+1);d.setDate(1);
+  return {from:ymd(d),to:null,label:"近 "+ST.shPer+" 個月"};}
 function shRows(){
   var all=shScopeRows();
-  var f=null;
-  if(ST.shPer!=="all"&&all.length){
-    var d=new Date(all[all.length-1].date+"T00:00:00");d.setMonth(d.getMonth()-(+ST.shPer)+1);d.setDate(1);f=ymd(d);
-  }
+  var w=shWin(all);
   var q=(ST.shoQ||"").toLowerCase();
   return all.filter(function(r){
-    if(f&&r.date<f)return false;
+    if(w.from&&r.date<w.from)return false;
+    if(w.to&&r.date>w.to)return false;
     if(q&&r.name.toLowerCase().indexOf(q)<0)return false;
     return true;
   });
@@ -3616,7 +3772,7 @@ function shRankView(rows,allMode){
 
 /* 2026-09-04 al 批 ②：把採購參考的計算抽成純函式，讓「全店模式」可以逐店各算一次再彙總。
    單店模式的呼叫參數與舊版完全相同（mxD／wf 一樣由該店最後一筆日期推出）⇒ 輸出逐值不變。 */
-function shAdvCalc(all,q,mxD,wf){
+function shAdvCalc(all,q,mxD,wf,wt){   /* 2026-09-10 bp 批：wt＝期間上界（自訂日期用），既有呼叫不傳＝維持開放結尾 */
   if(!all||!all.length)return [];
   /* 未訂天數以「資料截止日」計，不用今天：每月才貼一次資料，用今天會把最近幾天已訂但還沒貼進來的品項誤報成 ⚠️ */
   function dd(a,b){return Math.round((b-a)/86400000);}
@@ -3627,7 +3783,7 @@ function shAdvCalc(all,q,mxD,wf){
     if(q&&r.name.toLowerCase().indexOf(q)<0)return;
     var e=m[r.name]=m[r.name]||{cat:r.cat,hdays:{},hfirst:"9999",hlast:"",pqty:0,pords:{},pdays:{},pfirst:"9999",plast:""};
     e.hdays[r.date]=1;if(r.date<e.hfirst)e.hfirst=r.date;if(r.date>e.hlast)e.hlast=r.date;
-    if(!wf||r.date>=wf){e.pqty+=r.qty;e.pords[r.ord]=1;e.pdays[r.date]=1;if(r.date<e.pfirst)e.pfirst=r.date;if(r.date>e.plast)e.plast=r.date;}
+    if((!wf||r.date>=wf)&&(!wt||r.date<=wt)){e.pqty+=r.qty;e.pords[r.ord]=1;e.pdays[r.date]=1;if(r.date<e.pfirst)e.pfirst=r.date;if(r.date>e.plast)e.plast=r.date;}
   });
   var list=Object.keys(m).map(function(n){
     var e=m[n],pc=nk(e.pords),pdc=nk(e.pdays),hdc=nk(e.hdays);
@@ -3635,7 +3791,7 @@ function shAdvCalc(all,q,mxD,wf){
     var itv=pdc>=2?dd(D(e.pfirst),D(e.plast))/(pdc-1):null;
     var hitv=hdc>=2?dd(D(e.hfirst),D(e.hlast))/(hdc-1):null;
     var cov0=(wf&&wf>e.hfirst)?wf:e.hfirst;
-    var months=Math.max(1,(dd(D(cov0),mxD)+1)/30.4);
+    var months=Math.max(1,(dd(D(cov0),(wt&&wt<ymd(mxD))?D(wt):mxD)+1)/30.4);
     var mavg=pc?e.pqty/months:null;
     var thr=itv?Math.round(itv*1.5):null;
     var due=false,stx;
@@ -3656,12 +3812,11 @@ function shAdvView(){
   var all=SHIST[String(ST.storeId)]||[],q=(ST.shoQ||"").toLowerCase();
   if(!all.length)return '<div class="muted">此店沒有大平台下單紀錄。</div>';
   var mxD=new Date(all[all.length-1].date+"T00:00:00");
-  var wf=null;
-  if(ST.shPer!=="all"){var d0=new Date(all[all.length-1].date+"T00:00:00");d0.setMonth(d0.getMonth()-(+ST.shPer)+1);d0.setDate(1);wf=ymd(d0);}
-  var list=shAdvCalc(all,q,mxD,wf);
+  var _w=shWin(all);
+  var list=shAdvCalc(all,q,mxD,_w.from,_w.to);
   if(!list.length)return '<div class="muted">沒有符合的品項。</div>';
   list.sort(function(a,b){if(a.due!==b.due)return a.due?-1:1;if(a.inPer!==b.inPer)return a.inPer?-1:1;return (b.pqty-a.pqty)||(b.since-a.since);});
-  var perLbl=ST.shPer==="all"?"全部歷史":"近 "+ST.shPer+" 個月";
+  var perLbl=_w.label;
   var h='<table><thead><tr><th>品項</th><th style="text-align:right">月均量</th><th style="text-align:right">下單次數</th><th style="text-align:right">平均週期(天)</th><th>上次下單</th><th style="text-align:right">未訂天數</th><th>狀態</th></tr></thead><tbody>';
   list.forEach(function(e){
     h+='<tr><td>'+shEsc(e.name)+' <span class="muted">'+shEsc(e.cat)+'</span></td><td style="text-align:right">'+(e.mavg==null?'–':e.mavg.toFixed(1))+'</td><td style="text-align:right">'+e.cnt+'</td><td style="text-align:right">'+(e.itv?Math.round(e.itv):'–')+'</td><td>'+e.last+'</td><td style="text-align:right">'+e.since+'</td><td>'+e.stx+'</td></tr>';});
@@ -3675,12 +3830,11 @@ function shAdvAllView(){
   var allRows=SHIST.ALL||[],q=(ST.shoQ||"").toLowerCase();
   if(!allRows.length)return '<div class="muted">沒有大平台下單紀錄。</div>';
   var mxD=new Date(allRows[allRows.length-1].date+"T00:00:00");
-  var wf=null;
-  if(ST.shPer!=="all"){var d0=new Date(ymd(mxD)+"T00:00:00");d0.setMonth(d0.getMonth()-(+ST.shPer)+1);d0.setDate(1);wf=ymd(d0);}
+  var _w=shWin(allRows);
   var agg={};
   shStoreIds().forEach(function(id){
     var rows=SHIST[id];if(!rows||!rows.length)return;
-    shAdvCalc(rows,q,mxD,wf).forEach(function(e){
+    shAdvCalc(rows,q,mxD,_w.from,_w.to).forEach(function(e){
       var a=agg[e.name]=agg[e.name]||{name:e.name,cat:e.cat,pqty:0,cnt:0,mavg:0,nst:0,due:[],last:"",since:0};
       a.pqty+=e.pqty;a.cnt+=e.cnt;a.mavg+=(e.mavg||0);
       if(e.inPer)a.nst++;
@@ -3689,7 +3843,7 @@ function shAdvAllView(){
   var list=Object.keys(agg).map(function(n){return agg[n];});
   if(!list.length)return '<div class="muted">沒有符合的品項。</div>';
   list.sort(function(a,b){return (b.due.length-a.due.length)||(b.pqty-a.pqty)||(b.since-a.since);});
-  var perLbl=ST.shPer==="all"?"全部歷史":"近 "+ST.shPer+" 個月";
+  var perLbl=_w.label;
   var h='<table><thead><tr><th>品項</th><th style="text-align:right">月均量<div class="sub" style="font-weight:400">全公司</div></th><th style="text-align:right">下單次數</th><th style="text-align:right">下單店數</th><th>最近下單</th><th style="text-align:right">未訂天數</th><th>各店狀態</th></tr></thead><tbody>';
   list.forEach(function(e){
     var stx=e.due.length
@@ -3723,7 +3877,11 @@ function viewShist(){
   var h='<div class="note">🏬 <b>採購大平台下單紀錄</b>　'+(allMode?'<b>全公司 12 店</b>':'本店')+'向<b>出貨中心（採購大平台）</b>實際下過的訂單歷史，唯讀。資料至 <b>'+(all.length?all[all.length-1].date:"—")+'</b>'+(isHQ?'，由出貨中心每週上傳更新。':'，由出貨中心每週更新、非即時。')+(all.length?'':(allMode?'　⚠️ 資料中沒有任何訂單。':'　⚠️ 此店在資料中沒有任何訂單。'))+'</div>'+'<div class="note" style="background:#FFF8E7">ℹ️ 〈跟「📑 訂貨單」不一樣〉本頁＝<b>已經向大平台下過的單</b>（過去實際發生的）；「📑 訂貨單」＝<b>本系統依盤點算出、這次該訂多少</b>（還沒下的）。兩邊數字不會也不需要一樣。</div>';
   h+='<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">';
   h+='<span class="seg">'+["訂單","排行","採購參考"].map(function(mo){return '<div class="'+(ST.shMode===mo?"on":"")+'" data-shmode="'+mo+'">'+({"訂單":"📋 訂單","排行":"🏆 品項排行","採購參考":"🛒 採購參考"})[mo]+'</div>';}).join("")+'</span>'+scopeSeg;
-  h+='<select id="shPer">'+[["3","近3個月"],["6","近6個月"],["12","近12個月"],["all","全部歷史"]].map(function(p){return '<option value="'+p[0]+'"'+(ST.shPer===p[0]?" selected":"")+'>'+p[1]+'</option>';}).join("")+'</select>';
+  h+='<select id="shPer">'+[["3","近3個月"],["6","近6個月"],["12","近12個月"],["all","全部歷史"],["custom","自訂日期"]].map(function(p){return '<option value="'+p[0]+'"'+(ST.shPer===p[0]?" selected":"")+'>'+p[1]+'</option>';}).join("")+'</select>';
+  if(ST.shPer==="custom"){var _mn=all.length?all[0].date:"",_mx=all.length?all[all.length-1].date:"";
+    h+='<span class="muted" style="font-size:12px">起</span><input id="shFrom" type="date" value="'+shEsc(ST.shFrom||"")+'" min="'+_mn+'" max="'+_mx+'" style="font-size:13px">'
+      +'<span class="muted" style="font-size:12px">迄</span><input id="shTo" type="date" value="'+shEsc(ST.shTo||"")+'" min="'+_mn+'" max="'+_mx+'" style="font-size:13px">'
+      +'<span class="muted" style="font-size:12px">（留空＝不設限；資料範圍 '+(_mn||"—")+' ～ '+(_mx||"—")+'）</span>';}
   h+='<input id="shoQ" type="text" placeholder="🔍 搜尋品項" value="'+shEsc(ST.shoQ)+'" style="min-width:150px">';
   h+='<span class="muted">訂單 '+oc+' 張｜數量 '+shN(q)+'｜金額 '+shM(a)+(allMode?'｜'+nsc+' 店有下單':'')+'</span>';
   h+='</div></div>';
@@ -3822,6 +3980,8 @@ function shWire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-shscope]"),function(el){el.onclick=function(){
     ST.shAll=(el.dataset.shscope==="all");ST.shPage=0;ST.shExp={};ST.shRexp={};render();};});
   var sp=$("#shPer");if(sp)sp.onchange=function(){ST.shPer=this.value;ST.shPage=0;render();};
+  var _sf=$("#shFrom");if(_sf)_sf.onchange=function(){ST.shFrom=this.value;ST.shPage=0;render();};   /* 2026-09-10 bp 批 */
+  var _st2=$("#shTo");if(_st2)_st2.onchange=function(){ST.shTo=this.value;ST.shPage=0;render();};
   bindQ($("#shoQ"),function(v){ST.shoQ=v;ST.shPage=0;render();});
 }
 
