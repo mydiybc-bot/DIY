@@ -196,6 +196,9 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
 .cal-tooltip .tt-emp-row { padding: 2px 0; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
 .cal-tooltip .tt-emp-row .tt-emp-shift { color: var(--muted); margin-left: 4px; font-size: 12px; }
 .cal-tooltip .tt-emp-note { font-size: 12px; color: var(--muted); margin: 1px 0 4px 14px; line-height: 1.35; }
+.cal-tooltip .tt-date-note { font-size: 12px; color: #6F4E45; background: #FBF6EF; border-left: 3px solid #C9A227; border-radius: 4px; padding: 4px 7px; margin: 5px 0 2px 0; line-height: 1.4; }
+.cal-tooltip .tt-off-row  { font-size: 12px; color: #6F4E45; margin: 2px 0 0 0; line-height: 1.35; }
+.cal-tooltip .tt-off-row .nm { font-weight: 600; }
 .cal-tooltip .tt-flag { padding: 4px 8px; background: #FBE6E3; border-left: 3px solid var(--flag-red); border-radius: 3px; font-size: 12px; color: #8B2D1F; margin-top: 4px; }
 .cal-tooltip .tt-empty { color: var(--muted); font-style: italic; font-size: 12px; }
 
@@ -1830,6 +1833,8 @@ function _renderDailyCalendarImpl() {
             date: dStr, isOff: isOff, tier: tier,
             hours: r.hours, revenue: r.revenue, rph: r.rev_per_hour,
             employees: empList.map(e => ({name: e.name, hours: e.hours, shift: e.shift, note: e.note})),
+            date_note: r.date_note || '',
+            off_notes: Array.isArray(r.off_notes) ? r.off_notes : [],
             flags: flags.map(f => ({label: f.label, reason: f.reason}))
           };
           cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip-key="' + dStr + '">'
@@ -1880,6 +1885,10 @@ function buildTooltipHtml(d) {
   let html = '<div class="tt-title">' + d.date + (d.isOff ? ' (假日)' : ' (平日)') + ' ・ ' + tierLabel + '</div>';
   html += '<div style="font-size:12px;color:var(--muted);">工時 ' + d.hours + 'h ・ 營收 $' + Math.round(d.revenue).toLocaleString() + ' ・ rev/h $' + d.rph + '</div>';
 
+  if (d.date_note) {
+    html += '<div class="tt-date-note">📋 ' + _escNote(d.date_note) + '</div>';
+  }
+
   html += '<div class="tt-sect-title">當日班表 (' + d.employees.length + ' 人)</div>';
   if (d.employees.length === 0) {
     html += '<div class="tt-empty">無排班</div>';
@@ -1890,6 +1899,13 @@ function buildTooltipHtml(d) {
       if (e.note) {
         html += '<div class="tt-emp-note">📌 ' + _escNote(e.note) + '</div>';
       }
+    });
+  }
+
+  if (d.off_notes && d.off_notes.length > 0) {
+    html += '<div class="tt-sect-title">🚫 未排班備註</div>';
+    d.off_notes.forEach(o => {
+      html += '<div class="tt-off-row"><span class="nm">' + _escNote(o.name) + '</span>：' + _escNote(o.note) + '</div>';
     });
   }
 
@@ -2615,6 +2631,14 @@ function renderEmpResult() {
           agg[key].per[m].hours += (Number(e.hours) || 0);
           agg[key].per[m].days.add(day.date);
           if (e.note) agg[key].notes.push({ date: day.date, note: e.note, store: sid });
+        });
+        // ★ 2026-09-10：未排班備註也補進 notes chips。
+        //   鐵則：只 push 到 notes,絕不碰 per[m].hours / per[m].days（會污染合計工時與出勤天數）；
+        //         且只補「本來就有排班紀錄」的人,不新建 key（否則會冒出工時 0/出勤 0 的幽靈列）。
+        const offs = Array.isArray(day.off_notes) ? day.off_notes : [];
+        offs.forEach(o => {
+          const key2 = (empView === 'split') ? (sid + '||' + o.name) : o.name;
+          if (agg[key2]) agg[key2].notes.push({ date: day.date, note: o.note, store: sid });
         });
       });
     });
