@@ -19,6 +19,7 @@
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
+<!-- 2026-09-10 bs 批：「💾 儲存並更新」第一輪改整批一個 POST（type paramBatch，≤50 項一塊；GAS applyWrite_ 新增 upsertBatch_ 一鎖一開一讀、只寫動到的列，17 項約 5 秒）；補送輪維持逐筆 param，GAS 未部署新版時自動退回逐筆。只動 saveAllSend ＋ 新常數 SAVEALL_CHUNK。 -->
 <!-- 2026-09-10 br 批：店別參數「💾 儲存並更新」改排隊逐筆送（等上一筆回應才送下一筆，GAS 鎖不被自己塞爆）＋一次 dim_store_par 回讀對帳（最多 3 輪）＋沒對上自動補送（最多再 2 輪）；按鈕顯示「送出 5/17」「確認 12/17」進度；失敗值全程保留、重試同一顆。逐列「存」鈕移除（savePRow 保留無入口），改狀態標記 待存／排隊中／寫入中／已存／未寫入。只動 saveAllParams／verifyParamBatch／refreshSaveAllBtn／pstBtn 與 viewParams 三個字串；新增 saveAllTxt／saveAllSend／saveAllRound／saveAllSettle。引擎零改動。 -->
 <!-- 2026-09-06 aw 批：①跨店調撥改「同地區優先」（STORE_REGION／regionOf／sameRegion，同區給不完才跨區，欄位標同區/跨區，合計列顯示同區量）②「🥮 檔期備貨」開放給店長（唯讀全店總表：找同區調貨＋比較自己叫貨量），店長專屬說明列、本店列反白＋「本店」徽章、店名旁顯示地區 -->
 <!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清貨尾」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清貨尾・手動 ③主檔頁清貨尾徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
@@ -756,11 +757,28 @@ function used3m(st,s){var m=P3M[String(st)];if(!m)return false;
    逐列「存」鈕已移除（savePRow 保留但無入口），那格改為狀態標記：待存／排隊中／寫入中／已存／未寫入。 */
 var SAVEALL={busy:false,n:0,txt:""};
 var SAVEALL_ROUNDS=3;   // 送出最多 3 輪＝首輪＋自動補送 2 輪
+var SAVEALL_CHUNK=50;   // bs 批：第一輪整批 POST 每塊最多幾項
 function saveAllTxt(){
   var n=paramDirty().length;
   return SAVEALL.busy?("⏳ "+(SAVEALL.txt||"寫入中…")):("💾 儲存並更新"+(n?"（"+n+" 項）":""));}
 function saveAllSend(store,list,round,onDone){       // 排隊逐筆送：等上一筆 fetch 回來才送下一筆，GAS 鎖不會被自己塞爆
+  /* 2026-09-10 bs 批：第一輪改成「整批一個 POST」（type paramBatch，GAS 端一個鎖、兩檔各開一次各讀一次，17 項約 5 秒）；
+     超過 SAVEALL_CHUNK 項切塊。補送輪（round>0）維持逐筆 type param——
+     若 GAS 還沒部署 paramBatch，第一輪一筆都不會落地，回讀對不上會全部進補送輪、自動退回逐筆，前端與 GAS 誰先上都不會壞。 */
   var i=0,total=list.length,lb=(round>0?"補送":"送出");
+  if(round===0&&total>1){
+    var chunks=[];for(var c=0;c<total;c+=SAVEALL_CHUNK)chunks.push(list.slice(c,c+SAVEALL_CHUNK));
+    var ci=0;
+    function nextChunk(){
+      if(ci>=chunks.length){onDone();return;}
+      var ch=chunks[ci];ci++;
+      ch.forEach(function(x){PSTATE[x.id]={pending:1,fail:0,done:false};refreshPstBtn(x.id);});
+      SAVEALL.txt="送出 "+ci+"/"+chunks.length+" 批（"+total+" 項）…";refreshSaveAllBtn();
+      var pr0;
+      try{pr0=post({type:"paramBatch",store:store,items:ch.map(function(x){return {sku_id:x.id,fields:x.fields};})},true);}catch(e){pr0=null;}
+      if(!pr0||typeof pr0.then!=="function")pr0=Promise.resolve();
+      pr0.then(nextChunk,nextChunk);}
+    nextChunk();return;}
   function next(){
     if(i>=total){onDone();return;}
     var x=list[i];i++;
