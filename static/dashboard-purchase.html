@@ -19,6 +19,7 @@
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
+<!-- 2026-09-10 br 批：店別參數「💾 儲存並更新」改排隊逐筆送（等上一筆回應才送下一筆，GAS 鎖不被自己塞爆）＋一次 dim_store_par 回讀對帳（最多 3 輪）＋沒對上自動補送（最多再 2 輪）；按鈕顯示「送出 5/17」「確認 12/17」進度；失敗值全程保留、重試同一顆。逐列「存」鈕移除（savePRow 保留無入口），改狀態標記 待存／排隊中／寫入中／已存／未寫入。只動 saveAllParams／verifyParamBatch／refreshSaveAllBtn／pstBtn 與 viewParams 三個字串；新增 saveAllTxt／saveAllSend／saveAllRound／saveAllSettle。引擎零改動。 -->
 <!-- 2026-09-06 aw 批：①跨店調撥改「同地區優先」（STORE_REGION／regionOf／sameRegion，同區給不完才跨區，欄位標同區/跨區，合計列顯示同區量）②「🥮 檔期備貨」開放給店長（唯讀全店總表：找同區調貨＋比較自己叫貨量），店長專屬說明列、本店列反白＋「本店」徽章、店名旁顯示地區 -->
 <!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清貨尾」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清貨尾・手動 ③主檔頁清貨尾徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
 <!-- 2026-09-05 at 批：①matchQ 搜尋加「類別」（盤點／建議／店別參數／主檔四頁共用） ②總部分頁隱藏「建議採購」「用量對帳」（viewSuggest／viewRecon 函式保留，TABS_BY_ROLE 加回即恢復） ③三處指向建議頁的說明文字改指訂貨單 -->
@@ -747,7 +748,38 @@ function used3m(st,s){var m=P3M[String(st)];if(!m)return false;
 
 /* 批次寫入：一次 post 全部異動列，只做「一次」dim_store_par 回讀對帳（最多 3 輪），
    避免沿用 savePRow 的逐欄回讀（每欄一次全表 gviz，30 列就是 90 次）。 */
-var SAVEALL={busy:false,n:0};
+/* 2026-09-10 br 批：「儲存並更新」改成「排隊逐筆送」＋一次回讀對帳＋自動補送（經營者實測：一次改 17 項要按好幾次）。
+   根因：bp 批把所有列同時射出去；GAS doPost 外層 LockService.tryLock(30000)，每筆對 BOM 本＋專用檔各開各寫約 2～3 秒，
+   排在後面的等鎖逾 30 秒被回 busy；post 是 no-cors 看不到 busy，只能靠回讀對帳判失敗 ⇒ 每按一次只多擠進幾筆。
+   現在：一次只送一筆、等 GAS 回應（fetch resolve）才送下一筆 → 全部送完做一次 dim_store_par 回讀（最多 3 輪 2/4/6 秒）
+   → 沒對上的自動補送（最多再 2 輪）→ 還是不行才提示重試。店長填的值全程留在 EDIT／PARAM 不會掉，重試一律按右上同一顆。
+   逐列「存」鈕已移除（savePRow 保留但無入口），那格改為狀態標記：待存／排隊中／寫入中／已存／未寫入。 */
+var SAVEALL={busy:false,n:0,txt:""};
+var SAVEALL_ROUNDS=3;   // 送出最多 3 輪＝首輪＋自動補送 2 輪
+function saveAllTxt(){
+  var n=paramDirty().length;
+  return SAVEALL.busy?("⏳ "+(SAVEALL.txt||"寫入中…")):("💾 儲存並更新"+(n?"（"+n+" 項）":""));}
+function saveAllSend(store,list,round,onDone){       // 排隊逐筆送：等上一筆 fetch 回來才送下一筆，GAS 鎖不會被自己塞爆
+  var i=0,total=list.length,lb=(round>0?"補送":"送出");
+  function next(){
+    if(i>=total){onDone();return;}
+    var x=list[i];i++;
+    PSTATE[x.id]={pending:1,fail:0,done:false};
+    SAVEALL.txt=lb+" "+i+"/"+total+"…";refreshSaveAllBtn();refreshPstBtn(x.id);
+    var pr;
+    try{pr=post({type:"param",store:store,sku_id:x.id,fields:x.fields},true);}catch(e){pr=null;}
+    if(!pr||typeof pr.then!=="function")pr=Promise.resolve();
+    pr.then(next,next);}
+  next();}
+function saveAllRound(store,list,total,round){
+  saveAllSend(store,list,round,function(){
+    SAVEALL.txt="確認寫入中…";refreshSaveAllBtn();
+    verifyParamBatch(store,list,0,total,round);});}
+function saveAllSettle(id,fields){                 // 只清掉「這次送出且值沒再被改」的欄位，送出途中又改的保留待存
+  var e=EDIT[id];if(!e)return;
+  var back={"盤點分區":"zone","盤點順序":"ord","標配數量":"par","權數":"weight","交期天":"leadDays","手動週用量":"manualWeekly","安全庫存":"safety","使用中":"使用中","店品名":"custName","店廠商":"custVendor","店內容量":"custPackQty"};
+  Object.keys(fields).forEach(function(lb){var k=back[lb];if(k&&(k in e)&&String(e[k])===String(fields[lb]))delete e[k];});
+  if(!Object.keys(e).length)delete EDIT[id];}
 function paramFields(id){
   var e=EDIT[id]||{},f={};
   if("zone"in e)f["盤點分區"]=e.zone; if("ord"in e)f["盤點順序"]=e.ord; if("par"in e)f["標配數量"]=e.par;
@@ -766,11 +798,13 @@ function saveAllParams(){
   var list=paramDirty();
   if(!list.length){toast("目前沒有待儲存的變更");return;}
   var store=ST.storeId;
-  SAVEALL.busy=true;SAVEALL.n=list.length;
-  list.forEach(function(x){post({type:"param",store:store,sku_id:x.id,fields:x.fields},true);PSTATE[x.id]={pending:1,fail:0,done:false};});
-  toast("送出 "+list.length+" 項，確認寫入中…");render();
-  verifyParamBatch(store,list,0,list.length);}
-function verifyParamBatch(store,list,attempt,total){
+  SAVEALL.busy=true;SAVEALL.n=list.length;SAVEALL.txt="準備送出 "+list.length+" 項…";
+  list.forEach(function(x){PSTATE[x.id]={pending:1,fail:0,done:false,queued:true};});
+  refreshSaveAllBtn();list.forEach(function(x){refreshPstBtn(x.id);});
+  toast("開始寫入 "+list.length+" 項，逐筆送出中，請不要離開此頁");
+  saveAllRound(store,list,list.length,0);}
+function verifyParamBatch(store,list,attempt,total,round){
+  round=round||0;
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)];
   setTimeout(function(){
     fetchFresh("dim_store_par").then(function(rows){
@@ -780,18 +814,23 @@ function verifyParamBatch(store,list,attempt,total){
         var hit=by[String(x.id)],ok=!!hit;
         if(hit)Object.keys(x.fields).forEach(function(lb){if(!paramFieldOk(lb,hit[lb],x.fields[lb]))ok=false;});
         if(ok){Object.keys(x.fields).forEach(function(lb){pruneWarn(store,x.id,lb);});
-          PSTATE[x.id]={pending:0,fail:0,done:true};delete EDIT[x.id];}
+          PSTATE[x.id]={pending:0,fail:0,done:true};saveAllSettle(x.id,x.fields);refreshPstBtn(x.id);}
         else bad.push(x);});
-      if(bad.length&&attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,bad,attempt+1,total);return;}
+      SAVEALL.txt="確認 "+(total-bad.length)+"/"+total+"…";refreshSaveAllBtn();
+      if(bad.length&&attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,bad,attempt+1,total,round);return;}
+      if(bad.length&&round<SAVEALL_ROUNDS-1){          // 回讀沒對上 ⇒ 自動補送（值還在 EDIT 裡，原樣再送）
+        toast("有 "+bad.length+" 項還沒寫進去，自動補送中…");
+        bad.forEach(function(x){PSTATE[x.id]={pending:1,fail:0,done:false,queued:true};refreshPstBtn(x.id);});
+        saveAllRound(store,bad,total,round+1);return;}
       bad.forEach(function(x){Object.keys(x.fields).forEach(function(lb){pushWarn(store,x.id,lb,x.fields[lb]);});PSTATE[x.id]={pending:0,fail:1,done:true};});
-      SAVEALL.busy=false;
-      if(bad.length){toast("⚠ "+bad.length+" 項未寫入，請看上方紅色提示重做");render();return;}
-      toast(total+" 項已寫入，重新讀取中…");
+      SAVEALL.busy=false;SAVEALL.txt="";
+      if(bad.length){toast("⚠ "+bad.length+" 項補送 "+SAVEALL_ROUNDS+" 次仍未寫入，數值已保留，請稍後再按一次「儲存並更新」");render();return;}
+      toast(total+" 項全部已寫入，重新讀取中…");
       if(typeof refreshAll==="function")refreshAll(true);else render();
     }).catch(function(){
-      if(attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,list,attempt+1,total);return;}
+      if(attempt<VERIFY_DELAYS.length-1){verifyParamBatch(store,list,attempt+1,total,round);return;}
       list.forEach(function(x){Object.keys(x.fields).forEach(function(lb){pushWarn(store,x.id,lb,x.fields[lb]);});PSTATE[x.id]={pending:0,fail:1,done:true};});
-      SAVEALL.busy=false;toast("⚠ 無法確認寫入結果，請檢查網路後重做");render();});
+      SAVEALL.busy=false;SAVEALL.txt="";toast("⚠ 讀不到試算表、無法確認寫入結果，數值已保留，請檢查網路後再按一次「儲存並更新」");render();});
   },d);}
 function savePRow(id){
   var e=EDIT[id]||{},fields={};
@@ -813,17 +852,17 @@ function refreshSaveAllBtn(){
   var b=document.getElementById("pSaveAll");if(!b)return;
   var n=paramDirty().length;
   b.disabled=SAVEALL.busy||!n;b.style.opacity=(SAVEALL.busy||!n)?".45":"";
-  b.textContent=SAVEALL.busy?("確認寫入中…（"+SAVEALL.n+"）"):("💾 儲存並更新"+(n?"（"+n+" 項）":""));}
+  b.textContent=saveAllTxt();}
 function refreshPstBtn(id){
   var sp=document.querySelector('[data-pst="'+id+'"]');if(!sp)return;
   sp.innerHTML=pstBtn(id);
   var b=sp.querySelector("[data-psave]");if(b)b.onclick=function(){savePRow(id);};}
-function pstBtn(id){                            // 「存」鈕三段式狀態
+function pstBtn(id){                            // br 批：逐列「存」鈕移除，改狀態標記；重試一律走右上「💾 儲存並更新」
   var st=PSTATE[id];
-  if(!st)return '<button class="btn sm" data-psave="'+id+'">存</button>';
-  if(!st.done)return '<button class="btn sm" disabled style="opacity:.55">確認中…</button>';
-  if(st.fail)return '<button class="btn sm" data-psave="'+id+'" style="background:#C0392B">⚠ 重試</button>';
-  return '<button class="btn sm" data-psave="'+id+'" style="background:#2E7D32">✓ 已存</button>';}
+  if(!st)return (EDIT[id]&&Object.keys(paramFields(id)).length)?'<span class="badge" style="background:#B45309" title="已改、尚未存。全部改完後按右上「💾 儲存並更新」">✏️ 待存</span>':'';
+  if(!st.done)return '<span class="badge" style="background:#64748B">'+(st.queued?'⏳ 排隊中':'⏫ 寫入中…')+'</span>';
+  if(st.fail)return '<span class="badge" style="background:#C0392B" title="回讀對不上、自動補送後仍未寫入。數值已保留，請按右上「💾 儲存並更新」再送一次">⚠ 未寫入</span>';
+  return '<span class="badge" style="background:#2E7D32">✓ 已存</span>';}
 function writeWarnBanner(){
   if(!ST.writeWarn||!ST.writeWarn.length)return "";
   var items=ST.writeWarn.slice(0,8).map(function(w){return w.name+'（'+w.label+'→'+w.val+'）';}).join("、");
@@ -2634,8 +2673,8 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   var html='<div class="toolbar"><span class="own">✎ 店別參數（各店維護）</span>'
   +'<span style="margin-left:auto"></span>'
   +'<button class="btn" id="pSaveAll"'+(SAVEALL.busy?' disabled style="opacity:.55"':(_dn?'':' disabled style="opacity:.45"'))+'>'
-  +(SAVEALL.busy?('確認寫入中…（'+SAVEALL.n+'）'):('💾 儲存並更新'+(_dn?'（'+_dn+' 項）':'')))+'</button></div>'
-  +(_dn?'<div class="banner" style="background:#FFF8E7;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">✏️ 有 <b>'+_dn+'</b> 項改了還沒存。全部改完後按右上「💾 儲存並更新」一次送出即可，不用逐列按「存」。</div>':'')
+  +saveAllTxt()+'</button></div>'
+  +(_dn?'<div class="banner" style="background:#FFF8E7;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">✏️ 有 <b>'+_dn+'</b> 項改了還沒存。全部改完後按右上「💾 儲存並更新」一次送出即可（系統會逐筆寫入並自動補送，寫完會顯示「✓ 已存」）。</div>':'')
   +'<details class="pdet"><summary>📖 填寫說明（點開）</summary><div class="note" style="margin-top:6px">'
   +'門市：'+storeName(store)
   +'<br>① <b>有銷售推算</b>的品項：週用量由 POS 自動計算（綠字），只需視情況調「權」與「交」，<b>「週用」免填、填了也不生效</b>。'
@@ -2644,7 +2683,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   +'<br>⑥ <b>食材／耗材也可以改用「標配」</b>：把該項的「標配」填上數字（以採購單位），就<b>改成和器具模具一樣</b>——不看 POS 推算用量，盤點低於標配就補到標配。適合廚房紙巾、竹籤、保鮮膜這種「架上固定放幾個」的品項。<b>填回 0 就恢復用量預測。</b>'
   +'<br>④ <b>「安全」</b>＝額外緩衝量，可留 0。<b>「啟用」勾選即自動存檔</b>；取消勾選＝本店不使用，不出現在盤點與建議。'
   +'<br>⑤ <b>「廠商」「分區」「內容量」淺字＝總部主檔值</b>，只有本店與總部不同時才填，清空＝回歸總部主檔。'
-  +'<br><span style="color:#B45309">⚠️ 改內容量會重新換算現有庫存克數與訂貨點</span>（同樣「2.8 罐」在新規格下代表的克數不同，建議量隨之改變——這是修正，不是故障）。改完按該張卡片的「存」。'
+  +'<br><span style="color:#B45309">⚠️ 改內容量會重新換算現有庫存克數與訂貨點</span>（同樣「2.8 罐」在新規格下代表的克數不同，建議量隨之改變——這是修正，不是故障）。改完按右上「💾 儲存並更新」。'
   +'</div></details>'
   +catChips()
   +'<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項／廠商／編號，空白分隔可多關鍵字" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
@@ -3596,7 +3635,7 @@ function wire(){
       v=nz.val;el.value=(nz.val===""?"":nz.val);}
     if(f==="safety"&&v!==""){var sk0=SKU[id];if(sk0&&pqEff(ST.storeId,sk0)>0)v=Math.round(+v*pqOf(ST.storeId,sk0)*100)/100;}   /* 2026-09-01 w 批：安全庫存以採購單位輸入，存回使用單位 */
     if(f==="parB"){var sk1=SKU[id];if(v!==""&&sk1&&pqEff(ST.storeId,sk1)>0)v=Math.round(+v*pqOf(ST.storeId,sk1)*100)/100;if(v==="")v=0;f="par";}   /* 2026-09-03 y 批：食材/耗材標配以採購單位輸入，存回使用單位 */
-    EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id]){delete PSTATE[id];refreshPstBtn(id);}PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);
+    EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id])delete PSTATE[id];refreshPstBtn(id);PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);
     refreshSaveAllBtn();};});   /* 2026-09-10 bp 批：只更新按鈕，整頁重繪會讓捲動位置跳掉 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-puse]"),function(el){el.onchange=function(){var id=el.dataset.puse,on=el.checked;
     PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id].used=on;
