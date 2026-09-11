@@ -2632,9 +2632,21 @@ function renderEmpResult() {
           agg[key].per[m].days.add(day.date);
           if (e.note) agg[key].notes.push({ date: day.date, note: e.note, store: sid });
         });
-        // ★ 2026-09-10：未排班備註也補進 notes chips。
-        //   鐵則：只 push 到 notes,絕不碰 per[m].hours / per[m].days（會污染合計工時與出勤天數）；
-        //         且只補「本來就有排班紀錄」的人,不新建 key（否則會冒出工時 0/出勤 0 的幽靈列）。
+      });
+    });
+  });
+
+  // ★ 2026-09-11 two-pass：等 agg 建齊後才補未排班備註。
+  //   原本擺在同一趟迴圈內有順序依賴——若某人的備註日期早於他當月首次排班日,
+  //   處理到那天時 key 還沒建立,備註會被 if (agg[key2]) 無聲丟掉。
+  //   會中的情境：月初受訓/請假月中才首次上班、merge 跨店檢視時備註店先於有班店被處理、跨月查詢第一個月完全沒班。
+  //   鐵則不變：只 push 到 notes,絕不碰 per[m].hours / per[m].days（會污染合計工時與出勤天數）；
+  //             且只補「本來就有排班紀錄」的人,不新建 key（否則會冒出工時 0/出勤 0 的幽靈列）。
+  stores.forEach(sid => {
+    months.forEach(m => {
+      const res = _empDailyCache[sid + '_' + m];
+      if (!res || !res.daily) return;
+      res.daily.forEach(day => {
         const offs = Array.isArray(day.off_notes) ? day.off_notes : [];
         offs.forEach(o => {
           const key2 = (empView === 'split') ? (sid + '||' + o.name) : o.name;
@@ -2642,6 +2654,13 @@ function renderEmpResult() {
         });
       });
     });
+  });
+
+  // ★ 2026-09-11：補完後統一依日期排序。
+  //   不排的話未排班備註會全部排在有排班備註之後；chips 顯示端(renderEmpResult 下方)本來就有自己排,
+  //   但 CSV 匯出端(_csvEmp)直接用 r.notes,不排就會跳序。排在這裡兩邊一次解決。
+  Object.keys(agg).forEach(k => {
+    agg[k].notes.sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
   });
 
   const recs = Object.values(agg).map(r => {
