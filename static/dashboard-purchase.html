@@ -2471,37 +2471,81 @@ function bkResolve(name){name=String(name||"").trim();
   if(k2.length>=3){var cand=ix.all.filter(function(n){var nk=bkNorm(n,2);return nk.length>=3&&(nk.indexOf(k2)>=0||k2.indexOf(nk)>=0);});
     hit=bkUniq(cand);if(hit)return {name:hit,ok:true,approx:true};}
   return {name:name,ok:false,approx:false};}
+/* ===== 2026-09-11 bt 批：解析器改寬——姓名／電話沒有標籤也抓得到，日期格式放寬 =====
+   起因（經營者 2 號店實測）：後台複製出來是「林定嘉 0935660989」一整行，沒有「姓名：」「電話：」標籤，
+   bk/bn 批的解析器只認標籤，所以核對區的日期、備註仍是空白，店長要自己再填一次。
+   改法：
+   ① 電話：先認標籤，沒有就在全文找台灣手機 09xx-xxx-xxx（可含 - 或空格）或市話／+886
+   ② 姓名：先認標籤（冒號可省、標籤下一行也可）；沒有就取「電話同一行」的中文詞（去先生／小姐），
+      同行沒有就退回電話上一行的純中文短句
+   ③ 日期：西元 2026/9/15、2026-09-15、2026年9月15日 之外，再吃民國 115/9/15 與沒有年的 9/15、9月15日
+      （沒年份＝今年；若已過去超過 60 天視為明年）。優先序不變：訂位日期標籤 → 排除付款／建立日 → 第一個
+   ④ 防呆：含電話的行、數量超過 9,999 的行不會被當成品項（避免「林定嘉  0935660989」被讀成 935,660,989 份）*/
+var BK_PHONE_RE=/(?:\+?886[-\s]?|\b0)9\d{2}[-\s]?\d{3}[-\s]?\d{3}(?!\d)|(?:^|[^\d])\(?0[2-8]\)?[-\s]?\d{3,4}[-\s]?\d{4}(?!\d)/;
+var BK_NAME_STOP=/(先生|小姐|女士|太太|老師|同學|經理|主任|店長|聯絡人|訂位人|姓名|電話|手機|備註|公司|場次|包館|預約|訂位|號店|門市|分店|大人|小孩|成人|人數|份數|時段|上午|下午|晚上|星期|週[一二三四五六日]|已付|未付|訂金|日期)/g;
+function bkPhoneIn(s){var m=String(s||"").match(BK_PHONE_RE);if(!m)return "";var dg=m[0].replace(/[^\d]/g,"");
+  if(dg.indexOf("886")===0)dg="0"+dg.slice(3);return dg.length>=8&&dg.length<=10?dg:"";}
+function bkCjkName(s){var t=String(s||"").replace(BK_PHONE_RE,"").replace(/[\d\-+()（）:：,，、/／|｜]/g," ").replace(BK_NAME_STOP," ");
+  var ws=t.split(/\s+/).filter(function(w){return /^[\u4e00-\u9fff\u3400-\u4dbf]{2,6}$/.test(w);});
+  return ws.length?ws[0]:"";}
+function bkDateOf(y,m,d){m=+m;d=+d;if(!(m>=1&&m<=12&&d>=1&&d<=31))return "";
+  return y+"-"+("0"+m).slice(-2)+"-"+("0"+d).slice(-2);}
 function parseBookingPaste(txt){
   var lines=String(txt||"").split(/\r?\n/).map(function(l){return l.replace(/\u3000/g," ").trim();}).filter(Boolean);
   var date="",name="",phone="";
+  var today=(typeof TODAY!=="undefined"&&TODAY)?new Date(TODAY):new Date();
   /* 後台一頁有多個日期（付款期限、訂位日期…）。優先取「訂位日期」標籤下那一個，
      明確排除付款／建立日，都找不到才退回第一個。 */
+  function dateIn(l){
+    var dm=l.match(/(20\d{2})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})/);
+    if(dm)return bkDateOf(dm[1],dm[2],dm[3]);
+    dm=l.match(/(?:^|[^\d])(1[0-2]\d)\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})/);   /* 民國 3 碼 */
+    if(dm)return bkDateOf(+dm[1]+1911,dm[2],dm[3]);
+    if(bkPhoneIn(l))return "";                                                            /* 有電話的行不找短日期 */
+    dm=l.match(/(?:^|[^\d$])(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?(?![\d\/])/);            /* 沒年份 9/15、9月15日 */
+    if(dm){var y=today.getFullYear(),s=bkDateOf(y,dm[1],dm[2]);if(!s)return "";
+      if((new Date(s)-today)/86400000<-60)s=bkDateOf(y+1,dm[1],dm[2]);return s;}
+    return "";}
+  var fb="";
   for(var i=0;i<lines.length;i++){
-    var l=lines[i];
-    var dm=l.match(/(20\d{2})\s*[-\/年]\s*(\d{1,2})\s*[-\/月]\s*(\d{1,2})/);
-    if(!dm)continue;
-    var d=dm[1]+"-"+("0"+dm[2]).slice(-2)+"-"+("0"+dm[3]).slice(-2);
+    var l=lines[i];if(BK_ITEM_RE.test(l))continue;                                        /* 品項行不當日期 */
+    var d=dateIn(l);if(!d)continue;
     var ctx=l+" "+(i>0?lines[i-1]:"");
-    if(/訂位日期|活動日期|包館日期|預約日期/.test(ctx)){date=d;break;}
-    if(/付款期限|付款日|建立日|下單日|成立日/.test(ctx))continue;
-    if(!date)date=d;
+    if(/訂位日期|活動日期|包館日期|預約日期|體驗日期|來店日期/.test(ctx)){date=d;break;}
+    if(/付款期限|付款日|建立日|下單日|成立日|取消期限/.test(ctx))continue;
+    if(!fb)fb=d;
   }
-  lines.forEach(function(l){if(!name){var nm=l.match(/姓\s*名\s*[：:]\s*([^\s\/／|｜]+)/);if(nm)name=nm[1];}
-    if(!phone){var pm=l.match(/(?:電\s*話|手機|聯絡電話|Tel|TEL|tel)\s*[：:]?\s*(\+?[\d\-\s()]{8,})/);if(pm){var dg=pm[1].replace(/[^\d]/g,"");if(dg.length>=8)phone=dg;}}});
+  if(!date)date=fb;
+  /* 姓名／電話：先認標籤 */
+  lines.forEach(function(l,i){
+    if(!name){var nm=l.match(/(?:訂位人\s*姓\s*名|聯絡人\s*姓\s*名|姓\s*名|訂位人|聯絡人)\s*[：:]?\s*([^\s\/／|｜:：]*)/);
+      if(nm){var v=nm[1]||(lines[i+1]&&!BK_SKIPKW.test(lines[i+1])?lines[i+1]:"");var v2=String(v).replace(BK_PHONE_RE,"").trim();v=bkCjkName(v)||(/^[A-Za-z][A-Za-z .'-]{1,24}$/.test(v2)?v2:"");if(v)name=v;}}
+    if(!phone){var pm=l.match(/(?:電\s*話|手機|聯絡電話|Tel|TEL|tel|Phone|phone)\s*[：:]?\s*(\+?[\d\-\s()]{8,})/);
+      if(pm){var dg=pm[1].replace(/[^\d]/g,"");if(dg.indexOf("886")===0)dg="0"+dg.slice(3);if(dg.length>=8)phone=dg;}
+      else if(/(?:電\s*話|手機|聯絡電話)\s*[：:]?\s*$/.test(l)&&lines[i+1]){var p2=bkPhoneIn(lines[i+1]);if(p2)phone=p2;}}});
+  /* 沒有標籤：全文找電話，姓名取同一行的中文詞，再退回上一行 */
+  if(!phone){for(var k=0;k<lines.length;k++){var p=bkPhoneIn(lines[k]);if(!p)continue;phone=p;
+      if(!name){name=bkCjkName(lines[k])||(k>0&&/^[\u4e00-\u9fff]{2,5}$/.test(lines[k-1])&&!BK_SKIPKW.test(lines[k-1])?lines[k-1]:"");}
+      break;}}
+  else if(!name){for(var k2=0;k2<lines.length;k2++){if(lines[k2].replace(/[^\d]/g,"").indexOf(phone)>=0){name=bkCjkName(lines[k2]);if(name)break;}}}
   var rows=[];
   lines.forEach(function(l){
     if(BK_SKIPKW.test(l))return;
+    if(bkPhoneIn(l))return;                                                               /* ④ 含電話的行不是品項 */
     var m=l.match(/^(.+?)\s*\$\s*[\d,]+(?:\.\d+)?\s*[*xX×]\s*(\d+)\s*份?\s*$/);
     if(!m)m=l.match(/^(.+?)\s*[*xX×]\s*(\d+)\s*份?\s*$/);
     if(!m)m=l.match(/^(.+?)\s*[,，]\s*(\d+)\s*(?:[,，]\s*(.*))?$/);
-    if(!m)m=l.match(/^(.+?)\s{2,}(\d+)\s*份?\s*$/);
+    if(!m)m=l.match(/^(.+?)(?:\s{2,}|\t)(\d+)\s*份?\s*$/);
     if(!m)return;
     var nm2=String(m[1]).replace(/^[-•・*\s]+/,"").replace(/\s+$/,""),q=+m[2];
-    if(!nm2||!(q>0))return;
+    if(!nm2||!(q>0)||q>9999)return;                                                       /* ④ 數量上限 */
+    if(/^[\d\s\/\-:：.]+$/.test(nm2))return;                                              /* 品名全是數字／日期不算 */
     var rs=bkResolve(nm2);
     rows.push({raw:nm2,dessert:rs.name,qty:q,note:(m[3]||"").trim(),approx:rs.approx,miss:!rs.ok,err:""});
   });
   return {date:date,name:name,phone:phone,rows:rows};}
+var BK_ITEM_RE=/^(.+?)\s*(?:\$\s*[\d,]+(?:\.\d+)?\s*)?[*xX×]\s*\d+\s*份?\s*$|^(.+?)(?:\s{2,}|\t)\d+\s*份?\s*$/;
+
 /* 待送出清單：同一場次（同日期＋同備註）可以先累積多筆，最後一次送出 */
 function bkDraftHtml(){
   var d=ST.bkDraft||[];
@@ -2619,7 +2663,7 @@ function viewBooking(){var store=ST.storeId;
     +'</div>';
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">📋 從預約後台整段貼上（大型活動最快）</div>'
     +'<div class="muted" style="font-size:12px;margin-bottom:6px">在預約後台把<b>訂位日期、姓名、電話、品項清單</b>一起選取複製，貼進下面的框，按「解析」。系統自動抓出日期、姓名、電話與每一項的數量，核對後一次匯入。也吃「甜點名稱,數量」這種舊格式。</div>'
-    +'<textarea class="sm" id="bkPaste" style="width:100%;min-height:96px;font-family:inherit" placeholder="例：&#10;姓名：陳佳樺 / 電話：0975851268&#10;訂位日期&#10;2026/09/10&#10;汪汪狗蛋黃酥 $750 * 9 份&#10;老奶奶檸檬蛋糕 $620 * 2 份"></textarea>'
+    +'<textarea class="sm" id="bkPaste" style="width:100%;min-height:96px;font-family:inherit" placeholder="例：&#10;陳佳樺 0975851268&#10;訂位日期&#10;2026/09/10&#10;汪汪狗蛋黃酥 $750 * 9 份&#10;老奶奶檸檬蛋糕 $620 * 2 份&#10;（有沒有「姓名：」「電話：」標籤都可以）"></textarea>'
     +'<div class="toolbar" style="margin-top:6px"><button class="btn" id="bkPaseGo">解析</button>'
     +'<button class="btn ghost" id="bkPasteClr" style="margin-left:6px">清空</button></div>';
   if(ST.csvRows&&ST.csvRows.length){var miss=ST.csvRows.filter(function(r){return r.miss;}).length,apx=ST.csvRows.filter(function(r){return r.approx&&!r.miss;}).length;
