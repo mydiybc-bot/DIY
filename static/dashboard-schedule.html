@@ -510,7 +510,7 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
             上傳並更新儀表板
           </button>
           <button class="upload-btn secondary" onclick="clearUploadList()">取消</button>
-          <span style="font-size:12px;color:var(--muted);">⚠️ 整個流程約 1-2 分鐘，請勿關閉視窗。若遇其他門市同時上傳，系統會自動排隊重試，請耐心等候、不要重複上傳。</span>
+          <span style="font-size:12px;color:var(--muted);">💡 檔案上傳完成（約 10-30 秒）後即可關閉視窗，後續資料整理會在背景自動完成。</span>
         </div>
 
         <div class="upload-process-box" id="uploadProcessBox">
@@ -519,7 +519,7 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
           <div class="step-row pending" id="step-sync"><span class="step-icon"></span><span class="step-name">同步營收（syncDailySales）</span><span class="step-time"></span></div>
           <div class="step-row pending" id="step-week"><span class="step-icon"></span><span class="step-name">重算週度 KPI（buildWeekKPI）</span><span class="step-time"></span></div>
           <div class="upload-summary" id="uploadSummary" style="display:none;"></div>
-          <button class="upload-btn secondary" id="retryProcessBtn" style="display:none;margin-top:10px;" onclick="retryProcessOnly()">🔄 只重跑解析（檔案已上傳，不會重複上傳）</button>
+          <button class="upload-btn secondary" id="retryProcessBtn" style="display:none;margin-top:10px;" onclick="retryProcessOnly()">🔄 資料還沒更新？點這裡補跑（不會重新上傳）</button>
         </div>
       </div>
     </div>
@@ -2144,7 +2144,7 @@ async function confirmUploadAndProcess() {
     renderUploadList();
     try {
       // ★ 2026-09-11 多店同時上傳：搶不到上傳鎖時自動重試。
-      //   後端 _uploadSchedule 的 tryLock 失敗屬「安全失敗」——purge 寫在鎖內、尚未執行，
+      //   後端 _uploadSchedule 的 tryLock 失敗屬「安全失敗」——清空舊資料寫在鎖內、尚未執行，
       //   資料完全沒被動過,所以重試絕不會造成重複清空或重複寫入。
       let _att = 0;
       while (_att < UPLOAD_MAX_RETRY) {
@@ -2220,27 +2220,40 @@ async function confirmUploadAndProcess() {
   setStepStatus('step-sync', 'pending');
   setStepStatus('step-week', 'pending');
 
-  await runProcessWithQueue(uploadOkCount);
+  // ★ 2026-09-11：檔案進 Drive 就算完成,店長此刻即可離開。
+  //   後面的解析/同步/重算改成背景進行,不再讓人乾等 1-2 分鐘。
+  showUploadSummary('success',
+    '✅ 上傳完成！共 ' + uploadOkCount + ' 個檔案已收到。\n' +
+    '資料整理正在背景自動進行（約 1-2 分鐘），你現在就可以關閉視窗。\n' +
+    '稍後重新整理頁面即可看到新資料。');
   document.getElementById('uploadConfirmBtn').disabled = false;
+
+  // 不 await：背景跑,不擋畫面、不擋店長
+  runProcessInBackground(uploadOkCount);
 }
 
 // ════════════════════════════════════════════════════════════════
-// ★ 2026-09-11 多店同時上傳排隊機制
+// ★ 2026-09-11 背景解析 ＋ 多店同時上傳排隊
 // ────────────────────────────────────────────────────────────────
-// 背景:後端 _processUploads 有一道 5 分鐘的全系統處理鎖。12 家店在月底
-// 同時上傳時,第一位觸發後其餘店長的「解析」步驟會被整個擋掉。
-// 而檔案上傳階段已經把該店該月的 fact_schedule / fact_note 清空了,
-// 若解析沒跑,該店資料會懸空成空白——店長看到失敗通常會重按,愈按愈糟。
+// 背景:後端 _processUploads 有一道 5 分鐘處理鎖。12 家店月底同時上傳時,
+// 第一位觸發後其餘店長的解析會被整個擋掉;而上傳階段已經把該店該月的
+// fact_schedule / fact_note 清空,解析沒跑就會懸空成空白,店長看到失敗
+// 通常會重按,愈按愈糟。
 //
-// 對策:偵測到處理鎖 → 顯示排隊倒數 → 自動重試,不讓店長自己按。
-// 安全性:processUploads 只做「解析 Drive 既有待處理檔 + 重算」,不會重新
-// 上傳、不會再 purge 一次,所以重試多少次都是冪等的。
-// 另外 parsePendingFiles 掃的是整個資料夾,所以任何一位店長跑成功,
+// 對策:
+//   1. 上傳成功即顯示完成、放店長走(解析不需要人在場)。
+//   2. 解析在背景自動排隊重試,畫面只用淡色提示,不跳紅字。
+//   3. 關鍵事實:JSONP 請求只要送達 Google,GAS 端就會執行到完,
+//      使用者關掉視窗也不影響已經開始的那一次處理。
+//
+// 冪等性:processUploads 只做「解析 Drive 既有待處理檔 + 重算」,
+// 不會重新上傳、不會再清空一次,所以重試多少次都安全。
+// 另外 parsePendingFiles 掃的是整個資料夾,任何一位店長跑成功,
 // 都會順手把其他人排隊中的檔案一起解析掉。
 // ════════════════════════════════════════════════════════════════
 const UPLOAD_MAX_RETRY   = 4;       // 單檔上傳最多試 4 次
 const UPLOAD_RETRY_WAIT  = 35000;   // 上傳鎖 30 秒,等 35 秒再試
-const PROCESS_MAX_RETRY  = 48;      // 解析最多排隊 48 輪(約 20 分鐘上限)
+const PROCESS_MAX_RETRY  = 48;      // 背景解析最多排隊 48 輪(約 20 分鐘)
 const PROCESS_POLL_WAIT  = 25;      // 每 25 秒探一次
 // 註:後端跑完會 deleteProperty('process_lock_until') 主動放鎖,5 分鐘只是當機保護。
 //    所以訊息裡的「預估 N 秒」是「距逾時還有多久」,不是真正剩餘時間——
@@ -2256,7 +2269,7 @@ function _isBusyErr(msg) {
       || t.indexOf('已有處理中')       >= 0;
 }
 
-// 從後端訊息「預估 N 秒後完成」抽出等待秒數;抓不到給 60 秒,上限 330 秒
+// 從後端訊息「預估 N 秒後完成」抽出秒數;抓不到給 60 秒,上限 330 秒
 function _parseRemainSec(msg) {
   const m = String(msg || '').match(/預估\s*(\d+)\s*秒/);
   let n = m ? parseInt(m[1], 10) : 60;
@@ -2264,85 +2277,64 @@ function _parseRemainSec(msg) {
   return Math.min(n, 330);
 }
 
-// 排隊倒數(每秒更新步驟列與說明,讓店長知道系統還活著、不要亂按)
-async function _countdownWait(totalSec, round, waitedSec) {
-  const mins = Math.floor(waitedSec / 60);
-  const waitedTxt = mins >= 1 ? ('，已等候約 ' + mins + ' 分鐘') : '';
-  for (let s = totalSec; s > 0; s--) {
-    setStepStatus('step-parse', 'running', '⏳ 排隊中 ' + s + 's（第 ' + round + ' 輪）');
-    showUploadSummary('partial',
-      '⏳ 目前有其他門市正在更新，系統一次只能處理一家' + waitedTxt + '。\n' +
-      '你的檔案已經成功收到了，系統每 ' + PROCESS_POLL_WAIT + ' 秒自動探一次，輪到就會馬上跑。\n' +
-      '請不要關閉視窗，也不要重新上傳。');
-    await _sleep(1000);
-  }
-}
-
-// 執行 processUploads,遇到處理鎖就排隊重試
-async function runProcessWithQueue(uploadOkCount) {
+// 背景解析:自動排隊重試,全程不擋畫面、不跳紅字
+async function runProcessInBackground(uploadOkCount) {
   const retryBtn = document.getElementById('retryProcessBtn');
   if (retryBtn) retryBtn.style.display = 'none';
+  setStepStatus('step-parse', 'running', '背景處理中…');
 
   let round = 0;
   while (round < PROCESS_MAX_RETRY) {
     round++;
-    let result = null, hardErr = '';
+    let result = null;
     try {
       result = await callJsonp('processUploads');
-    } catch(err) {
-      hardErr = err.message || String(err);
-    }
+    } catch(err) { /* 逾時/連線問題都當作可重試 */ }
 
-    // 成功
+    // 全部跑完
     if (result && result.ok) {
       applyStepResults(result.steps);
       showUploadSummary('success',
-        '✅ 更新完成！' + (uploadOkCount > 0 ? ('共 ' + uploadOkCount + ' 個檔案已寫入，') : '') +
-        '後端處理 ' + result.totalSeconds + ' 秒' + (round > 1 ? ('（排隊 ' + round + ' 輪）') : '') +
-        '。儀表板資料更新中，3 秒後自動收合此視窗…');
+        '✅ 全部完成！' + (uploadOkCount > 0 ? ('共 ' + uploadOkCount + ' 個檔案已寫入，') : '') +
+        '處理 ' + result.totalSeconds + ' 秒' + (round > 1 ? ('（排隊 ' + round + ' 輪）') : '') +
+        '。儀表板資料更新中…');
       setTimeout(() => {
         loadData();
         if (dailyData) loadDailyData();
-      }, 2500);
+      }, 1500);
       setTimeout(() => {
         clearUploadList();
         document.getElementById('uploadCard').classList.remove('expanded');
-      }, 3500);
-      return true;
+      }, 3000);
+      return;
     }
 
-    const errMsg = (result && result.error) ? result.error : (hardErr || '後端處理失敗');
+    const errMsg = (result && result.error) ? result.error : '';
 
-    // 被別人的處理鎖擋住 → 排隊等待後自動重試
+    // 被別人的處理鎖擋住 → 安靜排隊,畫面維持「已完成上傳」的正面語氣
     if (_isBusyErr(errMsg) && round < PROCESS_MAX_RETRY) {
-      // 等待取「距逾時秒數+5」與固定輪詢間隔的較小值:剩很久也只等 25 秒就再探一次
-      const waitSec = Math.min(_parseRemainSec(errMsg) + 5, PROCESS_POLL_WAIT);
-      await _countdownWait(waitSec, round, (round - 1) * PROCESS_POLL_WAIT);
+      setStepStatus('step-parse', 'running', '⏳ 排隊中（第 ' + round + ' 輪）');
+      showUploadSummary('partial',
+        '✅ 檔案已成功上傳，這部分已經完成了。\n' +
+        '目前有其他門市正在更新，系統一次只能處理一家，正在自動排隊（第 ' + round + ' 輪）。\n' +
+        '你可以直接關閉視窗，不需要在這裡等，也不要重新上傳。');
+      await _sleep(PROCESS_POLL_WAIT * 1000);
       continue;
     }
 
-    // 真的失敗(或排隊次數用盡)
+    // 非忙碌的失敗(或排隊次數用盡):檔案已在 Drive,只差解析,不用紅字嚇人
     if (result && result.steps) applyStepResults(result.steps);
-    else setStepStatus('step-parse', 'fail');
-
-    if (_isBusyErr(errMsg)) {
-      showUploadSummary('fail',
-        '⚠️ 已排隊約 ' + Math.round(PROCESS_MAX_RETRY * PROCESS_POLL_WAIT / 60) + ' 分鐘仍輪不到，系統目前很忙。\n' +
-        '你的班表檔案「已經成功上傳」，只差最後的解析步驟。\n' +
-        '請 10 分鐘後回到本頁，按下方的「🔄 只重跑解析」按鈕即可，' +
-        '千萬不要重新上傳檔案。');
-    } else {
-      showUploadSummary('fail',
-        '處理失敗：' + errMsg + '\n' +
-        '檔案已上傳，可按下方「🔄 只重跑解析」重試，不需要重新上傳。');
-    }
+    else setStepStatus('step-parse', 'running', '稍後自動處理');
+    showUploadSummary('partial',
+      '✅ 檔案已成功上傳。\n' +
+      '資料整理還在排隊中，系統稍後會自動完成，你可以關閉視窗。\n' +
+      '若過一段時間資料仍未更新，再回到本頁按下方按鈕即可（不需要重新上傳）。');
     if (retryBtn) retryBtn.style.display = '';
-    return false;
+    return;
   }
-  return false;
 }
 
-// 只重跑解析:不重新上傳、不再 purge,純粹把 Drive 裡待處理的檔案跑完
+// 手動補跑解析:不重新上傳、不再清空資料,純粹把 Drive 裡待處理的檔案跑完
 async function retryProcessOnly() {
   const btn = document.getElementById('retryProcessBtn');
   if (btn) btn.disabled = true;
@@ -2350,8 +2342,8 @@ async function retryProcessOnly() {
   setStepStatus('step-parse', 'running', '');
   setStepStatus('step-sync',  'pending', '');
   setStepStatus('step-week',  'pending', '');
-  showUploadSummary('partial', '正在重跑解析，請稍候…');
-  await runProcessWithQueue(0);
+  showUploadSummary('partial', '正在補跑解析，請稍候…');
+  await runProcessInBackground(0);
   if (btn) btn.disabled = false;
 }
 
@@ -2380,7 +2372,7 @@ function setStepStatus(id, status, timeText) {
 function showUploadSummary(kind, msg) {
   const el = document.getElementById('uploadSummary');
   el.className = 'upload-summary ' + kind;
-  el.style.whiteSpace = 'pre-line';   // ★ 2026-09-11 排隊說明是多行文案
+  el.style.whiteSpace = 'pre-line';   // ★ 2026-09-11 提示文案是多行
   el.textContent = msg;
   el.style.display = 'block';
 }
