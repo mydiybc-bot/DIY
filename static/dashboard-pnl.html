@@ -2312,6 +2312,8 @@ adminHtmlEl.innerHTML = `
           </label>
           <a href="#" onclick="riPing(); return false;"
              style="font-size:12px; color:var(--text2);">連線測試</a>
+          <a href="#" onclick="riCheckStaging(); return false;"
+             style="font-size:12px; color:var(--text2);">查 staging 現況</a>
         </div>
 
         <div class="admin-progress" id="ri-progress" style="display:none;">
@@ -3360,55 +3362,92 @@ async function riImport() {
     const files = [];
     for (let i = 0; i < _riFiles.length; i++) {
       files.push({ name: _riFiles[i].name, b64: await _riReadB64(_riFiles[i]) });
-      bar.style.width = (8 + 22 * (i + 1) / _riFiles.length) + '%';
+      bar.style.width = (8 + 27 * (i + 1) / _riFiles.length) + '%';
     }
 
-    /* 第一關:一律先試算,全綠才寫 */
-    showAdminMsg(msg, 'info', '後端解析與對帳中…（12 個檔約 60–90 秒，請不要關視窗）');
-    bar.style.width = '45%';
-    const dry = await _riPost({
-      action: 'raw_upload', adminToken: _adminToken, dryRun: true, files: files
-    });
-    bar.style.width = '70%';
-    riRenderMatrix(dry);
+    /* 【2026-09-12 改】只送一趟。
+       原本「先試算、再寫入」等於把 11 個檔解析兩次,
+       GAS 同帳號請求是排隊執行的,第二趟很容易拿不到回應(Failed to fetch)。
+       閘門本來就在後端:全綠才寫、有紅就整批不寫,一趟就夠。 */
+    showAdminMsg(msg, 'info',
+      (dryOnly ? '解析與對帳中…' : '解析、對帳、寫入 staging…') +
+      '（11 個檔約 60–120 秒，請不要關視窗或重複按）');
+    bar.style.width = '50%';
 
-    if (!dry || !dry.ok) {
+    const r = await _riPost({
+      action: 'raw_upload', adminToken: _adminToken, dryRun: dryOnly, files: files
+    });
+    bar.style.width = '100%';
+    riRenderMatrix(r);
+
+    if (!r || !r.ok) {
       showAdminMsg(msg, 'err', '❌ 未通過檢核，沒有寫入任何資料：\n' +
-        ((dry && dry.errors && dry.errors.join('\n')) || '未知錯誤'));
+        ((r && r.errors && r.errors.join('\n')) || '未知錯誤'));
       btn.disabled = false; return;
     }
 
     if (dryOnly) {
-      showAdminMsg(msg, 'ok', '✅ 試算通過：' + dry.cells.length + ' 個店月 / ' +
-        dry.recordCount + ' 筆。未寫入（已勾「只試算」）。');
-      bar.style.width = '100%'; btn.disabled = false; return;
-    }
-
-    /* 第二關:寫 staging(全部月份,一次到位) */
-    showAdminMsg(msg, 'info', '✅ 檢核全綠，寫入 staging…');
-    const real = await _riPost({
-      action: 'raw_upload', adminToken: _adminToken, dryRun: false, files: files
-    });
-    bar.style.width = '100%';
-    riRenderMatrix(real);
-
-    if (!real || !real.ok) {
-      showAdminMsg(msg, 'err', '❌ 寫入 staging 失敗：' +
-        ((real && real.errors && real.errors.join('；')) || '未知'));
+      showAdminMsg(msg, 'ok', '✅ 試算通過：' + r.cells.length + ' 個店月 / ' +
+        r.recordCount + ' 筆。未寫入（已勾「只試算」）。');
       btn.disabled = false; return;
     }
 
-    const n = real.stagingWrite ? real.stagingWrite.rowsWritten : real.recordCount;
-    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + real.cells.length + ' 個店月 / ' + n +
-      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。' +
-      (n > 2000 ? '\n（這批較大，commit 可能要 1 分鐘左右。若真的逾時，不要重按 ✓，' +
-                  '先查 audit_log 最後一筆再決定是否還原備份。）' : ''));
+    const n = r.stagingWrite ? r.stagingWrite.rowsWritten : r.recordCount;
+    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + r.cells.length + ' 個店月 / ' + n +
+      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。');
     document.getElementById('admin-decision-section').style.display = 'block';
     btn.disabled = false;
 
   } catch (e) {
-    showAdminMsg(msg, 'err', '異常：' + e.message);
+    /* 【重要】Failed to fetch 代表「回應沒回來」,不代表「後端沒做」。
+       這時一定要讓經營者知道 staging 到底有沒有被寫,不能讓他猜。 */
+    showAdminMsg(msg, 'err',
+      '⚠️ 沒有收到後端回應（' + e.message + '）。\n' +
+      '這不代表失敗——後端可能已經寫好了，只是回應在路上斷掉。\n' +
+      '正在自動確認 staging 現況，請稍候…');
     btn.disabled = false;
+    setTimeout(riCheckStaging, 3000);
+  }
+}
+
+/* 查 staging 現況:用既有的 JSONP GET,不走 POST,所以斷線時特別可靠 */
+async function riCheckStaging() {
+  const msg = document.getElementById('ri-msg');
+  try {
+    /* noCache:必須拿當下真實筆數,不能吃快取 */
+    const rep = await callApi('admin_get_staging_report', {}, { noCache: true, timeout: 60000 });
+    const box = document.getElementById('ri-matrix');
+    let n = null;
+    if (rep) {
+      n = (rep.rowCount != null) ? rep.rowCount
+        : (rep.rows != null) ? rep.rows
+        : (rep.totalRows != null) ? rep.totalRows
+        : (rep.count != null) ? rep.count : null;
+    }
+
+    let h = '<div style="margin-top:10px; padding:10px 12px; background:#fff8e1; border-radius:8px; font-size:13px;">';
+    h += '<strong>staging 現況查詢結果</strong><br>';
+    if (n != null) {
+      h += 'staging 目前有 <strong>' + n + '</strong> 筆。<br>';
+      h += (n >= 3000)
+        ? '看起來<strong>已經寫入成功</strong>。可以直接按下方「✓ 確認匯入」，不必重跑。'
+        : '筆數偏少，很可能<strong>沒寫成功</strong>。建議重跑一次（重跑是安全的，staging 每次整份覆蓋）。';
+    } else {
+      h += '後端回了：<code style="font-size:11px;">' +
+           JSON.stringify(rep).slice(0, 300).replace(/</g,'&lt;') + '</code><br>' +
+           '看不出筆數，請直接到 Google Sheet 看 <code>fact_pnl_staging</code> 分頁有幾列。';
+    }
+    h += '<br><span style="color:#c62828;">⚠️ 在確認清楚之前，不要按「✓ 確認匯入」。</span>';
+    h += '</div>';
+    box.innerHTML = h + box.innerHTML;
+    showAdminMsg(msg, 'info', '已查到 staging 現況，請看下方黃色方框。');
+  } catch (e2) {
+    showAdminMsg(msg, 'err',
+      '⚠️ 沒有收到後端回應，而且自動查詢 staging 也失敗了（' + e2.message + '）。\n' +
+      '請直接開 Google Sheet 看 fact_pnl_staging 分頁有幾列：\n' +
+      '　· 約 3,744 列 → 已寫成功，直接按「✓ 確認匯入」\n' +
+      '　· 明顯少很多或空的 → 重跑一次（重跑安全，staging 每次整份覆蓋）\n' +
+      '在確認清楚之前，不要按「✓ 確認匯入」。');
   }
 }
 
@@ -3588,6 +3627,12 @@ function riRenderMatrix(r) {
     h += '</tr>';
   });
   h += '</table></div>';
+
+  if (r.timing && r.timing.length) {
+    h += '<details style="margin-top:6px;"><summary style="cursor:pointer; font-size:12px; color:var(--text2);">' +
+         '⏱ 後端耗時明細</summary><div style="font-size:11px; color:var(--text2); margin-top:6px;">' +
+         r.timing.join('<br>') + '</div></details>';
+  }
 
   if (r.skipped && r.skipped.length) {
     h += '<div style="margin-top:6px; font-size:12px; color:#c62828;">略過：' +
