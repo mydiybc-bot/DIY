@@ -3393,6 +3393,16 @@ async function riImport() {
     }
 
     const n = r.stagingWrite ? r.stagingWrite.rowsWritten : r.recordCount;
+
+    /* 【2026-09-13 必要】adminAskCommit 第一行是 if (!_adminParseResult) return;
+       那是「一鍵匯入」流程才會設定的變數。本流程沒設 → 按 ✓ 會靜默沒反應。
+       這裡補上它需要的最小結構(只用到 summary.totalRecords / summary.failedFiles)。 */
+    _adminParseResult = {
+      summary: { totalRecords: n, failedFiles: 0, source: 'raw_upload' },
+      fileResults: [],
+      _fromRawUpload: true
+    };
+
     showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + r.cells.length + ' 個店月 / ' + n +
       ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。');
     document.getElementById('admin-decision-section').style.display = 'block';
@@ -3429,9 +3439,18 @@ async function riCheckStaging() {
     h += '<strong>staging 現況查詢結果</strong><br>';
     if (n != null) {
       h += 'staging 目前有 <strong>' + n + '</strong> 筆。<br>';
-      h += (n >= 3000)
-        ? '看起來<strong>已經寫入成功</strong>。可以直接按下方「✓ 確認匯入」，不必重跑。'
-        : '筆數偏少，很可能<strong>沒寫成功</strong>。建議重跑一次（重跑是安全的，staging 每次整份覆蓋）。';
+      if (n >= 3000) {
+        h += '看起來<strong>已經寫入成功</strong>，不必重跑。<br>';
+        /* 重新整理過頁面時,決策區與 _adminParseResult 都被重置了,這裡一併補回 */
+        _adminParseResult = {
+          summary: { totalRecords: n, failedFiles: 0, source: 'staging_check' },
+          fileResults: [], _fromRawUpload: true
+        };
+        document.getElementById('admin-decision-section').style.display = 'block';
+        h += '已幫你把下方「✅ 確認匯入到 fact_pnl」叫出來，可以直接按 ✓。';
+      } else {
+        h += '筆數偏少，很可能<strong>沒寫成功</strong>。建議重跑一次（重跑是安全的，staging 每次整份覆蓋）。';
+      }
     } else {
       h += '後端回了：<code style="font-size:11px;">' +
            JSON.stringify(rep).slice(0, 300).replace(/</g,'&lt;') + '</code><br>' +
