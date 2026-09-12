@@ -2280,24 +2280,40 @@ adminHtmlEl.innerHTML = `
         <div class="admin-status info" id="admin-oneclick-msg" style="display:none;"></div>
       </div>
 
-      <!-- 區塊 2.5: 會計原始檔直匯(2026-09-11 新增) -->
-      <!-- 讓會計直接丟鼎新原始檔,不必再人工轉成 YYMM_SS_損益表 -->
+      <!-- 區塊 2.5: 會計原始檔拖拉上傳(2026-09-11 新增) -->
+      <!-- 會計直接把鼎新原始檔拖進來,不經 Drive、不必人工轉格式 -->
       <div class="admin-section" style="border-left:4px solid #2e7d32;">
-        <div class="admin-section-title">🧾 會計原始檔直匯</div>
+        <div class="admin-section-title">🧾 會計原始檔直接上傳</div>
         <div style="font-size:13px; color:var(--text2); margin-bottom:10px;">
-          收件匣裡放<strong>鼎新原始檔</strong>(如 <code>11501-08損益表-1店</code>)或
-          <strong>北3區模板</strong>(如 <code>2026_北3區_總損益表</code>),按一下自動解析 →
-          雙重對帳 → 寫入 staging。<span style="color:#c62828;">對帳不過整批不寫入。</span>
+          把會計給的<strong>鼎新原始檔</strong>(如 <code>11501-08損益表-1店.xlsx</code>)
+          和<strong>北3區模板</strong>整批拖進下面的框,
+          系統自動解析 → 雙重對帳 → 寫入 staging。
+          <span style="color:#c62828;">任一店月對帳不過,整批都不寫入。</span>
         </div>
 
-        <input type="text" class="admin-input" id="ri-folder-id" placeholder="收件匣 Drive 資料夾 ID">
-        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <div id="ri-drop"
+             style="border:2px dashed #2e7d32; border-radius:10px; padding:26px 16px;
+                    text-align:center; cursor:pointer; background:#f1f8f2; transition:all .15s;">
+          <div style="font-size:15px; color:#2e7d32; font-weight:600;">拖曳檔案到這裡</div>
+          <div style="font-size:12px; color:var(--text2); margin-top:6px;">
+            或點一下選檔　·　可一次選 12 個店　·　接受 .xlsx / .xls
+          </div>
+        </div>
+        <input type="file" id="ri-file" accept=".xlsx,.xls" multiple style="display:none;">
+
+        <div id="ri-filelist" style="margin-top:10px;"></div>
+
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <button class="admin-btn admin-btn-success" onclick="riImport()" id="ri-btn"
-                  style="font-size:15px; padding:12px 24px;">🧾 解析並匯入</button>
+                  style="font-size:15px; padding:12px 24px;" disabled>🧾 解析並匯入</button>
+          <button class="admin-btn admin-btn-secondary" onclick="riClear()">清空</button>
           <label style="font-size:12px; color:var(--text2);">
             <input type="checkbox" id="ri-dry" style="vertical-align:middle;"> 只試算不寫入
           </label>
+          <a href="#" onclick="riPing(); return false;"
+             style="font-size:12px; color:var(--text2);">連線測試</a>
         </div>
+
         <div class="admin-progress" id="ri-progress" style="display:none;">
           <div class="admin-progress-bar" id="ri-bar" style="width:0%"></div>
         </div>
@@ -2446,7 +2462,7 @@ async function adminVerify() {
       renderLastCommitBanner();
       /* 密碼通過後立刻載入預設資料夾 */
       adminLoadDefaultFolder();
-      riInit();   /* 2026-09-11: 原始檔直匯,帶回上次的收件匣資料夾 */
+      riInit();   /* 2026-09-11: 原始檔拖拉上傳 */
     } else {
       showAdminMsg(msg, 'err', '密碼錯誤');
     }
@@ -3175,18 +3191,115 @@ function fmtNum(n) {
 
 /* M4.1: 確認匯入入口 — 先 dry-run 偵測重複 */
 /* ============================================================
-   會計原始檔直匯(2026-09-11 新增)
-   後端 action = admin_raw_import,由 raw_import.gs 提供。
-   紅線:本區塊只寫 staging,fact_pnl 寫入仍走既有 adminAskCommit()。
+   會計原始檔拖拉上傳(2026-09-11 新增)
+   後端:raw_import.gs 的 doPost,action = raw_upload
+   紅線:本區塊只寫 staging;fact_pnl 寫入仍走既有 adminAskCommit()。
    ============================================================ */
 
-const _RI_KEY = 'diybc_raw_inbox_folder';
+let _riFiles = [];
 
 function riInit() {
+  const drop = document.getElementById('ri-drop');
+  const inp  = document.getElementById('ri-file');
+  if (!drop || drop.dataset.bound) return;
+  drop.dataset.bound = '1';
+
+  drop.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', e => riAdd(e.target.files));
+
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    drop.style.background = '#dcedc8'; drop.style.borderColor = '#1b5e20';
+  }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    drop.style.background = '#f1f8f2'; drop.style.borderColor = '#2e7d32';
+  }));
+  drop.addEventListener('drop', e => riAdd(e.dataTransfer.files));
+}
+
+function riAdd(fileList) {
+  const msg = document.getElementById('ri-msg');
+  for (const f of fileList) {
+    if (!/\.(xlsx|xls)$/i.test(f.name)) {
+      showAdminMsg(msg, 'err', '只接受 .xlsx / .xls：' + f.name);
+      continue;
+    }
+    if (_riFiles.some(x => x.name === f.name && x.size === f.size)) continue;
+    _riFiles.push(f);
+  }
+  riRenderFiles();
+}
+
+function riClear() {
+  _riFiles = [];
+  document.getElementById('ri-file').value = '';
+  document.getElementById('ri-matrix').innerHTML = '';
+  document.getElementById('ri-msg').style.display = 'none';
+  riRenderFiles();
+}
+
+function riRenderFiles() {
+  const box = document.getElementById('ri-filelist');
+  const btn = document.getElementById('ri-btn');
+  if (!_riFiles.length) { box.innerHTML = ''; btn.disabled = true; return; }
+
+  const total = _riFiles.reduce((a, f) => a + f.size, 0);
+  let h = '<div style="font-size:12px; color:var(--text2); margin-bottom:4px;">已選 ' +
+          _riFiles.length + ' 個檔（' + Math.round(total / 1024) + ' KB）</div>';
+  h += '<div style="display:flex; flex-wrap:wrap; gap:6px;">';
+  _riFiles.forEach((f, i) => {
+    h += '<span style="font-size:12px; background:var(--card); border-radius:12px; padding:3px 10px;">' +
+         f.name.replace(/</g,'&lt;') +
+         ' <a href="#" onclick="riDel(' + i + '); return false;" ' +
+         'style="color:var(--text2); text-decoration:none;">✕</a></span>';
+  });
+  h += '</div>';
+  box.innerHTML = h;
+  btn.disabled = false;
+
+  if (_riFiles.length > 20) {
+    showAdminMsg(document.getElementById('ri-msg'), 'err', '一次最多 20 個檔，請分兩批');
+    btn.disabled = true;
+  }
+}
+
+function riDel(i) { _riFiles.splice(i, 1); riRenderFiles(); }
+
+function _riReadB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload  = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = () => reject(new Error('讀不到檔案：' + file.name));
+    r.readAsDataURL(file);
+  });
+}
+
+async function _riPost(payload) {
+  const res = await fetch(API, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  });
+  const txt = await res.text();
+  try { return JSON.parse(txt); }
+  catch (e) { throw new Error('後端回應不是 JSON（前 200 字）：' + txt.slice(0, 200)); }
+}
+
+async function riPing() {
+  const msg = document.getElementById('ri-msg');
+  showAdminMsg(msg, 'info', '測試連線中…');
   try {
-    const v = localStorage.getItem(_RI_KEY);
-    if (v) document.getElementById('ri-folder-id').value = v;
-  } catch(e) {}
+    const r = await _riPost({ action: 'ping' });
+    showAdminMsg(msg, r && r.pong ? 'ok' : 'err',
+      r && r.pong ? '✅ 上傳通道正常（後端時間 ' + r.ts + '）'
+                  : '❌ 後端有回應但內容不對：' + JSON.stringify(r).slice(0, 200));
+  } catch (e) {
+    showAdminMsg(msg, 'err',
+      '❌ 上傳通道不通：' + e.message +
+      '\n多半是 raw_import.gs 還沒貼上，或 GAS 沒有「部署→管理→編輯→新版本」。');
+  }
 }
 
 async function riImport() {
@@ -3194,92 +3307,91 @@ async function riImport() {
   const btn  = document.getElementById('ri-btn');
   const prog = document.getElementById('ri-progress');
   const bar  = document.getElementById('ri-bar');
-  const mx   = document.getElementById('ri-matrix');
-  const folderId = (document.getElementById('ri-folder-id').value || '').trim();
-  const dryOnly  = document.getElementById('ri-dry').checked;
+  const dryOnly = document.getElementById('ri-dry').checked;
 
-  mx.innerHTML = '';
-  if (!folderId) { showAdminMsg(msg, 'err', '請先填收件匣資料夾 ID'); return; }
-  try { localStorage.setItem(_RI_KEY, folderId); } catch(e) {}
+  if (!_riFiles.length) { showAdminMsg(msg, 'err', '還沒選檔案'); return; }
 
   btn.disabled = true;
   prog.style.display = 'block';
-  bar.style.width = '15%';
-  showAdminMsg(msg, 'info', '解析中…(檔案多時約 30-90 秒)');
+  bar.style.width = '8%';
+  document.getElementById('ri-matrix').innerHTML = '';
+  showAdminMsg(msg, 'info', '讀取檔案中…');
 
   try {
-    /* 第一關:一律先 dry-run,全綠才寫 */
-    const dry = await callApiLong('admin_raw_import', {
-      folderId: folderId, yms: '', dryRun: 'true', adminToken: _adminToken
-    });
-    bar.style.width = '55%';
+    const files = [];
+    for (let i = 0; i < _riFiles.length; i++) {
+      files.push({ name: _riFiles[i].name, b64: await _riReadB64(_riFiles[i]) });
+      bar.style.width = (8 + 22 * (i + 1) / _riFiles.length) + '%';
+    }
 
+    /* 第一關:一律先試算,全綠才寫 */
+    showAdminMsg(msg, 'info', '後端解析與對帳中…（12 個檔約 60–90 秒，請不要關視窗）');
+    bar.style.width = '45%';
+    const dry = await _riPost({
+      action: 'raw_upload', adminToken: _adminToken, dryRun: true, files: files
+    });
+    bar.style.width = '70%';
     riRenderMatrix(dry);
 
     if (!dry || !dry.ok) {
-      showAdminMsg(msg, 'err', '❌ 未通過檢核,沒有寫入任何資料:\n' +
+      showAdminMsg(msg, 'err', '❌ 未通過檢核，沒有寫入任何資料：\n' +
         ((dry && dry.errors && dry.errors.join('\n')) || '未知錯誤'));
-      btn.disabled = false;
-      return;
+      btn.disabled = false; return;
     }
 
     if (dryOnly) {
-      showAdminMsg(msg, 'ok', '✅ 試算通過:' + dry.cells.length + ' 個店月 / ' +
-        dry.recordCount + ' 筆。未寫入(已勾選只試算)。');
-      btn.disabled = false;
-      return;
+      showAdminMsg(msg, 'ok', '✅ 試算通過：' + dry.cells.length + ' 個店月 / ' +
+        dry.recordCount + ' 筆。未寫入（已勾「只試算」）。');
+      bar.style.width = '100%'; btn.disabled = false; return;
     }
 
     /* 第二關:寫 staging */
-    showAdminMsg(msg, 'info', '✅ 檢核全綠,寫入 staging…');
-    const real = await callApiLong('admin_raw_import', {
-      folderId: folderId, yms: '', dryRun: 'false', adminToken: _adminToken
+    showAdminMsg(msg, 'info', '✅ 檢核全綠，寫入 staging…');
+    const real = await _riPost({
+      action: 'raw_upload', adminToken: _adminToken, dryRun: false, files: files
     });
     bar.style.width = '100%';
     riRenderMatrix(real);
 
     if (!real || !real.ok) {
-      showAdminMsg(msg, 'err', '❌ 寫入 staging 失敗:' +
+      showAdminMsg(msg, 'err', '❌ 寫入 staging 失敗：' +
         ((real && real.errors && real.errors.join('；')) || '未知'));
-      btn.disabled = false;
-      return;
+      btn.disabled = false; return;
     }
 
-    showAdminMsg(msg, 'ok', '✅ 已寫入 staging:' + real.cells.length + ' 個店月 / ' +
+    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + real.cells.length + ' 個店月 / ' +
       (real.stagingWrite ? real.stagingWrite.rowsWritten : real.recordCount) +
-      ' 筆。請在下方「確認匯入到 fact_pnl」按 ✓ 完成。');
-
-    /* 讓既有的確認區塊出現,commit 仍由經營者親自按 */
+      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。');
     document.getElementById('admin-decision-section').style.display = 'block';
     btn.disabled = false;
 
-  } catch(e) {
-    showAdminMsg(msg, 'err', '異常:' + e.message);
+  } catch (e) {
+    showAdminMsg(msg, 'err', '異常：' + e.message);
     btn.disabled = false;
   }
 }
 
-/* 畫 店 × 月 檢核矩陣 */
+/* 店 × 月 檢核矩陣 */
 function riRenderMatrix(r) {
   const mx = document.getElementById('ri-matrix');
   if (!r || !r.cells || !r.cells.length) { mx.innerHTML = ''; return; }
 
-  const yms = [...new Set(r.cells.map(c => c.year_month))].sort((a,b) => a-b);
-  const sts = [...new Set(r.cells.map(c => c.store_id))].sort((a,b) => a-b);
+  const yms = [...new Set(r.cells.map(c => c.year_month))].sort((a, b) => a - b);
+  const sts = [...new Set(r.cells.map(c => c.store_id))].sort((a, b) => a - b);
   const at = {};
   r.cells.forEach(c => { at[c.year_month + '_' + c.store_id] = c; });
 
   let h = '<div style="font-size:12px; color:var(--text2); margin-bottom:6px;">' +
-          '檢核矩陣(✅ 雙重對帳通過 / ❌ 未通過 / — 無資料)　共 ' +
-          r.cells.length + ' 個店月、' + r.recordCount + ' 筆</div>';
+          '檢核矩陣（✅ 雙重對帳通過　❌ 未通過　— 無資料）　共 ' +
+          r.cells.length + ' 個店月、' + r.recordCount + ' 筆　·　滑鼠移到格子看數字</div>';
   h += '<div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:12px;">';
   h += '<tr><th style="padding:3px 7px; border:1px solid #ddd; background:var(--card);">期間＼店</th>';
-  sts.forEach(s => { h += '<th style="padding:3px 7px; border:1px solid #ddd; background:var(--card);">' + s + '</th>'; });
+  sts.forEach(x => { h += '<th style="padding:3px 7px; border:1px solid #ddd; background:var(--card);">' + x + '</th>'; });
   h += '</tr>';
   yms.forEach(ym => {
     h += '<tr><td style="padding:3px 7px; border:1px solid #ddd; background:var(--card);">' + ym + '</td>';
-    sts.forEach(s => {
-      const c = at[ym + '_' + s];
+    sts.forEach(x => {
+      const c = at[ym + '_' + x];
       const txt = !c ? '—' : (c.ok ? '✅' : '❌');
       const tip = !c ? '' : (' title="營收 ' + c.revenue + '｜本期損益 ' + c.bottomLine +
                              '｜計算 ' + c.calcBottom + (c.ok ? '' : '｜' + c.reason) + '"');
@@ -3289,21 +3401,17 @@ function riRenderMatrix(r) {
   });
   h += '</table></div>';
 
-  if (r.filesRead && r.filesRead.length) {
-    h += '<div style="margin-top:8px; font-size:12px; color:var(--text2);">讀到的檔:' +
-         r.filesRead.join('、') + '</div>';
-  }
   if (r.skipped && r.skipped.length) {
-    h += '<div style="margin-top:6px; font-size:12px; color:var(--text2);">略過:' +
-         r.skipped.map(x => x.name + '(' + x.reason + ')').join('；') + '</div>';
+    h += '<div style="margin-top:6px; font-size:12px; color:#c62828;">略過：' +
+         r.skipped.map(x => x.name + '（' + x.reason + '）').join('；') + '</div>';
   }
   if (r.warnings && r.warnings.length) {
     const w = r.warnings.filter(x => x.indexOf('⚠️') >= 0);
     if (w.length) {
       h += '<details style="margin-top:6px;"><summary style="cursor:pointer; font-size:12px; color:#e65100;">' +
-           '⚠️ ' + w.length + ' 則版面警告(已自動處理,建議請製表者修正)</summary>' +
-           '<div style="font-size:12px; color:var(--text2); margin-top:6px;">' +
-           w.join('<br>') + '</div></details>';
+           '⚠️ ' + w.length + ' 則版面警告（已自動處理，建議請製表者修正）</summary>' +
+           '<div style="font-size:12px; color:var(--text2); margin-top:6px;">' + w.join('<br>') +
+           '</div></details>';
     }
   }
   mx.innerHTML = h;
