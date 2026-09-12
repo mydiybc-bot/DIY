@@ -2321,6 +2321,44 @@ adminHtmlEl.innerHTML = `
         <div id="ri-matrix" style="margin-top:12px;"></div>
       </div>
 
+      <!-- 區塊 2.6: 總分類帳原始檔上傳(2026-09-11 新增) -->
+      <!-- 只把檔案放進 diybc-ledger 引擎在看的 Drive 資料夾,不寫 fact_ledger -->
+      <div class="admin-section" style="border-left:4px solid #6a1b9a;">
+        <div class="admin-section-title">📒 總分類帳原始檔上傳</div>
+        <div style="font-size:13px; color:var(--text2); margin-bottom:10px;">
+          鼎新<strong>總分類帳</strong>檔案拖進來,系統會放進總分類帳資料夾,
+          並自動把同店同年的舊檔丟垃圾桶。放好之後再按 topbar 的
+          <strong>「⬆️ 更新總分類帳」</strong>才會真的寫進 fact_ledger。
+        </div>
+        <div style="font-size:12px; background:#f3e5f5; border-radius:6px; padding:8px 12px; margin-bottom:10px;">
+          <strong>檔名必須含「-N店」和年度</strong>,例如
+          <code>11501-08總分類帳-1店.xlsx</code> 或 <code>115年度總分類帳-1店.xlsx</code>。
+          不合規的檔會被擋下,因為引擎靠檔名認店號,認不出來會靜默忽略。
+        </div>
+
+        <input type="text" class="admin-input" id="lg-folder-id"
+               placeholder="總分類帳 Drive 資料夾 ID" value="11dGle3X-FtBg8Y3f8BWH4XdZGpGpysQe">
+
+        <div id="lg-drop" style="margin-top:10px; border:2px dashed #6a1b9a; border-radius:10px;
+                    padding:22px 16px; text-align:center; cursor:pointer; background:#faf5fc;">
+          <div style="font-size:15px; color:#6a1b9a; font-weight:600;">拖曳總分類帳檔案到這裡</div>
+          <div style="font-size:12px; color:var(--text2); margin-top:6px;">或點一下選檔　·　接受 .xlsx / .xls</div>
+        </div>
+        <input type="file" id="lg-file" accept=".xlsx,.xls" multiple style="display:none;">
+
+        <div id="lg-filelist" style="margin-top:10px;"></div>
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="admin-btn" onclick="lgUpload()" id="lg-btn" disabled
+                  style="background:#6a1b9a; color:#fff;">📒 上傳到總分類帳資料夾</button>
+          <button class="admin-btn admin-btn-secondary" onclick="lgClear()">清空</button>
+        </div>
+        <div class="admin-progress" id="lg-progress" style="display:none;">
+          <div class="admin-progress-bar" id="lg-bar" style="width:0%"></div>
+        </div>
+        <div class="admin-status info" id="lg-msg" style="display:none;"></div>
+        <div id="lg-result" style="margin-top:10px;"></div>
+      </div>
+
       <!-- 區塊 3: 摘要(簡化) -->
       <div class="admin-section" id="admin-summary-section" style="display:none;">
         <div class="admin-section-title">📊 匯入摘要</div>
@@ -2462,7 +2500,8 @@ async function adminVerify() {
       renderLastCommitBanner();
       /* 密碼通過後立刻載入預設資料夾 */
       adminLoadDefaultFolder();
-      riInit();   /* 2026-09-11: 原始檔拖拉上傳 */
+      riInit();   /* 2026-09-11: 損益表原始檔拖拉上傳 */
+      lgInit();   /* 2026-09-11: 總分類帳原始檔拖拉上傳 */
     } else {
       showAdminMsg(msg, 'err', '密碼錯誤');
     }
@@ -3345,7 +3384,7 @@ async function riImport() {
       bar.style.width = '100%'; btn.disabled = false; return;
     }
 
-    /* 第二關:寫 staging */
+    /* 第二關:寫 staging(全部月份,一次到位) */
     showAdminMsg(msg, 'info', '✅ 檢核全綠，寫入 staging…');
     const real = await _riPost({
       action: 'raw_upload', adminToken: _adminToken, dryRun: false, files: files
@@ -3359,10 +3398,159 @@ async function riImport() {
       btn.disabled = false; return;
     }
 
-    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + real.cells.length + ' 個店月 / ' +
-      (real.stagingWrite ? real.stagingWrite.rowsWritten : real.recordCount) +
-      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。');
+    const n = real.stagingWrite ? real.stagingWrite.rowsWritten : real.recordCount;
+    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + real.cells.length + ' 個店月 / ' + n +
+      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。' +
+      (n > 2000 ? '\n（這批較大，commit 可能要 1 分鐘左右。若真的逾時，不要重按 ✓，' +
+                  '先查 audit_log 最後一筆再決定是否還原備份。）' : ''));
     document.getElementById('admin-decision-section').style.display = 'block';
+    btn.disabled = false;
+
+  } catch (e) {
+    showAdminMsg(msg, 'err', '異常：' + e.message);
+    btn.disabled = false;
+  }
+}
+
+/* ============================================================
+   總分類帳原始檔上傳(2026-09-11 新增)
+   後端 action = ledger_upload。只把檔案放進 Drive 資料夾,
+   不寫 fact_ledger — 寫入仍由 topbar「⬆️ 更新總分類帳」觸發,
+   那條線本來就有逐子科目對帳閘門。
+   ============================================================ */
+
+let _lgFiles = [];
+
+function lgInit() {
+  const drop = document.getElementById('lg-drop');
+  const inp  = document.getElementById('lg-file');
+  if (!drop || drop.dataset.bound) return;
+  drop.dataset.bound = '1';
+
+  drop.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', e => lgAdd(e.target.files));
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    drop.style.background = '#f3e5f5'; drop.style.borderColor = '#4a148c';
+  }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation();
+    drop.style.background = '#faf5fc'; drop.style.borderColor = '#6a1b9a';
+  }));
+  drop.addEventListener('drop', e => lgAdd(e.dataTransfer.files));
+}
+
+/* 前端先驗檔名,不用等後端來回 */
+function _lgKey(name) {
+  const base = String(name).replace(/\.(xlsx|xls)$/i, '');
+  const mS = base.match(/-(\d+)店/);
+  if (!mS) return { ok: false, reason: '缺少「-N店」' };
+  const mY1 = base.match(/(\d{3})年度/);
+  const mY2 = base.match(/^(\d{3})(\d{2})/);
+  const roc = mY1 ? parseInt(mY1[1], 10) : (mY2 ? parseInt(mY2[1], 10) : null);
+  if (!roc) return { ok: false, reason: '缺少年度' };
+  return { ok: true, storeId: parseInt(mS[1], 10), roc: roc };
+}
+
+function lgAdd(fileList) {
+  const msg = document.getElementById('lg-msg');
+  for (const f of fileList) {
+    if (!/\.(xlsx|xls)$/i.test(f.name)) {
+      showAdminMsg(msg, 'err', '只接受 .xlsx / .xls：' + f.name); continue;
+    }
+    if (_lgFiles.some(x => x.name === f.name && x.size === f.size)) continue;
+    _lgFiles.push(f);
+  }
+  lgRenderFiles();
+}
+
+function lgClear() {
+  _lgFiles = [];
+  document.getElementById('lg-file').value = '';
+  document.getElementById('lg-result').innerHTML = '';
+  document.getElementById('lg-msg').style.display = 'none';
+  lgRenderFiles();
+}
+
+function lgDel(i) { _lgFiles.splice(i, 1); lgRenderFiles(); }
+
+function lgRenderFiles() {
+  const box = document.getElementById('lg-filelist');
+  const btn = document.getElementById('lg-btn');
+  if (!_lgFiles.length) { box.innerHTML = ''; btn.disabled = true; return; }
+
+  let bad = 0;
+  let h = '<div style="display:flex; flex-wrap:wrap; gap:6px;">';
+  _lgFiles.forEach((f, i) => {
+    const k = _lgKey(f.name);
+    if (!k.ok) bad++;
+    h += '<span style="font-size:12px; border-radius:12px; padding:3px 10px; background:' +
+         (k.ok ? 'var(--card)' : '#ffebee') + '; color:' + (k.ok ? 'inherit' : '#c62828') + ';">' +
+         f.name.replace(/</g,'&lt;') +
+         (k.ok ? '　<span style="color:var(--text2);">' + k.storeId + '店 ' + k.roc + '年</span>'
+               : '　⚠️ ' + k.reason) +
+         ' <a href="#" onclick="lgDel(' + i + '); return false;" ' +
+         'style="color:var(--text2); text-decoration:none;">✕</a></span>';
+  });
+  h += '</div>';
+  if (bad) h += '<div style="margin-top:6px; font-size:12px; color:#c62828;">有 ' + bad +
+                ' 個檔名不合規,請改名後再試(整批不會上傳)</div>';
+  box.innerHTML = h;
+  btn.disabled = bad > 0;
+}
+
+async function lgUpload() {
+  const msg = document.getElementById('lg-msg');
+  const btn = document.getElementById('lg-btn');
+  const bar = document.getElementById('lg-bar');
+  const folderId = (document.getElementById('lg-folder-id').value || '').trim();
+
+  if (!folderId) { showAdminMsg(msg, 'err', '請填總分類帳資料夾 ID'); return; }
+  if (!_lgFiles.length) { showAdminMsg(msg, 'err', '還沒選檔案'); return; }
+
+  btn.disabled = true;
+  document.getElementById('lg-progress').style.display = 'block';
+  bar.style.width = '10%';
+  showAdminMsg(msg, 'info', '讀取檔案中…');
+
+  try {
+    const files = [];
+    for (let i = 0; i < _lgFiles.length; i++) {
+      files.push({ name: _lgFiles[i].name, b64: await _riReadB64(_lgFiles[i]) });
+      bar.style.width = (10 + 40 * (i + 1) / _lgFiles.length) + '%';
+    }
+
+    showAdminMsg(msg, 'info', '上傳中…');
+    bar.style.width = '70%';
+    const r = await _riPost({
+      action: 'ledger_upload', adminToken: _adminToken, folderId: folderId, files: files
+    });
+    bar.style.width = '100%';
+
+    if (!r || !r.ok) {
+      showAdminMsg(msg, 'err', '❌ 上傳失敗：' +
+        ((r && r.errors && r.errors.join('\n')) || '未知錯誤'));
+      if (r && r.rejected && r.rejected.length) {
+        document.getElementById('lg-result').innerHTML =
+          '<div style="font-size:12px; color:#c62828;">被擋下：' +
+          r.rejected.map(x => x.name + '（' + x.reason + '）').join('；') + '</div>';
+      }
+      btn.disabled = false; return;
+    }
+
+    let h = '<div style="font-size:12px; color:var(--text2);">';
+    h += '已上傳：' + r.uploaded.join('、');
+    if (r.replaced && r.replaced.length) h += '<br>取代掉的舊檔（在垃圾桶可救回）：' + r.replaced.join('、');
+    if (r.inventory) {
+      h += '<br>資料夾現況共 ' + r.folderFiles + ' 個檔：' + r.inventory.join('、');
+      h += '<br><span style="color:#e65100;">⚠️ 引擎每次會清空 fact_ledger 整份重建,' +
+           '上面清單少了哪一家,那家的資料就會被洗掉。請確認 12 家都在。</span>';
+    }
+    h += '</div>';
+    document.getElementById('lg-result').innerHTML = h;
+
+    showAdminMsg(msg, 'ok', '✅ 已放進資料夾（' + r.uploaded.length + ' 個檔）。' +
+      '接下來請按頁面上方的「⬆️ 更新總分類帳」才會寫進 fact_ledger。');
     btn.disabled = false;
 
   } catch (e) {
