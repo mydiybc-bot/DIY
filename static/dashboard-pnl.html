@@ -3316,23 +3316,50 @@ function _riReadB64(file) {
   });
 }
 
-async function _riPost(payload) {
-  const res = await fetch(API, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload)
-  });
-  const txt = await res.text();
-  try { return JSON.parse(txt); }
-  catch (e) { throw new Error('後端回應不是 JSON（前 200 字）：' + txt.slice(0, 200)); }
+/* 【2026-09-13 實測】後端每次都在 0.5～45 秒內完成，但 Google 把回應交回瀏覽器那段
+   （script.googleusercontent.com echo 轉址）有時要十幾秒、而且有一半機率回 404 HTML。
+   對策：逾時 + 自動重試。後端各動作都已做成可重複執行（commit_month 冪等），重試是安全的。 */
+async function _riPost(payload, opts) {
+  opts = opts || {};
+  const maxTry   = opts.maxTry || 4;
+  const timeoutMs = opts.timeoutMs || 180000;
+  const onRetry  = opts.onRetry || function () {};
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= maxTry; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(API, {
+        method: 'POST', redirect: 'follow', signal: ac.signal,
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const txt = await res.text();
+      clearTimeout(timer);
+      if (res.status !== 200 || txt.charAt(0) !== '{') {
+        throw new Error('Google 回應異常（HTTP ' + res.status + '，' +
+          (txt.charAt(0) === '<' ? 'HTML 頁面' : '非 JSON') + '）');
+      }
+      return JSON.parse(txt);
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = (e.name === 'AbortError') ? new Error('等待超過 ' + Math.round(timeoutMs / 1000) + ' 秒') : e;
+      if (attempt < maxTry) {
+        const wait = 3000 * attempt;
+        onRetry(attempt, maxTry, lastErr.message, wait);
+        await new Promise(r => setTimeout(r, wait));
+      }
+    }
+  }
+  throw new Error(lastErr.message + '（已重試 ' + maxTry + ' 次）');
 }
 
 async function riPing() {
   const msg = document.getElementById('ri-msg');
   showAdminMsg(msg, 'info', '測試連線中…');
   try {
-    const r = await _riPost({ action: 'ping' });
+    const r = await _riPost({ action: 'ping' }, { maxTry: 3, timeoutMs: 45000 });
     showAdminMsg(msg, r && r.pong ? 'ok' : 'err',
       r && r.pong ? '✅ 上傳通道正常（後端時間 ' + r.ts + '）'
                   : '❌ 後端有回應但內容不對：' + JSON.stringify(r).slice(0, 200));
@@ -3376,6 +3403,10 @@ async function riImport() {
 
     const r = await _riPost({
       action: 'raw_upload', adminToken: _adminToken, dryRun: dryOnly, files: files
+    }, {
+      maxTry: 3, timeoutMs: 240000,
+      onRetry: (n, max, why, wait) => showAdminMsg(msg, 'info',
+        '回應沒送到（' + why + '）。後端很可能已經做完，' + (wait / 1000) + ' 秒後自動重試確認（' + n + '/' + max + '）…')
     });
     bar.style.width = '100%';
     riRenderMatrix(r);
@@ -3426,7 +3457,10 @@ async function riSnapshotUI() {
   const box = document.getElementById('ri-matrix');
   showAdminMsg(msg, 'info', '查詢現況中…');
   try {
-    const sn = await _riPost({ action: 'snapshot', adminToken: _adminToken });
+    const sn = await _riPost({ action: 'snapshot', adminToken: _adminToken }, {
+      maxTry: 4, timeoutMs: 60000,
+      onRetry: (n, max, why, wait) => showAdminMsg(msg, 'info', '回應沒送到（' + why + '），' + (wait / 1000) + ' 秒後重試（' + n + '/' + max + '）…')
+    });
     if (!sn || !sn.ok) {
       showAdminMsg(msg, 'err', '查詢失敗：' + ((sn && sn.errors && sn.errors.join('；')) || '未知'));
       return;
@@ -3509,7 +3543,12 @@ async function riCommitAll() {
 
     let r = null;
     try {
-      r = await _riPost({ action: 'commit_month', adminToken: _adminToken, ym: ym });
+      r = await _riPost({ action: 'commit_month', adminToken: _adminToken, ym: ym }, {
+        maxTry: 5, timeoutMs: 180000,
+        onRetry: (n, max, why, wait) => {
+          el.innerHTML = '⏳ ' + ym + '　回應沒送到（' + why + '），' + (wait / 1000) + ' 秒後自動重試（' + n + '/' + max + '）…';
+        }
+      });
     } catch (e) {
       el.innerHTML = '❌ ' + ym + '　沒收到回應：' + e.message;
       showAdminMsg(cmsg, 'err', ym + ' 沒收到回應。後端可能已寫好也可能沒有。' +
@@ -3526,6 +3565,10 @@ async function riCommitAll() {
     }
 
     doneN++;
+    if (r.alreadyDone) {
+      el.innerHTML = '✅ ' + ym + '　<span style="color:var(--text2);">已寫入（上一次其實成功了，只是回應沒送到）</span>';
+      continue;
+    }
     el.innerHTML = '✅ ' + ym + '　<span style="color:var(--text2);">' +
       'fact_pnl ' + r.factPnlBefore + '→' + r.factPnlAfter +
       (r.rowsOverwritten ? '　覆蓋 ' + r.rowsOverwritten : '') +
@@ -3653,7 +3696,8 @@ async function lgUpload() {
     bar.style.width = '70%';
     const r = await _riPost({
       action: 'ledger_upload', adminToken: _adminToken, folderId: folderId, files: files
-    });
+    }, { maxTry: 3, timeoutMs: 180000,
+         onRetry: (n, max, why, wait) => showAdminMsg(msg, 'info', '回應沒送到（' + why + '），' + (wait / 1000) + ' 秒後重試（' + n + '/' + max + '）…') });
     bar.style.width = '100%';
 
     if (!r || !r.ok) {
