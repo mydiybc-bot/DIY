@@ -3420,53 +3420,88 @@ async function riImport() {
   }
 }
 
-/* 查 staging 現況:用既有的 JSONP GET,不走 POST,所以斷線時特別可靠 */
+/* 查 staging 現況:用既有的 JSONP GET,不走 POST,所以斷線時特別可靠。
+   後端 getStagingReport() 實際回傳(2026-09-13 實機確認):
+     { ok:true, totalRecords:3744,
+       byStore:[{key:'11501_9', year_month:11501, store_id:9,
+                 records:39, revenue:525524, cost:…, gross:…}, …] }
+   ★ 欄位名以實機回應為準,不得再用猜的。 */
 async function riCheckStaging() {
   const msg = document.getElementById('ri-msg');
+  const box = document.getElementById('ri-matrix');
+  showAdminMsg(msg, 'info', '查詢 staging 現況中…');
+
   try {
-    /* noCache:必須拿當下真實筆數,不能吃快取 */
     const rep = await callApi('admin_get_staging_report', {}, { noCache: true, timeout: 60000 });
-    const box = document.getElementById('ri-matrix');
-    let n = null;
-    if (rep) {
-      n = (rep.rowCount != null) ? rep.rowCount
-        : (rep.rows != null) ? rep.rows
-        : (rep.totalRows != null) ? rep.totalRows
-        : (rep.count != null) ? rep.count : null;
+    const by = (rep && Array.isArray(rep.byStore)) ? rep.byStore : [];
+    let n = (rep && typeof rep.totalRecords === 'number') ? rep.totalRecords : null;
+    if (n === null && by.length) n = by.reduce((a, x) => a + (x.records || 0), 0);
+
+    if (!rep || !rep.ok || !n) {
+      showAdminMsg(msg, 'err',
+        'staging 看起來是空的或查詢失敗。請重新拖檔跑一次（重跑安全，staging 每次整份覆蓋）。');
+      return;
     }
 
-    let h = '<div style="margin-top:10px; padding:10px 12px; background:#fff8e1; border-radius:8px; font-size:13px;">';
-    h += '<strong>staging 現況查詢結果</strong><br>';
-    if (n != null) {
-      h += 'staging 目前有 <strong>' + n + '</strong> 筆。<br>';
-      if (n >= 3000) {
-        h += '看起來<strong>已經寫入成功</strong>，不必重跑。<br>';
-        /* 重新整理過頁面時,決策區與 _adminParseResult 都被重置了,這裡一併補回 */
-        _adminParseResult = {
-          summary: { totalRecords: n, failedFiles: 0, source: 'staging_check' },
-          fileResults: [], _fromRawUpload: true
-        };
-        document.getElementById('admin-decision-section').style.display = 'block';
-        h += '已幫你把下方「✅ 確認匯入到 fact_pnl」叫出來，可以直接按 ✓。';
-      } else {
-        h += '筆數偏少，很可能<strong>沒寫成功</strong>。建議重跑一次（重跑是安全的，staging 每次整份覆蓋）。';
-      }
+    const yms = [...new Set(by.map(x => x.year_month))].sort((a, b) => a - b);
+    const sts = [...new Set(by.map(x => x.store_id))].sort((a, b) => a - b);
+    const find = (ym, st) => by.find(x => x.year_month === ym && x.store_id === st);
+
+    /* 照妖鏡:店號有沒有貼錯人。全綠驗不出來,只有這兩個數字驗得出來 */
+    const chk = [
+      { ym: 11508, st: 11, want: 1031265, note: '吳寶春信義A13（檔名解析）' },
+      { ym: 11501, st: 9,  want: 525524,  note: '中壢（北3區分頁拆分）' }
+    ].map(c => {
+      const r = find(c.ym, c.st);
+      return { ...c, got: r ? r.revenue : null, ok: r && r.revenue === c.want };
+    });
+    const allChk = chk.every(c => c.ok);
+
+    let h = '<div style="margin-top:10px; padding:12px 14px; background:#e8f5e9; border-radius:8px; font-size:13px;">';
+    h += '<div style="font-weight:600; margin-bottom:8px;">staging 現況</div>';
+    h += '<table style="border-collapse:collapse; font-size:13px; margin-bottom:10px;">' +
+         '<tr><td style="padding:2px 14px 2px 0;">總筆數</td><td><strong>' + n + '</strong></td></tr>' +
+         '<tr><td style="padding:2px 14px 2px 0;">店月數</td><td><strong>' + by.length + '</strong></td></tr>' +
+         '<tr><td style="padding:2px 14px 2px 0;">期間</td><td>' +
+         (yms.length ? yms[0] + ' ～ ' + yms[yms.length - 1] + '（' + yms.length + ' 個月）' : '—') + '</td></tr>' +
+         '<tr><td style="padding:2px 14px 2px 0;">店號</td><td>' + sts.join('、') + '（' + sts.length + ' 家）</td></tr>' +
+         '</table>';
+
+    h += '<div style="font-weight:600; margin:8px 0 4px;">店號映射檢查</div>';
+    chk.forEach(c => {
+      h += '<div>' + (c.ok ? '✅' : '❌') + ' ' + c.ym + ' × ' + c.st + ' 店　營收 ' +
+           (c.got === null ? '（找不到這一格）' : c.got.toLocaleString()) +
+           '　應為 ' + c.want.toLocaleString() +
+           '　<span style="color:var(--text2);">' + c.note + '</span></div>';
+    });
+
+    if (allChk) {
+      /* 重整過頁面時 _adminParseResult 與決策區都被重置,這裡補回,否則按 ✓ 會靜默沒反應 */
+      _adminParseResult = {
+        summary: { totalRecords: n, failedFiles: 0, source: 'staging_check' },
+        fileResults: [], _fromRawUpload: true
+      };
+      const dec = document.getElementById('admin-decision-section');
+      if (dec) dec.style.display = 'block';
+      h += '<div style="margin-top:10px; padding:8px 10px; background:#fff; border-radius:6px;">' +
+           '✅ 資料完整、店號正確。已把下方「<strong>✅ 確認匯入到 fact_pnl</strong>」叫出來，' +
+           '可以直接按 ✓（會跳出重複提示，請選「覆蓋」）。</div>';
+      showAdminMsg(msg, 'ok', '✅ staging 有 ' + n + ' 筆、' + by.length +
+        ' 個店月，檢查通過。請看下方綠色方框，往下按 ✓ 完成匯入。');
     } else {
-      h += '後端回了：<code style="font-size:11px;">' +
-           JSON.stringify(rep).slice(0, 300).replace(/</g,'&lt;') + '</code><br>' +
-           '看不出筆數，請直接到 Google Sheet 看 <code>fact_pnl_staging</code> 分頁有幾列。';
+      h += '<div style="margin-top:10px; padding:8px 10px; background:#ffebee; border-radius:6px; color:#c62828;">' +
+           '⚠️ 店號映射檢查沒過，<strong>先不要匯入</strong>。請把這個畫面截圖回報。</div>';
+      showAdminMsg(msg, 'err', '⚠️ 店號映射檢查未通過，請看下方紅字，先不要按 ✓。');
     }
-    h += '<br><span style="color:#c62828;">⚠️ 在確認清楚之前，不要按「✓ 確認匯入」。</span>';
     h += '</div>';
     box.innerHTML = h + box.innerHTML;
-    showAdminMsg(msg, 'info', '已查到 staging 現況，請看下方黃色方框。');
+
   } catch (e2) {
     showAdminMsg(msg, 'err',
-      '⚠️ 沒有收到後端回應，而且自動查詢 staging 也失敗了（' + e2.message + '）。\n' +
+      '查詢 staging 失敗（' + e2.message + '）。\n' +
       '請直接開 Google Sheet 看 fact_pnl_staging 分頁有幾列：\n' +
-      '　· 約 3,744 列 → 已寫成功，直接按「✓ 確認匯入」\n' +
-      '　· 明顯少很多或空的 → 重跑一次（重跑安全，staging 每次整份覆蓋）\n' +
-      '在確認清楚之前，不要按「✓ 確認匯入」。');
+      '　· 約 3,745 列（含標題）→ 已寫成功\n' +
+      '　· 明顯少很多或只剩標題 → 重跑一次（重跑安全，staging 每次整份覆蓋）');
   }
 }
 
