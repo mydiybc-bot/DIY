@@ -2312,8 +2312,8 @@ adminHtmlEl.innerHTML = `
           </label>
           <a href="#" onclick="riPing(); return false;"
              style="font-size:12px; color:var(--text2);">連線測試</a>
-          <a href="#" onclick="riCheckStaging(); return false;"
-             style="font-size:12px; color:var(--text2);">查 staging 現況</a>
+          <a href="#" onclick="riSnapshotUI(); return false;"
+             style="font-size:12px; color:var(--text2);">查現況／繼續匯入</a>
         </div>
 
         <div class="admin-progress" id="ri-progress" style="display:none;">
@@ -3392,20 +3392,9 @@ async function riImport() {
       btn.disabled = false; return;
     }
 
-    const n = r.stagingWrite ? r.stagingWrite.rowsWritten : r.recordCount;
-
-    /* 【2026-09-13 必要】adminAskCommit 第一行是 if (!_adminParseResult) return;
-       那是「一鍵匯入」流程才會設定的變數。本流程沒設 → 按 ✓ 會靜默沒反應。
-       這裡補上它需要的最小結構(只用到 summary.totalRecords / summary.failedFiles)。 */
-    _adminParseResult = {
-      summary: { totalRecords: n, failedFiles: 0, source: 'raw_upload' },
-      fileResults: [],
-      _fromRawUpload: true
-    };
-
-    showAdminMsg(msg, 'ok', '✅ 已寫入 staging：' + r.cells.length + ' 個店月 / ' + n +
-      ' 筆。請到下方「確認匯入到 fact_pnl」按 ✓ 完成。');
-    document.getElementById('admin-decision-section').style.display = 'block';
+    const n = r.holdWrite ? r.holdWrite.rowsWritten : r.recordCount;
+    showAdminMsg(msg, 'ok', '✅ 檢核全綠，' + n + ' 筆已進暫存區。請按下方「🚀 寫入 fact_pnl」，系統會逐月自動寫入。');
+    riRenderCommitPanel(r.holdYms || []);
     btn.disabled = false;
 
   } catch (e) {
@@ -3416,93 +3405,140 @@ async function riImport() {
       '這不代表失敗——後端可能已經寫好了，只是回應在路上斷掉。\n' +
       '正在自動確認 staging 現況，請稍候…');
     btn.disabled = false;
-    setTimeout(riCheckStaging, 3000);
+    setTimeout(riSnapshotUI, 3000);
   }
 }
 
-/* 查 staging 現況:用既有的 JSONP GET,不走 POST,所以斷線時特別可靠。
-   後端 getStagingReport() 實際回傳(2026-09-13 實機確認):
-     { ok:true, totalRecords:3744,
-       byStore:[{key:'11501_9', year_month:11501, store_id:9,
-                 records:39, revenue:525524, cost:…, gross:…}, …] }
-   ★ 欄位名以實機回應為準,不得再用猜的。 */
-async function riCheckStaging() {
+/* ============================================================
+   【2026-09-13 架構修正】逐月 commit
+   上傳後全部 records 放在後端暫存區 _raw_import_hold。
+   按「🚀 寫入 fact_pnl」→ 前端一個月一個月呼叫 commit_month，
+   每月約 468 筆、十幾秒，永遠不會撞 GAS 六分鐘上限。
+   每月成功才從暫存區移除 → 中途斷線也能從沒做完的月份接著跑。
+   commitStagingToFact 是既有函式,備份/稽核/筆數核對/Lock 全部照舊。
+   ============================================================ */
+
+let _riCommitting = false;
+
+/* 現況快照:走 POST(同上傳通道),每一段後端都 try/catch,不會整包掛掉 */
+async function riSnapshotUI() {
   const msg = document.getElementById('ri-msg');
   const box = document.getElementById('ri-matrix');
-  showAdminMsg(msg, 'info', '查詢 staging 現況中…');
-
+  showAdminMsg(msg, 'info', '查詢現況中…');
   try {
-    const rep = await callApi('admin_get_staging_report', {}, { noCache: true, timeout: 60000 });
-    const by = (rep && Array.isArray(rep.byStore)) ? rep.byStore : [];
-    let n = (rep && typeof rep.totalRecords === 'number') ? rep.totalRecords : null;
-    if (n === null && by.length) n = by.reduce((a, x) => a + (x.records || 0), 0);
-
-    if (!rep || !rep.ok || !n) {
-      showAdminMsg(msg, 'err',
-        'staging 看起來是空的或查詢失敗。請重新拖檔跑一次（重跑安全，staging 每次整份覆蓋）。');
+    const sn = await _riPost({ action: 'snapshot', adminToken: _adminToken });
+    if (!sn || !sn.ok) {
+      showAdminMsg(msg, 'err', '查詢失敗：' + ((sn && sn.errors && sn.errors.join('；')) || '未知'));
       return;
     }
+    const holdYms = (sn.hold && sn.hold.yms) || [];
+    const fpRows  = sn.factPnl ? sn.factPnl.rows : null;
 
-    const yms = [...new Set(by.map(x => x.year_month))].sort((a, b) => a - b);
-    const sts = [...new Set(by.map(x => x.store_id))].sort((a, b) => a - b);
-    const find = (ym, st) => by.find(x => x.year_month === ym && x.store_id === st);
-
-    /* 照妖鏡:店號有沒有貼錯人。全綠驗不出來,只有這兩個數字驗得出來 */
-    const chk = [
-      { ym: 11508, st: 11, want: 1031265, note: '吳寶春信義A13（檔名解析）' },
-      { ym: 11501, st: 9,  want: 525524,  note: '中壢（北3區分頁拆分）' }
-    ].map(c => {
-      const r = find(c.ym, c.st);
-      return { ...c, got: r ? r.revenue : null, ok: r && r.revenue === c.want };
-    });
-    const allChk = chk.every(c => c.ok);
-
-    let h = '<div style="margin-top:10px; padding:12px 14px; background:#e8f5e9; border-radius:8px; font-size:13px;">';
-    h += '<div style="font-weight:600; margin-bottom:8px;">staging 現況</div>';
-    h += '<table style="border-collapse:collapse; font-size:13px; margin-bottom:10px;">' +
-         '<tr><td style="padding:2px 14px 2px 0;">總筆數</td><td><strong>' + n + '</strong></td></tr>' +
-         '<tr><td style="padding:2px 14px 2px 0;">店月數</td><td><strong>' + by.length + '</strong></td></tr>' +
-         '<tr><td style="padding:2px 14px 2px 0;">期間</td><td>' +
-         (yms.length ? yms[0] + ' ～ ' + yms[yms.length - 1] + '（' + yms.length + ' 個月）' : '—') + '</td></tr>' +
-         '<tr><td style="padding:2px 14px 2px 0;">店號</td><td>' + sts.join('、') + '（' + sts.length + ' 家）</td></tr>' +
-         '</table>';
-
-    h += '<div style="font-weight:600; margin:8px 0 4px;">店號映射檢查</div>';
-    chk.forEach(c => {
-      h += '<div>' + (c.ok ? '✅' : '❌') + ' ' + c.ym + ' × ' + c.st + ' 店　營收 ' +
-           (c.got === null ? '（找不到這一格）' : c.got.toLocaleString()) +
-           '　應為 ' + c.want.toLocaleString() +
-           '　<span style="color:var(--text2);">' + c.note + '</span></div>';
-    });
-
-    if (allChk) {
-      /* 重整過頁面時 _adminParseResult 與決策區都被重置,這裡補回,否則按 ✓ 會靜默沒反應 */
-      _adminParseResult = {
-        summary: { totalRecords: n, failedFiles: 0, source: 'staging_check' },
-        fileResults: [], _fromRawUpload: true
-      };
-      const dec = document.getElementById('admin-decision-section');
-      if (dec) dec.style.display = 'block';
-      h += '<div style="margin-top:10px; padding:8px 10px; background:#fff; border-radius:6px;">' +
-           '✅ 資料完整、店號正確。已把下方「<strong>✅ 確認匯入到 fact_pnl</strong>」叫出來，' +
-           '可以直接按 ✓（會跳出重複提示，請選「覆蓋」）。</div>';
-      showAdminMsg(msg, 'ok', '✅ staging 有 ' + n + ' 筆、' + by.length +
-        ' 個店月，檢查通過。請看下方綠色方框，往下按 ✓ 完成匯入。');
-    } else {
-      h += '<div style="margin-top:10px; padding:8px 10px; background:#ffebee; border-radius:6px; color:#c62828;">' +
-           '⚠️ 店號映射檢查沒過，<strong>先不要匯入</strong>。請把這個畫面截圖回報。</div>';
-      showAdminMsg(msg, 'err', '⚠️ 店號映射檢查未通過，請看下方紅字，先不要按 ✓。');
+    let h = '<div style="margin-top:10px; padding:12px 14px; background:#e3f2fd; border-radius:8px; font-size:13px;">';
+    h += '<div style="font-weight:600; margin-bottom:8px;">現況</div>';
+    h += '<table style="border-collapse:collapse; font-size:13px;">';
+    h += '<tr><td style="padding:2px 14px 2px 0;">fact_pnl 筆數</td><td><strong>' + (fpRows === null ? '？' : fpRows.toLocaleString()) + '</strong></td></tr>';
+    h += '<tr><td style="padding:2px 14px 2px 0;">暫存區待寫入</td><td>' +
+         (holdYms.length ? holdYms.map(x => x.ym + '（' + x.stores + '店/' + x.records + '筆）').join('、')
+                         : '<span style="color:var(--text2);">空的（沒有待寫入的月份）</span>') + '</td></tr>';
+    h += '<tr><td style="padding:2px 14px 2px 0;">staging</td><td>' + (sn.staging ? sn.staging.rows + ' 筆' : '？') + '</td></tr>';
+    if (sn.audit && sn.audit.last) {
+      h += '<tr><td style="padding:2px 14px 2px 0; vertical-align:top;">audit_log 最後一筆</td><td style="font-size:12px;">' +
+           sn.audit.header.map((k, i) => '<span style="color:var(--text2);">' + k + '</span>=' +
+             String(sn.audit.last[i]).replace(/</g,'&lt;')).join('　') + '</td></tr>';
+    }
+    if (sn.backups && sn.backups.length) {
+      h += '<tr><td style="padding:2px 14px 2px 0;">最近備份分頁</td><td style="font-size:12px;">' + sn.backups.join('、') + '</td></tr>';
+    }
+    h += '</table>';
+    if (sn.errors && sn.errors.length) {
+      h += '<div style="margin-top:6px; font-size:12px; color:#c62828;">部分查詢失敗：' + sn.errors.join('；') + '</div>';
     }
     h += '</div>';
-    box.innerHTML = h + box.innerHTML;
+    box.innerHTML = h;
 
-  } catch (e2) {
-    showAdminMsg(msg, 'err',
-      '查詢 staging 失敗（' + e2.message + '）。\n' +
-      '請直接開 Google Sheet 看 fact_pnl_staging 分頁有幾列：\n' +
-      '　· 約 3,745 列（含標題）→ 已寫成功\n' +
-      '　· 明顯少很多或只剩標題 → 重跑一次（重跑安全，staging 每次整份覆蓋）');
+    if (holdYms.length) {
+      riRenderCommitPanel(holdYms);
+      showAdminMsg(msg, 'ok', '暫存區還有 ' + holdYms.length + ' 個月沒寫入。可以按「🚀 寫入 fact_pnl」繼續。');
+    } else {
+      showAdminMsg(msg, 'ok', '暫存區是空的。若要匯入，請重新拖檔。');
+    }
+  } catch (e) {
+    showAdminMsg(msg, 'err', '查詢失敗（' + e.message + '）。請直接開 Google Sheet 看 fact_pnl 筆數與 audit_log 最後一筆。');
   }
+}
+
+/* 逐月寫入面板 */
+function riRenderCommitPanel(holdYms) {
+  const box = document.getElementById('ri-matrix');
+  let h = '<div id="ri-commit-panel" style="margin-top:12px; padding:12px 14px; background:#fff8e1; border-radius:8px; font-size:13px;">';
+  h += '<div style="font-weight:600; margin-bottom:6px;">待寫入 fact_pnl：' + holdYms.length + ' 個月</div>';
+  h += '<div style="font-size:12px; color:var(--text2); margin-bottom:10px;">' +
+       '系統會一個月一個月寫，每月十幾秒，已存在的月份會被覆蓋（覆蓋前自動備份）。中途斷掉沒關係，按「查現況／繼續匯入」就能接著跑。</div>';
+  h += '<div id="ri-commit-list" style="font-size:13px; line-height:1.9;">';
+  holdYms.forEach(x => {
+    h += '<div id="ri-cm-' + x.ym + '">⬜ ' + x.ym + '　<span style="color:var(--text2);">' + x.stores + ' 店 / ' + x.records + ' 筆</span></div>';
+  });
+  h += '</div>';
+  h += '<button class="admin-btn admin-btn-success" id="ri-commit-btn" onclick="riCommitAll()" ' +
+       'style="margin-top:10px; font-size:15px; padding:10px 22px;">🚀 寫入 fact_pnl（逐月自動）</button>';
+  h += '<div class="admin-status info" id="ri-commit-msg" style="display:none; margin-top:8px;"></div>';
+  h += '</div>';
+  box.innerHTML = h + box.innerHTML;
+}
+
+async function riCommitAll() {
+  if (_riCommitting) return;
+  const btn = document.getElementById('ri-commit-btn');
+  const cmsg = document.getElementById('ri-commit-msg');
+  const items = [...document.querySelectorAll('[id^="ri-cm-"]')].map(el => parseInt(el.id.slice(6), 10));
+  if (!items.length) return;
+
+  if (!confirm('要寫入 ' + items.length + ' 個月到 fact_pnl 嗎？\n' +
+               '已存在的月份會被覆蓋（覆蓋前自動備份）。\n每月約十幾秒，中途請不要關視窗。')) return;
+
+  _riCommitting = true;
+  btn.disabled = true;
+  let doneN = 0;
+  const t0 = Date.now();
+
+  for (const ym of items) {
+    const el = document.getElementById('ri-cm-' + ym);
+    el.innerHTML = '⏳ ' + ym + '　寫入中…';
+    showAdminMsg(cmsg, 'info', '正在寫入 ' + ym + '（' + (doneN + 1) + '/' + items.length + '）…');
+
+    let r = null;
+    try {
+      r = await _riPost({ action: 'commit_month', adminToken: _adminToken, ym: ym });
+    } catch (e) {
+      el.innerHTML = '❌ ' + ym + '　沒收到回應：' + e.message;
+      showAdminMsg(cmsg, 'err', ym + ' 沒收到回應。後端可能已寫好也可能沒有。' +
+        '請按「查現況／繼續匯入」——如果 ' + ym + ' 還在暫存區就是沒寫成功，直接繼續即可；' +
+        '不在暫存區就是已寫成功。');
+      _riCommitting = false; btn.disabled = false; return;
+    }
+
+    if (!r || !r.ok) {
+      el.innerHTML = '❌ ' + ym + '　' + ((r && r.errors && r.errors.join('；')) || '未知錯誤');
+      showAdminMsg(cmsg, 'err', '停在 ' + ym + '。已完成 ' + doneN + ' 個月。' +
+        '這個月的資料還在暫存區，修正問題後按「查現況／繼續匯入」即可接著跑。');
+      _riCommitting = false; btn.disabled = false; return;
+    }
+
+    doneN++;
+    el.innerHTML = '✅ ' + ym + '　<span style="color:var(--text2);">' +
+      'fact_pnl ' + r.factPnlBefore + '→' + r.factPnlAfter +
+      (r.rowsOverwritten ? '　覆蓋 ' + r.rowsOverwritten : '') +
+      (r.replacedBackupSheet ? '　備份 ' + r.replacedBackupSheet : '') +
+      (r.countMismatch ? '　<span style="color:#c62828;">⚠️ 筆數核對異常</span>' : '') +
+      '　' + (r.timing ? r.timing[r.timing.length - 1] : '') + '</span>';
+  }
+
+  _riCommitting = false;
+  try { _cacheClearFact(); } catch (e) {}
+  showAdminMsg(cmsg, 'ok', '✅ 全部完成：' + doneN + ' 個月，共 ' +
+    Math.round((Date.now() - t0) / 1000) + ' 秒。儀表板資料已更新，重新整理即可看到。');
+  btn.textContent = '✅ 已全部寫入';
 }
 
 /* ============================================================
