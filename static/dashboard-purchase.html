@@ -451,7 +451,7 @@ async function bootstrap(keep){ try {
   /* bx 批：agg_endcut（EventLayer v1.8）。分頁不存在時 gviz 會回第一個分頁 → 以表頭「結束日／佔比」把關 */
   ENDCUT={};(res[14]||[]).forEach(function(r){if(r["結束日"]==null||r["佔比"]==null||r["sku_id"]==null)return;
     var st=String(r["店號"]==null?"":r["店號"]).trim(),id=String(r["sku_id"]||"").trim(),e=gvDate(r["結束日"]),sh=num(r["佔比"]);
-    if(!st||!id||!e||!(sh>0))return;((ENDCUT[st]=ENDCUT[st]||{})[id]=ENDCUT[st][id]||[]).push({end:ymd(e),share:Math.min(1,sh),who:String(r["甜點"]||""),ps:(r["份數佔比"]==null||r["份數佔比"]==="")?null:Math.min(1,Math.max(0,num(r["份數佔比"]))),oa:String(r["在售甜點"]==null?"":r["在售甜點"]).trim()});});   /* by 批：份數佔比、在售甜點（EventLayer v1.8.1） */   /* by 批：份數佔比（EventLayer v1.8.1） */
+    if(!st||!id||!e||!(sh>0))return;((ENDCUT[st]=ENDCUT[st]||{})[id]=ENDCUT[st][id]||[]).push({end:ymd(e),share:Math.min(1,sh),who:String(r["甜點"]||""),ps:(typeof r["份數佔比"]==="number"&&isFinite(r["份數佔比"]))?Math.min(1,Math.max(0,r["份數佔比"])):null,   /* bz 批：只接受真的數字；欄位被試算表當成日期（"Date(1899,11,30)"）時＝null，endCutOf 會改走安全模式 */oa:String(r["在售甜點"]==null?"":r["在售甜點"]).trim()});});   /* by 批：份數佔比、在售甜點（EventLayer v1.8.1） */   /* by 批：份數佔比（EventLayer v1.8.1） */
   var dSku=res[0],dPar=res[1],aP=res[2],aC=res[3],dS=res[4],dU=res[5],fInv=res[6],aB=res[7],dD=res[8],fB=res[9],dEv=res[10]||[],dNi=res[11]||[];
   /* 2026-08-19 單價參考層：ref_sku_price 唯讀（缺席/失敗時 gviz 已回 [] → REFP={} 靜默降級）。
      nnRef＝null 保護版 num：空值回 null 而非 0，否則「查無」列會顯示「建議 $0」 */
@@ -1434,7 +1434,10 @@ function endCutOf(st,s,lead,cyc){var L=(ENDCUT[st]||{})[s.id];if(!L||!L.length||
     String(x.who||"").split("、").forEach(function(w){w=w.trim();if(w&&whoAll.indexOf(w)<0)whoAll.push(w);});
     rows.push({end:x.end,e:e,share:x.share,ps:(x.ps==null?null:x.ps),who:x.who});});
   if(!rows.length)return null;rows.sort(function(a,b){return a.end<b.end?-1:1;});
-  var hasPs=rows.some(function(r){return r.ps!=null;});
+  var hasPs=rows.every(function(r){return r.ps!=null;});
+  /* bz 批（上線後實查）：份數佔比讀不到（例：欄位被試算表套成日期格式，gviz 回日期、數值遺失）⇒ 無法判斷客人會不會改做其他甜點。
+     共用料（合計用料 <95%）一律不扣（寧可照舊叫，也不讓大家都用的耗材少叫）；專屬料不受份數佔比影響，照常收尾。 */
+  var _shareTot=0;rows.forEach(function(r){_shareTot+=r.share;});if(!hasPs&&_shareTot<0.95)return null;
   function fAt(ended){var S=0,P=0;rows.forEach(function(r){if(ended(r)){S+=r.share;P+=(r.ps||0);}});S=Math.min(1,S);if(S<=0)return 1;
     if(!hasPs||P>=0.95)return Math.max(0,1-S);return Math.max(0,Math.min(1,(1-S)/(1-P)));}
   var sum=0;for(var i=0;i<cov;i++){var d=new Date(t0.getFullYear(),t0.getMonth(),t0.getDate()+i);sum+=fAt(function(r){return r.e<d;});}
