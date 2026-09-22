@@ -1127,7 +1127,7 @@ function regionOf(st){return STORE_REGION[String(st)]||"";}
 function sameRegion(a,b){var ra=regionOf(a);return !!ra&&ra===regionOf(b);}
 function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點","查詢":"🔎 查詢","訂貨單":"📑 訂貨單","效期":"🕐 食材效期","主檔":"🗂 主檔","季節":"📈 季節","單位對照":"📐 單位對照","店別參數":"⚙️ 店別參數","預約":"🎉 預約包館","總覽":"📊 總覽","軌跡":"🧾 參數軌跡","對帳":"🔍 用量對帳","大平台":"🏬 採購大平台","檔期備貨":"🥮 檔期備貨"}[t];}
 function renderTabs(){var list=TABS_BY_ROLE[ST.role]||TABS_BY_ROLE["總部"];if(list.indexOf(ST.tab)<0)ST.tab=list[0];
-  $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+'</div>';}).join("");
+  $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+(t==="預約"?bkTabBadge():"")+'</div>';}).join("");
   Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(el){el.onclick=function(){ST.tab=el.dataset.tab;render();};});}
 function dsbRole(){
   /* 2026-09-10 bp 批：店長版把「ⓘ 更新方式」收掉，改成一句「什麼時候需要按更新」的直述句。
@@ -2744,6 +2744,30 @@ function bkOptions(){
 function bkKnown(name){name=String(name||"").trim();if(!name)return false;
   if(BKMAP&&BKMAP[name])return true;
   return DESSERTS.indexOf(name)>=0;}
+/* ===== 2026-09-22 cc 批：團體訂位自動同步（團體訂位 GAS v1.3 每天 06:00 寫進 fact_booking）=====
+   同步列的備註：〔團體〕姓名 尾電話末4碼 #訂位碼前12碼 ⟨POS 客人在訂位系統選的甜點名⟩（同步靠這段辨認是哪一團、哪一項）
+   ① 同步列的日期／數量／備註由同步維護，網頁上只准改「甜點」；改甜點仍是「取消舊筆＋新增一筆」且備註原封不動 → 同步認得、並記住店長的選擇
+   ② 對不到配方（不會產生備料）→ 分頁籤紅色數字＋頁首紅框＋該列直接選甜點
+   ③「對得到」＝ 對照表轉成 BOM 名後在 dim_dessert 裡（與後端重算 posToCanon[名]||名 → BOM 同一套判斷）；
+      舊的 bkKnown 只看名字在不在清單，對照表裡「沒有對應」的列（例：陪同入場費）也算認得，會漏標 */
+var BK_SYNC_RE=/〔團體〕[\s\S]*#[0-9a-f]{12}\s*⟨POS\s*([\s\S]*?)⟩\s*$/;
+function bkIsSync(b){return BK_SYNC_RE.test(String((b&&b.note)||""));}
+function bkPosOf(b){var m=String((b&&b.note)||"").match(BK_SYNC_RE);return m?m[1]:"";}
+function bkNoteCore(note){var t=String(note||"");return BK_SYNC_RE.test(t)?t.replace(/\s*#[0-9a-f]{12}\s*⟨POS[\s\S]*$/,""):t;}
+function bkExpands(name){name=String(name||"").trim();if(!name)return false;
+  var c=(BKMAP&&BKMAP[name])||name;return DESSERTS.indexOf(c)>=0;}
+function bkUnk(b){var d=String((b&&b.dessert)||"").trim();if(!d)return true;
+  if(BKMAP)return !bkExpands(d);
+  if(DESSERTS.indexOf(d)>=0)return false;
+  return bkIsSync(b)&&bkPosOf(b)===d;}   /* 對照表還沒載入時，只標得準同步列（對不到時甜點欄原封不動＝後台名稱） */
+function bkUnmatched(store){var t0=ymd(TODAY);
+  return BOOKINGS.filter(function(b){return (store==null||b.store===String(store))&&b.status!=="取消"&&String(b.date)>=t0&&bkUnk(b);});}
+function bkTabBadge(){var n=0;try{n=bkUnmatched(ST.storeId).length;}catch(e){n=0;}
+  return n?' <span title="有 '+n+' 筆預約的甜點對不到配方，不會備料" style="background:#C0392B;color:#fff;border-radius:9px;padding:0 6px;font-size:12px;font-weight:700">⚠️'+n+'</span>':'';}
+function bkSyncNoteHtml(b){var pos=bkPosOf(b);
+  return '<span style="background:#E6F2E6;color:#256029;border-radius:8px;padding:0 6px;font-size:12px;white-space:nowrap">🔄 團體訂位</span> '
+    +shEsc(bkNoteCore(b.note).replace(/^〔團體〕/,""))
+    +(pos&&pos!==b.dessert?'<div style="font-size:12px">客人選的：'+shEsc(pos)+'</div>':'');}
 /* ===== 2026-09-09 bn 批：預約 × BOM 展開抽成純函式，期間備料與客人查詢共用 =====
    同時修 bj 批留下的洞：期間備料用 b.dessert 直接查 BOM 表，預約若存的是 POS 品名會落「BOM 查無」。
    這裡照 GAS 的 posToCanon 邏輯先轉 BOM 名，再用 bkNorm 寬鬆比對一次。 */
@@ -2787,10 +2811,10 @@ function bkSessions(q,store){
   var isTel=/^\d{4,}$/.test(q),ql=q.toLowerCase();
   var hit=BOOKINGS.filter(function(b){if(b.store!==String(store)||b.status==="取消")return false;
     var nt=String(b.note||"");
-    if(isTel)return nt.replace(/[^\d]/g,"").indexOf(q)>=0;
+    if(isTel)return bkNoteCore(nt).replace(/[^\d]/g,"").indexOf(q)>=0;   /* cc 批：同步列只比對姓名電話那段（訂位碼裡也有數字） */
     return nt.toLowerCase().indexOf(ql)>=0||String(b.dessert||"").toLowerCase().indexOf(ql)>=0;});
   var g={},order=[];
-  hit.forEach(function(b){var k=b.date+"|"+(b.note||"");if(!g[k]){g[k]={date:b.date,note:b.note||"",rows:[],total:0};order.push(k);}
+  hit.forEach(function(b){var nc=bkNoteCore(b.note);var k=b.date+"|"+nc;if(!g[k]){g[k]={date:b.date,note:nc,rows:[],total:0};order.push(k);}   /* cc 批：同步列每項甜點備註尾巴不同，去掉後同一場才會湊在一起 */
     g[k].rows.push(b);g[k].total+=b.qty;});
   return order.map(function(k){return g[k];}).sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;});}
 var BKQ=null;   /* 客人查詢展開結果：null／"loading"／{label,need} */
@@ -2798,6 +2822,16 @@ function viewBooking(){var store=ST.storeId;
   if(BKMAP===null){loadBkMap().then(function(){if(ST.tab==="預約")render();});}
   var opts=bkOptions().map(function(d){return '<option value="'+shEsc(d)+'"></option>';}).join('');
   var h='<div class="note">門市：'+storeName(store)+'　·　登記未來的預約/包館甜點需求，系統會把所需原料<b>直接加進建議訂貨量</b>（每日重算生效；急件請總部立即重算）。</div>';
+  /* cc 批：團體訂位自動同步說明＋對不到配方紅框 */
+  h+='<div class="note" style="background:#EEF6EE;border-color:#9CC89C">🔄 <b>團體訂位（8 人以上／包館）的甜點，每天早上 6 點自動同步進來</b>，不用再手動登記；客人改甜點、改人數或取消，隔天早上也會自動更新。清單中標「🔄 團體訂位」的就是自動同步的。</div>';
+  var unkL=bkUnmatched(store);
+  if(unkL.length){var others="";
+    if(ST.role==="總部"){var byS={};bkUnmatched(null).forEach(function(b){if(b.store!==String(store))byS[b.store]=(byS[b.store]||0)+1;});
+      others=Object.keys(byS).sort(function(a,b){return (+a)-(+b);}).map(function(k){return k+"號店 "+byS[k]+" 筆";}).join("、");}
+    h+='<div class="card" id="bkUnkBanner" style="background:#FDECEA;border:1px solid #f5b5ae;padding:10px 12px">'
+      +'<b style="color:#8B0000">⚠️ 有 '+unkL.length+' 筆預約的甜點名稱對不到配方，這幾筆目前不會產生備料</b>'
+      +'<div class="sub" style="color:#8B0000;margin-top:4px">請在下方標紅的列，從清單挑出正確的甜點，按「確定」。團體訂位的甜點選過一次，之後同名的甜點會自動套用。'
+      +(others?'<br>其他門市也有待選：'+shEsc(others):'')+'</div></div>';}
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">新增預約/包館　<span style="font-size:12px">先設定日期與場次，再逐一加甜點</span></div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
     +'<input class="sm" type="date" id="bkDate" min="'+ymd(TODAY)+'" value="'+(ST.bkDate||'')+'">'
@@ -2835,10 +2869,18 @@ function viewBooking(){var store=ST.storeId;
       +(apx&&!miss?'<span class="muted" style="margin-left:8px">'+apx+' 筆是近似對應，請看一下有沒有對錯</span>':'')+'</div></div>';}
   h+='</div>';
   var t0=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate());
-  var list=BOOKINGS.filter(function(b){return b.store===String(store)&&b.status!=="取消"&&new Date(b.date)>=t0;}).sort(function(a,b){return a.date<b.date?-1:1;});
-  h+='<div class="card"><table><tr><th>日期</th><th>甜點</th><th class="right">數量</th><th>備註</th><th></th></tr>';
+  var list=BOOKINGS.filter(function(b){return b.store===String(store)&&b.status!=="取消"&&new Date(b.date)>=t0;}).sort(function(a,b){var ka=a.date+"|"+bkNoteCore(a.note),kb=b.date+"|"+bkNoteCore(b.note);return ka<kb?-1:(ka>kb?1:0);});   /* cc 批：同一天同一場排在一起 */
+  var syncDates={};list.forEach(function(b){if(bkIsSync(b))syncDates[b.date]=1;});
+  h+='<div class="card"><div style="overflow-x:auto"><table><tr><th>日期</th><th>甜點</th><th class="right">數量</th><th>備註</th><th></th></tr>';   /* cc 批：表格自己捲，手機整頁不變寬 */
   list.forEach(function(b){
     var e=(ST.bkEdit&&ST.bkEdit.id===b.id)?ST.bkEdit:null;
+    if(e&&bkIsSync(b)){   /* cc 批：團體同步列只准改甜點（日期／數量／備註由同步維護，改了明天會被改回來、改備註還會變成重複備料） */
+      h+='<tr style="background:#FFFBF2"><td><b>'+b.date+'</b></td>'
+        +'<td><input class="sm" id="beDessert" list="bkDsList" value="'+shEsc(bkUnk(b)?'':e.dessert)+'" placeholder="從清單挑正確的甜點" style="width:100%;max-width:210px;min-width:110px;box-sizing:border-box" autocomplete="off"></td>'
+        +'<td class="right"><b>'+fmt(b.qty)+'</b></td>'
+        +'<td class="muted" style="font-size:12px">'+bkSyncNoteHtml(b)+'<div style="color:#B45309;margin-top:2px">日期、數量由訂位系統每天自動更新，這裡只能改甜點</div></td>'
+        +'<td><span class="why" id="beSave"><b>儲存</b></span>　<span class="why" id="beCancel">放棄</span></td></tr>';
+      return;}
     if(e){   /* 2026-09-08 bk 批：客人改甜點／數量／日期時要能改，不能只有取消 */
       h+='<tr style="background:#FFFBF2"><td><input class="sm" type="date" id="beDate" value="'+e.date+'" style="width:140px"></td>'
         +'<td><input class="sm" id="beDessert" list="bkDsList" value="'+shEsc(e.dessert)+'" style="width:210px" autocomplete="off"></td>'
@@ -2846,10 +2888,17 @@ function viewBooking(){var store=ST.storeId;
         +'<td><input class="sm" id="beNote" value="'+shEsc(e.note||'')+'" style="width:130px"></td>'
         +'<td><span class="why" id="beSave"><b>儲存</b></span>　<span class="why" id="beCancel">放棄</span></td></tr>';
       return;}
-    var unk=(BKMAP&&!bkKnown(b.dessert))?' <span style="color:#C0392B;font-size:12px" title="系統對不到配方，這筆不會產生備料需求。按「編輯」改成清單裡的名字。">⚠️未對應</span>':'';
-    h+='<tr><td><b>'+b.date+'</b></td><td>'+shEsc(b.dessert)+unk+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="muted">'+shEsc(b.note||'')+'</td><td><span class="why" data-bkedit="'+b.id+'">編輯</span>　<span class="why" data-bkdel="'+b.id+'">取消</span></td></tr>';});
+    /* cc 批：對不到配方的列直接在列上選甜點；同步列顯示「🔄 團體訂位」；手動列與團體同步同一天 → 提醒可能重複 */
+    var syn=bkIsSync(b),unkR=bkUnk(b);
+    var dcell=unkR
+      ?'<div style="color:#8B0000;font-size:12px">⚠️ 對不到配方（不會備料）：'+shEsc(b.dessert||'（空白）')+'</div>'
+        +'<input class="sm" list="bkDsList" data-bkpick="'+b.id+'" placeholder="從清單挑正確的甜點" style="width:100%;max-width:200px;min-width:110px;box-sizing:border-box" autocomplete="off"> <span class="why" data-bkpickgo="'+b.id+'"><b>確定</b></span>'
+      :shEsc(b.dessert);
+    var ncell=syn?bkSyncNoteHtml(b):shEsc(b.note||'');
+    if(!syn&&syncDates[b.date])ncell+='<div style="color:#B45309;font-size:12px">⚠️ 這天有團體訂位自動同步；若這筆是同一團，請按「取消」避免重複備料</div>';
+    h+='<tr'+(unkR?' style="background:#FDECEA"':'')+'><td><b>'+b.date+'</b></td><td>'+dcell+'</td><td class="right"><b>'+fmt(b.qty)+'</b></td><td class="muted">'+ncell+'</td><td><span class="why" data-bkedit="'+b.id+'">編輯</span>　<span class="why" data-bkdel="'+b.id+'">取消</span></td></tr>';});
   if(!list.length)h+='<tr><td colspan="5" class="muted">尚無未來預約</td></tr>';
-  h+='</table></div><div class="note">超過 14 天後的預約會保留，進入 14 天窗口才計入建議量。</div>';
+  h+='</table></div></div><div class="note">超過 14 天後的預約會保留，進入 14 天窗口才計入建議量。</div>';
   /* 2026-09-09 bn 批：查客人備料 */
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">🔎 查客人備料（用姓名或電話找到那場包館，展開食材／耗材／器具／模具）</div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input class="sm" id="bkQ" style="width:220px" placeholder="姓名或電話…" value="'+shEsc(ST.bkQ||'')+'"><button class="btn" id="bkQGo">查詢</button>'
@@ -3700,6 +3749,8 @@ function wire(){
     ST.bkDraft=[];
     toast("已登記 "+list.length+" 筆，建議量每日重算後生效");render();};
   Array.prototype.forEach.call(document.querySelectorAll("[data-bkdel]"),function(el){el.onclick=function(){var id=el.dataset.bkdel;
+    var bb=null;BOOKINGS.forEach(function(x){if(x.id===id)bb=x;});
+    if(bb&&bkIsSync(bb)&&typeof confirm==="function"&&!confirm("這筆是團體訂位自動同步的。\n客人的訂位沒有取消的話，明天早上會再同步回來。\n要改甜點請按「編輯」。\n\n仍要取消這筆嗎？"))return;   /* cc 批 */
     post({type:"bookingDel",id:id});BOOKINGS.forEach(function(b){if(b.id===id)b.status="取消";});toast("已取消預約");render();};});
   // CSV 匯入
   var cvd=$("#bkCsvDate");if(cvd)cvd.onchange=function(){ST.csvDate=cvd.value;};
@@ -3740,10 +3791,12 @@ function wire(){
   var bec=$("#beCancel");if(bec)bec.onclick=function(){ST.bkEdit=null;render();};
   var bes=$("#beSave");if(bes)bes.onclick=function(){
     var e=ST.bkEdit;if(!e)return;
-    var d=$("#beDate").value,ds=String($("#beDessert").value||"").trim(),q=+$("#beQty").value,no=$("#beNote").value||"";
+    var syn=bkIsSync(e);   /* cc 批：團體同步列只取甜點，日期／數量／備註沿用原值 */
+    var d=syn?e.date:$("#beDate").value,ds=String($("#beDessert").value||"").trim(),q=syn?e.qty:+$("#beQty").value,no=syn?(e.note||""):($("#beNote").value||"");
     if(!d){toast("請選日期");return;}
     var rsv2=bkResolve(ds);if(!rsv2.ok){toast("「"+ds+"」不在甜點清單裡");return;}
     ds=rsv2.name;
+    if(syn&&BKMAP&&!bkExpands(ds)){toast("「"+ds+"」在對照表裡沒有對到配方，請選別的名稱，或請總部補產品名稱對照表");return;}
     if(!(q>0)){toast("請填數量");return;}
     post({type:"bookingDel",id:e.id});
     BOOKINGS.forEach(function(x){if(x.id===e.id)x.status="取消";});
@@ -3751,6 +3804,20 @@ function wire(){
     post({type:"booking",id:nid,store:ST.storeId,date:d,dessert:ds,qty:q,note:no});
     BOOKINGS.push({id:nid,store:String(ST.storeId),date:d,dessert:ds,qty:q,note:no,status:""});
     ST.bkEdit=null;toast("已更新");render();};
+  /* cc 批：對不到配方的列，直接在列上選甜點（先新增再取消，中途斷線也不會變成少備料；備註原封不動，同步才認得） */
+  function bkPickSave(id){var b=null;BOOKINGS.forEach(function(x){if(x.id===id)b=x;});if(!b)return;
+    var el=document.querySelector('[data-bkpick="'+id+'"]');var v=String((el&&el.value)||"").trim();
+    if(!v){toast("請先從清單挑一個甜點");return;}
+    if(BKMAP===null){toast("甜點清單還在載入，請稍後再按一次「確定」");return;}
+    var rs=bkResolve(v);if(!rs.ok){toast("「"+v+"」不在甜點清單裡，請從下拉選");return;}
+    if(!bkExpands(rs.name)){toast("「"+rs.name+"」在對照表裡沒有對到配方，請選別的名稱，或請總部補產品名稱對照表");return;}
+    var nid="BK"+Date.now();
+    post({type:"booking",id:nid,store:b.store,date:b.date,dessert:rs.name,qty:b.qty,note:b.note||""},true);
+    post({type:"bookingDel",id:b.id},true);
+    b.status="取消";BOOKINGS.push({id:nid,store:b.store,date:b.date,dessert:rs.name,qty:b.qty,note:b.note||"",status:""});
+    toast("已改為「"+rs.name+"」"+(bkIsSync(b)?"；之後同名的團體訂位會自動套用":"")+"，明早重算後計入備料");render();}
+  Array.prototype.forEach.call(document.querySelectorAll("[data-bkpickgo]"),function(el){el.onclick=function(){bkPickSave(el.dataset.bkpickgo);};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-bkpick]"),function(el){el.onkeydown=function(ev){if(ev.key==="Enter")bkPickSave(el.dataset.bkpick);};});
   var cvg=$("#bkCsvGo");if(cvg)cvg.onclick=function(){var d=ST.csvDate;if(!d){toast("請先選活動日期");return;}
     var gnote=ST.csvNote||"";
     var ok=(ST.csvRows||[]).slice();if(!ok.length)return;
