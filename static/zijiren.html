@@ -965,6 +965,77 @@ function processFromCache(cache, fromIdx, toIdx) {
   };
 }
 
+// ─── 2026 本月進度（進行中的當月；★ 只供觀察，絕不進達成率分子）───────
+//   資料 T+1：年表當月欄 = 月初～昨天。推估月底 = 至今 ÷ 已過天數 × 當月天數
+//   本月需招 = 月底要回到年度進度線還差多少 = 年目標 ×(已完結月+1)/12 − 已完結累計
+function buildMonthProgressHtml(sheet2026, actual2026) {
+  const curIdx = CLOSED_IDX_2026 + 1;            // 進行中的月（0-indexed）
+  if (curIdx < 0 || curIdx > 11) return '';       // 2026 年外不顯示
+  const now = new Date();
+  const daysInMonth = new Date(2026, curIdx + 1, 0).getDate();
+  const daysDone = now.getDate() - 1;             // 資料到昨天
+  const moName = (curIdx + 1) + '月';
+  if (daysDone < 1) {
+    return `<div class="chart-card" style="margin-top:16px"><div style="font-weight:700;margin-bottom:6px">📅 ${moName}本月進度</div>
+      <div style="font-size:13px;color:var(--muted)">今天是月初，明天起才有本月資料。</div></div>`;
+  }
+  const rows = STORE_NAMES.map(s => {
+    const soFar = (sheet2026[s] || {})[`2026/${curIdx}`] || 0;
+    const proj = Math.round(soFar / daysDone * daysInMonth);
+    const need = Math.max(0, Math.round((TARGETS_2026[s] || 0) * (curIdx + 1) / 12 - (actual2026[s] || 0)));
+    const pace = need > 0 ? Math.round(proj / need * 100) : null;   // null = 已超前進度線
+    return { s, soFar, proj, need, pace };
+  });
+  const totSoFar = rows.reduce((a, r) => a + r.soFar, 0);
+  const totProj  = rows.reduce((a, r) => a + r.proj, 0);
+  const totNeed  = rows.reduce((a, r) => a + r.need, 0);
+  const totPace  = totNeed > 0 ? Math.round(totProj / totNeed * 100) : null;
+  rows.sort((a, b) => (b.pace === null ? 1e9 : b.pace) - (a.pace === null ? 1e9 : a.pace));
+
+  const paceCell = p => {
+    if (p === null) return `<span style="color:#2D7A55;font-weight:600">已超前</span>`;
+    const c = p >= 100 ? '#2D7A55' : p >= 80 ? '#B87A00' : '#C4412F';
+    return `<span style="color:${c};font-weight:600">${p}%</span>`;
+  };
+  // 腐爛偵測：已過 3 天以上，全公司本月仍為 0 → 管線可能斷了
+  const staleWarn = (daysDone >= 3 && totSoFar === 0)
+    ? `<div style="margin:8px 0;padding:8px 12px;border-radius:8px;background:#FDECEA;color:#C4412F;font-size:13px;font-weight:600">⚠️ 本月已過 ${daysDone} 天，新增人數仍是 0，每日自動抓取可能中斷，請通知 Chat 檢查。</div>`
+    : '';
+  const grid = 'display:grid;grid-template-columns:108px 80px 80px 96px 80px;gap:8px;min-width:470px';
+  const body = rows.map(r => `<div style="${grid};padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <div title="${r.s}">${r.s.replace(/店$/, '')}</div>
+      <div style="text-align:right">${r.soFar.toLocaleString()}</div>
+      <div style="text-align:right">${r.proj.toLocaleString()}</div>
+      <div style="text-align:right">${r.need.toLocaleString()}</div>
+      <div style="text-align:right">${paceCell(r.pace)}</div></div>`).join('');
+
+  return `<div class="chart-card" style="margin-top:16px">
+    <div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-bottom:4px">
+      <div style="font-weight:700">📅 ${moName}本月進度</div>
+      <div style="font-size:12px;color:var(--muted)">資料到昨天（已過 ${daysDone} / ${daysInMonth} 天）｜僅供追蹤，不計入上方達成率</div>
+    </div>
+    ${staleWarn}
+    <div style="display:flex;flex-wrap:wrap;gap:20px;margin:8px 0 12px;font-size:13px">
+      <div>本月至今 <strong style="font-size:18px">${totSoFar.toLocaleString()}</strong> 人</div>
+      <div>推估月底 <strong style="font-size:18px">${totProj.toLocaleString()}</strong> 人</div>
+      <div>月底回到進度線需 <strong style="font-size:18px">${totNeed.toLocaleString()}</strong> 人</div>
+      <div>節奏 ${paceCell(totPace)}</div>
+    </div>
+    <div style="overflow-x:auto">
+      <div style="${grid};padding:4px 0 6px;font-size:12px;color:var(--muted);font-weight:600;border-bottom:2px solid var(--border)">
+        <div>門市</div><div style="text-align:right">本月至今</div><div style="text-align:right">推估月底</div>
+        <div style="text-align:right" title="年目標×${curIdx + 1}/12 − 1～${curIdx}月累計">本月需招</div>
+        <div style="text-align:right" title="推估月底 ÷ 本月需招">節奏</div>
+      </div>
+      ${body}
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6">
+      推估月底＝本月至今 ÷ 已過天數 × 當月天數。本月需招＝月底要回到「年度進度標準 ${curIdx + 1}/12」還差的人數；前幾個月已超前的店顯示「已超前」。
+      節奏 ≥100% 綠、80–99% 黃、&lt;80% 紅。月初天數少，推估波動大，看趨勢為主。
+    </div>
+  </div>`;
+}
+
 // ─── 2026 TARGET SECTION ──────────────────────────────────────
 function renderTargetSection() {
   if (!_rawCache || !_rawCache.qNewMembers2026) return;
@@ -1119,7 +1190,8 @@ function renderTargetSection() {
           ${rowsHtml}
         </div>
       </div>
-    </div>`;
+    </div>
+    ${buildMonthProgressHtml(sheet2026, actual2026)}`;
 }
 
 // ─── RENDER ALL ───────────────────────────────────────────────
