@@ -18,6 +18,7 @@
 <!-- 2026-07-27 寫入狀態回饋：原本只有失敗會提示、成功靜默，且 post() 的「已送出」語意誤導。改為 postParam 改用 silent post，並以 PSTATE 追蹤逐欄確認結果；店別參數「存」鈕三段式（存／確認中…／✓已存綠／⚠重試紅），完成時 toast 明確報「已確認寫入」或「有 N 項未寫入」；⚙調整與啟用勾選同樣給成功回饋；編輯欄位即清除舊狀態。 -->
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
+<!-- 2026-09-23 cd 批：檔期備貨頁各店列可點，展開該店該品項的大平台下單次數／金額／明細（店長、總部皆可；口徑＝同列已出貨）；新函式 campShipDetail，改 viewCampHQ／wire -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
 <!-- 2026-09-10 bs 批：「💾 儲存並更新」第一輪改整批一個 POST（type paramBatch，≤50 項一塊；GAS applyWrite_ 新增 upsertBatch_ 一鎖一開一讀、只寫動到的列，17 項約 5 秒）；補送輪維持逐筆 param，GAS 未部署新版時自動退回逐筆。只動 saveAllSend ＋ 新常數 SAVEALL_CHUNK。 -->
 <!-- 2026-09-10 br 批：店別參數「💾 儲存並更新」改排隊逐筆送（等上一筆回應才送下一筆，GAS 鎖不被自己塞爆）＋一次 dim_store_par 回讀對帳（最多 3 輪）＋沒對上自動補送（最多再 2 輪）；按鈕顯示「送出 5/17」「確認 12/17」進度；失敗值全程保留、重試同一顆。逐列「存」鈕移除（savePRow 保留無入口），改狀態標記 待存／排隊中／寫入中／已存／未寫入。只動 saveAllParams／verifyParamBatch／refreshSaveAllBtn／pstBtn 與 viewParams 三個字串；新增 saveAllTxt／saveAllSend／saveAllRound／saveAllSettle。引擎零改動。 -->
@@ -1546,6 +1547,7 @@ function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台�
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
   if(ST.chExclOnly===undefined)ST.chExclOnly=false;
+  if(!ST.chSt)ST.chSt={};   /* cd 批：點店名展開該店大平台下單紀錄 */
   var evs=Object.keys(EVCV);
   if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線（agg_evcurve 為空）。EventLayer v1.6 在檔期開賣滿 3 天、累積佔比達 10% 後才會產出曲線；未開賣的檔期走「首批級距」，請看各店訂貨單。</div>';
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}
@@ -1658,13 +1660,15 @@ function viewCampHQ(){
         var _canOut=(it.xm==="whole"&&p.pq>0)?Math.floor(p.surplus/p.pq+1e-9):null;
         var xf=p.xin.length?('<span style="color:#1e4e8c">自 '+p.xin.map(function(x){return escA(storeName(x.from))+_rg(x)+' 調 '+_q(x);}).join('、')+'</span>'):(p.xout.length?('<span style="color:#2E7D32">調出 '+p.xout.map(function(x){return _q(x)+' 給 '+escA(storeName(x.to))+_rg(x);}).join('、')+'</span>'):(p.dc&&!p.noShip&&p.surplus>0?(it.xm==="none"?'<span class="muted">不調撥</span>':(_canOut===null?'<span class="muted">可調出 '+fmt(Math.round(p.surplus))+'</span>':(_canOut>=1?'<span class="muted">可調出 '+fmt(_canOut)+' '+escA(bu)+'</span>':'<span class="muted">多 '+fmt(Math.round(p.surplus))+' '+u+'，不足 1 '+escA(bu)+'不調</span>'))):'<span class="muted">—</span>'));
         var _me=(String(st)===String(ST.storeId));   /* aw 批：店長看總表時標出自己的店 */
-        h+='<tr'+(_me?' style="background:#eaf3ff"':'')+'><td class="chStore"><b>'+escA(storeName(st))+'</b>'+(_me?'<span class="badge" style="background:#1e4e8c">本店</span>':'')+(regionOf(st)?'<span class="muted" style="font-size:11.5px">　'+regionOf(st)+'</span>':'')+'</td><td class="right chMH">'+fmt(Math.round(p.est))+'</td><td class="right chMH">'+fmt(Math.round(p.sold))+'</td><td class="right chMH">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right chMH">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
+        var _sk=it.id+"|"+st,_so=!!ST.chSt[_sk];   /* cd 批 */
+        h+='<tr data-chst="'+escA(_sk)+'" title="點一下看這家店的大平台下單紀錄" style="cursor:pointer'+(_me?';background:#eaf3ff':'')+(_so?';box-shadow:inset 3px 0 0 #1e4e8c':'')+'"><td class="chStore"><b>'+escA(storeName(st))+'</b> <span style="color:#1e4e8c;font-size:11.5px">'+(_so?'▴':'▾')+'</span>'+(_me?'<span class="badge" style="background:#1e4e8c">本店</span>':'')+(regionOf(st)?'<span class="muted" style="font-size:11.5px">　'+regionOf(st)+'</span>':'')+'</td><td class="right chMH">'+fmt(Math.round(p.est))+'</td><td class="right chMH">'+fmt(Math.round(p.sold))+'</td><td class="right chMH">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right chMH">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
           +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+')</span>')):'<span class="muted">自購</span>')+'</td>'
           +'<td class="right muted">'+(p.dc&&!p.noShip?'≈ '+fmt(Math.round(p.onhand)):'—')+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.need>0?'#B3261E':(p.surplus>0?'#2E7D32':'#6b7280'))+'">'+(p.need>0?fmt(Math.round(p.need)):(p.dc&&!p.noShip&&p.surplus>0?'多 '+fmt(Math.round(p.surplus)):'0'))+'</td>'
           +'<td>'+xf+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))+(p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">⏳ 貨到已下架，不採購（原需 '+fmt(Math.round(p.late))+'）</div>':'')+'</td>'
-          +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';});
+          +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';
+        if(_so)h+='<tr><td colspan="12" style="background:#f4f8fd;padding:6px 10px">'+campShipDetail(ev,s,st,p)+'</td></tr>';});
       /* by 批：貨到已下架的店不列採購 */
       if(it.nLate>0)h+='<tr><td colspan="12" style="background:#FDECEA;color:#8a1c1c;padding:6px 10px">⏳ <b>'+it.nLate+'</b> 家店現在叫貨、貨到時這個料已經下架（原本要買 '+fmt(Math.round(it.sumLate))+' '+escA(s.useUnit)+'），<b>不列入需採購</b>；缺口請靠上面的調撥，或店長自行判斷。</td></tr>';
       /* 2026-09-10 bp 批：兩件事以前是靜默的，現在直接寫在展開區 */
@@ -1681,6 +1685,33 @@ function viewCampHQ(){
       h+='</tbody></table></td></tr>';}
   });
   h+='</tbody></table></div><div class="sub muted" style="margin-top:6px">排序＝需採購金額高→低。需採購＝各店缺口扣掉可調撥後的合計；點品項展開各店與調撥建議；點上方「ⓘ 這些數字怎麼算」看每欄定義。</div></div>';
+  return h;}
+/* ===== 2026-09-23 cd 批：檔期備貨頁點店名 → 該店這個品項的大平台下單紀錄（次數／金額／明細）=====
+   經營者需求：店長、總部兩種身分都要在檔期備貨頁直接看各店從大平台叫了多少，不必切到查詢頁。
+   口徑與同一列「已出貨」完全相同：同一套 anPlatMatch 配對、shipUnitG 換算、同一個起算日（campHQShipped 的 from）。
+   起算日之前的單照樣列出，但標「未計入」，所以「計入」那幾筆加起來一定等於表上的已出貨。純顯示，不改任何數字。 */
+function campShipDetail(ev,s,st,p){
+  if(!p.dc)return '<div class="sub muted">這家店的「'+escA(s.name)+'」不是向出貨中心叫（自購或其他廠商），大平台沒有紀錄。</div>';
+  if(!SHIST.ALL)return '<div class="sub muted">大平台紀錄載入中…</div>';
+  var sh=campHQShipped(ev,s,SHIST.ALL.filter(function(r){return String(r.st)===String(st);})),from=sh.from,uu=s.useUnit;
+  var rows=SHIST.ALL.filter(function(r){return String(r.st)===String(st)&&anPlatMatch(r.name,s);}).map(function(r){
+    var u=shipUnitG(String(st),{unit:uu,sku:s},r.name);return {date:r.date,ord:r.ord,name:r.name,qty:num(r.qty),price:num(r.price),amt:num(r.qty)*num(r.price),use:num(r.qty)*u.g,inWin:!(from&&r.date<from)};});
+  rows.sort(function(a,b){return a.date<b.date?1:(a.date>b.date?-1:(a.ord<b.ord?1:-1));});
+  var last=SHIST.ALL.length?SHIST.ALL[SHIST.ALL.length-1].date:"";
+  function agg(L){var o={},q=0,a=0,g=0;L.forEach(function(r){o[r.ord]=1;q+=r.qty;a+=r.amt;g+=r.use;});return {n:Object.keys(o).length,q:q,a:a,g:g};}
+  var W=agg(rows.filter(function(r){return r.inWin;})),P=agg(rows.filter(function(r){return !r.inWin;}));
+  /* 手機：店別表本身比螢幕寬（橫向捲動），明細框用 sticky 貼住畫面左邊、寬度不超過螢幕，不用左右滑就看得到次數與金額 */
+  var box='<div style="position:sticky;left:0;max-width:calc(100vw - 56px)">';
+  var h=box+'<div style="font-weight:700;color:#1e4e8c;margin-bottom:4px">🏬 '+escA(storeName(st))+'　'+escA(s.name)+'　大平台下單紀錄</div>';
+  if(!rows.length)return h+'<div class="sub muted">大平台紀錄（資料到 '+escA(last)+'）裡，這家店沒有叫過這個品項。</div></div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;margin-bottom:6px">'
+    +'<span>'+(from?escA(from)+' 起':'')+'下單 <b>'+fmt(W.n)+'</b> 次</span>'
+    +'<span>共 <b>'+fmt(W.q)+'</b> '+escA(s.buyUnit||"包")+'（＝'+fmt(Math.round(W.g))+' '+escA(uu)+'，就是表上的「已出貨」）</span>'
+    +'<span>金額 <b>NT$'+fmt(Math.round(W.a))+'</b></span></div>';
+  if(P.n)h+='<div class="sub" style="color:#8B0000;margin-bottom:6px">另有 '+escA(from)+' 以前 '+fmt(P.n)+' 次、'+fmt(P.q)+' '+escA(s.buyUnit||"包")+'、NT$'+fmt(Math.round(P.a))+'，沒有算進「已出貨」（下面灰字那幾筆）。</div>';
+  h+='<div style="overflow-x:auto"><table style="font-size:12.5px;min-width:460px"><thead><tr><th>日期</th><th class="right">數量</th><th class="right">單價</th><th class="right">金額</th><th class="right">換算 '+escA(uu)+'</th><th>大平台品項</th><th>訂單號碼</th></tr></thead><tbody>';
+  rows.forEach(function(r){h+='<tr'+(r.inWin?'':' style="color:#9aa0a6"')+'><td style="white-space:nowrap">'+escA(r.date.slice(5))+(r.inWin?'':'<div class="sub">未計入</div>')+'</td><td class="right">'+fmt(r.qty)+'</td><td class="right">@'+fmt(r.price)+'</td><td class="right">NT$'+fmt(Math.round(r.amt))+'</td><td class="right">'+fmt(Math.round(r.use))+'</td><td>'+escA(r.name)+anPlatTag(r.name)+'</td><td class="sub">'+escA(r.ord)+'</td></tr>';});
+  h+='</tbody></table></div><div class="sub muted" style="margin-top:4px">資料到 '+escA(last)+'（出貨中心最後一次上傳的報表）。金額＝數量 × 大平台單價。</div></div>';
   return h;}
 /* ===== 🥮 檔期備料進度（2026-09-03 z 批）=====
    問題：檔期限定原料（月餅冰皮粉之類）最容易「一次訂滿整檔期」→ 檔期結束變呆料。
@@ -3664,9 +3695,10 @@ function wire(){
   var shc=$("#shUpCancel");if(shc){shc.onclick=function(){SHUP=null;render();};}
   /* 2026-09-05 ao 批：檔期備貨總表 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-chexp]"),function(el){el.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();var k=el.getAttribute("data-chexp")||"";ST.chExp[k]=!ST.chExp[k];render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chst]"),function(el){el.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();var k=el.getAttribute("data-chst")||"";ST.chSt=ST.chSt||{};ST.chSt[k]=!ST.chSt[k];render();};});   /* cd 批：點店名展開大平台紀錄 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-chneed]"),function(el){el.onclick=function(){ST.chNeedOnly=el.getAttribute("data-chneed")==="1";render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-chhelp]"),function(el){el.onclick=function(ev){if(ev&&ev.preventDefault)ev.preventDefault();ST.chHelp=!ST.chHelp;render();};});
-  Array.prototype.forEach.call(document.querySelectorAll("[data-chev]"),function(el){el.onclick=function(){ST.chEv=el.getAttribute("data-chev")||"";ST.chExp={};render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-chev]"),function(el){el.onclick=function(){ST.chEv=el.getAttribute("data-chev")||"";ST.chExp={};ST.chSt={};render();};});
   var chq=$("#chQ");if(chq){chq.oninput=function(){ST.chQ=this.value;clearTimeout(chq._t);chq._t=setTimeout(function(){var v=$("#view").innerHTML;render();var e2=$("#chQ");if(e2){e2.focus();try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(e){}}},250);};}
   /* 2026-09-04 am 批：出貨中心判讀「算式」展開／收合 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-shipx]"),function(el){el.onclick=function(ev){
