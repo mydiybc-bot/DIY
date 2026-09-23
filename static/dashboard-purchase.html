@@ -18,6 +18,7 @@
 <!-- 2026-07-27 寫入狀態回饋：原本只有失敗會提示、成功靜默，且 post() 的「已送出」語意誤導。改為 postParam 改用 silent post，並以 PSTATE 追蹤逐欄確認結果；店別參數「存」鈕三段式（存／確認中…／✓已存綠／⚠重試紅），完成時 toast 明確報「已確認寫入」或「有 N 項未寫入」；⚙調整與啟用勾選同樣給成功回饋；編輯欄位即清除舊狀態。 -->
 <!-- 2026-07-27 UI 即時性修正：savePRow 抽為具名函式並以 refreshPstBtn 做 targeted DOM 更新（按下「存」立即顯示「確認中…」、改值立即回到「存」），避免整頁重繪；render() 加入捲動位置保留，解決 439 列參數頁重繪跳回頂端。 -->
 <!-- 2026-07-27 內容量規格顯示：盤點頁列(📦 970 g／罐)、輸入框下方(1 罐=970g)、建議採購頁列、調整對話框 四處標示 packQty，供店長換算參考；packQty<=0 或器具模具不顯示。 -->
+<!-- 2026-09-23 cf 批：檔期備貨頁「需採購」①只差不到半包（瓶／罐）不硬進位 ②自購／非出貨中心的店不列入、只顯示還要用多少（經營者裁示）；新常數 CAMPHQ_TINY，只改 viewCampHQ -->
 <!-- 2026-09-23 cd 批：檔期備貨頁各店列可點，展開該店該品項的大平台下單次數／金額／明細（店長、總部皆可；口徑＝同列已出貨）；新函式 campShipDetail，改 viewCampHQ／wire -->
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
 <!-- 2026-09-10 bs 批：「💾 儲存並更新」第一輪改整批一個 POST（type paramBatch，≤50 項一塊；GAS applyWrite_ 新增 upsertBatch_ 一鎖一開一讀、只寫動到的列，17 項約 5 秒）；補送輪維持逐筆 param，GAS 未部署新版時自動退回逐筆。只動 saveAllSend ＋ 新常數 SAVEALL_CHUNK。 -->
@@ -1544,6 +1545,8 @@ function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台�
     if(from&&r.date<from){preG+=num(r.qty)*u.g;prePacks+=num(r.qty);if(!preFirst||r.date<preFirst)preFirst=r.date;return;}
     g+=num(r.qty)*u.g;packs+=num(r.qty);names[r.name]=1;});
   return {g:g,packs:packs,from:from,lead:lead,preG:preG,prePacks:prePacks,preFirst:preFirst,names:Object.keys(names)};}
+/* cf 批（2026-09-23 經營者裁示）：檔期備貨頁「需採購」只差不到這個比例的一包（瓶／罐）就不叫。0.5＝半包；要改門檻只改這一個數字 */
+var CAMPHQ_TINY=0.5;
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
   if(ST.chExclOnly===undefined)ST.chExclOnly=false;
@@ -1573,7 +1576,7 @@ function viewCampHQ(){
     +'<tr><td><b>已出貨的起算日</b></td><td><b>檔期專屬品回推 '+CAMPHQ_LEAD_EXCL+' 天，共用品回推 '+CAMPHQ_LEAD+' 天。</b>專屬品沒有別的產品會訂，期間內每一筆都是這檔的備貨；共用品放寬會把日常補貨誤當檔期供給。若起算日之前還有下單紀錄，展開後會紅字列出未計入的量。</td></tr>'
     +'<tr><td><b>尚需</b></td><td>剩餘推估 − 估計在店。正數＝這家店缺；負數＝多了（顯示為「可調出」）。</td></tr>'
     +'<tr><td><b>🔁 調撥</b></td><td>同一品項，有店多、有店缺 → 先從多的店調給缺的店。<b>同地區優先</b>（台中 1,2／台北 3,4,7,8,11／桃園 9,10 車程近、當天可互送），同區給不完才跨區，標「（同區）／（跨區）」。調得到的部分不用買。<br><b>整瓶／可分裝</b>：每個料在<b>「主檔」頁的「調撥方式」</b>設定：可分裝＝照克數調（例：烏龍茶粉、箱裝乾料）；整包＝開了就不能分，<b>只整'+'瓶／整包調、零頭不拆</b>（例：色膏、果醬）；不調撥＝不列調撥建議。沒設定（自動）時，採購單位是瓶、罐、桶、支、條、盒、管＝整包，其他＝可分裝。</td></tr>'
-    +'<tr><td><b>建議備</b>（採購單位）</td><td>調撥後仍缺的量 ÷ 每包內容量，進位。<b>這才是出貨中心要花錢買的</b>。</td></tr></table>'
+    +'<tr><td><b>建議備</b>（採購單位）</td><td>調撥後仍缺的量 ÷ 每包內容量，進位。<b>這才是出貨中心要花錢買的</b>。<br><b>兩種情形不列入</b>：①只差不到半包（半瓶／半罐）——不硬進位成 1 包，店裡通常還有舊貨 ②自購或向其他廠商叫的店——系統看不到它們的進貨與庫存，只顯示還要用多少，由店長自行判斷。</td></tr></table>'
     +'<div class="sub muted" style="margin-top:6px">品項列的「尚需」與「建議備」＝各店調撥後合計；「可調撥」＝能靠內部調度解決的量。列表依採購金額高→低排序。</div></div>';
   if(evs.length>1)h+='<div class="card" style="padding:8px 12px"><span class="seg">'+evs.map(function(e){return '<div class="'+(e===ev?"on":"")+'" data-chev="'+escA(e)+'">'+e+'</div>';}).join('')+'</span></div>';
   /* 曲線摘要 */
@@ -1620,12 +1623,14 @@ function viewCampHQ(){
           p.xin.push({from:sp.st,qty:take,cross:!same,units:units});per[sp.st].xout.push({to:st,qty:take,cross:!same,units:units});
           sp.left-=take;p.left=Math.max(0,p.left-take);sumXfer+=got;if(same)sumXfarSame+=got;});});});
     short.forEach(function(st){per[st].buy=per[st].left;});
-    Object.keys(per).forEach(function(st){var p=per[st];if(!p.dc)p.buy=p.need;   /* 自購／非出貨中心：沒有調撥資訊，尚需即需求 */
+    Object.keys(per).forEach(function(st){var p=per[st];p.self=0;p.tiny=0;
+      if(!p.dc){p.self=p.need;p.buy=0;}   /* cf 批（經營者裁示 2026-09-23）：自購／非出貨中心的店不列入「需採購」（系統不知道它們店裡有多少），只顯示還要用多少、由店長自行判斷 */
       /* by 批：與盤點頁一致——這家店這個料「貨到時已經下架」（endCutOf dead）就不列採購，缺口只靠調撥；p.late＝原本要買的量 */
       var _sp=pOf(st,s),_ec=endCutOf(st,s,(_sp.leadDays==null?DEFAULT_LEAD:_sp.leadDays),_sp.orderCycleWeeks);p.late=0;if(_ec&&_ec.dead&&p.buy>0){p.late=p.buy;p.buy=0;}
+      if(p.buy>0&&p.pq>0&&p.buy<p.pq*CAMPHQ_TINY-1e-9){p.tiny=p.buy;p.buy=0;}   /* cf 批：只差不到半包（半瓶／半罐）不硬進位成 1 包 */
       p.packs=Math.max(0,p.pq>0?Math.ceil(p.buy/p.pq-1e-9):Math.round(p.buy));});
-    var sumBuy=0,sumPacks=0,sumLate=0,nLate=0;Object.keys(per).forEach(function(st){sumBuy+=per[st].buy;sumPacks+=per[st].packs;if(per[st].late>0){sumLate+=per[st].late;nLate++;}});
-    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumXfarSame:sumXfarSame,sumBuy:sumBuy,sumPacks:sumPacks,sumLate:sumLate,nLate:nLate,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||"",
+    var sumBuy=0,sumPacks=0,sumLate=0,nLate=0,sumSelf=0,nSelf=0,sumTiny=0,nTiny=0;Object.keys(per).forEach(function(st){var p=per[st];sumBuy+=p.buy;sumPacks+=p.packs;if(p.late>0){sumLate+=p.late;nLate++;}if(p.self>0){sumSelf+=p.self;nSelf++;}if(p.tiny>0){sumTiny+=p.tiny;nTiny++;}});
+    return {id:id,s:s,per:per,sumRem:sumRem,sumUsed:sumUsed,sumShip:sumShip,sumOn:sumOn,sumNeed:sumNeed,sumEst:sumEst,sumSold:sumSold,sumXfer:sumXfer,sumXfarSame:sumXfarSame,sumBuy:sumBuy,sumPacks:sumPacks,sumLate:sumLate,nLate:nLate,sumSelf:sumSelf,nSelf:nSelf,sumTiny:sumTiny,nTiny:nTiny,dc:dc,anyNeed:(sumBuy>0||sumXfer>0),who:(nd[id][Object.keys(nd[id])[0]]||{}).who||"",
       excl:campExcl(id),xm:xm,sumPre:sumPre,sumPrePacks:sumPrePacks,preFirst:preFirst,nOver:nOver,lead:campLead(s)};
   }).filter(Boolean);
   var shown=items.filter(function(it){if(q&&(it.s.name+" "+it.s.vendor+" "+it.id+" "+it.who).toLowerCase().indexOf(q)<0)return false;if(ST.chNeedOnly&&!it.anyNeed)return false;if(ST.chExclOnly&&!it.excl)return false;return true;});
@@ -1650,7 +1655,8 @@ function viewCampHQ(){
       +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購</span>')+'</td>'
       +'<td class="right muted">'+(it.dc&&rowsAll?'≈ '+fmt(Math.round(it.sumOn))+' '+u:'—')+'</td>'
       +'<td class="right" style="color:#1e4e8c;font-weight:700">'+(it.sumXfer>0?fmt(Math.round(it.sumXfer))+' '+u:'<span class="muted">—</span>')+'</td>'
-      +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(it.sumBuy))+' '+u+'</td>'
+      +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(it.sumBuy))+' '+u
+        +((it.nTiny||it.nSelf)?'<div class="sub muted" style="font-weight:400">'+[it.nTiny?it.nTiny+' 店只差一點點':'',it.nSelf?it.nSelf+' 店自購':''].filter(Boolean).join('、')+'，不列</div>':'')+'</td>'
       +'<td class="right"><b>'+fmt(it.sumPacks)+'</b> '+s.buyUnit+'</td></tr>';
     if(open){
       h+='<tr><td colspan="9" style="background:#fffdf2;padding:4px 10px"><div class="sub muted chMobNote" style="margin:2px 0 4px">📱 手機已隱藏「推估總份數、已售份數、推估總需求、已用」四欄，橫放或用電腦可看全部</div><table style="font-size:12.5px"><thead><tr><th class="chStore">店</th><th class="right chMH">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right chMH">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（'+escA(bu)+'數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥'+(it.xm==="whole"?'<div class="sub" style="font-weight:400">整'+escA(bu)+'調、不拆</div>':(it.xm==="none"?'<div class="sub" style="font-weight:400">此料不調撥</div>':''))+'</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
@@ -1666,9 +1672,14 @@ function viewCampHQ(){
           +'<td class="right muted">'+(p.dc&&!p.noShip?'≈ '+fmt(Math.round(p.onhand)):'—')+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.need>0?'#B3261E':(p.surplus>0?'#2E7D32':'#6b7280'))+'">'+(p.need>0?fmt(Math.round(p.need)):(p.dc&&!p.noShip&&p.surplus>0?'多 '+fmt(Math.round(p.surplus)):'0'))+'</td>'
           +'<td>'+xf+'</td>'
-          +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))+(p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">⏳ 貨到已下架，不採購（原需 '+fmt(Math.round(p.late))+'）</div>':'')+'</td>'
+          +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))
+            +(p.self>0?'<div class="sub" style="font-weight:400;color:#6b7280;white-space:nowrap" title="自購或向其他廠商叫，還要用 '+fmt(Math.round(p.self))+' '+escA(u)+'，店長自行判斷">自購・店長判斷</div>':'')
+            +(p.tiny>0?'<div class="sub" style="font-weight:400;color:#6b7280;white-space:nowrap" title="只差 '+fmt(Math.round(p.tiny))+' '+escA(u)+'，不到半'+escA(bu)+'，不硬進位">差 '+fmt(Math.round(p.tiny))+'・不叫</div>':'')+(p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">⏳ 貨到已下架，不採購（原需 '+fmt(Math.round(p.late))+'）</div>':'')+'</td>'
           +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';
         if(_so)h+='<tr><td colspan="12" style="background:#f4f8fd;padding:6px 10px">'+campShipDetail(ev,s,st,p)+'</td></tr>';});
+      /* cf 批：不列入需採購的兩種情形，展開區直接寫出來 */
+      if(it.nTiny>0)h+='<tr><td colspan="12" style="background:#F4F6F8;color:#374151;padding:6px 10px">🤏 <b>'+it.nTiny+'</b> 家店只差一點點（每家不到半'+escA(bu)+'，合計 '+fmt(Math.round(it.sumTiny))+' '+escA(u)+'），<b>不硬進位成 1 '+escA(bu)+'</b>。店裡通常還有舊貨，真的不夠請店長自己叫。</td></tr>';
+      if(it.nSelf>0)h+='<tr><td colspan="12" style="background:#F4F6F8;color:#374151;padding:6px 10px">🛒 <b>'+it.nSelf+'</b> 家店這個料是自購或向其他廠商叫（合計還要用 '+fmt(Math.round(it.sumSelf))+' '+escA(u)+'），系統看不到它們的進貨與庫存，<b>不列入需採購</b>，由店長自行判斷。</td></tr>';
       /* by 批：貨到已下架的店不列採購 */
       if(it.nLate>0)h+='<tr><td colspan="12" style="background:#FDECEA;color:#8a1c1c;padding:6px 10px">⏳ <b>'+it.nLate+'</b> 家店現在叫貨、貨到時這個料已經下架（原本要買 '+fmt(Math.round(it.sumLate))+' '+escA(s.useUnit)+'），<b>不列入需採購</b>；缺口請靠上面的調撥，或店長自行判斷。</td></tr>';
       /* 2026-09-10 bp 批：兩件事以前是靜默的，現在直接寫在展開區 */
