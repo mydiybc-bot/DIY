@@ -2108,7 +2108,8 @@ var VERIFY=[2500,5000,9000];
 var XLSX_URL='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 var TPL_HEAD=['半成品名稱','類型','製作單位','適用甜點','一批做出數量','一批做出單位','品項','每批用量','單位','存放方式','拿取方式','使用說明','製作步驟','備註'];
 var S={inited:false,ready:false,loading:false,api:'',apiVer:0,err:'',rows:[],info:{},ents:[],bomRows:null,bomByItem:{},bomDesserts:[],bomItems:[],
-  fq:'',fkind:'',edit:null,view:null,nb:'1',queue:[],qSigned:false,qSigner:'',status:'',busy:false,pendingOpen:null};
+  fq:'',fkind:'',edit:null,view:null,nb:'1',queue:[],qSigned:false,qSigner:'',status:'',busy:false,pendingOpen:null,sold:null,soldFrom:'',todoAll:false};
+var SOLD_DAYS=90;
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function num(x){var n=parseFloat(x);return isNaN(n)?0:n}
@@ -2123,7 +2124,7 @@ function ikey(d,it){return d+'\u0001'+it}
 /* 器具／模具判斷：主檔有 → 看品類別；主檔沒有 → 名稱推測（與 autodraft 同規則） */
 function isTool(name){var s=skuOf(name);if(s)return /器具|模具/.test(trim(s.cat));var n=String(name||'');
   if(/材料包|組合包|色膏|糖珠/.test(n))return false;
-  return /壓模|矽膠模|模具|圈模|派盤|烤模|蛋糕模|慕斯模|餅乾模|烤盤$|筆|匙$|刮刀|抹刀|攪拌|打蛋|篩|秤|溫度計|噴槍|剪刀|擀|量杯|夾|刷$|鏟|針|棒$|轉台|花嘴|工具|機$|器$|盆$|碗$/.test(n)}
+  return /壓模|矽膠模|模具|圈模|派盤|烤模|蛋糕模|慕斯模|餅乾模|烤盤$|筆|匙$|勺$|刮刀|抹刀|攪拌|打蛋|篩|秤|溫度計|噴槍|剪刀|擀|量杯|夾|刷$|鏟|針|棒$|轉台|花嘴|工具|機$|器$|盆$|碗$/.test(n)}
 function catOf(name){var s=skuOf(name);if(s)return trim(s.cat)||'食材';return isTool(name)?'器具':'未建主檔'}
 function toolsToText(ts){return ts.filter(function(t){return trim(t.m)}).map(function(t){return trim(t.m)+(trim(t.q)?' '+trim(t.q):'')+(trim(t.u)?' '+trim(t.u):'')}).join('；')}
 function textToTools(s){return String(s||'').split(/[；;\n]/).map(function(x){x=trim(x);if(!x)return null;var m=x.match(/^(.*?)\s+([\d.]+)\s*(\S*)$/);return m?{m:trim(m[1]),q:m[2],u:m[3]}:{m:x,q:'',u:''}}).filter(Boolean)}
@@ -2174,6 +2175,37 @@ function loadBom(){if(S.bomRows)return Promise.resolve();
     r.rows.forEach(function(x){var d=trim(x[0]),it=trim(x[1]);if(!d||!it)return;ds[d]=1;its[it]=1;(by[it]=by[it]||[]).push({d:d,q:num(x[2]),u:trim(x[3])})});
     S.bomRows=r.rows.length;S.bomByItem=by;S.bomDesserts=Object.keys(ds).sort();S.bomItems=Object.keys(its).sort()},
     function(){S.bomRows=0})}
+/* 近 3 個月各甜點賣出份數（POS資料 → 產品名稱對照表 轉成 BOM 甜點名）；讀不到就 null（提醒清單退回全部） */
+function loadSales(){if(S.sold)return Promise.resolve();var d=new Date(Date.now()-SOLD_DAYS*86400000),ds=d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());S.soldFrom=ds;
+  return Promise.all([R.gq(R.readIdOf('POS資料'),'POS資料',"select D, sum(H) where C >= date '"+ds+"' group by D"),R.gq(R.readIdOf('產品名稱對照表'),'產品名稱對照表','select A,B').catch(function(){return {rows:[]}})])
+    .then(function(a){var p2c={};a[1].rows.forEach(function(r){var x=trim(r[0]),y=trim(r[1]);if(x)p2c[x]=y||x});var o={};
+      a[0].rows.forEach(function(r){var n=trim(r[0]),q=num(r[1]);if(!n||!(q>0))return;var c=p2c[n]||n;o[c]=(o[c]||0)+q});S.sold=o},function(){S.sold=null})}
+/* 還沒登記、該登記的：A＝主檔廠商「半成品」或名稱是材料包／組合包；B＝BOM 寫「1 包」但主檔不是以包計（可能是門市分裝）。預設只看近 3 個月有賣的甜點用到的 */
+function todoLists(){var reg={};S.ents.forEach(function(e){reg[e.item]=1});S.queue.forEach(function(q){reg[trim(q.name)]=1});
+  var useSold=!!S.sold&&!S.todoAll,A=[],B=[];
+  Object.keys(S.bomByItem).forEach(function(it){if(reg[it])return;var s=skuOf(it),v=s?trim(s.vendor):'';
+    var rows=S.bomByItem[it].filter(function(x){return !useSold||S.sold[x.d]>0});if(!rows.length)return;
+    var ds={};rows.forEach(function(x){ds[x.d]=1});var dl=Object.keys(ds),qty=0;dl.forEach(function(d){qty+=S.sold&&S.sold[d]||0});
+    var row={it:it,v:s?(v||'（未填）'):'主檔沒有',ds:dl.sort(function(a,b){return (S.sold&&S.sold[b]||0)-(S.sold&&S.sold[a]||0)}),qty:qty};
+    if(s&&/器具|模具/.test(trim(s.cat)))return;
+    var pack=/材料包|組合包|食材包|裝飾組/.test(it);
+    if(pack&&v==='出貨中心')return;                                  /* 出貨中心整包供應（例：恐龍派對組合包）→ 不用登記 */
+    if(v==='半成品'||pack)A.push(row);
+    else if(s&&rows.some(function(x){return x.u==='包'})&&trim(s.useUnit)!=='包')B.push(row)});
+  function srt(x,y){return y.qty-x.qty||x.it.localeCompare(y.it,'zh-Hant')}
+  return {A:A.sort(srt),B:B.sort(srt),useSold:useSold}}
+function todoHTML(){var t=todoLists();if(!t.A.length&&!t.B.length&&!S.todoAll&&!S.sold)return '';
+  function tbl(arr,grp){return '<div class="ap-items"><table><tr><th>名稱</th><th>主檔廠商</th><th>用到的甜點'+(t.useSold?'（近 3 個月賣出份數）':'')+'</th><th></th></tr>'
+    +arr.map(function(r){return '<tr><td><b>'+esc(r.it)+'</b></td><td>'+esc(r.v)+'</td><td>'+r.ds.slice(0,4).map(function(d){return esc(d)+(S.sold&&S.sold[d]?' <span class="ap-muted">'+Math.round(S.sold[d])+' 份</span>':'')}).join('、')+(r.ds.length>4?' 等 '+r.ds.length+' 支':'')+'</td>'
+      +'<td><button class="ap-btn2" data-smreg="'+esc(r.it)+'" data-smgrp="'+grp+'">＋ 登記</button></td></tr>'}).join('')+'</table></div>'}
+  var h='<div class="ap-card"><div class="ap-actions" style="justify-content:space-between;flex-wrap:wrap"><div class="ap-h" style="margin:0">📝 還沒登記配方的店製品項'+(t.useSold?'（近 3 個月有賣的甜點用到，'+esc(S.soldFrom)+' 起）':'（全部，含已下架甜點）')+'</div>'
+    +'<label style="font-weight:400"><input type="checkbox" data-smtodoall="1"'+(S.todoAll?' checked':'')+'> 顯示已下架甜點用到的</label></div>'
+    +(S.sold?'':'<div class="ap-muted">讀不到 POS 銷售資料，先列出全部。</div>');
+  h+='<div class="ap-h" style="margin-top:8px">A. 半成品／材料包（'+t.A.length+'）</div>'+(t.A.length?tbl(t.A,'A'):'<div class="ap-muted">沒有了 🎉</div>')
+    +'<div class="ap-muted" style="margin-top:4px">外購或出貨中心供應的不用登記：請到採購系統主檔把廠商改成實際廠商或「出貨中心」，就不會再出現在這裡。</div>';
+  h+='<div class="ap-h" style="margin-top:12px">B. BOM 寫「1 包」的食材（可能是門市分裝包，確認是店員分裝的再登記）（'+t.B.length+'）</div>'+(t.B.length?tbl(t.B,'B'):'<div class="ap-muted">沒有</div>')
+    +'<div class="ap-muted" style="margin-top:4px">分裝包的登記方式：名稱＝這個食材、類型＝分裝包、一批做出 1 包、用料＝它自己幾克（例：紅豆餡 1 包 → 紅豆餡 130 g）＋夾鏈袋。買來就是一包的不用登記。</div>';
+  return h+'</div>'}
 function loadApiVer(){if(!S.api){S.apiVer=0;return Promise.resolve()}
   var p;try{p=fetch(S.api)}catch(e){p=Promise.reject(e)}
   return Promise.resolve(p).then(function(r){return r&&r.json?r.json():null}).then(function(j){var m=j&&j.ver&&String(j.ver).match(/v(\d+\.\d+)/);S.apiVer=m?parseFloat(m[1]):0},function(){S.apiVer=-1})}
@@ -2183,7 +2215,7 @@ function loadData(){
   var p2=jq('select *',INFO).then(function(r){S.info=parseInfo(r)},function(){S.info={}});
   return Promise.all([p1,p2]).then(function(){S.ents=buildEnts(S.rows)})}
 function loadAll(){S.loading=true;S.err='';render();
-  return Promise.all([loadData(),loadBom()]).then(loadApiVer).then(function(){S.loading=false;S.ready=true;
+  return Promise.all([loadData(),loadBom(),loadSales()]).then(loadApiVer).then(function(){S.loading=false;S.ready=true;
     if(S.pendingOpen){var po=S.pendingOpen;S.pendingOpen=null;po();return}render()})}
 
 /* ---- 共用計算 ---- */
@@ -2273,10 +2305,7 @@ function listHTML(){var f=nz(S.fq),k=S.fkind;
       +'<td>'+e.lines.length+' 項'+(nt?'＋器具 '+nt:'')+'</td><td>'+st.n+' 支</td><td style="color:'+(st.cls==='ok'?'#2E7D32':'#8A5A00')+'">'+st.txt+'</td>'
       +'<td class="ap-muted">'+esc(e.ts)+(e.req?'<br>'+esc(e.req):'')+'</td><td><button class="ap-btn2" data-smedit="'+i+'">編輯</button></td></tr>'});
   h+='</table></div></div>';
-  var reg={};S.ents.forEach(function(e){reg[e.item]=1});S.queue.forEach(function(q){reg[trim(q.name)]=1});
-  var todo=(R.skus?R.skus():[]).filter(function(s){return trim(s.vendor)==='半成品'&&!reg[s.name]&&bomUse(s.name).length});
-  if(todo.length)h+='<div class="ap-card"><div class="ap-h">📝 主檔標「半成品」、BOM 有甜點在用、還沒登記的（'+todo.length+'）</div><div class="ap-muted" style="margin-bottom:4px">含已下架甜點；出貨中心製作或外購的不用登記（請到採購系統主檔把廠商改掉，就不會再出現在這裡）。</div>'
-    +todo.map(function(s){return '<button class="ap-btn2" style="margin:2px 4px 2px 0" data-smreg="'+esc(s.name)+'">＋ '+esc(s.name)+'（'+bomUse(s.name).length+' 列）</button>'}).join('')+'</div>';
+  h+=todoHTML();
   return dls()+h}
 
 function queueHTML(){var ok=0;
@@ -2380,7 +2409,8 @@ function useHTML(ed){var yq=num(ed.yq),yu=trim(ed.yu),name=trim(ed.name);
 function wire(){var el=root();if(!el)return;
   function on(sel,ev,fn){el.querySelectorAll(sel).forEach(function(x){x['on'+ev]=function(e){fn(x,e)}})}
   on('[data-smnew]','click',function(){S.edit=newEd();S.view=null;S.status='';render()});
-  on('[data-smreload]','click',function(){S.status='';S.bomRows=null;loadAll()});
+  on('[data-smreload]','click',function(){S.status='';S.bomRows=null;S.sold=null;loadAll()});
+  on('[data-smtodoall]','change',function(x){S.todoAll=x.checked;render()});
   on('[data-smimport]','click',function(){var f=el.querySelector('[data-smfile]');if(f){f.value='';f.click()}});
   on('[data-smfile]','change',function(x){var f=x.files&&x.files[0];if(f)importFile(f,null)});
   on('[data-smtpl]','click',function(){downloadTemplate(null)});
@@ -2392,7 +2422,10 @@ function wire(){var el=root();if(!el)return;
   on('[data-smprint]','click',function(){try{window.print()}catch(e){}});
   on('[data-smeditview]','click',function(){S.edit=edFromEnt(S.view);S.view=null;S.status='';render()});
   on('[data-smedit]','click',function(x){S.edit=edFromEnt(S.ents[+x.getAttribute('data-smedit')]);S.status='';render()});
-  on('[data-smreg]','click',function(x){var ed=newEd(),n=x.getAttribute('data-smreg');ed.name=n;ed.yu=commonUnit(n);ed.desserts=bomDessertsOf(n);S.edit=ed;S.status='';render()});
+  on('[data-smreg]','click',function(x){var ed=newEd(),n=x.getAttribute('data-smreg');ed.name=n;ed.yu=commonUnit(n);ed.desserts=bomDessertsOf(n);
+    if(x.getAttribute('data-smgrp')==='B'){var s0=skuOf(n);ed.kind='分裝包';ed.yq='1';ed.yu='包';ed.lines=[{m:n,q:'',u:s0?trim(s0.useUnit):'g'},{m:'夾鏈袋',q:'1',u:'個'}]}
+    else if(/材料包|食材包/.test(n))ed.kind='材料包';else if(/組合/.test(n))ed.kind='分裝包';
+    S.edit=ed;S.status='';render()});
   on('[data-smback]','click',function(){S.edit=null;S.view=null;render()});
   on('[data-sme]','change',function(x){var k=x.getAttribute('data-sme'),ed=S.edit;ed[k]=x.value;
     if(k==='name'){var n=trim(x.value);if(!trim(ed.yu))ed.yu=commonUnit(n);if(!ed.shared&&!ed.desserts.length)ed.desserts=bomDessertsOf(n);
