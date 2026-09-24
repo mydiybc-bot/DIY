@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🍰 食譜系統</title>
+<!-- 2026-09-24 十三（採購 ci 批配套）：新品申請表「新增食材/器模具」表二加第 20 欄「保存期限」（NI_KEYS 多 shelf；格式 未開封 …｜分裝 …｜開封後 …）。「複製 dim_sku 新品項列」表頭改成主檔 A–S 全欄（O 適用店～R 調撥方式留空、S＝效期）；申請單摘要每列多「保存期限：」；.json lines 多 shelf（載入相容舊檔）。「複製新增食材/器模具表」仍 19 格（Excel 範本不動）。改 NI_KEYS／COLW2／t2HeadHTML／t2RowHTML／skuText／摘要一行／jsonObj／fromJson 一處，其餘零改動。 -->
 <!-- 2026-09-05 新頁：食譜系統（由 dashboard-materials.html 的食譜成本卡分頁搬出，成為獨立儀表板）
      分頁 ①「食譜成本分析」＝RecipeMod（rc-）整段搬移，六個子分頁原封不動；唯一邏輯改動＝新增 readIdOf()：
        POS資料／BOM表 → BOM 本；dim_sku／dim_unitconv／產品名稱對照表 → 儀表板專用檔（與採購系統 readIdOf 同口徑）；
@@ -1383,7 +1384,7 @@ var ZONE_ALIAS={'冰箱區':'冰箱','凍庫區':'冷凍庫','洞洞牆區':'洞
 var CATS=['食材','耗材','器具','模具'];
 var COLD=/奶油|鮮奶|牛奶|雞蛋|蛋白|蛋黃|優格|乳酪|起司|起士|動植鮮|鮮奶油|水果|草莓|藍莓|覆盆|蘋果|檸檬|柳橙|香蕉|冷藏|冷凍|吉利丁|卡士達|克林姆|布丁|果泥|果醬|芋泥|栗子|冰淇淋/;
 /* 🆕 列可填欄位（與 Excel 第 17 列表頭對應；一層結構） */
-var NI_KEYS=['sticker','pkgSpec','pkgCost','store','take','supply','vendor','pkgType','split','first','lnote'];
+var NI_KEYS=['sticker','pkgSpec','pkgCost','store','take','supply','vendor','pkgType','split','first','lnote','shelf'];   /* 09-24 十三：shelf＝保存期限（進主檔 dim_sku「效期」欄） */
 var EXTRA={zone:{},status:{},last:{},loaded:false};   /* 依品名 */
 var POSCAT=null;                                         /* [{main,sub}] 去重後 */
 var ALIASES={};                                          /* 品名 → [BOM別名...] */
@@ -1602,7 +1603,7 @@ function summaryText(c){var h=AP.head,rid=reqDate(),p=num(h.price),rate=rateOf(c
     L.push((i+1)+'. '+l.m+'　'+(nw?'🆕':'[手動加入]')+'　貼紙名稱：'+dash(l.sticker)+'　成本(原包裝)：'+(nw?(num(l.pkgCost)>0?num(l.pkgCost)+' 元':'—'):(skuCost(l)?skuCost(l)+' 元':'—'))+'　原包裝規格：'+dash(nw?l.pkgSpec:skuSpec(l)),
       '   每份使用量：'+l.q+' '+(l.u||'')+'　存放方式：'+dash(l.store)+'　拿取方式：'+dash(l.take)+'　區域：'+dash(l.zone),
       '   提供方式：'+dash(l.supply)+'　進貨廠商：'+dash(nw?l.vendor:skuVendor(l))+'　包裝類型：'+dash(l.pkgType)+'　分裝方式：'+dash(l.split),
-      '   採購量(100%)：'+(bq?bq+' '+(l.u||''):'—')+'　第一單處理：'+dash(l.first)+'　備註：'+dash(l.lnote)
+      '   採購量(100%)：'+(bq?bq+' '+(l.u||''):'—')+'　第一單處理：'+dash(l.first)+'　備註：'+dash(l.lnote)+'　保存期限：'+dash(l.shelf)
       +(isToolLine(l)?'　（器具／模具不計價）':'　每份成本：'+(row?(row.cost===null?(nw?'估？':'缺'):fm(row.cost)+' 元'+(row.t==='C'?'(估)':'')):'—')))});
   /* 用料（全部，成本卡依據）：品項／數量／單位／每份成本，無區域 */
   L.push('','── 用料（全部，成本卡依據）──');
@@ -1616,10 +1617,10 @@ function summaryText(c){var h=AP.head,rid=reqDate(),p=num(h.price),rate=rateOf(c
 function bomText(){var h=AP.head;
   return R.bomTsv(String(h.name||'').trim()||'新品',AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0}).map(function(l){return {m:String(l.m).trim(),q:num(l.q),u:String(l.u||'').trim()||'g'}}))}
 /* dim_sku 新品項列：欄位順序照 dim_sku A–N（sku_id 留白／品名／品類別／廠商＝⑫／使用單位／採購單位／內容量＝⑤規格數字（含 kg／L ×1000；抽不到填 1）／單價＝④／保存天／BOM別名／POS別名／預設分區＝⑩／(M)／來源） */
-function skuText(){var rid=reqDate(),rows=['sku_id\t品名\t品類別\t廠商\t使用單位\t採購單位\t每採購單位內容量\t單價\t保存天\tBOM別名\tPOS別名\t預設分區\t\t來源'];
+function skuText(){var rid=reqDate(),rows=['sku_id\t品名\t品類別\t廠商\t使用單位\t採購單位\t每採購單位內容量\t單價\t保存天\tBOM別名\tPOS別名\t預設分區\t\t來源\t適用店\t狀態\t最後有效日\t調撥方式\t效期'];   /* 09-24 十三：A–S 全欄，S＝效期 */
   newLines().forEach(function(l){var nm=String(l.m).trim();
     var u=String(l.u||'g').trim()||'g';var pc=num(l.pkgCost),pn=packNum(l.pkgSpec);
-    rows.push(['',nm,lineCat(l),String(l.vendor||'').trim(),u,u,pn?String(pn):'1',pc>0?String(pc):'','','','',l.zone||'','','申請單 '+rid].join('\t'))});
+    rows.push(['',nm,lineCat(l),String(l.vendor||'').trim(),u,u,pn?String(pn):'1',pc>0?String(pc):'','','','',l.zone||'','','申請單 '+rid,'','','','',String(l.shelf||'').replace(/\s*[|｜]\s*/g,'｜').trim()].join('\t'))});
   return rows.length>1?rows.join('\n'):''}
 /* 新增食材/器模具表：每個 🆕 品項一列、恰 19 格（對齊 Excel A18 起貼上，E／J 為合併欄留空），不附表頭；C＝成本 D＝規格 F＝每份使用量 G＝單位 P＝採購量 */
 function itemsText(){
@@ -1633,7 +1634,7 @@ function jsonObj(c){var d=new Date(),p=num(AP.head.price),rate=rateOf(c);
       items:semiItemsOf(s).map(function(it,k){var q=num(it.q);var yq=num(s.yq);return {seq:k+1,name:String(it.m).trim(),unit:it.u||'',qty_batch:q,per_unit:yq>0?r3(q/yq):null,qty4:q,in_master:!!skuOf(it.m)}})}}),
     lines:AP.lines.filter(function(l){return String(l.m||'').trim()}).map(function(l,i){var row=rowOf(c,l);var nw=isNewItem(l);
       return {seq:i+1,sku_id:l.id||'',name:String(l.m).trim(),is_new:nw,pinned:!!l.pin,sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packNum(l.pkgSpec):null,
-        qty:num(l.q),unit:l.u||'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,
+        qty:num(l.q),unit:l.u||'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,shelf:l.shelf||'',
         cat:lineCat(l),in_master:!nw,cost:row?(row.cost===null?null:r2(row.cost)):null,basis:row?row.s:(isToolLine(l)?'器具／模具不計價':''),tier:row?row.t:''}}),
     cost:{total:r2(c.total),food:r2(c.fd),pack:r2(c.cs),evidence_pct:c.ev,gaps:c.gaps,est:c.nEst,new_items:c.nNew,cost_rate:rate===null?null:r1(rate),margin:rate===null?null:r1(100-rate)},
     source_file:AP.srcName||'',engine:'RecipeMod costLines（估價層 v2026-07-31j）＋🆕 原包裝成本÷規格×用量',form:'新品研發工作申請單 2026-02-24'}}
@@ -1652,7 +1653,7 @@ function fromJson(j){if(!j||typeof j!=='object')throw new Error('不是申請單
   var lines=(j.lines||[]).map(function(x){x=x||{};if(isDraft)return normLine(x);
     var o=newLine();o.m=String(x.name||x.m||'');o.q=x.qty!==undefined?x.qty:(x.q||'');o.u=x.unit||x.u||'';o.zone=x.zone||'';o.id=x.sku_id||x.id||'';o.cat=x.cat||'';o.pin=!!x.pinned;
     var nw=x.is_new!==undefined?!!x.is_new:(x.in_master===false);
-    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';
+    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';o.shelf=x.shelf||'';
     if(nw){o.pkgCost=x.pkg_cost!=null?x.pkg_cost:(x.pkgCost||'');o.pkgSpec=x.pkg_spec||x.pkgSpec||'';o.vendor=x.vendor||''}
     if(x.new_item){var n=x.new_item;o.sticker=o.sticker||n.sticker||'';o.pkgCost=o.pkgCost||n.pkg_cost||'';o.pkgSpec=o.pkgSpec||n.pkg_spec||'';o.store=o.store||n.store||'';o.take=o.take||n.take||'';o.supply=o.supply||n.supply||'';o.vendor=o.vendor||n.vendor||'';o.pkgType=o.pkgType||n.pkg_type||'';o.split=o.split||n.split||'';o.first=o.first||n.first||'';o.lnote=o.lnote||n.note||''}
     return normLine(o)});
@@ -1745,8 +1746,8 @@ function table1HTML(c){
   h+='</tbody></table></div><div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝主檔使用單位；填「匙」「滴」等 BOM 寫法會走 dim_unitconv 換算。器具／模具只列清單不計價。🆕 列的每份成本＝表二填的 成本÷規格數字×數量。</span></div></div></div>';
   return h}
 /* 表二：只列 isNewItem 的列，Excel 第 17 列 17 欄；品項／每份使用量／單位 唯讀鏡像表一；無刪除鍵 */
-var COLW2=[130,84,66,80,64,44,70,84,100,84,78,74,78,64,44,84,62];   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
-function t2HeadHTML(){var H=['品項','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','採購量(100%)','單位','第一單處理','備註'];
+var COLW2=[130,84,66,80,64,44,70,84,100,84,78,74,78,64,44,84,62,150];   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
+function t2HeadHTML(){var H=['品項','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','採購量(100%)','單位','第一單處理','備註','保存期限'];
   return '<colgroup>'+COLW2.map(function(w){return '<col style="width:'+w+'px">'}).join('')+'</colgroup><thead><tr>'+H.map(function(x){return '<th>'+x+'</th>'}).join('')+'</tr></thead>'}
 function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l);
   function t(k,ph){return '<input type="text" data-nf="'+k+'" value="'+esc(l[k])+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'}
@@ -1762,7 +1763,7 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   h+='<td>'+d('zone',ZONES,'— 請選 —')+'</td>';
   h+='<td>'+d('supply',SUPPLYS)+'</td>'+(nw?('<td>'+t('vendor')+'</td>'):ro(skuVendor(l),''))+'<td>'+d('pkgType',PKGTYPES)+'</td><td>'+t('split')+'</td>';
   h+='<td class="ap-rocell" data-buyqty="'+i+'">'+(bq?bq:'—')+'</td><td class="ap-rocell" data-buyunit="'+i+'">'+esc(u||'—')+'</td>';
-  h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td></tr>';
+  h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td><td>'+t('shelf','未開封 依原包裝｜開封後 D+7')+'</td></tr>';   /* 09-24 十三：保存期限 */
   return h}
 function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}).filter(function(i){return i>=0});
   var h='<div class="ap-sheet ap-bleed"><div class="ap-sheet-title">🆕 新增食材/器模具 <span class="ap-muted">Excel 第 17 列全欄</span><button class="ap-btn2" id="apAddNew" style="margin-left:auto">＋ 新增品項</button></div>'
