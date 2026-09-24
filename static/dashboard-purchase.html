@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#2E7D32">
 <link rel="manifest" href="purchase-manifest.json">
 <title>自己做 · 採購系統</title>
+<!-- 2026-09-24 ci 批：效期併主檔。①dim_sku 新欄「效期」（一格文字，出貨中心維護）→ SKUS.shelf ②盤點卡片品名旁 🕐 小鈕，預設收合、點開才顯示（灰＝主檔未填；D+3 內紅、D+7 內橘）③「🕐 效期」分頁改讀主檔：只列本店在用品項、依盤點分區分組、總部可就地編輯（post type:sku fields.效期 ＋ 回讀 dim_sku 驗證）；dim_shelf／SHELF 快照／shelfApi 不再讀寫（舊函式保留未呼叫）④店長「📝 新品項申請」多「保存期限」欄：藏在用途說明尾巴的〔效期：…〕記號（同 cg7〔標配〕手法，fact_sku_req／skureq-api 零改動），總部審核卡可改，核准時寫進主檔效期。只動 SKUS 對應、viewCount 卡片兩處、viewShelf／dlShelfCsv 整支、sr* 六處、wire 一段；引擎零改動。 -->
 <!-- 2026-07-25 全站字級下限修正：9 處 11px→12px（.badge/.pill/.tagnew/.lock/.own/header 更新時間/兩個檔期徽章/建議採購表副行）。無其他改動。 -->
 <!-- 2026-09-01 w 批（調整提出 0901）：①dim_sku 新欄 適用店／狀態／最後有效日 → liveItems 全站過濾（skuForStore／skuExpired）②盤點頁「🗓 過季」籤 ③店別參數「安全庫存」改採購單位輸入（顯示÷內容量、寫入×內容量）④主檔頁 建議價＝單價時不顯示套用 ⑤總覽頁移除「立即重算」卡，重算完成後清 RB.msg ⑥主檔頁列顯示 狀態／適用店／過季 徽章 ⑦重算輪詢上限 4→6 分鐘 ⑧查詢頁各店使用量：有分類篩選時標警語、上週用量欄灰掉（口徑不同）。計算層零改動。 -->
 <!-- 2026-09-01 v 批（盤點頁）：①卡片移除品類標籤，改以分區內「品類分隔列」呈現 ②分區內排序 品類(食材→耗材→器具→模具)→店別自訂順序→品名 ③包材耗材區併入烘烤區（autoZone 耗材→烘烤區；Sheet 殘留的「包材耗材區」由 zoneAlias 對映，不動資料）④新籤「🏬 出貨中心」（廠商含出貨中心）⑤新籤「💤 零需求」：訂貨點/標配 0 的品項移出「全部」、不計進度與未盤；訂貨單「本輪未盤點 N 項」同步排除。計算層 rowFor 零改動。 -->
@@ -79,6 +80,8 @@
   input[type=number]{width:84px;text-align:right}input.sm{width:62px}input.tx{width:96px;text-align:left}
   input[type=date]{width:auto;min-width:150px}input[type=file]{width:auto;min-width:180px}
   .ipt-lbl{font-size:12px;color:var(--mut);margin-right:2px}
+.shbtn{background:#fff;border:1px solid #cfe6cf;color:#2E7D32;border-radius:9px;padding:0 6px;font-size:13px;line-height:20px;margin-left:6px;cursor:pointer;vertical-align:1px}.shbtn.on{background:#eef6ef}.shbtn.none{color:#b8b1a8;border-color:#e3e8ef}
+  .shelfline{background:#f7faf7;border-radius:8px;padding:5px 8px;margin-top:4px;color:#374151}
 .okbtn{font-size:12px;padding:3px 8px;border-color:#9fd3a3;color:#2E7D32}.okbtn.on{background:#e8f5e9;border-color:#2E7D32;font-weight:700}
   table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
   th{color:var(--mut);font-weight:600;font-size:12px;white-space:nowrap}td input,td select{font-size:13px}
@@ -482,7 +485,7 @@ async function bootstrap(keep){ try {
   BOOKINGS=fB.map(function(r){return {id:String(r['預約ID']||''),store:String(r['店號']),date:(function(){var d=gvDate(r['日期']);return d?ymd(d):String(r['日期']||'').slice(0,10);})(),dessert:r['甜點']||'',qty:num(r['數量']),note:r['備註']||'',status:r['狀態']||''};}).filter(function(b){return b.id;});
   EVENTS=dEv.map(function(r){var f=gvDate(r["開始日"]),g=gvDate(r["結束日"]);return {name:r["事件名"]||"",from:f,to:g,coef:num(r["加成係數"]),scope:r["適用品類"]||"全部",on:(r["啟用"]==null||r["啟用"]==="")?true:(toBool(r["啟用"])||r["啟用"]==="是")};}).filter(function(e){return e.name&&e.from&&e.to&&e.coef>0&&e.to>=e.from;});
   NEWAGG=buildNewAgg(dNi);   /* ca 批：多檔期同料加總保留（見 buildNewAgg） */
-  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",xfer:String(r["調撥方式"]||"").trim(),packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim(),src:String(r["來源"]||"").trim(),stores:String(r["適用店"]||"").split(/[,，、;\s]+/).map(function(x){return x.trim();}).filter(Boolean),status:String(r["狀態"]||"").trim(),lastValid:(function(v){var d=gvDate(v);return d?ymd(d):"";})(r["最後有效日"]),aliases:String(r["BOM別名"]||"").split(/[;；,，、]/).map(function(a){return a.trim();}).filter(Boolean)};}).filter(function(s){return s.id&&s.name;});   /* 2026-09-05 ao 批：補全形「；」（與 EventLayer v1.6 同）；資料仍一律用「、」 */
+  SKUS=dSku.map(function(r){return {id:r["sku_id"],name:r["品名"],cat:r["品類別"]||"食材",vendor:r["廠商"]||"",useUnit:r["使用單位"]||"g",buyUnit:r["採購單位"]||"包",xfer:String(r["調撥方式"]||"").trim(),packQty:num(r["每採購單位內容量"])||1,price:num(r["單價"]),defZone:String(r["預設分區"]||"").trim(),src:String(r["來源"]||"").trim(),stores:String(r["適用店"]||"").split(/[,，、;\s]+/).map(function(x){return x.trim();}).filter(Boolean),status:String(r["狀態"]||"").trim(),lastValid:(function(v){var d=gvDate(v);return d?ymd(d):"";})(r["最後有效日"]),shelf:String(r["效期"]||"").trim(),aliases:String(r["BOM別名"]||"").split(/[;；,，、]/).map(function(a){return a.trim();}).filter(Boolean)};}).filter(function(s){return s.id&&s.name;});   /* 2026-09-05 ao 批：補全形「；」（與 EventLayer v1.6 同）；資料仍一律用「、」 */
   SKU={};SKUS.forEach(function(s){SKU[s.id]=s;});
   AGG={};var storeSet={};
   aP.forEach(function(r){var st=String(r["店號"]);storeSet[st]=1;((AGG[st]=AGG[st]||{})[r["sku_id"]]={week:num(r["上週用量"]),avg4:num(r["近4週均"]),status:r["狀態"]||"販售中",launch:r["上市日"]||""});});
@@ -1269,7 +1272,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
       if(!skuTail(s))ref+=adjLink(s.id);
       var ok=okOf(store,s),numed=(((DIRTY[store]||{})[s.id])||(countedNow(store,s)&&!ok));
       var vOn=(numed&&iv.onHand!=null)?iv.onHand:"";
-      html+='<div class="row" data-invrow="'+s.id+'"><div><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'/* 2026-09-10 bp 批：同一張卡上「📦 600 g／罐」（packSpec）與右上「1 罐=600g」是同一件事，重複。
+      html+='<div class="row" data-invrow="'+s.id+'"><div><b>'+dispName(store,s)+'</b>'+shelfBtn(s)+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+shelfBlock(s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'/* 2026-09-10 bp 批：同一張卡上「📦 600 g／罐」（packSpec）與右上「1 罐=600g」是同一件事，重複。
    packSpec 本來就含（本店）標記，資訊零損失，右上這行移除。 */+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填"'+(ok?' data-ok="1"':'')+'>'+'<div style="margin-top:5px"><button class="btn ghost sm okbtn'+(ok?' on':'')+'" data-ok-btn="'+s.id+'" type="button">'+(ok?'↩ 取消足夠':'✓ 足夠')+'</button></div></div></div>';});
     html+='</div>';}
     html+='</div>';});
@@ -3240,42 +3243,54 @@ function shelfCell(v){if(!v)return '<span class="muted">—</span>';
   if(m&&+m[1]<=3)return '<b style="color:#C0392B">'+v+'</b>';
   if(m&&+m[1]<=7)return '<b style="color:#B45309">'+v+'</b>';
   return v;}
-function viewShelf(){if(!ST.shCat)ST.shCat="全部";var q=(ST.shQ||"").trim();
-  if(!SHELFD&&!SHELFLD&&!SHELFERR)loadShelf();
-  var data=SHELFD||SHELF;
-  var canEdit=(ST.role==="總部")&&!!SHELF_API&&!!SHELFD;
-  var src=SHELFLD?'<span class="muted" style="font-size:12px">⏳ 同步線上資料中…</span>'
-    :(SHELFD?'<span style="font-size:12px;color:#2E7D32;font-weight:700">☁️ 線上・即時'+(canEdit?'・可編輯':'')+'</span>'
-    :'<span style="font-size:12px;color:#B45309;font-weight:700" title="dim_shelf 分頁不存在或載入失敗">⚠️ 內建快照 '+SHELF_VER+'（線上表未接通）</span>');
-  var html='<div class="toolbar"><span class="lock">🕐 食材效期表</span>'+src
-    +'<span style="flex:1"></span>'
-    +(canEdit?'<button class="btn sm" id="shAdd">➕ 新增</button>':'')
-    +(ST.role==="總部"&&SHELFD&&!SHELF_API?'<a class="btn sm ghost" style="text-decoration:none" target="_blank" href="https://docs.google.com/spreadsheets/d/'+SHEET_ID+'/edit" title="尚未偵測到編輯 API（dim_shelf H1 未貼網址），先用 Sheet 編輯">✎ Sheet</a>':'')
-    +'<button class="btn sm ghost" id="shReload" title="重新載入線上資料">🔄</button>'
-    +'<button class="btn sm ghost" id="shPrint">🖨 列印</button>'
-    +'<button class="btn sm ghost" id="shCsv">⬇️ CSV</button></div>'
-    +'<div class="note"><b>D+N</b>＝從分裝/開封當天（D）起算，第 N 天前用完；<b>依原包裝</b>＝以外包裝標示效期為準；<b>依食譜</b>＝半成品，依食譜規範。'
-    +'紅字 D+3 內、橘字 D+7 內屬短效，分裝/開封務必寫日期標籤。'+(canEdit?'':'內容有誤或缺品項請回報總部。')+'</div>';
-  if(canEdit&&ST.shEdit==="__new__")html+=shEditor();
-  html+='<div class="chips">'+["全部","冷藏","冷凍","常溫"].map(function(c){return '<div class="chip '+(c==ST.shCat?"on":"")+'" data-shcat="'+c+'">'+c+'</div>';}).join("")+'</div>'
-    +'<div style="margin:6px 0 8px"><input class="sm" id="shQ" style="width:100%;max-width:320px" placeholder="🔍 搜尋品項/備註…" value="'+(ST.shQ||'').replace(/"/g,'&quot;')+'"></div>';
-  var rows=data.filter(function(r){return (ST.shCat==="全部"||r[0]===ST.shCat)&&(!q||r[1].indexOf(q)>=0||(r[5]||"").indexOf(q)>=0);});
-  var byCat={};rows.forEach(function(r){(byCat[r[0]]=byCat[r[0]]||[]).push(r);});
-  var order=["冷藏","冷凍","常溫"].filter(function(c){return byCat[c];});
-  Object.keys(byCat).forEach(function(c){if(order.indexOf(c)<0)order.push(c);});
-  if(!rows.length)html+='<div class="note">找不到符合「'+q+'」的品項。</div>';
-  order.forEach(function(c){
-    html+='<div class="card shelfcard" style="padding:0;overflow:hidden;margin-bottom:10px">'
-      +'<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#FAFAF7;border-bottom:1px solid #E5E5DE">'+shelfBadge(c)+'<span class="muted" style="font-size:12px">'+byCat[c].length+' 項</span></div>'
-      +'<div style="overflow-x:auto"><table style="min-width:'+(canEdit?620:560)+'px"><tr><th style="min-width:120px">品項</th><th>未開封</th><th>分裝庫存</th><th>上架／開封後</th><th>備註</th>'+(canEdit?'<th style="width:36px"></th>':'')+'</tr>';
-    byCat[c].forEach(function(r){
-      var nt=!r[5]?'<span class="muted">—</span>':(/D\+\d+/.test(r[5])?shelfCell(r[5]):'<span class="muted">'+r[5]+'</span>');
-      html+='<tr><td><b>'+r[1]+'</b></td><td>'+shelfCell(r[2])+'</td><td>'+shelfCell(r[3])+'</td><td>'+shelfCell(r[4])+'</td><td>'+nt+'</td>'
-        +(canEdit?'<td><button class="btn sm ghost shEd" data-shed="'+r[1].replace(/"/g,'&quot;')+'" title="編輯">✎</button></td>':'')+'</tr>';
-      if(canEdit&&ST.shEdit===r[1])html+='<tr><td colspan="6" style="padding:0">'+shEditor()+'</td></tr>';});
+/* ===== ci 批：效期併主檔（dim_sku「效期」欄） ===== */
+var SH_KEYS=["未開封","分裝","開封後"];
+function shelfParts(txt){var o={"未開封":"","分裝":"","開封後":"",note:[]};String(txt||"").split(/[｜|]/).forEach(function(p){p=p.trim();if(!p)return;
+  var hit=false;SH_KEYS.forEach(function(k){if(!hit&&p.indexOf(k)===0){o[k]=p.slice(k.length).trim();hit=true;}});if(!hit)o.note.push(p);});return o;}
+function shelfInline(s){var o=shelfParts(s.shelf),a=[];SH_KEYS.forEach(function(k){if(o[k])a.push(k+" "+shelfCell(o[k]));});if(o.note.length)a.push('<span class="muted">'+escH(o.note.join("、"))+'</span>');return a.join('<span style="color:#cbd5e1;margin:0 4px">｜</span>');}
+function shelfBtn(s){if(s.cat!=="食材"&&!s.shelf)return "";var on=!!(ST.shOpen&&ST.shOpen[s.id]);
+  return '<button type="button" class="shbtn'+(on?" on":"")+(s.shelf?"":" none")+'" data-shbtn="'+s.id+'" title="保存期限">🕐</button>';}
+function shelfBlock(s){if(s.cat!=="食材"&&!s.shelf)return "";var on=!!(ST.shOpen&&ST.shOpen[s.id]);
+  return '<div class="sub shelfline" data-shblk="'+s.id+'"'+(on?"":" hidden")+'>🕐 '+(s.shelf?shelfInline(s):'保存期限<b>尚未建檔</b><span class="muted">（出貨中心在主檔補）</span>')+'</div>';}
+function escH(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function shelfRows(){var st=ST.storeId,hq=(ST.role==="總部"),src=hq?SKUS.filter(function(s){return !s.status&&!skuExpired(s);}):liveItems(st);
+  return src.filter(function(s){return s.cat==="食材"||s.shelf;}).map(function(s){return {s:s,zone:hq?zoneAlias(s.defZone||autoZone(s)):zoneOf(st,s)};});}
+function viewShelf(){var q=(ST.shQ||"").trim(),hq=(ST.role==="總部");if(!ST.shCat)ST.shCat="全部";
+  var all=shelfRows(),zones=[];all.forEach(function(r){if(zones.indexOf(r.zone)<0)zones.push(r.zone);});
+  var nEmpty=all.filter(function(r){return !r.s.shelf;}).length;
+  var html='<div class="toolbar"><span class="lock">🕐 食材保存期限</span><span style="font-size:12px;color:#2E7D32;font-weight:700">☁️ 主檔・'+(hq?'全部在用品項':storeName(ST.storeId)+' 在用品項')+(hq?'・可編輯':'')+'</span>'
+    +'<span style="flex:1"></span><button class="btn sm ghost" id="shPrint">🖨 列印</button><button class="btn sm ghost" id="shCsv">⬇️ CSV</button></div>'
+    +'<div class="note"><b>D+N</b>＝從分裝/開封當天（D）起算，第 N 天前用完；<b>依原包裝</b>＝以外包裝標示效期為準；<b>依食譜</b>＝半成品，依食譜規範。紅字 D+3 內、橘字 D+7 內屬短效，分裝/開封務必寫日期標籤。'
+    +(hq?'資料來源＝主檔「效期」欄，本頁改完即同步全店。':'內容有誤或缺品項請回報總部。')+'</div>';
+  html+='<div class="chips">'+["全部"].concat(zones).concat(hq&&nEmpty?["尚未建檔"]:[]).map(function(c){return '<div class="chip '+(c==ST.shCat?"on":"")+'" data-shcat="'+escA(c)+'">'+c+(c==="尚未建檔"?'（'+nEmpty+'）':'')+'</div>';}).join("")+'</div>'
+    +'<div style="margin:6px 0 8px"><input class="sm" id="shQ" style="width:100%;max-width:320px" placeholder="🔍 搜尋品名…" value="'+escA(ST.shQ||'')+'"></div>';
+  var rows=all.filter(function(r){var s=r.s;if(ST.shCat==="尚未建檔"){if(s.shelf)return false;}else if(ST.shCat!=="全部"&&r.zone!==ST.shCat)return false;
+    if(q){var names=[s.name].concat(s.aliases||[]);if(!names.some(function(n){return String(n).indexOf(q)>=0;}))return false;}return true;});
+  var byZ={};rows.forEach(function(r){(byZ[r.zone]=byZ[r.zone]||[]).push(r.s);});
+  var order=zones.filter(function(z){return byZ[z];});
+  if(!rows.length)html+='<div class="note">沒有符合的品項。</div>';
+  order.forEach(function(z){var list=byZ[z].slice().sort(function(a,b){return a.name.localeCompare(b.name,"zh-Hant");});
+    html+='<div class="card shelfcard" style="padding:0;overflow:hidden;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#FAFAF7;border-bottom:1px solid #E5E5DE"><b style="color:var(--blue)">📍 '+escH(z)+'</b><span class="muted" style="font-size:12px">'+list.length+' 項</span></div>'
+      +'<div style="overflow-x:auto"><table style="min-width:'+(hq?620:560)+'px"><tr><th style="min-width:120px">品項</th><th>未開封</th><th>分裝</th><th>開封後</th><th>備註</th>'+(hq?'<th style="width:36px"></th>':'')+'</tr>';
+    list.forEach(function(s){var o=shelfParts(s.shelf);
+      if(!s.shelf)html+='<tr><td><b>'+escH(s.name)+'</b></td><td colspan="4"><span class="muted">尚未建檔</span></td>'+(hq?'<td><button class="btn sm ghost" data-shedit="'+escA(s.id)+'" title="填寫">✎</button></td>':'')+'</tr>';
+      else html+='<tr><td><b>'+escH(s.name)+'</b></td><td>'+shelfCell(o["未開封"])+'</td><td>'+shelfCell(o["分裝"])+'</td><td>'+shelfCell(o["開封後"])+'</td><td>'+(o.note.length?'<span class="muted">'+escH(o.note.join("、"))+'</span>':'<span class="muted">—</span>')+'</td>'+(hq?'<td><button class="btn sm ghost" data-shedit="'+escA(s.id)+'" title="編輯">✎</button></td>':'')+'</tr>';
+      if(hq&&ST.shEdit===s.id)html+='<tr><td colspan="6" style="padding:8px 10px;background:#FFFDF2"><div class="sub" style="margin-bottom:4px">格式：<b>未開封 …｜分裝 …｜開封後 …｜備註</b>（用「｜」分段；D+N 會自動上色）</div>'
+        +'<input class="tx" id="shEditIn" style="width:100%;box-sizing:border-box;max-width:560px" value="'+escA(ST.shDraft==null?s.shelf:ST.shDraft)+'" placeholder="未開封 依原包裝｜開封後 D+7">'
+        +'<div style="display:flex;gap:8px;margin-top:6px"><button class="btn sm" id="shSave2">💾 儲存</button><button class="btn sm ghost" id="shCancel2">取消</button>'+(ST.shSaving?'<span class="muted" style="align-self:center">⏳ 寫入並回讀中…</span>':'')+'</div></td></tr>';});
     html+='</table></div></div>';});
-  html+='<div class="sub">共 '+rows.length+' 項'+(q?'（篩選中）':'')+'　·　效期標準由總部統一維護'+(canEdit?'（本頁直接編輯）':'')+'，各店不得自行修改。</div>';
+  html+='<div class="sub">共 '+rows.length+' 項'+(q||ST.shCat!=="全部"?'（篩選中）':'')+'　·　效期由出貨中心在主檔統一維護，各店不得自行修改。</div>';
   return html;}
+function shSave2(){var id=ST.shEdit,s=SKU[id];if(!s||ST.shSaving)return;var v=(($("#shEditIn")||{}).value||"").replace(/\s*[|｜]\s*/g,"｜").trim();
+  if(v.length>200){toast("太長了（最多 200 字）");return;}
+  ST.shSaving=true;render();
+  post({type:"sku",sku_id:id,fields:{"效期":v}},true).then(function(){
+    var tries=[2500,5000,9000],n=0;
+    (function chk(){setTimeout(function(){gviz("dim_sku").then(function(rs){var r=rs.filter(function(x){return String(x["sku_id"]||"").trim()===id;})[0];var got=r?String(r["效期"]||"").trim():null;
+      if(got===v){s.shelf=v;ST.shSaving=false;ST.shEdit=null;ST.shDraft=null;render();toast("✅ 已寫入主檔：「"+s.name+"」");return;}
+      if(++n<tries.length){chk();return;}
+      ST.shSaving=false;render();toast("⚠️ 還沒確認寫入，稍後按「🔄 更新」再看");}).catch(function(){ST.shSaving=false;render();toast("⚠️ 回讀失敗");});},tries[n]);})();});}
+
 function shDraftFrom(r){return r?{c:r[0],n:r[1],u:r[2],s:r[3],o:r[4],b:r[5]}:{c:"冷藏",n:"",u:"依原包裝",s:"",o:"",b:""};}
 function shSave(){
   var d={c:($("#shdC")||{}).value||"冷藏",n:(($("#shdN")||{}).value||"").trim(),u:(($("#shdU")||{}).value||"").trim(),s:(($("#shdS")||{}).value||"").trim(),o:(($("#shdO")||{}).value||"").trim(),b:(($("#shdB")||{}).value||"").trim()};
@@ -3301,9 +3316,8 @@ function printShelf(){document.body.classList.add("print-shelf");
   window.addEventListener("afterprint",done);
   setTimeout(function(){try{window.print();}catch(e){done();}},60);}
 function dlShelfCsv(){
-  var data=SHELFD||SHELF;
   var esc=function(v){v=String(v==null?"":v);return (v.indexOf(",")>=0||v.indexOf('"')>=0)?'"'+v.replace(/"/g,'""')+'"':v;};
-  var lines=[["保存類別","品項","未開封","分裝庫存","上架/開封後","備註"]].concat(data).map(function(r){return r.map(esc).join(",");});
+  var lines=[["分區","sku_id","品項","未開封","分裝","開封後","備註"]].concat(shelfRows().map(function(r){var o=shelfParts(r.s.shelf);return [r.zone,r.s.id,r.s.name,o["未開封"],o["分裝"],o["開封後"],o.note.join("、")];})).map(function(r){return r.map(esc).join(",");});
   var blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
   var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="食材保存期限_"+ymd(TODAY)+".csv";
   document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
@@ -3671,7 +3685,7 @@ function srNewId(st){var d=new Date(),c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789",r="";
   return "R"+srPad(st,2)+"-"+String(d.getFullYear()).slice(2)+srPad(d.getMonth()+1,2)+srPad(d.getDate(),2)+srPad(d.getHours(),2)+srPad(d.getMinutes(),2)+"-"+r;}
 function srRow(o){function s(k){var v=o[k];return String(v==null?"":v).trim();}
   var un=s("用途說明"),par=un.indexOf(SR_PAR_TAG)===0;
-  return {id:s("申請單號"),t:s("申請時間"),st:s("門市").replace(/\.0+$/,""),who:s("申請人"),name:s("品名"),cat:s("類別"),use:s("用途"),useNote:par?un.slice(SR_PAR_TAG.length).trim():un,_par:par,freq:s("頻率"),others:s("其他店"),
+  return {id:s("申請單號"),t:s("申請時間"),st:s("門市").replace(/\.0+$/,""),who:s("申請人"),name:s("品名"),cat:s("類別"),use:s("用途"),useNote:srShelfSplit(par?un.slice(SR_PAR_TAG.length).trim():un).note,shelf:srShelfSplit(un).shelf,_par:par,freq:s("頻率"),others:s("其他店"),
     vendor:s("廠商"),useUnit:s("使用單位"),buyUnit:s("採購單位"),pq:num(o["每採購單位內容量"]),price:num(o["單價"]),qty:num(o["標配或週用量"]),need:s("需要日期"),link:s("參考連結"),
     status:s("狀態")||"待審",sku:s("處理結果sku_id"),note:s("處理說明"),dt:s("處理時間")};}
 function srFetch(){
@@ -3755,12 +3769,15 @@ function srSimHtml(name,st,cat,gate){var sim=srSimilar(name,cat);
   if(!gate)return srAlert("warn","⚠️ 主檔有 "+(sim.list.length+sim.more)+" 項類似的品項","先看下面是不是同一個東西。<b>送出時會再請你確認一次。</b>",list);
   return srAlert("stop","⛔ 還不能送出：主檔已有類似的品項","是同一個東西就<b>不用申請</b>；確定都不是，按最下面<b>「都不是，仍要申請」</b>。",
     list+'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px"><button class="btn ghost" style="font-size:16px;padding:10px 16px" id="srSimSame">是同一個，不申請了</button><button class="btn" style="font-size:16px;padding:10px 16px" id="srSimDiff">都不是，仍要申請</button></div>');}
-function srForm(){if(!ST.srForm)ST.srForm={who:lsGet("srWho")||"",name:"",cat:"",use:"",useNote:"",freq:"",vendor:"",useUnit:"",buyUnit:"",pq:"",price:"",qty:"",need:"",link:"",_uu:false};return ST.srForm;}
+function srForm(){if(!ST.srForm)ST.srForm={who:lsGet("srWho")||"",name:"",cat:"",use:"",useNote:"",freq:"",vendor:"",useUnit:"",buyUnit:"",pq:"",price:"",qty:"",need:"",link:"",shelf:"",_uu:false};return ST.srForm;}
 /* cg7（經營者 09-24）：數量一律問「標配數量」＝店裡要常備幾個「採購單位」（例：2 包），不再問每週用量。
    寫入 dim_store_par「標配數量」時換成使用單位（×申請單上的內容量），跟店別參數頁同一個存法。
    新版送出時在「用途說明」前面加〔標配〕記號（畫面上會拿掉）；沒有記號＝舊版申請，數量是「每週用量（使用單位）」→ 核准時照舊寫手動週用量。
    不用時間切點：舊頁面快取在店裡的平板上，換版後還是可能送舊語意的單。 */
 var SR_PAR_TAG="〔標配〕";
+/* ci 批：保存期限藏在用途說明尾巴〔效期：…〕（fact_sku_req 不加欄、skureq-api 不改）；srRow 讀時拆出來、畫面不顯示記號 */
+var SR_SHELF_RE=/〔效期：([^〕]*)〕\s*$/;
+function srShelfSplit(un){var m=String(un||"").match(SR_SHELF_RE);return m?{note:String(un).replace(SR_SHELF_RE,"").trim(),shelf:m[1].trim()}:{note:String(un||"").trim(),shelf:""};}
 function srIsLegacy(r){return !r._par;}
 function srParUse(r){return num(r.qty)*(num(r.pq)>0?num(r.pq):1);}
 function srQtyTxt(r){if(srIsLegacy(r))return "週用 "+dec(num(r.qty))+" "+r.useUnit;
@@ -3798,6 +3815,7 @@ function srStoreView(){var st=ST.storeId,f=srForm(),dur=srDur(f.cat),can=!!SR_AP
     +srFieldHtml(srQtyLabel(f),srInput("qty",f.qty,"店裡要常備幾個採購單位，例：2","number"),1,"以採購單位計")
     +srFieldHtml("需要日期",'<input class="sm" data-srf="need" type="date" style="width:100%;box-sizing:border-box" value="'+srEsc(f.need)+'">',0)
     +srFieldHtml("參考連結",srInput("link",f.link,"商品網址（選填）"),0)
+    +srFieldHtml("保存期限",srInput("shelf",f.shelf,"例：未開封 依原包裝｜開封後 D+7"),0,"食材請填，核准後全店查得到")
     +'</div><div id="srSim">'+srSimHtml(f.name,st,f.cat,ST.srSimGate===srSimKey(f))+'</div>'
     +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="srSubmit"'+(can?'':' disabled title="申請功能尚未開通"')+'>送出申請</button><button class="btn ghost sm" id="srClear">清空</button>'
     +(can?'':'<span class="muted" style="font-size:12px">申請功能尚未開通（總部尚未部署）</span>')+'</div></div>';
@@ -3820,7 +3838,7 @@ function srStoreList(txt){var ok={};STORES.forEach(function(s){ok[String(s.id)]=
   return out.sort(function(a,b){return (+a)-(+b);});}
 function srEditOf(g){ST.srEdit=ST.srEdit||{};var e=ST.srEdit[g.key];if(e)return e;
   var r=g.reqs[0];
-  e=ST.srEdit[g.key]={name:r.name,cat:r.cat,useUnit:r.useUnit,vendor:r.vendor,buyUnit:r.buyUnit,pq:String(r.pq||""),price:String(r.price||"")};
+  e=ST.srEdit[g.key]={name:r.name,cat:r.cat,useUnit:r.useUnit,vendor:r.vendor,buyUnit:r.buyUnit,pq:String(r.pq||""),price:String(r.price||""),shelf:String((g.reqs.filter(function(x){return x.shelf;})[0]||{}).shelf||"")};
   return e;}
 function srVerdict(g){var sim=srSimilar(srEditOf(g).name,srEditOf(g).cat),allOnce=g.reqs.every(function(r){return r.freq==="一次性／短期";}),stores=srStoreList(g.reqs.map(function(r){return r.st;}).join(","));
   if(allOnce)return ['#FFF4E5','#8A5A00','🟠 建議改走臨時採購：申請人自己說是一次性／短期用，進系統只會變成長期零需求。'];
@@ -3839,7 +3857,7 @@ function srGroupCard(g){var e=srEditOf(g),v=srVerdict(g),k=srEsc(g.key),busy=(SR
   h+='<div class="muted" style="margin:4px 0">轉入主檔的內容（可先改再核准）：</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
     +ip("name","品名",150,"需與 BOM 一致")
     +'<span class="pf"><b>類別</b><select class="sm" data-sre="'+k+'|cat"'+(sim.exact?' disabled':'')+'>'+SR_CATS.map(function(c){return '<option'+(c===e.cat?' selected':'')+'>'+c+'</option>';}).join('')+'</select></span>'
-    +ip("vendor","廠商",90)+ip("buyUnit","採購單位",56)+ip("pq","內容量",70)+ip("useUnit","使用單位",56)+ip("price","單價",64)
+    +ip("vendor","廠商",90)+ip("buyUnit","採購單位",56)+ip("pq","內容量",70)+ip("useUnit","使用單位",56)+ip("price","單價",64)+'<span class="pf"><b>效期</b><input class="sm" data-sre="'+k+'|shelf" style="width:220px" placeholder="未開封 依原包裝｜開封後 D+7" value="'+srEsc(e.shelf||"")+'"'+(sim.exact&&sim.exact.shelf?' disabled title="主檔已有效期"':'')+'></span>'
     +'</div>'
     +'<div class="sub" style="margin-top:4px">核准後：'+(sim.exact?'沿用 '+srEsc(sim.exact.id)+((sim.exact.stores||[]).length?'（主檔原本限定 '+srEsc(sim.exact.stores.join('、'))+' 號店，會加上申請店）':''):'建新編號 '+srEsc(nextSkuId(SR_CATS.indexOf(e.cat)>=0?e.cat:"食材"))+'，<b>全部門市都可以用</b>')+'；申請店寫入「標配數量」＝上表數量（盤點低於標配就補到標配）。其他店先放在盤點頁「💤 零需求」，要用時到該店「⚙️ 店別參數」填數量就好，不用再申請。</div>'
     +'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" data-srok="'+k+'"'+(anyBusy?' disabled':'')+'>'+(busy?'⏳ 處理中…':'✅ 核准'+(sim.exact?'（開放給申請店）':'轉入主檔'))+'</button>'
@@ -3895,8 +3913,8 @@ function srSubmit(){var f=srForm(),st=String(ST.storeId||"");
   if(mine&&mine!==st&&typeof confirm==="function"&&!confirm("⚠️ 門市不對？\n\n這台裝置的本機門市是「"+storeName(mine)+"」，你正要用「"+storeName(st)+"」送出申請。\n確定嗎？"))return;
   var id=srNewId(st);
   var req={id:id,t:srNow(),st:st,who:String(f.who).trim(),name:nm,cat:f.cat,use:f.use,useNote:String(f.useNote).trim(),freq:f.freq,others:"",
-    vendor:String(f.vendor).trim(),useUnit:String(f.useUnit).trim(),buyUnit:String(f.buyUnit).trim(),pq:pq,price:pr,qty:q,need:String(f.need||"").trim(),link:String(f.link||"").trim()};
-  req._par=true;var sendReq=JSON.parse(JSON.stringify(req));delete sendReq._par;sendReq.useNote=SR_PAR_TAG+req.useNote;
+    vendor:String(f.vendor).trim(),useUnit:String(f.useUnit).trim(),buyUnit:String(f.buyUnit).trim(),pq:pq,price:pr,qty:q,need:String(f.need||"").trim(),link:String(f.link||"").trim(),shelf:String(f.shelf||"").replace(/\s*[|｜]\s*/g,"｜").replace(/[〔〕]/g,"").trim()};
+  req._par=true;var sendReq=JSON.parse(JSON.stringify(req));delete sendReq._par;delete sendReq.shelf;sendReq.useNote=SR_PAR_TAG+req.useNote+(req.shelf?"〔效期："+req.shelf+"〕":"");
   SR_LOCAL[id]={req:req,state:"sending",payload:{action:"submit",req:sendReq}};srSaveLocal();
   lsSet("srWho",req.who);ST.srForm=null;ST.srSimGate=null;
   srSend(id);render();}
@@ -3916,7 +3934,7 @@ function srCheckDecided(ids,status,tries,cb){   /* 回讀申請池確認狀態�
     cb(false,bad);});},4000);}
 async function srApprove(gk){
   if(SR_BUSY)return;var G=srGroups(),g=G[gk];if(!g){toast("找不到這組申請");return;}
-  var e=srEditOf(g),name=String(e.name||"").trim(),cat=e.cat,uu=String(e.useUnit||"").trim(),bu=String(e.buyUnit||"").trim(),pq=+e.pq,pr=+e.price,vd=String(e.vendor||"").trim();
+  var e=srEditOf(g),name=String(e.name||"").trim(),cat=e.cat,uu=String(e.useUnit||"").trim(),bu=String(e.buyUnit||"").trim(),pq=+e.pq,pr=+e.price,vd=String(e.vendor||"").trim(),shf=String(e.shelf||"").replace(/\s*[|｜]\s*/g,"｜").trim();
   var sim=srSimilar(name,cat),ex=sim.exact,ids=g.reqs.map(function(r){return r.id;});
   if(!ex){
     if(!name){toast("品名必填");return;}
@@ -3941,13 +3959,15 @@ async function srApprove(gk){
         mg.sort(function(a,b){return (+a)-(+b);});
         if(mg.join(",")!==ex.stores.join(",")){sf["適用店"]=mg.join(",");ex.stores=mg;}}
       if(ex.status){sf["狀態"]="";ex.status="";}
+      if(shf&&!ex.shelf){sf["效期"]=shf;ex.shelf=shf;}   /* ci 批：主檔沒效期才補，不蓋出貨中心填的 */
       if(Object.keys(sf).length){await post({type:"sku",sku_id:id,fields:sf},true);exp.push({k:"sku",f:sf});}
     }else{
       id=nextSkuId(cat);
       if(SKUS.some(function(s){return s.name===name;})){throw new Error("品名已存在");}
       var fields={"品名":name,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu,"每採購單位內容量":pq,"單價":(pr>0?pr:0)};   /* cg6：不寫適用店＝全部門市 */
+      if(shf)fields["效期"]=shf;   /* ci 批 */
       await post({type:"sku",sku_id:id,fields:fields},true);exp.push({k:"sku",f:{"品名":name}});
-      var ns={id:id,name:name,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu,xfer:"",packQty:pq,price:(pr>0?pr:0),defZone:"",src:"",stores:[],status:"",lastValid:"",aliases:[]};
+      var ns={id:id,name:name,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu,xfer:"",packQty:pq,price:(pr>0?pr:0),defZone:"",src:"",stores:[],status:"",lastValid:"",shelf:shf,aliases:[]};
       SKUS.push(ns);SKU[id]=ns;}
     var sts=Object.keys(per);
     for(var i=0;i<sts.length;i++){var s=sts[i],pf={};pf[per[s].f]=per[s].v;
@@ -4037,6 +4057,11 @@ function wire(){
   var shs=$("#shdSave");if(shs)shs.onclick=shSave;
   var shx=$("#shdCancel");if(shx)shx.onclick=function(){ST.shEdit=null;ST.shDraft=null;render();};
   var shd=$("#shdDel");if(shd)shd.onclick=shDelete;
+  /* ci 批：效期頁（主檔版）編輯 */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-shedit]"),function(el){el.onclick=function(){if(ST.shSaving)return;ST.shEdit=el.getAttribute("data-shedit");ST.shDraft=null;render();var ip=$("#shEditIn");if(ip)ip.focus();};});
+  var sei=$("#shEditIn");if(sei)sei.oninput=function(){ST.shDraft=sei.value;};
+  var ss2=$("#shSave2");if(ss2)ss2.onclick=shSave2;
+  var sc2=$("#shCancel2");if(sc2)sc2.onclick=function(){if(ST.shSaving)return;ST.shEdit=null;ST.shDraft=null;render();};
   var aas=$("#anAllS");if(aas)aas.onclick=function(){ST.anAllS=true;render();};
   var aam=$("#anAllM");if(aam)aam.onclick=function(){ST.anAllM=true;render();};
   /* 2026-09-04 al 批 ①：物料表排序切換（用量／估算成本） */
@@ -4807,6 +4832,11 @@ function askStore(force){
       loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
       toast("本機門市已設為 "+storeName(id));};});}
 if(typeof window!=="undefined"&&!window.__TEST__) bootstrap().then(function(){ askStore(false); });
+
+/* ci 批：盤點卡片 🕐 收合鈕（事件委派，rerender 後狀態由 ST.shOpen 保留） */
+document.addEventListener("click",function(ev){var b=ev.target&&ev.target.closest?ev.target.closest("[data-shbtn]"):null;if(!b)return;ev.preventDefault();
+  var id=b.getAttribute("data-shbtn");ST.shOpen=ST.shOpen||{};ST.shOpen[id]=!ST.shOpen[id];
+  var row=b.closest(".row"),blk=row?row.querySelector("[data-shblk]"):null;if(blk)blk.hidden=!ST.shOpen[id];b.classList.toggle("on",!!ST.shOpen[id]);});
 </script>
 </body>
 </html>
