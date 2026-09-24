@@ -23,6 +23,7 @@
 <!-- 2026-07-27 用量對帳分頁（唯讀診斷，總部/經營者）：新增「🔍 用量對帳」分頁，比對 AGG.avg4（系統近4週均）與 dim_store_par.手動週用量（門市基準），為 BOM 單層展開偏差建立基準線。純前端唯讀：不寫任何 Sheet、不新增網路請求、不改引擎。含四段判讀分類、差異比中位數、0.45–0.55 集中度、廠商中位數表、模式B 貼上 TSV 覆蓋基準、匯出 TSV（含 BOM 頭）。既有函式零改動，僅 TABS_BY_ROLE/tabLabel/render 分派/wire() 末端四處掛載。 -->
 <!-- 2026-09-10 bs 批：「💾 儲存並更新」第一輪改整批一個 POST（type paramBatch，≤50 項一塊；GAS applyWrite_ 新增 upsertBatch_ 一鎖一開一讀、只寫動到的列，17 項約 5 秒）；補送輪維持逐筆 param，GAS 未部署新版時自動退回逐筆。只動 saveAllSend ＋ 新常數 SAVEALL_CHUNK。 -->
 <!-- 2026-09-10 br 批：店別參數「💾 儲存並更新」改排隊逐筆送（等上一筆回應才送下一筆，GAS 鎖不被自己塞爆）＋一次 dim_store_par 回讀對帳（最多 3 輪）＋沒對上自動補送（最多再 2 輪）；按鈕顯示「送出 5/17」「確認 12/17」進度；失敗值全程保留、重試同一顆。逐列「存」鈕移除（savePRow 保留無入口），改狀態標記 待存／排隊中／寫入中／已存／未寫入。只動 saveAllParams／verifyParamBatch／refreshSaveAllBtn／pstBtn 與 viewParams 三個字串；新增 saveAllTxt／saveAllSend／saveAllRound／saveAllSettle。引擎零改動。 -->
+<!-- 2026-09-24 cg6 批：①全站「頁面層級」警示改用 alertBig（22px 標題＋8px 色條）：資料源（gvBanner）、參數寫入失敗、盤點寫入失敗、盤點頁本機門市不對／未設定、預約對不到配方、查詢頁資料源、單位對照不一致、店別參數未存；卡片內每列小提示不放大 ②新品項核准不再限定適用店＝全部門市可用，申請店寫數量，其他店在💤零需求、要用時到店別參數填 -->
 <!-- 2026-09-24 cg 批：「📝 新品項申請」分頁（兩身分最後一頁）。店長送申請→獨立 GAS diybc-skureq-api 寫 fact_sku_req（網址在 W1）；總部每月審：同名合併、預審建議、✅ 核准＝主程式 type:sku 建主檔（適用店＝申請店）＋type:param 寫標配/手動週用量、🛒 臨時採購、↩ 退回；回讀驗證。只動 TABS_BY_ROLE／tabLabel／renderTabs／render 四處掛載＋新增 sr* 函式，既有計算零改動。 -->
 <!-- 2026-09-06 aw 批：①跨店調撥改「同地區優先」（STORE_REGION／regionOf／sameRegion，同區給不完才跨區，欄位標同區/跨區，合計列顯示同區量）②「🥮 檔期備貨」開放給店長（唯讀全店總表：找同區調貨＋比較自己叫貨量），店長專屬說明列、本店列反白＋「本店」徽章、店名旁顯示地區 -->
 <!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清貨尾」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清貨尾・手動 ③主檔頁清貨尾徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
@@ -381,10 +382,10 @@ function gvBanner(){
   var oldest=null,noCache=0;ks.forEach(function(k){var b=GV.bad[k];if(b.cached){if(oldest===null||b.cached<oldest)oldest=b.cached;}else noCache++;});
   function hm(t){var d=new Date(t);return (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
   var msg;
-  if(noCache===0)msg='<b>⚠️ 資料源忙碌中</b><span>Google Sheet 可能正在重算（有人貼資料或跑腳本）。目前顯示的是 <b>'+hm(oldest)+'</b> 讀到的資料，數字可能不是最新；稍後重新整理即可更新。</span>';
-  else if(oldest===null)msg='<b>⚠️ 資料源沒有回應</b><span>Google Sheet 可能正在重算（有人貼資料或跑腳本），而且這台裝置沒有先前的資料可用。請等幾分鐘後重新整理；若持續超過 30 分鐘請通知總部。</span>';
-  else msg='<b>⚠️ 資料源忙碌中</b><span>部分資料改用 <b>'+hm(oldest)+'</b> 的舊資料，另有 '+noCache+' 張表完全讀不到。請等幾分鐘後重新整理。</span>';
-  el.innerHTML=msg;el.style.display="";
+  if(noCache===0)msg=alertBig("warn","⚠️ 資料源忙碌中：數字可能不是最新","Google Sheet 可能正在重算（有人貼資料或跑腳本）。目前顯示的是 <b>"+hm(oldest)+"</b> 讀到的資料；稍後重新整理即可更新。");
+  else if(oldest===null)msg=alertBig("stop","⛔ 資料源沒有回應：畫面上的資料不完整","Google Sheet 可能正在重算，而且這台裝置沒有先前的資料可用。<b>先不要盤點或下單</b>，等幾分鐘後重新整理；持續超過 30 分鐘請通知總部。");
+  else msg=alertBig("stop","⛔ 資料源忙碌中：有 "+noCache+" 張表讀不到","部分資料改用 <b>"+hm(oldest)+"</b> 的舊資料。請等幾分鐘後重新整理。");
+  el.innerHTML=msg;el.style.display="";el.style.cssText="display:block;margin:12px 10px 14px;padding:0;border:0;background:none";
 }
 function gvCore(url,key,tag){
   var p=fetch(url).then(function(r){return r.text();}).then(function(t){
@@ -918,10 +919,7 @@ function pstBtn(id){                            // br 批：逐列「存」鈕�
 function writeWarnBanner(){
   if(!ST.writeWarn||!ST.writeWarn.length)return "";
   var items=ST.writeWarn.slice(0,8).map(function(w){return w.name+'（'+w.label+'→'+w.val+'）';}).join("、");
-  return '<div class="card" style="background:#FDECEA;border:1px solid #f5b5ae;padding:10px 12px">'
-    +'<b style="color:#8B0000">⚠ 以下設定尚未確認寫入，請重做一次</b>'
-    +'<div class="sub" style="color:#8B0000;margin-top:4px">'+items+(ST.writeWarn.length>8?(' 等 '+ST.writeWarn.length+' 項'):'')
-    +'<br>畫面上的數值是暫時的，重新整理後會恢復原值。請確認網路後再操作一次；若持續失敗請通知總部。</div></div>';}
+  return alertBig("stop","⛔ 設定沒有寫進去，請重做一次",'<b>'+shEsc(items)+(ST.writeWarn.length>8?(' 等 '+ST.writeWarn.length+' 項'):'')+'</b><br>畫面上的數值是暫時的，重新整理後會恢復原值。請確認網路後再操作一次；若持續失敗請通知總部。');}
 function verifySave(store,expect,attempt,btn){
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)],n=Object.keys(expect).length;
   setTimeout(function(){
@@ -1129,7 +1127,7 @@ var STORE_REGION={"1":"台中","2":"台中","3":"台北","4":"台北","7":"台�
 function regionOf(st){return STORE_REGION[String(st)]||"";}
 function sameRegion(a,b){var ra=regionOf(a);return !!ra&&ra===regionOf(b);}
 function tabLabel(t){return {"建議":"🛒 建議採購","盤點":"📋 盤點","查詢":"🔎 查詢","訂貨單":"📑 訂貨單","效期":"🕐 食材效期","主檔":"🗂 主檔","季節":"📈 季節","單位對照":"📐 單位對照","店別參數":"⚙️ 店別參數","預約":"🎉 預約包館","總覽":"📊 總覽","軌跡":"🧾 參數軌跡","對帳":"🔍 用量對帳","大平台":"🏬 採購大平台","檔期備貨":"🥮 檔期備貨","申請":"📝 新品項申請"}[t];}
-function renderTabs(){if(ST.role==="總部"&&SRD===null&&!SRLD&&!SRERR&&SKUS.length)loadSkuReq().then(function(){renderTabs();});   /* cg 批：總部分頁籤顯示待審數 */
+function renderTabs(){if(ST.role==="總部"&&SRD===null&&!SRLD&&!SRERR&&SKUS.length)loadSkuReq().then(function(){if(ST.tab==="申請")render();else renderTabs();});   /* cg 批：總部分頁籤顯示待審數 */
   var list=TABS_BY_ROLE[ST.role]||TABS_BY_ROLE["總部"];if(list.indexOf(ST.tab)<0)ST.tab=list[0];
   $("#tabs").innerHTML=list.map(function(t){return '<div class="tab '+(t==ST.tab?"on":"")+'" data-tab="'+t+'">'+tabLabel(t)+(t==="預約"?bkTabBadge():"")+(t==="申請"?srTabBadge():"")+'</div>';}).join("");
   Array.prototype.forEach.call(document.querySelectorAll(".tab"),function(el){el.onclick=function(){ST.tab=el.dataset.tab;render();};});}
@@ -1237,7 +1235,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   var groups=zonesOrderedZ(store,items);
   var done=live.filter(function(s){return countedNow(store,s);}).length,tot=live.length;
   var dn=Object.keys(DIRTY[store]||{}).length;
-  var html=seasonStrip()+'<div class="note">門市：<b>'+storeName(store)+'</b>　·　依現場實際數量填寫，填入後即時顯示建議訂貨量；目視明顯夠用的可按「✓ 足夠」跳過不數；離開前記得按「儲存盤點」送出。</div>';
+  var __mine=myStore(),html=(!__mine?alertBig("stop","⛔ 這台裝置還沒設定本機門市","按下面紅色的「尚未設定本機門市」選一次，之後存盤點時系統才能幫你擋住存錯店。"):(__mine!==store?alertBig("stop","⛔ 你現在看的是 "+storeName(store)+"，不是本機的 "+storeName(__mine),"在這裡存盤點會寫進 <b>"+storeName(store)+"</b>。不是故意的話，請到右上角把門市切回 <b>"+storeName(__mine)+"</b>。"):""))+seasonStrip()+'<div class="note">門市：<b>'+storeName(store)+'</b>　·　依現場實際數量填寫，填入後即時顯示建議訂貨量；目視明顯夠用的可按「✓ 足夠」跳過不數；離開前記得按「儲存盤點」送出。</div>';
   if(ss!=null){
     var sTxt;if(ss===0){sTxt="延續歷史盤點中";}else{var sd=new Date(ss);sTxt="本次盤點開始於 "+(sd.getMonth()+1)+"/"+sd.getDate()+" "+("0"+sd.getHours()).slice(-2)+":"+("0"+sd.getMinutes()).slice(-2);}
     var pct=tot?Math.round(done/tot*100):0;
@@ -1247,11 +1245,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
         return '<span class="pill" id="myStBtn" style="cursor:pointer" title="點此更改本機門市">🏬 本機門市：'+storeName(mine)+'</span>';})()+'<span class="lock" id="invLock"'+(dn?'':' style="display:none"')+'>✍️ '+dn+' 筆已填未送出</span>'+'<span style="flex:1"></span><button class="btn ghost sm" id="sessReset">🔄 重新盤點</button></div><div class="barbg" style="margin-top:8px;height:8px"><div class="bar" id="invBar" style="height:8px;width:'+pct+'%"></div></div></div>';
   }
   if(ST.saveWarn){var sw=ST.saveWarn;
-    html+='<div class="card" style="background:#FDECEA;border:1px solid #f5b5ae;padding:10px 12px">'
-      +'<b style="color:#8B0000">⚠ 寫入尚未確認，草稿已完整保留</b>'
-      +'<div class="sub" style="color:#8B0000;margin-top:4px">'
-      +(sw.net?'目前連不上資料表，無法確認。':(sw.bad+' / '+sw.total+' 筆在資料表中查不到。'))
-      +'請確認網路後<b>再按一次「儲存盤點」</b>。在確認成功前，你填的數字都還在，離開或重整也不會消失。</div></div>';}
+    html+=alertBig("stop","⛔ 盤點還沒存進去，請再按一次「儲存盤點」",(sw.net?'目前連不上資料表，無法確認。':(sw.bad+' / '+sw.total+' 筆在資料表中查不到。'))+'你填的數字都還在，<b>離開或重整也不會消失</b>；確認網路後再按一次就好。');}
   html+='<div class="stickyctl">'+catChips();
   html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat(nDC?[["出貨中心","🏬 出貨中心("+nDC+")"]]:[]).concat(allZ.length?[["零需求","💤 零需求("+allZ.length+")"]]:[]).concat(allT.length?[["清貨尾","🧹 清貨尾("+allT.length+")"]]:[]).concat(allX.length?[["過季","🗓 過季("+allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
   html+=searchBar(store)+'</div>';
@@ -2559,8 +2553,8 @@ function viewPeriodStats(){
   if(!ANRES)return h+'<div class="note">例：5/1〜5/30＋次類別「2026 夏季限定」→ 檔期賣了什麼、用了什麼一次看。</div>';
   var totQty=0;ANRES.sales.forEach(function(s2){totQty+=s2.qty;});
   var totCost=0;ANRES.mats.forEach(function(m){totCost+=m.cost||0;});
-  if(ANRES.src==="fail")h+='<div class="note" style="color:#b3261e"><b>⚠️ 資料源沒有回應</b>，這不是「沒有銷售」。Google Sheet 可能正在重算，請等幾分鐘後再按一次查詢。</div>';
-  else if(ANRES.src&&ANRES.src!=="live")h+='<div class="note" style="color:#8a5a00"><b>⚠️ 資料源忙碌中</b>，以下是 '+new Date(ANRES.src).toLocaleString()+' 讀到的舊結果，稍後再查一次可更新。</div>';
+  if(ANRES.src==="fail")h+=alertBig("stop","⛔ 資料源沒有回應：這不是「沒有銷售」","Google Sheet 可能正在重算，請等幾分鐘後再按一次查詢。");
+  else if(ANRES.src&&ANRES.src!=="live")h+=alertBig("warn","⚠️ 資料源忙碌中：以下是舊結果","這是 <b>"+new Date(ANRES.src).toLocaleString()+"</b> 讀到的結果，稍後再查一次可更新。");
   h+='<div class="note">'+ANRES.from+' 〜 '+ANRES.to+'　·　'+(ANRES.store?storeName(ANRES.store):'全部分店')+(ANRES.c1?'　·　'+ANRES.c1+anPerTxt("c1",ANRES.c1):'')+(ANRES.c2?'／'+ANRES.c2+anPerTxt("c2",ANRES.c2):'')
     +'　·　甜點 '+ANRES.sales.length+' 款共 <b>'+fmt(Math.round(totQty))+'</b> 個　·　物料 '+ANRES.mats.length+' 項　·　食耗材估算成本 <b>$'+fmt(Math.round(totCost))+'</b></div>';
   var sShown=ST.anAllS?ANRES.sales:ANRES.sales.slice(0,20);
@@ -2872,10 +2866,7 @@ function viewBooking(){var store=ST.storeId;
   if(unkL.length){var others="";
     if(ST.role==="總部"){var byS={};bkUnmatched(null).forEach(function(b){if(b.store!==String(store))byS[b.store]=(byS[b.store]||0)+1;});
       others=Object.keys(byS).sort(function(a,b){return (+a)-(+b);}).map(function(k){return k+"號店 "+byS[k]+" 筆";}).join("、");}
-    h+='<div class="card" id="bkUnkBanner" style="background:#FDECEA;border:1px solid #f5b5ae;padding:10px 12px">'
-      +'<b style="color:#8B0000">⚠️ 有 '+unkL.length+' 筆預約的甜點名稱對不到配方，這幾筆目前不會產生備料</b>'
-      +'<div class="sub" style="color:#8B0000;margin-top:4px">請在下方標紅的列，從清單挑出正確的甜點，按「確定」。團體訂位的甜點選過一次，之後同名的甜點會自動套用。'
-      +(others?'<br>其他門市也有待選：'+shEsc(others):'')+'</div></div>';}
+    h+='<div id="bkUnkBanner">'+alertBig("stop","⛔ 有 "+unkL.length+" 筆預約對不到配方，這幾筆不會備料",'請在下方<b>標紅的列</b>，從清單挑出正確的甜點，按「確定」。團體訂位的甜點選過一次，之後同名的會自動套用。'+(others?'<br>其他門市也有待選：'+shEsc(others):''))+'</div>';}
   h+='<div class="card"><div class="muted" style="margin-bottom:6px">新增預約/包館　<span style="font-size:12px">先設定日期與場次，再逐一加甜點</span></div>'
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
     +'<input class="sm" type="date" id="bkDate" min="'+ymd(TODAY)+'" value="'+(ST.bkDate||'')+'">'
@@ -2979,7 +2970,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   +'<span style="margin-left:auto"></span>'
   +'<button class="btn" id="pSaveAll"'+(SAVEALL.busy?' disabled style="opacity:.55"':(_dn?'':' disabled style="opacity:.45"'))+'>'
   +saveAllTxt()+'</button></div>'
-  +(_dn?'<div class="banner" style="background:#FFF8E7;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">✏️ 有 <b>'+_dn+'</b> 項改了還沒存。全部改完後按右上「💾 儲存並更新」一次送出即可（系統會逐筆寫入並自動補送，寫完會顯示「✓ 已存」）。</div>':'')
+  +(_dn?alertBig("warn","✏️ 有 "+_dn+" 項改了還沒存","全部改完後按右上<b>「💾 儲存並更新」</b>一次送出（系統會逐筆寫入並自動補送，寫完會顯示「✓ 已存」）。<b>沒按就離開，改的東西不會生效。</b>"):'')
   +'<details class="pdet"><summary>📖 填寫說明（點開）</summary><div class="note" style="margin-top:6px">'
   +'門市：'+storeName(store)
   +'<br>① <b>有銷售推算</b>的品項：週用量由 POS 自動計算（綠字），只需視情況調「權」與「交」，<b>「週用」免填、填了也不生效</b>。'
@@ -3090,7 +3081,7 @@ function viewUnitConv(){var ed=ST.role==="總部";
     html+='<tr><td>'+u.item+(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>')+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td>'+(ed?'<td>'+(CONV_API?'<button class="btn sm ghost" data-cvdel="'+i+'" title="刪除這列換算">🗑</button>':'<span class="muted" title="尚未部署 diybc-conv-api">—</span>')+'</td>':'')+'</tr>';});
   if(!UNITCONV.length)html+='<tr><td colspan="5" class="muted">無資料</td></tr>';html+='</table></div>';
   if(ed&&!CONV_API)html+='<div class="note">要在網頁上直接刪除換算列：部署獨立 GAS 專案 <b>diybc-conv-api</b>（見交付的 convApi.gs），把網址貼到 dim_unitconv 的 <b>F1</b>，再按 🔄 更新。</div>';
-  if(_warnN)html='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00;margin-bottom:8px">⚠️ 有 <b>'+_warnN+'</b> 列的「使用單位」與「基準單位」不一致，會讓統計與訂貨建議用錯單位（詳見各列紅字）。</div>'+html;
+  if(_warnN)html=alertBig("stop","⛔ 有 "+_warnN+" 列單位不一致，建議量會算錯","「使用單位」與「基準單位」不同，統計與訂貨建議會用錯單位。請看下方各列紅字逐一修正。")+html;
   if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">新增換算（例：品項「鹹蛋黃」單位「包」換算量 45 基準「g」）</div><div style="display:flex;gap:6px;flex-wrap:wrap"><input class="sm" style="width:150px" placeholder="適用品項或（通用）" id="cvItem"><input class="sm" style="width:64px" placeholder="單位" id="cvUnit"><input class="sm" style="width:80px" type="number" step="0.01" placeholder="換算量" id="cvAmt"><input class="sm" style="width:80px" placeholder="基準單位" id="cvBase" value="g"></div></div><div class="toolbar"><button class="btn" id="saveConv">儲存單位對照</button></div>';
   return html;}
 
@@ -3656,6 +3647,7 @@ function bindQ(el,apply){
     try{el.focus();if(p==null)p=el.value.length;el.setSelectionRange(p,p);}catch(e2){}
   }
 }
+/* 2026-09-24 cg3：拿掉店長表單「其他店也會用」（經營者裁定：各店要用就各自申請，同名自動合併、各店帶自己的數量）；fact_sku_req「其他店」欄保留、送空白，舊資料照常讀 */
 /* ===== 2026-09-24 cg 批：📝 新品項申請（店長送申請 → 總部每月審 → 核准轉入主檔） =====
    ① 店長只能「送申請」：寫進獨立 GAS diybc-skureq-api 的 fact_sku_req（申請池），碰不到 dim_sku／dim_store_par。
    ② 「核准轉入」只在總部身分出現（切總部要權限中心密碼）：
@@ -3665,7 +3657,7 @@ function bindQ(el,apply){
    ③ 同名申請（不同店）自動併成一組，一次處理。
    ⚠️ 定位同總部密碼：防誤按、防店長自己轉正；不是資安邊界（主程式 type:sku 只驗公開 token，這是既有狀況）。
    申請池網址放在 fact_sku_req 的 W1（表頭列），前端從 gviz 表頭偵測，同 dim_shelf H1 做法。 */
-var SR_TOKEN="dbc-skureq-Hv6pL3",SR_API="",SRD=null,SRLD=null,SRERR="",SR_BUSY=null,SR_MSG=null;
+var SR_TOKEN="dbc-skureq-Hv6pL3",SR_API="",SRD=null,SRLD=null,SRERR="",SR_BUSY=null,SR_MSG=null,SR_WAIT=false;
 var SR_CATS=["食材","耗材","器具","模具"],SR_USES=["做甜點／半成品","店務使用"],SR_FREQS=["長期固定使用","一次性／短期"];
 var SR_LOCAL=(function(){try{var o=JSON.parse(lsGet("srPend")||"{}");return (o&&typeof o==="object")?o:{};}catch(e){return {};}})();   /* 本機送出、還沒在申請池讀到的申請（重整頁面不會掉） */
 function srSaveLocal(){try{lsSet("srPend",JSON.stringify(SR_LOCAL));}catch(e){}}
@@ -3704,22 +3696,65 @@ function loadSkuReq(force){
 function srPending(){return (SRD||[]).filter(function(r){return r.status==="待審";});}
 function srTabBadge(){if(ST.role!=="總部"||!SRD)return "";var n=srPending().length;
   return n?' <span title="有 '+n+' 筆新品項申請等待審核" style="background:#C0392B;color:#fff;border-radius:9px;padding:0 6px;font-size:12px;font-weight:700">'+n+'</span>':'';}
-function srSimilar(name){var n=srNorm(name),exact=null,list=[];if(n.length<2)return {exact:null,list:[]};
-  SKUS.forEach(function(s){var ns=[s.name].concat(s.aliases||[]).map(srNorm);
-    if(ns.indexOf(n)>=0){if(!exact)exact=s;return;}
-    if(ns.some(function(x){return x.length>=2&&(x.indexOf(n)>=0||n.indexOf(x)>=0);}))list.push(s);});
-  return {exact:exact,list:list.slice(0,5)};}
+/* cg2：相似判斷（經營者 09-24：類似的也要擋下並列出來，店長確認不同才可送）。
+   比「核心名」＝去括號內容、國字吋數轉數字（六吋→6吋）、鍊→鏈；
+   分數：核心名相同 1；短的完整包含在長的裡 0.5+0.5×短/長；其餘＝max(兩字組 Dice, 0.8×最長共同連續字/短的字數)。
+   門檻看類別：同類 0.5、不同類 0.8、還沒選類別 0.6（器具／模具算同一類）。
+   真實主檔試算（613 項）：奶油→奶油／肉桂奶油／裝飾鮮奶油、手套→矽膠手套、塑膠碗→彩色塑膠碗、黑色圍裙 不會誤配「黑色」色膏。 */
+var SR_CN={"一":"1","二":"2","三":"3","四":"4","五":"5","六":"6","七":"7","八":"8","九":"9","十":"10"};
+function srCore(s){return srNorm(s).replace(/\([^)]*\)/g,"").replace(/[\[\]【】「」『』]/g,"").replace(/([一二三四五六七八九十])(?=吋|寸)/g,function(m){return SR_CN[m];}).replace(/寸/g,"吋").replace(/鍊/g,"鏈");}
+function srBigrams(s){var a=[];for(var i=0;i<s.length-1;i++)a.push(s.slice(i,i+2));return a;}
+function srDice(a,b){var A=srBigrams(a),B=srBigrams(b),n=A.length+B.length,m=0;if(!A.length||!B.length)return 0;
+  A.forEach(function(x){var i=B.indexOf(x);if(i>=0){m++;B.splice(i,1);}});return 2*m/n;}
+function srSimScore(q,name){var a=srCore(q),b=srCore(name);if(!a||!b)return 0;if(a===b)return 1;
+  var sh=a.length<=b.length?a:b,lg=a.length<=b.length?b:a;
+  if(sh.length>=2&&lg.indexOf(sh)>=0)return 0.5+0.5*sh.length/lg.length;
+  var L=srLcs(a,b);   /* 共同的連續字（≥2 字）佔短的那個的比例，例：手套L↔矽膠手套 */
+  return Math.max(srDice(a,b),L>=2?0.8*L/sh.length:0);}
+function srLcs(a,b){var best=0,i,j,k;for(i=0;i<a.length;i++)for(j=0;j<b.length;j++){k=0;while(i+k<a.length&&j+k<b.length&&a.charAt(i+k)===b.charAt(j+k))k++;if(k>best)best=k;}return best;}
+function srCatFam(c){return (c==="器具"||c==="模具")?"器模":(c||"");}
+function srSimilar(name,cat){var n=srNorm(name),exact=null,hits=[];if(n.length<2)return {exact:null,list:[],more:0};
+  SKUS.forEach(function(s){var names=[s.name].concat(s.aliases||[]);
+    if(names.map(srNorm).indexOf(n)>=0){if(!exact)exact=s;return;}
+    var v=0;names.forEach(function(x){var t=srSimScore(name,x);if(t>v)v=t;});
+    var th=!cat?0.6:(srCatFam(s.cat)===srCatFam(cat)?0.5:0.8);
+    if(v>=th)hits.push({s:s,v:v});});
+  hits.sort(function(x,y){return (y.v-x.v)||(x.s.name.length-y.s.name.length);});
+  return {exact:exact,list:hits.slice(0,5).map(function(h){return h.s;}),more:Math.max(0,hits.length-5)};}
 function srExistHint(s,st){   /* 主檔已有：告訴店長為什麼盤點頁可能看不到、該找誰 */
   if(s.status)return "主檔狀態是「"+s.status+"」，請跟總部說要恢復";
   if(!skuForStore(st,s))return "目前只開放給 "+(s.stores||[]).join("、")+" 號店，請跟總部說要開放給本店";
   var p=PARAM[String(st)]&&PARAM[String(st)][s.id];
   if(p&&p.used===false)return "本店在「⚙️ 店別參數」把它關掉了，打開「啟用」就好";
+  var z=false;try{z=zeroDemand(st,s);}catch(e){z=false;}
+  if(z)return "它在盤點頁的「💤 零需求」裡。本店要用，到「⚙️ 店別參數」搜尋「"+s.name+"」，填"+(srDur(s.cat)?"「標配」":"「週用」")+"就好";
   return "盤點頁應該已經有，搜尋「"+s.name+"」看看";}
-function srSimHtml(name,st){var sim=srSimilar(name);
-  if(sim.exact)return '<div class="banner" style="background:#FDECEA;border-color:#F5B7B1;color:#B3261E;margin:6px 0 0">主檔已經有「<b>'+srEsc(sim.exact.name)+'</b>」（'+srEsc(sim.exact.id)+'），不用申請：'+srEsc(srExistHint(sim.exact,st))+'。</div>';
-  if(sim.list.length)return '<div class="banner" style="background:#FFF7E6;border-color:#FFE1A8;color:#7A5B00;margin:6px 0 0">可能是同一個東西：'+sim.list.map(function(s){return '<b>'+srEsc(s.name)+'</b>';}).join('、')+'。如果是，就不用申請。</div>';
-  return '';}
-function srForm(){if(!ST.srForm)ST.srForm={who:lsGet("srWho")||"",name:"",cat:"",use:"",useNote:"",freq:"",others:"",vendor:"",useUnit:"",buyUnit:"",pq:"",price:"",qty:"",need:"",link:"",_uu:false};return ST.srForm;}
+function srSimKey(f){return srNorm(f.name)+"|"+(f.cat||"");}
+/* cg5：申請頁警示統一加大（經營者 09-24：要比原本大一倍、更強調，店長才會注意）。
+   標題 22px 粗體＋左側 8px 色條＋2px 外框；說明 16px。kind：stop 紅（擋下）／warn 橘（提醒）／ok 綠。 */
+var ALERT_BIG={stop:["#FDECEA","#C62828","#B3261E"],warn:["#FFF4E0","#E67E22","#8A4B00"],ok:["#E8F5E9","#2E7D32","#1B5E20"]};
+/* cg6：全站「頁面層級」警示共用（盤點本機門市、寫入失敗、資料源、預約對不到配方、單位對照、參數未存、查詢頁資料源、申請頁）。
+   卡片裡每一列的小提示（突變、權數、規格不符…）刻意不放大，放大會把盤點卡片擠爆、所有東西都一樣大等於沒強調。 */
+function alertBig(kind,title,body,extra){var c=ALERT_BIG[kind]||ALERT_BIG.warn;
+  return '<div class="sr-alert alert-big" role="alert" style="margin:10px 0;padding:14px 16px;border:2px solid '+c[1]+';border-left:8px solid '+c[1]+';border-radius:10px;background:'+c[0]+'">'
+    +'<div style="font-size:22px;font-weight:800;line-height:1.35;color:'+c[2]+'">'+title+'</div>'
+    +(body?'<div style="font-size:16px;line-height:1.65;margin-top:6px;color:#222">'+body+'</div>':'')+(extra||'')+'</div>';}
+function srAlert(kind,title,body,extra){return alertBig(kind,title,body,extra);}
+function srMsgAlert(m){var t=String(m.txt||""),k=t.indexOf("。");   /* 第一句當標題，其餘當說明 */
+  return srAlert(m.ok?"ok":"stop",srEsc(k>0?t.slice(0,k+1):t),k>0&&k<t.length-1?srEsc(t.slice(k+1)):"");}
+function srSimHtml(name,st,cat,gate){var sim=srSimilar(name,cat);
+  if(sim.exact)return srAlert("stop","⛔ 不用申請：主檔已經有「"+srEsc(sim.exact.name)+"」",
+    '編號 '+srEsc(sim.exact.id)+'。<b>'+srEsc(srExistHint(sim.exact,st))+'。</b>');
+  if(!sim.list.length)return '';
+  var list='<div style="margin-top:10px;background:#fff;border-radius:8px;padding:2px 12px">';
+  sim.list.forEach(function(s,i){list+='<div style="padding:8px 0;'+(i?'border-top:1px dashed #ddd;':'')+'color:#222"><span class="badge b-'+srEsc(s.cat)+'">'+srEsc(s.cat)+'</span><b style="font-size:18px">'+srEsc(s.name)+'</b> <span class="muted">'+srEsc(s.id)+'</span>'
+    +'<div style="font-size:14px;color:#555;margin-top:2px">'+srEsc(s.vendor||"未填廠商")+'　·　1 '+srEsc(s.buyUnit)+'＝'+srEsc(s.packQty)+' '+srEsc(s.useUnit)+'　·　'+srEsc(srExistHint(s,st))+'</div></div>';});
+  if(sim.more)list+='<div style="font-size:14px;color:#555;padding:6px 0;border-top:1px dashed #ddd">另有 '+sim.more+' 項比較不像，未列出。</div>';
+  list+='</div>';
+  if(!gate)return srAlert("warn","⚠️ 主檔有 "+(sim.list.length+sim.more)+" 項類似的品項","先看下面是不是同一個東西。<b>送出時會再請你確認一次。</b>",list);
+  return srAlert("stop","⛔ 還不能送出：主檔已有類似的品項","是同一個東西就<b>不用申請</b>；確定都不是，按最下面<b>「都不是，仍要申請」</b>。",
+    list+'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px"><button class="btn ghost" style="font-size:16px;padding:10px 16px" id="srSimSame">是同一個，不申請了</button><button class="btn" style="font-size:16px;padding:10px 16px" id="srSimDiff">都不是，仍要申請</button></div>');}
+function srForm(){if(!ST.srForm)ST.srForm={who:lsGet("srWho")||"",name:"",cat:"",use:"",useNote:"",freq:"",vendor:"",useUnit:"",buyUnit:"",pq:"",price:"",qty:"",need:"",link:"",_uu:false};return ST.srForm;}
 function srQtyLabel(f){var uu=f.useUnit||"使用單位";
   return srDur(f.cat)?("店裡要常備幾"+uu+"（標配）"):("預估每週用多少"+uu);}
 function srFieldHtml(lb,inner,req,tip){return '<label style="display:flex;flex-direction:column;gap:3px;font-size:13px"><span style="font-weight:700">'+lb+(req?' <span style="color:#C0392B">*</span>':'')+(tip?' <span class="muted" style="font-weight:400;font-size:12px">'+tip+'</span>':'')+'</span>'+inner+'</label>';}
@@ -3727,7 +3762,7 @@ function srInput(k,v,ph,type){return '<input class="sm" data-srf="'+k+'" '+(type
 function srSelect(k,v,opts){return '<select class="sm" data-srf="'+k+'" style="width:100%;box-sizing:border-box"><option value="">請選擇</option>'+opts.map(function(o){return '<option'+(o===v?' selected':'')+'>'+o+'</option>';}).join('')+'</select>';}
 function srStatusHtml(r){
   if(r._local)return r._state==="fail"
-    ?'<span style="color:#C0392B;font-weight:700">⚠️ 還沒確認送達</span> <button class="btn sm" data-srresend="'+srEsc(r.id)+'">重送</button>'
+    ?'<div style="color:#B3261E;font-weight:800;font-size:18px">⚠️ 還沒確認送達</div><div style="font-size:14px;color:#333;margin:2px 0 6px">這筆可能沒送到總部，請按重送</div><button class="btn" style="font-size:16px" data-srresend="'+srEsc(r.id)+'">重送</button>'
     :'<span class="muted">⏳ 送出中…</span>';
   if(r.status==="已核准")return '<span style="color:#1a7f37;font-weight:700">✅ 已加入系統'+(r.sku?'（'+srEsc(r.sku)+'）':'')+'</span><div class="sub">按右上「🔄 更新」後會出現在盤點頁'+(r.note?'　·　'+srEsc(r.note):'')+'</div>';
   if(r.status==="臨時採購")return '<span style="color:#8A5A00;font-weight:700">🛒 直接用零用金買，不進系統</span>'+(r.note?'<div class="sub">'+srEsc(r.note)+'</div>':'');
@@ -3736,9 +3771,9 @@ function srStatusHtml(r){
 function srLocalRows(){return Object.keys(SR_LOCAL).map(function(id){var L=SR_LOCAL[id],r=L.req||{};
   var o={};Object.keys(r).forEach(function(k){o[k]=r[k];});o._local=true;o._state=L.state;o.status="待審";return o;});}
 function srStoreView(){var st=ST.storeId,f=srForm(),dur=srDur(f.cat),can=!!SR_API;
-  var html='<div class="note">這裡提的是<b>店裡要開始固定使用</b>的新東西（新食材、新耗材、新器具模具）。總部<b>每月統一審一次</b>，通過的會自動加進系統、出現在盤點頁。<br>'
+  var html='<div class="note">這裡提的是<b>店裡要開始固定使用</b>的新東西（新食材、新耗材、新器具模具）。總部<b>每月統一審一次</b>，通過的會自動加進系統、出現在盤點頁。<br><b>別店已經申請通過的東西</b>，本店要用不用再申請：到「⚙️ 店別參數」搜尋它、填數量就好（打品名時系統會告訴你）。<br>'
     +'<b>一次性、只用這一次</b>的東西不用填，直接用零用金買。欄位不清楚就照包裝寫：例如「1 箱 20 包，每包 500 g」→ 採購單位「箱」、使用單位「g」、內容量「10000」。</div>';
-  html+='<div class="card" style="padding:12px"><div style="font-weight:800;margin-bottom:8px">➕ 新增申請　<span class="muted" style="font-weight:400">門市：'+srEsc(storeName(st))+'</span></div>'
+  html+='<div class="card" style="padding:12px"><div style="font-weight:800;margin-bottom:8px">➕ 新增申請　<span class="muted" style="font-weight:400">門市：'+srEsc(storeName(st))+'</span><span style="font-weight:400;font-size:12px;margin-left:10px"><span style="color:#C0392B;font-weight:800">*</span> 為必填，沒填送不出去；其他欄位可空白</span></div>'
     +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">'
     +srFieldHtml("申請人",srInput("who",f.who,"你的名字"),1)
     +srFieldHtml("品名",srInput("name",f.name,"照包裝或廠商的寫法"),1)
@@ -3752,10 +3787,9 @@ function srStoreView(){var st=ST.storeId,f=srForm(),dur=srDur(f.cat),can=!!SR_AP
     +srFieldHtml("每採購單位內容量",srInput("pq",f.pq,"1 採購單位＝幾個使用單位","number"),1)
     +srFieldHtml("單價",srInput("price",f.price,"每 1 採購單位","number"),1)
     +srFieldHtml(f.cat?srQtyLabel(f):"數量",srInput("qty",f.qty,dur?"例：2":"例：500","number"),1)
-    +srFieldHtml("其他店也會用",srInput("others",f.others,"店號，例：3,5（不知道可空白）"),0)
     +srFieldHtml("需要日期",'<input class="sm" data-srf="need" type="date" style="width:100%;box-sizing:border-box" value="'+srEsc(f.need)+'">',0)
     +srFieldHtml("參考連結",srInput("link",f.link,"商品網址（選填）"),0)
-    +'</div><div id="srSim">'+srSimHtml(f.name,st)+'</div>'
+    +'</div><div id="srSim">'+srSimHtml(f.name,st,f.cat,ST.srSimGate===srSimKey(f))+'</div>'
     +'<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="srSubmit"'+(can?'':' disabled title="申請功能尚未開通"')+'>送出申請</button><button class="btn ghost sm" id="srClear">清空</button>'
     +(can?'':'<span class="muted" style="font-size:12px">申請功能尚未開通（總部尚未部署）</span>')+'</div></div>';
   var mine=srLocalRows().filter(function(r){return String(r.st)===String(st);})
@@ -3776,29 +3810,29 @@ function srStoreList(txt){var ok={};STORES.forEach(function(s){ok[String(s.id)]=
   var out=[];String(txt==null?"":txt).split(/[,，、;；\s]+/).forEach(function(x){x=x.trim().replace(/號店?$/,"");if(x&&ok[x]&&out.indexOf(x)<0)out.push(x);});
   return out.sort(function(a,b){return (+a)-(+b);});}
 function srEditOf(g){ST.srEdit=ST.srEdit||{};var e=ST.srEdit[g.key];if(e)return e;
-  var r=g.reqs[0],st=[];g.reqs.forEach(function(q){srStoreList(q.st+","+q.others).forEach(function(x){if(st.indexOf(x)<0)st.push(x);});});
-  e=ST.srEdit[g.key]={name:r.name,cat:r.cat,useUnit:r.useUnit,vendor:r.vendor,buyUnit:r.buyUnit,pq:String(r.pq||""),price:String(r.price||""),stores:srStoreList(st.join(",")).join(",")};
+  var r=g.reqs[0];
+  e=ST.srEdit[g.key]={name:r.name,cat:r.cat,useUnit:r.useUnit,vendor:r.vendor,buyUnit:r.buyUnit,pq:String(r.pq||""),price:String(r.price||"")};
   return e;}
-function srVerdict(g){var sim=srSimilar(srEditOf(g).name),allOnce=g.reqs.every(function(r){return r.freq==="一次性／短期";}),stores=srStoreList(g.reqs.map(function(r){return r.st;}).join(","));
+function srVerdict(g){var sim=srSimilar(srEditOf(g).name,srEditOf(g).cat),allOnce=g.reqs.every(function(r){return r.freq==="一次性／短期";}),stores=srStoreList(g.reqs.map(function(r){return r.st;}).join(","));
   if(allOnce)return ['#FFF4E5','#8A5A00','🟠 建議改走臨時採購：申請人自己說是一次性／短期用，進系統只會變成長期零需求。'];
   if(sim.exact)return ['#E8F1FB','#1f5fa8','🔵 主檔已有「'+sim.exact.name+'」（'+sim.exact.id+'）：核准＝開放給申請店，不會建新編號。'];
-  return ['#E8F5E9','#2E7D32','🟢 建議轉入主檔：長期使用'+(stores.length>1?'、'+stores.length+' 家店都要':'，只開放給申請店（其他店看不到）')+'。'];}
+  return ['#E8F5E9','#2E7D32','🟢 建議轉入主檔：長期使用'+(stores.length>1?'、'+stores.length+' 家店都要':'')+'。'];}
 function srGroupCard(g){var e=srEditOf(g),v=srVerdict(g),k=srEsc(g.key),busy=(SR_BUSY===g.key),anyBusy=!!SR_BUSY;
-  var food=g.reqs.some(function(r){return r.use==="做甜點／半成品";}),sim=srSimilar(e.name);
+  var food=g.reqs.some(function(r){return r.use==="做甜點／半成品";}),sim=srSimilar(e.name,e.cat);
   var h='<div class="card" style="padding:12px;margin-bottom:10px"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="badge b-'+srEsc(e.cat)+'">'+srEsc(e.cat)+'</span><b style="font-size:15px">'+srEsc(g.reqs[0].name)+'</b>'
     +'<span class="pill">'+g.reqs.length+' 筆申請</span></div>'
     +'<div class="banner" style="background:'+v[0]+';border-color:'+v[1]+';color:'+v[1]+';margin:8px 0">'+srEsc(v[2])+(food?'<br>📌 用途含「做甜點」：要把它加進 BOM 表（名稱跟下面品名一字不差），系統才會隨銷量自動算；在那之前靠手動週用量叫貨。':'')+'</div>';
-  if(!sim.exact&&sim.list.length)h+='<div class="sub" style="color:#8A5A00">主檔相似品項：'+sim.list.map(function(s){return srEsc(s.name)+'（'+srEsc(s.id)+'）';}).join('、')+'　— 若其實是同一個，把品名改成主檔的名字再核准。</div>';
+  if(!sim.exact&&sim.list.length)h+='<div class="sub" style="color:#8A5A00">主檔相似品項（店長已確認「不是同一個」才送出）：'+sim.list.map(function(s){return srEsc(s.name)+'（'+srEsc(s.id)+'）';}).join('、')+'　— 若你判斷其實是同一個，把品名改成主檔的名字再核准＝開放既有品項。</div>';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin:6px 0"><tr style="background:#f6f6f6"><th style="text-align:left;padding:4px">門市</th><th style="text-align:left;padding:4px">申請人／時間</th><th style="text-align:left;padding:4px">用途</th><th style="text-align:left;padding:4px">頻率</th><th style="text-align:left;padding:4px">規格／單價</th><th style="text-align:right;padding:4px">'+(srDur(e.cat)?'標配':'週用量')+'</th></tr>';
   g.reqs.forEach(function(r){h+='<tr style="border-top:1px solid #eee"><td style="padding:4px;white-space:nowrap">'+srEsc(storeName(r.st))+(r.others?'<div class="sub">另：'+srEsc(r.others)+'</div>':'')+'</td><td style="padding:4px">'+srEsc(r.who)+'<div class="sub">'+srEsc(r.t)+(r.need?'　需 '+srEsc(r.need):'')+'</div></td><td style="padding:4px">'+srEsc(r.use)+'<div class="sub">'+srEsc(r.useNote)+'</div>'+(r.link?'<a href="'+srEsc(r.link)+'" target="_blank" rel="noopener">連結</a>':'')+'</td><td style="padding:4px">'+srEsc(r.freq)+'</td><td style="padding:4px;white-space:nowrap">'+srEsc(r.vendor)+'<div class="sub">1 '+srEsc(r.buyUnit)+'＝'+srEsc(r.pq)+' '+srEsc(r.useUnit)+'　$'+srEsc(r.price)+'</div></td><td style="padding:4px;text-align:right">'+srEsc(r.qty)+' '+srEsc(r.useUnit)+'</td></tr>';});
   h+='</table></div>';
-  function ip(f,lb,w,ph){return '<span class="pf"><b>'+lb+'</b><input class="sm" data-sre="'+k+'|'+f+'" style="width:'+w+'px" placeholder="'+srEsc(ph||"")+'" value="'+srEsc(e[f])+'"'+(sim.exact&&f!=="stores"&&f!=="name"?' disabled title="主檔已有，沿用主檔設定"':'')+'></span>';}
+  function ip(f,lb,w,ph){return '<span class="pf"><b>'+lb+'</b><input class="sm" data-sre="'+k+'|'+f+'" style="width:'+w+'px" placeholder="'+srEsc(ph||"")+'" value="'+srEsc(e[f])+'"'+(sim.exact&&f!=="name"?' disabled title="主檔已有，沿用主檔設定"':'')+'></span>';}
   h+='<div class="muted" style="margin:4px 0">轉入主檔的內容（可先改再核准）：</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
     +ip("name","品名",150,"需與 BOM 一致")
     +'<span class="pf"><b>類別</b><select class="sm" data-sre="'+k+'|cat"'+(sim.exact?' disabled':'')+'>'+SR_CATS.map(function(c){return '<option'+(c===e.cat?' selected':'')+'>'+c+'</option>';}).join('')+'</select></span>'
     +ip("vendor","廠商",90)+ip("buyUnit","採購單位",56)+ip("pq","內容量",70)+ip("useUnit","使用單位",56)+ip("price","單價",64)
-    +ip("stores","適用店",90,"空白＝全部門市")+'</div>'
-    +'<div class="sub" style="margin-top:4px">核准後：'+(sim.exact?'沿用 '+srEsc(sim.exact.id):'建新編號 '+srEsc(nextSkuId(SR_CATS.indexOf(e.cat)>=0?e.cat:"食材")))+'；每家申請店寫入'+(srDur(e.cat)?'「標配數量」':'「手動週用量」')+'＝上表數量；適用店只寫在主檔，沒申請的店不會自動設數量。</div>'
+    +'</div>'
+    +'<div class="sub" style="margin-top:4px">核准後：'+(sim.exact?'沿用 '+srEsc(sim.exact.id)+((sim.exact.stores||[]).length?'（主檔原本限定 '+srEsc(sim.exact.stores.join('、'))+' 號店，會加上申請店）':''):'建新編號 '+srEsc(nextSkuId(SR_CATS.indexOf(e.cat)>=0?e.cat:"食材"))+'，<b>全部門市都可以用</b>')+'；申請店寫入'+(srDur(e.cat)?'「標配數量」':'「手動週用量」')+'＝上表數量。其他店先放在盤點頁「💤 零需求」，要用時到該店「⚙️ 店別參數」填數量就好，不用再申請。</div>'
     +'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" data-srok="'+k+'"'+(anyBusy?' disabled':'')+'>'+(busy?'⏳ 處理中…':'✅ 核准'+(sim.exact?'（開放給申請店）':'轉入主檔'))+'</button>'
     +'<button class="btn ghost" data-srtmp="'+k+'"'+(anyBusy?' disabled':'')+'>🛒 改走臨時採購</button><button class="btn ghost" data-srno="'+k+'"'+(anyBusy?' disabled':'')+'>↩ 退回</button>'
     +(g.reqs.length>1?'<span class="muted" style="font-size:12px;align-self:center">本組 '+g.reqs.length+' 筆一起處理</span>':'')+'</div></div>';
@@ -3807,8 +3841,8 @@ function srHQ(){var all=SRD||[],f=ST.srFilter||"待審",pend=srPending();
   var cnt={"待審":0,"已核准":0,"臨時採購":0,"退回":0};all.forEach(function(r){if(cnt[r.status]!=null)cnt[r.status]++;});
   var stN={};pend.forEach(function(r){stN[r.st]=1;});
   var html='<div class="summary"><div class="stat"><div class="n">'+pend.length+'</div><div class="l">待審（'+Object.keys(stN).length+' 家店）</div></div><div class="stat"><div class="n">'+srGroups().__order.length+'</div><div class="l">待審品項（同名已合併）</div></div></div>';
-  html+='<div class="note">建議<b>每月固定一天</b>一次審完；急件才單獨處理。判斷三件事：<b>會不會長期用</b>（一次性→臨時採購）、<b>幾家店要</b>（只寫進申請店，其他店看不到）、<b>規格單價填齊沒</b>（缺了轉入後補貨會算錯）。核准只有總部看得到，店長無法自己轉入。</div>';
-  if(SR_MSG)html+='<div class="banner" style="background:'+(SR_MSG.ok?'#E8F5E9':'#FDECEA')+';border-color:'+(SR_MSG.ok?'#2E7D32':'#F5B7B1')+';color:'+(SR_MSG.ok?'#2E7D32':'#B3261E')+'">'+srEsc(SR_MSG.txt)+'</div>';
+  html+='<div class="note">建議<b>每月固定一天</b>一次審完；急件才單獨處理。判斷三件事：<b>會不會長期用</b>（一次性→臨時採購）、<b>幾家店要</b>（核准後全部門市都能用；申請店自動設數量，其他店在「💤 零需求」，要用時自己到店別參數填）、<b>規格單價填齊沒</b>（缺了轉入後補貨會算錯）。核准只有總部看得到，店長無法自己轉入。</div>';
+  if(SR_MSG)html+=srMsgAlert(SR_MSG);
   html+='<div class="chips">'+["待審","已核准","臨時採購","退回","全部"].map(function(x){var n=x==="全部"?all.length:cnt[x];return '<div class="chip '+(x===f?"on":"")+'" data-srfilter="'+x+'">'+x+' '+n+'</div>';}).join('')+'</div>';
   if(f==="待審"){var g=srGroups();
     if(!g.__order.length)html+='<div class="card muted">沒有待審的申請 🎉</div>';
@@ -3820,11 +3854,11 @@ function srHQ(){var all=SRD||[],f=ST.srFilter||"待審",pend=srPending();
   list.forEach(function(r){html+='<div class="row"><div class="nm"><span class="badge b-'+srEsc(r.cat)+'">'+srEsc(r.cat)+'</span><b>'+srEsc(r.name)+'</b><div class="sub">'+srEsc(storeName(r.st))+'　·　'+srEsc(r.who)+'　·　'+srEsc(r.t)+(r.dt?'　→ '+srEsc(r.dt):'')+'</div></div><div style="text-align:right;min-width:130px;font-size:13px">'+srStatusHtml(r)+'</div></div>';});
   return html+'</div>';}
 function viewSkuReq(){
-  if(SRD===null&&!SRLD&&!SRERR)loadSkuReq().then(function(){if(ST.tab==="申請")render();else renderTabs();});
+  if(SRD===null&&!SRERR&&!SR_WAIT){SR_WAIT=true;loadSkuReq().then(function(){SR_WAIT=false;if(ST.tab==="申請")render();else renderTabs();});}   /* cg6：分頁籤已在讀時也要掛回呼，否則停在「讀取中」 */
   var html='<div class="toolbar"><span class="own">📝 新品項申請</span><span style="flex:1"></span><button class="btn sm ghost" id="srReload">🔄 重讀申請</button></div>';
-  if(SRERR==="nosheet")html+='<div class="banner" style="background:#FDECEA;border-color:#F5B7B1;color:#B3261E">申請功能尚未開通：總部要先部署 diybc-skureq-api 並執行 srSetup()。</div>';
-  else if(SRERR==="load")html+='<div class="banner" style="background:#FDECEA;border-color:#F5B7B1;color:#B3261E">讀不到申請資料（網路或資料源忙碌），請稍後按「🔄 重讀申請」。</div>';
-  else if(SRD&&!SR_API)html+='<div class="banner" style="background:#FFF7E6;border-color:#FFE1A8;color:#7A5B00">申請表已建立，但沒偵測到寫入網址（fact_sku_req 的 W1），暫時不能送出。</div>';
+  if(SRERR==="nosheet")html+=srAlert("stop","⛔ 申請功能尚未開通","總部要先部署 diybc-skureq-api 並執行 srSetup()。");
+  else if(SRERR==="load")html+=srAlert("stop","⚠️ 讀不到申請資料","可能是網路或資料源忙碌，請稍後按右上<b>「🔄 重讀申請」</b>。");
+  else if(SRD&&!SR_API)html+=srAlert("warn","⚠️ 暫時不能送出申請","申請表已建立，但沒偵測到寫入網址（fact_sku_req 的 W1）。");
   if(ST.role==="總部")return html+(SRD===null?'<div class="card muted">讀取中…</div>':srHQ());
   return html+srStoreView();}
 /* ---- 寫入 ---- */
@@ -3841,17 +3875,20 @@ function srSubmit(){var f=srForm(),st=String(ST.storeId||"");
   if(!(pr>0)){toast("單價要填大於 0 的數字");return;}
   if(!(q>0)){toast("數量要填大於 0 的數字");return;}
   var nm=String(f.name).trim();if(nm.length>40){toast("品名太長（最多 40 字）");return;}
-  var sim=srSimilar(nm);if(sim.exact){toast("主檔已經有「"+sim.exact.name+"」，不用申請");return;}
+  var sim=srSimilar(nm,f.cat);if(sim.exact){toast("主檔已經有「"+sim.exact.name+"」，不用申請");return;}
+  if(sim.list.length&&f._simAck!==srSimKey(f)){ST.srSimGate=srSimKey(f);render();
+    var box=document.getElementById("srSim");if(box&&box.scrollIntoView)try{box.scrollIntoView({block:"center"});}catch(e){}
+    toast("主檔有 "+sim.list.length+" 項類似的，請先確認");return;}
   var dup=srLocalRows().concat(SRD||[]).some(function(r){return String(r.st)===st&&r.status==="待審"&&srNorm(r.name)===srNorm(nm);});
   if(dup){toast("本店已經申請過「"+nm+"」，等總部審核");return;}
   if(f.freq==="一次性／短期"&&typeof confirm==="function"&&!confirm("一次性或短期用的東西，建議直接用零用金買，不必進系統。\n\n仍要送出申請嗎？"))return;
   var mine=myStore();
   if(mine&&mine!==st&&typeof confirm==="function"&&!confirm("⚠️ 門市不對？\n\n這台裝置的本機門市是「"+storeName(mine)+"」，你正要用「"+storeName(st)+"」送出申請。\n確定嗎？"))return;
   var id=srNewId(st);
-  var req={id:id,t:srNow(),st:st,who:String(f.who).trim(),name:nm,cat:f.cat,use:f.use,useNote:String(f.useNote).trim(),freq:f.freq,others:srStoreList(f.others).join(","),
+  var req={id:id,t:srNow(),st:st,who:String(f.who).trim(),name:nm,cat:f.cat,use:f.use,useNote:String(f.useNote).trim(),freq:f.freq,others:"",
     vendor:String(f.vendor).trim(),useUnit:String(f.useUnit).trim(),buyUnit:String(f.buyUnit).trim(),pq:pq,price:pr,qty:q,need:String(f.need||"").trim(),link:String(f.link||"").trim()};
   SR_LOCAL[id]={req:req,state:"sending",payload:{action:"submit",req:req}};srSaveLocal();
-  lsSet("srWho",req.who);ST.srForm=null;
+  lsSet("srWho",req.who);ST.srForm=null;ST.srSimGate=null;
   srSend(id);render();}
 function srSend(id){var L=SR_LOCAL[id];if(!L)return;L.state="sending";srSaveLocal();
   srPostApi(JSON.parse(JSON.stringify(L.payload))).then(function(){srConfirm(id,0);});}
@@ -3870,7 +3907,7 @@ function srCheckDecided(ids,status,tries,cb){   /* 回讀申請池確認狀態�
 async function srApprove(gk){
   if(SR_BUSY)return;var G=srGroups(),g=G[gk];if(!g){toast("找不到這組申請");return;}
   var e=srEditOf(g),name=String(e.name||"").trim(),cat=e.cat,uu=String(e.useUnit||"").trim(),bu=String(e.buyUnit||"").trim(),pq=+e.pq,pr=+e.price,vd=String(e.vendor||"").trim();
-  var stores=srStoreList(e.stores),sim=srSimilar(name),ex=sim.exact,ids=g.reqs.map(function(r){return r.id;});
+  var sim=srSimilar(name,cat),ex=sim.exact,ids=g.reqs.map(function(r){return r.id;});
   if(!ex){
     if(!name){toast("品名必填");return;}
     if(SR_CATS.indexOf(cat)<0){toast("類別要選");return;}
@@ -3880,7 +3917,7 @@ async function srApprove(gk){
   var fld=srDur(ex?ex.cat:cat)?"標配數量":"手動週用量";
   var per={};g.reqs.forEach(function(r){var s=String(r.st);if(!(num(per[s])>=num(r.qty)))per[s]=num(r.qty);});   /* 同店重複申請取大的 */
   var msg=(ex?("主檔已有「"+ex.name+"」（"+ex.id+"），不建新編號。\n"):("建新品項 "+nextSkuId(cat)+"「"+name+"」（"+cat+"，1 "+bu+"＝"+pq+" "+uu+"，$"+pr+"）\n"))
-    +"適用店："+(stores.length?stores.join("、")+" 號店":"全部門市")+"\n"
+    +(ex?((ex.stores||[]).length?"主檔原本限定 "+ex.stores.join("、")+" 號店 → 加上申請店\n":""):"全部門市都可以用（沒申請的店在「💤 零需求」）\n")
     +"寫入店別參數「"+fld+"」："+Object.keys(per).map(function(s){return s+"號店 "+per[s];}).join("、")+"\n"
     +(ex&&ex.status?"主檔狀態「"+ex.status+"」會清空（恢復出現）\n":"")
     +(!ex&&!(pr>0)?"⚠️ 單價 0：訂貨單金額會低估，之後要補\n":"")
@@ -3890,8 +3927,7 @@ async function srApprove(gk){
   var id,exp=[];
   try{
     if(ex){id=ex.id;var sf={};
-      if(ex.stores&&ex.stores.length){var mg=ex.stores.slice();(stores.length?stores:Object.keys(per)).forEach(function(s){if(mg.indexOf(s)<0)mg.push(s);});
-        if(!stores.length)mg=[];   /* 總部把適用店清空＝開放全部門市 */
+      if(ex.stores&&ex.stores.length){var mg=ex.stores.slice();Object.keys(per).forEach(function(s){if(mg.indexOf(s)<0)mg.push(s);});   /* 主檔原本限定店：加上申請店，不動其他設定 */
         mg.sort(function(a,b){return (+a)-(+b);});
         if(mg.join(",")!==ex.stores.join(",")){sf["適用店"]=mg.join(",");ex.stores=mg;}}
       if(ex.status){sf["狀態"]="";ex.status="";}
@@ -3899,9 +3935,9 @@ async function srApprove(gk){
     }else{
       id=nextSkuId(cat);
       if(SKUS.some(function(s){return s.name===name;})){throw new Error("品名已存在");}
-      var fields={"品名":name,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu,"每採購單位內容量":pq,"單價":(pr>0?pr:0),"適用店":stores.join(",")};
+      var fields={"品名":name,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu,"每採購單位內容量":pq,"單價":(pr>0?pr:0)};   /* cg6：不寫適用店＝全部門市 */
       await post({type:"sku",sku_id:id,fields:fields},true);exp.push({k:"sku",f:{"品名":name}});
-      var ns={id:id,name:name,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu,xfer:"",packQty:pq,price:(pr>0?pr:0),defZone:"",src:"",stores:stores.slice(),status:"",lastValid:"",aliases:[]};
+      var ns={id:id,name:name,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu,xfer:"",packQty:pq,price:(pr>0?pr:0),defZone:"",src:"",stores:[],status:"",lastValid:"",aliases:[]};
       SKUS.push(ns);SKU[id]=ns;}
     var sts=Object.keys(per);
     for(var i=0;i<sts.length;i++){var s=sts[i],pf={};pf[fld]=per[s];
@@ -3946,11 +3982,14 @@ function srWire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-srf]"),function(el){var k=el.getAttribute("data-srf");
     var h=function(){var f=srForm();f[k]=el.value;
       if(k==="useUnit")f._uu=!!el.value;
-      if(k==="name"){var box=$("#srSim");if(box)box.innerHTML=srSimHtml(el.value,ST.storeId);}
+      if(k==="name"||k==="cat"){f._simAck=null;ST.srSimGate=null;}
+      if(k==="name"){var box=$("#srSim");if(box)box.innerHTML=srSimHtml(el.value,ST.storeId,f.cat,false);}
       if(el.tagName==="SELECT"){if(k==="cat"&&!f._uu)f.useUnit=srDur(el.value)?"個":"g";render();}};
     if(el.tagName==="SELECT")el.onchange=h;else el.oninput=h;});
   var sb=$("#srSubmit");if(sb)sb.onclick=srSubmit;
-  var sc=$("#srClear");if(sc)sc.onclick=function(){ST.srForm=null;render();};
+  var ss=$("#srSimSame");if(ss)ss.onclick=function(){var nm=srForm().name;ST.srForm=null;ST.srSimGate=null;render();toast("已取消「"+nm+"」的申請；主檔那一項若盤點頁看不到，照上面的提示處理");};
+  var sd=$("#srSimDiff");if(sd)sd.onclick=function(){var f=srForm();f._simAck=srSimKey(f);ST.srSimGate=null;srSubmit();};
+  var sc=$("#srClear");if(sc)sc.onclick=function(){ST.srForm=null;ST.srSimGate=null;render();};
   var rl=$("#srReload");if(rl)rl.onclick=function(){SRERR="";loadSkuReq(true).then(function(){render();toast("已重讀申請");});};
   Array.prototype.forEach.call(document.querySelectorAll("[data-srresend]"),function(el){el.onclick=function(){srSend(el.getAttribute("data-srresend"));render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-srfilter]"),function(el){el.onclick=function(){ST.srFilter=el.getAttribute("data-srfilter");render();};});
