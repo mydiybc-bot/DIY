@@ -403,13 +403,13 @@
   <!-- 資料狀態列 -->
   <div class="dsb dsb-auto">
     <b>🟢 食譜成本分析：自動</b>
-    <span>直讀 BOM 本＋主檔專用檔＋廠商單價表｜<b>🟡 新品申請表：簽呈送審</b> 產出申請單後由主廚發佈到簽呈系統，相關主管簽核</span>
+    <span>直讀 BOM 本＋採購系統主檔（價格只看主檔）｜<b>🟡 新品申請表：簽呈送審</b> 產出申請單後由主廚發佈到簽呈系統，相關主管簽核</span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 更新步驟</button>
     <div class="dsb-sop" id="dsbSop">
       <b>食譜成本分析（資料來源與維護）</b>
       <ol>
         <li>配方＝BOM 本「BOM表」；品項主檔 dim_sku／單位換算 dim_unitconv／產品名稱對照表＝採購系統同一份儀表板專用檔（GAS 雙寫同步）——照常維護，本頁即時跟上</li>
-        <li>價格優先序：廠價(即時)＝fact_vendor_price 最新季（靠 dim_price_map 對照到主檔品名，同品多供應商取最高）→ 主檔價（價格表填的）→ 憑證/換算＝估價層 → 估 → 缺</li>
+        <li>價格只看採購系統主檔（2026-09-24 起）：主檔價（單價÷內容量）→ 主檔沒填單價的標「估」（出貨中心報價或內嵌估價）→ 缺。廠商單價表不再使用；要改價就到採購系統「主檔」頁改</li>
         <li>要把「估」換成真價：用「價格表 · 可改價」填單價按「存」寫回 dim_sku（會跳確認，採購系統同步生效）；配方類例外，由 Chat 更新估價層</li>
         <li>若標「⚠ 主檔價與參考差 N 倍，暫不採用」＝主檔口徑可能錯，到價格表改對即自動接手</li>
         <li>器具/模具為資產不計入單次成本；損耗率：食材 ×1.05、耗材 ×1.03；全部含稅。售價可按「抓 POS 售價」查近 90 天實收均價</li>
@@ -442,7 +442,7 @@
 <button data-v="period">期間用量 · 金額</button>
 <button data-v="try">新品試算</button>
 </div>
-<div id="loading">⏳ 讀取 BOM 本、主檔專用檔與廠商單價表…</div>
+<div id="loading">⏳ 讀取 BOM 本與採購系統主檔…</div>
 <div id="app" style="display:none"></div>
 <div id="fail" style="display:none" class="rc-err">讀不到 BOM 本／主檔專用檔資料。請確認：① 用瀏覽器開啟本檔（雙擊即可）且有網路 ② BOM 本與儀表板專用檔權限仍為「知道連結可檢視」。</div>
 
@@ -525,6 +525,8 @@ var chain=Promise.resolve();
 function gq(id,sheet,tq){chain=chain.then(function(){return gviz(id,sheet,tq)});return chain}
 
 var BOM={},BOMLIST=[],SKU={},SKUARR=[],SKUALIAS={},CONV=[],POSMAP={},VLIVE={},READY=false,VPOK=false;
+/* 2026-09-24（方案 A）：true＝成本只看採購系統主檔單價（dim_sku 單價÷內容量）；廠價(即時)層停用，出貨中心報價降為「估」 */
+var PRICE_MASTER_ONLY=true;
 function num(x){var n=parseFloat(x);return isNaN(n)?0:n}
 function conv(item,unit){unit=String(unit||'').trim();
   if(!unit||unit==='g'||unit==='ml')return 1;
@@ -549,16 +551,16 @@ function devOf(name){ // 主檔價 vs 參考價 偏離倍數；null=無法比較
   var sp=skuPrice(name),rf=refPrice(name);
   if(!sp||!rf||!(rf.p>0)||sp.u!==rf.u)return null;
   var k=sp.p/rf.p;return (k>=8||k<=1/8)?{k:k,ref:rf}:null}
-function priceOf(name){ // 優先序：廠價(即時) → 主檔價(你填的) → 估價層A/B → 估價層C → 缺
-  if(VLIVE[name])return VLIVE[name];
+function priceOf(name){ // 優先序（2026-09-24 方案 A）：主檔價 → 估價層（出貨中心報價、內嵌估價）→ 缺；PRICE_MASTER_ONLY=false 時恢復「廠價(即時)」最優先
+  if(!PRICE_MASTER_ONLY&&VLIVE[name])return VLIVE[name];
   var sp=skuPrice(name);
   if(sp){var d=devOf(name);
     /* 主檔價與參考價差 8 倍以上＝疑似口徑錯（例：單價填每kg 但內容量寫 20000g）。
        此時**不採用主檔價**，改用參考價並標紅，避免髒值靜默污染成本；到價格表改對後即自動接手。 */
-    if(d)return{p:d.ref.p,u:d.ref.u,t:d.ref.t,s:d.ref.s,warn:'主檔價 '+sp.p.toFixed(4)+' 與參考差 '+(d.k>=1?d.k.toFixed(1)+' 倍':'1/'+(1/d.k).toFixed(1))+'，暫不採用'};
+    if(d)return{p:d.ref.p,u:d.ref.u,t:PRICE_MASTER_ONLY?'C':d.ref.t,s:d.ref.s,warn:'主檔價 '+sp.p.toFixed(4)+' 與參考差 '+(d.k>=1?d.k.toFixed(1)+' 倍':'1/'+(1/d.k).toFixed(1))+'，疑似單價或內容量填錯，暫不採用——請到採購系統主檔修正'};
     return sp}
   var os=EMB.OS[name]||EMB.OSTOOL[name];
-  if(os&&os.p>0)return{p:os.p,u:os.u,t:(os.t==='A'?'A':'B'),s:'出貨中心報價 · '+os.s};
+  if(os&&os.p>0)return PRICE_MASTER_ONLY?{p:os.p,u:os.u,t:'C',s:'出貨中心報價（估）· '+os.s+'——在採購系統主檔填單價即換真價'}:{p:os.p,u:os.u,t:(os.t==='A'?'A':'B'),s:'出貨中心報價 · '+os.s};
   var e=EMB.PRICES[name];
   if(e)return e;
   if(EMB.CONSUM[name]!==undefined)return{p:EMB.CONSUM[name],u:'個',t:'C',s:'市價估(包材)——在採購系統主檔頁填單價即換真價'};
@@ -871,8 +873,9 @@ Promise.resolve().then(function(){
   gq(readIdOf('dim_sku'),'dim_sku','select A,B,C,D,E,F,G,H,J'),
   gq(readIdOf('dim_unitconv'),'dim_unitconv',''),
   gq(readIdOf('產品名稱對照表'),'產品名稱對照表','select A,B').catch(function(){return null}),
-  gq(readIdOf('fact_vendor_price'),'fact_vendor_price','select A,B,C,D,F,G,M,N,O').catch(function(){return null}),
-  gq(readIdOf('dim_price_map'),'dim_price_map','').catch(function(){return null})
+  /* 2026-09-24 經營者裁定（方案 A）：成本只看採購系統主檔單價，不讀廠商單價表 */
+  PRICE_MASTER_ONLY?Promise.resolve(null):gq(readIdOf('fact_vendor_price'),'fact_vendor_price','select A,B,C,D,F,G,M,N,O').catch(function(){return null}),
+  PRICE_MASTER_ONLY?Promise.resolve(null):gq(readIdOf('dim_price_map'),'dim_price_map','').catch(function(){return null})
  ])
 }).then(function(res){
  var bom=res[0],sku=res[1],uc=res[2],pm=res[3],vp=res[4];
@@ -962,7 +965,7 @@ function render(){var app=document.getElementById('app');if(!READY)return;
   var h='<div class="rc-card"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
    +'<input type="text" id="dsearch" list="dl" placeholder="🔍 輸入或選甜點…" style="min-width:240px" value="'+SEL+'">'
    +'<datalist id="dl">'+BOMLIST.map(function(d){return '<option value="'+d+'">'}).join('')+'</datalist>'
-   +'<span class="rc-muted">'+BOMLIST.length+' 支（BOM 本即時）'+(VPOK?'　·　廠價已連線':'　·　⚠ 廠商單價表未連上，改用內嵌估價')+'</span></div></div>';
+   +'<span class="rc-muted">'+BOMLIST.length+' 支（BOM 本即時）'+(PRICE_MASTER_ONLY?'　·　價格只看採購系統主檔（主檔沒填單價的標「估」）':(VPOK?'　·　廠價已連線':'　·　⚠ 廠商單價表未連上，改用內嵌估價'))+'</span></div></div>';
   h+=BOM[SEL]?cardHTML(SEL,costLines(BOM[SEL])):'';
   app.innerHTML=h;
   var di=document.getElementById('dsearch');
@@ -1050,13 +1053,14 @@ function render(){var app=document.getElementById('app');if(!READY)return;
   var nReal=list.filter(function(x){return x.eff&&x.eff.t==='A'}).length;
   var h='<div class="rc-card"><div class="rc-muted"><b>直接在這裡改價。</b>「單價」＝每 1 採購單位的<b>含稅</b>價（例：擠花袋 1 件 2000 個 → 填一整件的錢）。按「存」會寫回採購系統主檔 dim_sku，'
    +'回讀確認成功才顯示 ✓；<b>採購系統也會同步吃到</b>。內容量填錯也可一起改。'
-   +'<br>生效優先序：<span class="rc-tA">廠價(即時)</span> ＞ <span class="rc-tA">你填的主檔價</span> ＞ <span class="rc-tB">憑據估</span> ＞ <span class="rc-tC">市價估</span> ＞ <span class="rc-tX">缺</span>。'
-   +'有廠商發票的食材由廠商單價表自動接手，填了主檔價也以廠價為準。</div>'
+   +(PRICE_MASTER_ONLY?'<br>生效優先序：<span class="rc-tA">主檔價</span> ＞ <span class="rc-tC">估（主檔沒填單價時暫用）</span> ＞ <span class="rc-tX">缺</span>。<b>成本只看採購系統主檔</b>，廠商單價表已停用。'
+     :'<br>生效優先序：<span class="rc-tA">廠價(即時)</span> ＞ <span class="rc-tA">你填的主檔價</span> ＞ <span class="rc-tB">憑據估</span> ＞ <span class="rc-tC">市價估</span> ＞ <span class="rc-tX">缺</span>。'
+   +'有廠商發票的食材由廠商單價表自動接手，填了主檔價也以廠價為準。')+'</div>'
    +'<div class="rc-kpi"><div><b>'+nReal+'</b><span>已有真價</span></div><div><b>'+nGap+'</b><span>仍是估／缺</span></div>'
-   +'<div><b>'+Object.keys(VLIVE).length+'</b><span>由廠商單價表即時取得</span></div>'
+   +(PRICE_MASTER_ONLY?'':'<div><b>'+Object.keys(VLIVE).length+'</b><span>由廠商單價表即時取得</span></div>')
    +'<div><b style="color:'+(nWarn?'#C0392B':'#2E7D32')+'">'+nWarn+'</b><span>主檔價疑有誤</span></div>'
    +'<div><b>'+rows.length+'</b><span>本次列出</span></div></div>'
-   +'<div class="rc-muted" style="margin:-4px 0 8px">對照表來源：<b>'+PMAP_SRC+'</b>'+(VPOK?'　·　單價表 '+VPROWS.length+' 列已讀':'　·　⚠ 廠商單價表未連上')+'　·　尚未對到主檔的單價表品項 <b>'+VPUNMAPPED.length+'</b> 項（見「單價表未對應」）</div>'
+   +'<div class="rc-muted" style="margin:-4px 0 8px">對照表來源：<b>'+PMAP_SRC+'</b>'+(PRICE_MASTER_ONLY?'　·　價格只看採購系統主檔（廠商單價表已停用）':(VPOK?'　·　單價表 '+VPROWS.length+' 列已讀':'　·　⚠ 廠商單價表未連上'))+'　·　尚未對到主檔的單價表品項 <b>'+VPUNMAPPED.length+'</b> 項（見「單價表未對應」）</div>'
    +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'
    +'<input type="text" id="pq" placeholder="🔍 品名或廠商" style="flex:1;min-width:200px" value="'+q.replace(/"/g,'&quot;')+'">'
    +(q?'<button class="rc-btn2" id="pqclr">✕</button>':'')+'</div>'
@@ -1100,6 +1104,7 @@ function render(){var app=document.getElementById('app');if(!READY)return;
       h+='<tr><td>'+r.sup+'</td><td class="rc-src">'+(r.code||'—')+'</td><td>'+r.name+'</td><td class="rc-src">'+r.q+'</td><td class="rc-r rc-src">'+(b.kind==='unit'?(b.v+'/'+(r.F||'個')):(b.v.toFixed(2)+'/'+b.kind))+'</td></tr>'});
     h+='</table></div>'}
   h+='<div class="rc-card"><div style="font-size:15px;font-weight:700;margin-bottom:2px">🔁 季更新後要做什麼</div><div class="rc-muted">'
+    +(PRICE_MASTER_ONLY?'<b>價格只看採購系統主檔：</b>品項要改價，到採購系統「主檔」頁改「單價／內容量」，這裡重新整理就生效（廠商單價表已停用，下面兩點暫不適用）。<br>':'')
     +'① 照 vendor-price-tracker 把新季資料貼進 fact_vendor_price（料號不變的品項<b>自動</b>吃到新價，什麼都不用做）。'
     +'② 看上面「單價表未對應」——新出現的品項若要用，到 dim_price_map 分頁補一列。'
     +'③ 看「單價表沒有」篩選——這些是抽單價時該去找單據的品項清單。</div></div>';
