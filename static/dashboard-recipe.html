@@ -1942,7 +1942,7 @@ function render(){var root=document.getElementById('apRoot');if(!_ready||!root)r
   if(AP.miss.length)s+='<div class="ap-note"><b>⚠ 食譜內文提到、但「食材工具」清單沒列的品項（'+AP.miss.length+' 項）</b><div class="ap-muted">這些沒被計入成本，門市備料與週用量推算也會漏。請主廚補進食材清單，或手動加到表一。</div><div style="margin-top:4px"><b>'+esc(AP.miss.join('、'))+'</b></div></div>';
   /* 半成品製作 */
   s+=linkListHTML()+'<datalist id="apBomDL"></datalist>';
-  s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品製作 <span class="ap-muted">可 0～N 個；一律以「一批」為單位（一批用多少原料、做出多少，例：吉利丁粉 50 g＋水 250 g → 300 g）。門市製作的會寫進採購系統，店長才知道要叫原料</span><button class="ap-btn2" id="apSemiAdd">＋ 新增半成品</button></div>';
+  s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品製作 <span class="ap-muted">可 0～N 個；一律以「一批」為單位（一批用多少原料、做出多少，例：吉利丁粉 50 g＋水 250 g → 300 g）。門市製作的送到「🧪 店製品項」簽核後寫進採購系統</span><span class="ap-btns"><button class="ap-btn2" id="apSemiImport" title="匯入標準格式 Excel，一次帶進這支新品的所有半成品">📥 載入半成品/材料包</button><button class="ap-btn2" id="apSemiTpl">📄 下載標準格式</button><button class="ap-btn2" id="apSemiAll" title="把這張單的半成品全部帶到「🧪 店製品項」待儲存清單">↗ 全部送到店製品項</button><button class="ap-btn2" id="apSemiAdd">＋ 新增半成品</button></span><input type="file" id="apSemiFile" accept=".xlsx,.xls" style="display:none"></div>';
   AP.semis.forEach(function(sm,si){s+=semiHTML(sm,si)});
   if(!AP.semis.length)s+='<div class="ap-muted" style="padding:8px 12px">目前沒有半成品；沒有就留空。</div>';
   s+='</div>';
@@ -2017,6 +2017,21 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
     var box=root.querySelector('.ap-semi[data-semi="'+b.dataset.sadd+'"]');if(box){var rows=box.querySelectorAll('tr[data-sk]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-sf="m"]');if(inp)inp.focus()}}}});
   root.querySelectorAll('[data-semidel]').forEach(function(b){b.onclick=function(){if(!confirm('刪除半成品 '+(+b.dataset.semidel+1)+'？'))return;AP.semis.splice(+b.dataset.semidel,1);OUT=null;saveDraft();render()}});
+  var si1=document.getElementById('apSemiImport'),sf=document.getElementById('apSemiFile');
+  if(si1&&sf){si1.onclick=function(){if(!window.SemiMod){alert('店製品項模組尚未載入，請重新整理');return}sf.value='';sf.click()};
+    sf.onchange=function(){var f=sf.files&&sf.files[0];if(!f)return;
+      SemiMod.parseForApply(f,semiDessert()).then(function(r){
+        if(!r.semis.length){alert('檔案裡沒有讀到任何半成品。'+(r.errors.length?'\n'+r.errors.join('\n'):''));return}
+        if(AP.semis.length===1&&!semiName(AP.semis[0])&&!semiItemsOf(AP.semis[0]).length)AP.semis=[];
+        r.semis.forEach(function(x){var o=newSemi();['name','link','kind','maker','yq','yu','store','take','usage','steps','note'].forEach(function(k){if(x[k]!=null)o[k]=String(x[k])});o.shared=!!x.shared;
+          o.items=(x.items||[]).map(function(it){var n=newSemiItem();n.m=it.m;n.q=it.q==null?'':String(it.q);n.u=it.u||'';return n});if(!o.items.length)o.items=[newSemiItem()];AP.semis.push(o)});
+        OUT=null;saveDraft();render();
+        alert('已載入 '+r.semis.length+' 個半成品／材料包。'+(r.errors.length?'\n注意：\n'+r.errors.join('\n'):'')+'\n核對後按「↗ 全部送到店製品項」，主管簽核後在那裡儲存。')},
+      function(e){alert('載入失敗：'+e)})}}
+  var st1=document.getElementById('apSemiTpl');if(st1)st1.onclick=function(){if(window.SemiMod)SemiMod.downloadTemplate();else alert('店製品項模組尚未載入，請重新整理')};
+  var sall=document.getElementById('apSemiAll');if(sall)sall.onclick=function(){if(!window.SemiMod){alert('店製品項模組尚未載入，請重新整理');return}
+    var list=AP.semis.filter(function(s){return semiName(s)&&s.maker!=='出貨中心'});if(!list.length){alert('這張單沒有門市製作的半成品可以送。');return}
+    SemiMod.queueFromApply(AP.semis,semiDessert())};
   var sa=document.getElementById('apSemiAdd');if(sa)sa.onclick=function(){AP.semis.push(newSemi());OUT=null;saveDraft();render();
     var boxes=root.querySelectorAll('.ap-semi');var last=boxes[boxes.length-1];if(last){var inp=last.querySelector('[data-sh="name"]');if(inp)inp.focus()}};
   /* 表一：品項／數量／單位／刪除；改品項 blur 後整頁重繪（表二依 isNewItem 自動出現／消失，l.* 欄位保留） */
@@ -2078,20 +2093,22 @@ return {ensureInit:ensureInit,render:render,get ready(){return _ready}};
 })();
 </script>
 <script>
-/* ================= SemiMod：🧪 店製品項（2026-09-24 新做）=================
-   半成品／材料包／分裝包的「一批配方」獨立管理，不再借用新品申請表。
-   ‧ 讀：BOM 本 dim_semi（自己的 JSONP，不經 RecipeMod 的 window.google 鏈）＋ BOM表 A–D（經 RecipeMod.gq）＋ 主檔（RecipeMod 已載入）
-   ‧ 寫：diybc-semi-api v1.2「按品項模式」（byKeys）：只動這個品項＋這些甜點的列，同名品項在別的甜點的配方不受影響
-   ‧ 一個「店製品項」＝ 名稱＋一批配方＋適用範圍（所有甜點共用／指定甜點，可多選）
-   ‧ 經營者 09-24 裁定：主廚在新品經多位主管簽核同意後自己按儲存 → 儲存前必須勾「已經主管簽核同意」，簽核人寫進 dim_semi「申請單號」欄 */
+/* ================= SemiMod：🧪 店製品項（2026-09-24 新做；同日 v2：查詢詳情頁、製作說明、Excel 標準格式匯入匯出、待儲存批次）=================
+   半成品／材料包／分裝包的「一批配方」＋製作說明，獨立管理。
+   ‧ 讀：BOM 本 dim_semi（配方）＋ dim_semi_info（製作步驟、存放、拿取、使用說明、器具模具、備註）＋ BOM表 A–D ＋ 主檔（RecipeMod）
+   ‧ 寫：diybc-semi-api v1.3「按品項模式」（byKeys）＋ info；主廚在主管簽核同意後自己按儲存（簽核人寫進 dim_semi「申請單號」）
+   ‧ 器具／模具不進 dim_semi（採購引擎本來就不算器具模具的用量），只存在製作說明裡給查詢頁看
+   ‧ Excel 標準格式：一列一個品項（食材／耗材／器具／模具）；同一個半成品寫多列，半成品層級的欄位寫在第一列即可 */
 window.SemiMod=(function(){
 var R=window.RecipeMod;
-var TOKEN='dbc-semi-Tn5wQ8',TAB='dim_semi',SHARED='＊共用',NEED_VER=1.2;
-var KINDS=['分裝包','材料包','半成品'],MAKERS=['門市','出貨中心'];
+var TOKEN='dbc-semi-Tn5wQ8',TAB='dim_semi',INFO='dim_semi_info',SHARED='＊共用',NEED_VER=1.3;
+var KINDS=['分裝包','材料包','半成品'],MAKERS=['門市','出貨中心'],TAKES=['自取','向店員拿取'],STORES=['常溫','冷藏','冷凍'];
 var BAD_UNIT=/勺|匙|適量|少許|些許|酌量/;
 var VERIFY=[2500,5000,9000];
-var S={inited:false,ready:false,loading:false,api:'',apiVer:0,err:'',rows:[],ents:[],bomRows:null,bomByItem:{},bomDesserts:[],bomItems:[],
-  fq:'',fkind:'',edit:null,status:'',busy:false,pendingOpen:null};
+var XLSX_URL='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+var TPL_HEAD=['半成品名稱','類型','製作單位','適用甜點','一批做出數量','一批做出單位','品項','每批用量','單位','存放方式','拿取方式','使用說明','製作步驟','備註'];
+var S={inited:false,ready:false,loading:false,api:'',apiVer:0,err:'',rows:[],info:{},ents:[],bomRows:null,bomByItem:{},bomDesserts:[],bomItems:[],
+  fq:'',fkind:'',edit:null,view:null,nb:'1',queue:[],qSigned:false,qSigner:'',status:'',busy:false,pendingOpen:null};
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function num(x){var n=parseFloat(x);return isNaN(n)?0:n}
@@ -2101,6 +2118,15 @@ function trim(s){return String(s==null?'':s).trim()}
 function skuOf(n){n=trim(n);return n&&R&&R.skuOf?R.skuOf(n):null}
 function pad2(n){return ('0'+n).slice(-2)}
 function ymd(){var d=new Date();return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())}
+function ikey(d,it){return d+'\u0001'+it}
+
+/* 器具／模具判斷：主檔有 → 看品類別；主檔沒有 → 名稱推測（與 autodraft 同規則） */
+function isTool(name){var s=skuOf(name);if(s)return /器具|模具/.test(trim(s.cat));var n=String(name||'');
+  if(/材料包|組合包|色膏|糖珠/.test(n))return false;
+  return /壓模|矽膠模|模具|圈模|派盤|烤模|蛋糕模|慕斯模|餅乾模|烤盤$|筆|匙$|刮刀|抹刀|攪拌|打蛋|篩|秤|溫度計|噴槍|剪刀|擀|量杯|夾|刷$|鏟|針|棒$|轉台|花嘴|工具|機$|器$|盆$|碗$/.test(n)}
+function catOf(name){var s=skuOf(name);if(s)return trim(s.cat)||'食材';return isTool(name)?'器具':'未建主檔'}
+function toolsToText(ts){return ts.filter(function(t){return trim(t.m)}).map(function(t){return trim(t.m)+(trim(t.q)?' '+trim(t.q):'')+(trim(t.u)?' '+trim(t.u):'')}).join('；')}
+function textToTools(s){return String(s||'').split(/[；;\n]/).map(function(x){x=trim(x);if(!x)return null;var m=x.match(/^(.*?)\s+([\d.]+)\s*(\S*)$/);return m?{m:trim(m[1]),q:m[2],u:m[3]}:{m:x,q:'',u:''}}).filter(Boolean)}
 
 /* ---- 讀資料 ---- */
 var seq=0;
@@ -2123,17 +2149,23 @@ function parseSemi(r){var ix={};r.cols.forEach(function(c,i){ix[c]=i});
     yq:num(g(x,'一批產出量')),yu:trim(g(x,'產出單位')),mat:trim(g(x,'原料')),q:num(g(x,'一批用量')),u:trim(g(x,'單位')),sku:trim(g(x,'原料sku_id')),req:trim(g(x,'申請單號')),ts:trim(g(x,'寫入時間'))}})
     .filter(function(o){return o.item&&o.mat});
   return {api:api,rows:rows}}
+function parseInfo(r){var ix={};r.cols.forEach(function(c,i){ix[c]=i});if(ix['店製品項']===undefined||ix['製作步驟']===undefined)return {};
+  function g(x,k){var i=ix[k];return i===undefined?'':String(x[i]==null?'':x[i])}
+  var o={};r.rows.forEach(function(x){var it=trim(g(x,'店製品項'));if(!it)return;
+    o[ikey(trim(g(x,'甜點名稱')),it)]={store:trim(g(x,'存放方式')),take:trim(g(x,'拿取方式')),usage:g(x,'使用說明').trim(),steps:g(x,'製作步驟').trim(),tools:g(x,'器具模具').trim(),note:g(x,'備註').trim()}});
+  return o}
 
 /* 同一品項、配方完全相同的甜點合成一個「店製品項」；同名但配方不同（例：紅豆餡在不同甜點包量不同）分開 */
 function buildEnts(rows){var byKey={};
-  rows.forEach(function(o){var k=o.item+'\u0001'+o.dessert;var e=byKey[k]=byKey[k]||{item:o.item,dessert:o.dessert,kind:o.kind,maker:o.maker,yq:o.yq,yu:o.yu,lines:[],req:'',ts:'',srcs:{}};
-    e.lines.push({m:o.mat,q:o.q,u:o.u});if(o.req)e.req=o.req;if(o.ts>e.ts)e.ts=o.ts;e.srcs[o.src]=1});
+  rows.forEach(function(o){var k=ikey(o.dessert,o.item);var e=byKey[k]=byKey[k]||{item:o.item,dessert:o.dessert,kind:o.kind,maker:o.maker,yq:o.yq,yu:o.yu,lines:[],req:'',ts:''};
+    e.lines.push({m:o.mat,q:o.q,u:o.u});if(o.req)e.req=o.req;if(o.ts>e.ts)e.ts=o.ts});
   var ents={},out=[];
   Object.keys(byKey).forEach(function(k){var e=byKey[k];
     var sig=[e.item,e.dessert===SHARED?'S':'D',e.kind,e.maker,e.yq,e.yu].concat(e.lines.map(function(l){return l.m+':'+l.q+':'+l.u}).sort()).join('|');
-    var t=ents[sig];if(!t){t=ents[sig]={item:e.item,kind:e.kind,maker:e.maker,yq:e.yq,yu:e.yu,lines:e.lines,shared:e.dessert===SHARED,desserts:[],req:e.req,ts:e.ts};out.push(t)}
-    if(e.dessert!==SHARED)t.desserts.push(e.dessert);if(e.ts>t.ts){t.ts=e.ts;t.req=e.req||t.req}});
-  out.forEach(function(t){t.desserts.sort();t.id=t.item+'｜'+(t.shared?SHARED:t.desserts.join('、'))});
+    var t=ents[sig];if(!t){t=ents[sig]={item:e.item,kind:e.kind,maker:e.maker,yq:e.yq,yu:e.yu,lines:e.lines,shared:e.dessert===SHARED,desserts:[],req:e.req,ts:e.ts,info:null};out.push(t)}
+    if(e.dessert!==SHARED)t.desserts.push(e.dessert);if(e.ts>t.ts){t.ts=e.ts;t.req=e.req||t.req}
+    if(!t.info&&S.info[k])t.info=S.info[k]});
+  out.forEach(function(t){t.desserts.sort();t.id=t.item+'｜'+(t.shared?SHARED:t.desserts.join('、'));t.info=t.info||{store:'',take:'',usage:'',steps:'',tools:'',note:''}});
   out.sort(function(a,b){return (a.kind+a.item).localeCompare(b.kind+b.item,'zh-Hant')});
   return out}
 
@@ -2145,16 +2177,17 @@ function loadBom(){if(S.bomRows)return Promise.resolve();
 function loadApiVer(){if(!S.api){S.apiVer=0;return Promise.resolve()}
   var p;try{p=fetch(S.api)}catch(e){p=Promise.reject(e)}
   return Promise.resolve(p).then(function(r){return r&&r.json?r.json():null}).then(function(j){var m=j&&j.ver&&String(j.ver).match(/v(\d+\.\d+)/);S.apiVer=m?parseFloat(m[1]):0},function(){S.apiVer=-1})}
-function loadAll(){S.loading=true;S.err='';render();
-  var p1=jq('select *').then(function(r){var p=parseSemi(r);if(!p){S.rows=[];S.api='';S.err='採購系統還沒有 dim_semi 分頁';return}S.rows=p.rows;S.api=p.api;if(!p.api)S.err='dim_semi 的 N1 沒有寫入端網址'},
+function loadData(){
+  var p1=jq('select *').then(function(r){var p=parseSemi(r);if(!p){S.rows=[];S.api='';S.err='採購系統還沒有 dim_semi 分頁';return}S.rows=p.rows;S.api=p.api;S.err=p.api?'':'dim_semi 的 N1 沒有寫入端網址'},
     function(e){S.rows=[];S.api='';S.err='讀不到 dim_semi（'+e+'）'});
-  return Promise.all([p1,loadBom()]).then(loadApiVer).then(function(){S.ents=buildEnts(S.rows);S.loading=false;S.ready=true;
-    if(S.pendingOpen){var po=S.pendingOpen;S.pendingOpen=null;openFromApply(po.sm,po.dessert);return}render()})}
+  var p2=jq('select *',INFO).then(function(r){S.info=parseInfo(r)},function(){S.info={}});
+  return Promise.all([p1,p2]).then(function(){S.ents=buildEnts(S.rows)})}
+function loadAll(){S.loading=true;S.err='';render();
+  return Promise.all([loadData(),loadBom()]).then(loadApiVer).then(function(){S.loading=false;S.ready=true;
+    if(S.pendingOpen){var po=S.pendingOpen;S.pendingOpen=null;po();return}render()})}
 
 /* ---- 共用計算 ---- */
 function bomUse(item){return S.bomByItem[item]||[]}
-function scopeDesserts(ed){return ed.shared?null:ed.desserts}
-/* 這個品項在適用範圍內，BOM 裡每支甜點每份用多少（同甜點多列加總）；單位不同另列 */
 function usage(item,yu,shared,desserts){var ok={},bad={};var set=null;if(!shared){set={};(desserts||[]).forEach(function(d){set[d]=1})}
   bomUse(item).forEach(function(x){if(set&&!set[x.d])return;if(x.u===yu){var o=ok[x.d]=ok[x.d]||{q:0,n:0};o.q+=x.q;o.n++}else bad[x.d]=x.q+' '+x.u});
   return {ok:Object.keys(ok).map(function(d){return {d:d,q:ok[d].q,n:ok[d].n}}).sort(function(a,b){return b.q-a.q}),bad:bad}}
@@ -2162,100 +2195,179 @@ function entStatus(e){var u=usage(e.item,e.yu,e.shared,e.desserts),nb=Object.key
   if(!u.ok.length&&!nb)return {cls:'warn',txt:'⚠ BOM 沒有甜點用到',n:0};
   if(nb)return {cls:'warn',txt:'⚠ '+nb+' 支單位不符',n:u.ok.length};
   return {cls:'ok',txt:'✓ 生效中',n:u.ok.length}}
-function isSemiName(n,exceptItem){n=trim(n);if(!n||n===exceptItem)return false;return S.ents.some(function(e){return e.item===n})}
+function isSemiName(n,exceptItem){n=trim(n);if(!n||n===exceptItem)return false;return S.ents.some(function(e){return e.item===n})||S.queue.some(function(q){return trim(q.name)===n})}
 function badUnit(l){var u=trim(l.u);if(!u||!trim(l.m))return false;var s=skuOf(l.m);
   if(s){var su=trim(s.useUnit);if(u===su||u==='g'||u==='ml')return false;var c=R.convs?R.convs():[];
     return !c.some(function(x){return x.unit===u&&(x.item===l.m||x.item===s.name||x.item==='（通用）'||x.item==='(通用)'||x.item==='通用')})&&!/^(個|支|張|顆|片|件|對|朵|雙|捲|卷|條|組)$/.test(u)}
   return BAD_UNIT.test(u)}
+function commonUnit(item){var c={};bomUse(item).forEach(function(x){c[x.u]=(c[x.u]||0)+1});var best='',n=0;Object.keys(c).forEach(function(u){if(c[u]>n){n=c[u];best=u}});return best}
+function bomDessertsOf(item){var ds={};bomUse(item).forEach(function(b){ds[b.d]=1});return Object.keys(ds).sort()}
+
+/* ---- 編輯草稿（清單編輯、匯入、申請表帶入共用同一個結構）---- */
+function newEd(){return {orig:null,name:'',kind:'',maker:'門市',yq:'',yu:'',shared:false,desserts:[],lines:[{m:'',q:'',u:''}],tools:[],
+  store:'',take:'',usage:'',steps:'',note:'',signed:false,signer:'',from:'',qi:-1}}
+function edFromEnt(e){var ed=newEd();ed.orig=e;ed.name=e.item;ed.kind=e.kind;ed.maker=e.maker||'門市';ed.yq=String(e.yq);ed.yu=e.yu;ed.shared=e.shared;ed.desserts=e.desserts.slice();
+  ed.lines=e.lines.map(function(l){return {m:l.m,q:String(l.q),u:l.u}});var i=e.info||{};ed.store=i.store||'';ed.take=i.take||'';ed.usage=i.usage||'';ed.steps=i.steps||'';ed.note=i.note||'';ed.tools=textToTools(i.tools);return ed}
+/* 匯入或申請表帶入的草稿：對到採購系統既有的同名同範圍品項 → 編輯（會取代）；否則新增 */
+function attachOrig(ed){var ks={};(ed.shared?[SHARED]:ed.desserts).forEach(function(d){ks[d]=1});
+  var ex=S.ents.filter(function(e){return e.item===trim(ed.name)&&(e.shared?ks[SHARED]:e.desserts.some(function(d){return ks[d]}))})[0];ed.orig=ex||null;return ed}
+function problems(ed){var e=[];if(!ed)return e;
+  if(!trim(ed.name))e.push('名稱');if(!ed.kind)e.push('類型');
+  if(ed.maker==='出貨中心')e.push('出貨中心製作的不寫入採購系統（出貨中心自己備料）');
+  if(!(num(ed.yq)>0)||!trim(ed.yu))e.push('一批做出（數量＋單位）');
+  if(!ed.shared&&!ed.desserts.length)e.push('適用甜點（至少一支）');
+  if(!ed.lines.some(function(l){return trim(l.m)&&num(l.q)>0}))e.push('至少一列食材／耗材');
+  var seen={};ed.lines.forEach(function(l){var m=trim(l.m);if(!m)return;if(seen[m])e.push('「'+m+'」重複');seen[m]=1;if(!(num(l.q)>0))e.push('「'+m+'」沒填每批用量')});
+  return e}
+/* 和採購系統現有配方比：回傳改了哪些（空陣列＝完全相同）；新品項回傳 null */
+function diffOf(ed){var o=ed.orig;if(!o)return null;var d=[],i=o.info||{};
+  if(trim(ed.kind)!==trim(o.kind)||trim(ed.maker)!==trim(o.maker))d.push('類型／製作單位');
+  if(num(ed.yq)!==num(o.yq)||trim(ed.yu)!==trim(o.yu))d.push('一批做出');
+  var a=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0}).map(function(l){return trim(l.m)+':'+num(l.q)+':'+trim(l.u)}).sort().join('|'),
+      b=o.lines.map(function(l){return trim(l.m)+':'+num(l.q)+':'+trim(l.u)}).sort().join('|');
+  if(a!==b)d.push('食材／耗材用量');
+  if(toolsToText(ed.tools)!==toolsToText(textToTools(i.tools)))d.push('器具／模具');
+  if(trim(ed.steps)!==trim(i.steps))d.push('製作步驟');
+  if(trim(ed.store)!==trim(i.store)||trim(ed.take)!==trim(i.take))d.push('存放／拿取');
+  if(trim(ed.usage)!==trim(i.usage)||trim(ed.note)!==trim(i.note))d.push('說明／備註');
+  if(!o.shared&&!ed.shared&&o.desserts.join('、')!==ed.desserts.join('、'))d.push('適用甜點');
+  return d}
+function qKey(ed){return trim(ed.name)+'|'+(ed.shared?'S':ed.desserts.join('、'))}
+function newMatList(ed){var o=[];if(!ed)return o;ed.lines.forEach(function(l){var m=trim(l.m);if(m&&num(l.q)>0&&!skuOf(m)&&!isSemiName(m,ed.name)&&o.indexOf(m)<0)o.push(m)});return o}
 
 /* ---- 畫面 ---- */
 function root(){return document.getElementById('smRoot')}
 function render(){var el=root();if(!el)return;var ld=document.getElementById('smLoading');
   if(!S.ready&&S.loading){if(ld){ld.style.display='';ld.textContent='⏳ 讀取採購系統的店製配方與 BOM 表…'}el.style.display='none';return}
   if(ld)ld.style.display='none';el.style.display='';
-  el.innerHTML=(S.edit?editorHTML():listHTML());wire()}
-
+  el.innerHTML=S.edit?editorHTML():(S.view?detailHTML(S.view):listHTML());wire()}
+function cell(l,f){return '<div class="ap-lbl">'+l+'</div><div class="ap-fld">'+f+'</div>'}
+function opts(list,v,ph){return (ph?'<option value="">'+ph+'</option>':'')+list.map(function(x){return '<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>'}).join('')}
 function dls(){return '<datalist id="smItemDL">'+S.bomItems.map(function(n){return '<option value="'+esc(n)+'">'}).join('')+'</datalist>'
   +'<datalist id="smDessertDL">'+S.bomDesserts.map(function(n){return '<option value="'+esc(n)+'">'}).join('')+'</datalist>'
-  +'<datalist id="smSkuDL">'+(R.skus?R.skus():[]).map(function(s){return '<option value="'+esc(s.name)+'">'}).join('')+'</datalist>'}
-
+  +'<datalist id="smSkuDL">'+(R.skus?R.skus():[]).map(function(s){return '<option value="'+esc(s.name)+'">'}).join('')+'</datalist>'
+  +'<datalist id="smStoreDL">'+STORES.map(function(n){return '<option value="'+n+'">'}).join('')+'</datalist>'}
 function apiNote(){if(S.err)return '<div class="ap-bad">⚠ '+esc(S.err)+'</div>';
-  if(S.apiVer>0&&S.apiVer<NEED_VER)return '<div class="ap-bad">⚠ 寫入端版本 v'+S.apiVer+' 太舊，這一頁需要 v'+NEED_VER+'（請總部更新 diybc-semi-api：管理部署作業 → 編輯 → 新版本）。可以瀏覽，暫時不能儲存。</div>';
+  if(S.apiVer>0&&S.apiVer<NEED_VER)return '<div class="ap-bad">⚠ 寫入端版本 v'+S.apiVer+' 太舊，這一頁需要 v'+NEED_VER+'（請總部更新 diybc-semi-api：管理部署作業 → 編輯 → 新版本）。可以瀏覽與查詢，暫時不能儲存。</div>';
   if(S.apiVer<0)return '<div class="ap-muted">（寫入端版本讀不到，儲存時再確認）</div>';return ''}
+function canWrite(){return !!S.api&&S.apiVer>=NEED_VER&&!S.busy}
 
 function listHTML(){var f=nz(S.fq),k=S.fkind;
   var ents=S.ents.filter(function(e){return (!k||e.kind===k)&&(!f||nz(e.item+e.desserts.join('')).indexOf(f)>=0)});
   var h='<div class="ap-card"><div class="ap-actions" style="flex-wrap:wrap;gap:8px;align-items:center">'
     +'<button class="ap-btn" data-smnew="1">＋ 新增店製品項</button>'
-    +'<input type="text" data-smq="1" value="'+esc(S.fq)+'" placeholder="搜尋名稱或甜點" style="min-width:180px">'
-    +'<select data-smkind="1"><option value="">全部類型</option>'+KINDS.map(function(x){return '<option'+(x===k?' selected':'')+'>'+x+'</option>'}).join('')+'</select>'
+    +'<button class="ap-btn2" data-smimport="1" title="匯入標準格式 Excel（一次很多項）">📥 載入半成品/材料包</button><input type="file" data-smfile="1" accept=".xlsx,.xls" style="display:none">'
+    +'<button class="ap-btn2" data-smtpl="1">📄 下載標準格式</button>'
+    +'<button class="ap-btn2" data-smexport="1" title="把下面清單（含目前篩選）的配方與製作說明下載成標準格式，改完可再載入">⬇ 下載目前資料</button>'
+    +'<input type="text" data-smq="1" value="'+esc(S.fq)+'" placeholder="搜尋名稱或甜點" style="min-width:160px;width:auto">'
+    +'<select data-smkind="1" style="width:auto">'+opts(KINDS,k,'全部類型')+'</select>'
     +'<button class="ap-btn2" data-smreload="1">重新讀取</button></div>'
-    +'<div class="ap-muted" style="margin-top:6px">採購系統已登記 <b>'+S.ents.length+'</b> 個店製品項（'+S.rows.length+' 列原料）。每個品項只存「一批用多少原料、做出多少」；每支甜點用多少由 BOM 表決定，採購系統每天 07:05 自動拆成原料。</div>'
+    +'<div class="ap-muted" style="margin-top:6px">採購系統已登記 <b>'+S.ents.length+'</b> 個店製品項（'+S.rows.length+' 列原料）。點名稱看製作方法與所需材料；每支甜點用多少由 BOM 表決定，採購系統每天 07:05 自動拆成原料。</div>'
     +apiNote()+(S.status?'<div style="margin-top:6px">'+S.status+'</div>':'')+'</div>';
-  h+='<div class="ap-card"><div class="ap-items"><table><tr><th>名稱</th><th>類型</th><th>製作</th><th>一批做出</th><th>適用範圍</th><th>原料</th><th>BOM 用到</th><th>狀態</th><th>最後更新</th><th></th></tr>';
-  if(!ents.length)h+='<tr><td colspan="10" class="ap-muted">'+(S.ents.length?'沒有符合的品項':'還沒有任何店製品項，按「＋ 新增店製品項」開始')+'</td></tr>';
-  ents.forEach(function(e){var st=entStatus(e),i=S.ents.indexOf(e);
-    h+='<tr><td><b>'+esc(e.item)+'</b></td><td>'+esc(e.kind)+'</td><td>'+esc(e.maker)+'</td><td>'+r3(e.yq)+' '+esc(e.yu)+'</td>'
+  if(S.queue.length)h+=queueHTML();
+  h+='<div class="ap-card"><div class="ap-items"><table><tr><th>名稱</th><th>類型</th><th>製作</th><th>一批做出</th><th>適用範圍</th><th>材料</th><th>BOM 用到</th><th>狀態</th><th>最後更新</th><th></th></tr>';
+  if(!ents.length)h+='<tr><td colspan="10" class="ap-muted">'+(S.ents.length?'沒有符合的品項':'還沒有任何店製品項，按「＋ 新增店製品項」或「📥 載入半成品/材料包」開始')+'</td></tr>';
+  ents.forEach(function(e){var st=entStatus(e),i=S.ents.indexOf(e),nt=textToTools(e.info.tools).length;
+    h+='<tr><td><a href="javascript:void 0" data-smview="'+i+'" style="font-weight:700">'+esc(e.item)+'</a>'+(e.info.steps?'':' <span class="ap-muted" title="還沒有製作步驟">（無步驟）</span>')+'</td><td>'+esc(e.kind)+'</td><td>'+esc(e.maker)+'</td><td>'+r3(e.yq)+' '+esc(e.yu)+'</td>'
       +'<td>'+(e.shared?'所有甜點共用':esc(e.desserts.slice(0,2).join('、'))+(e.desserts.length>2?' 等 '+e.desserts.length+' 支':''))+'</td>'
-      +'<td>'+e.lines.length+' 項</td><td>'+st.n+' 支</td><td style="color:'+(st.cls==='ok'?'#2E7D32':'#8A5A00')+'">'+st.txt+'</td>'
+      +'<td>'+e.lines.length+' 項'+(nt?'＋器具 '+nt:'')+'</td><td>'+st.n+' 支</td><td style="color:'+(st.cls==='ok'?'#2E7D32':'#8A5A00')+'">'+st.txt+'</td>'
       +'<td class="ap-muted">'+esc(e.ts)+(e.req?'<br>'+esc(e.req):'')+'</td><td><button class="ap-btn2" data-smedit="'+i+'">編輯</button></td></tr>'});
   h+='</table></div></div>';
-  /* 主檔標「半成品」、BOM 有甜點在用、還沒登記的 → 提醒 */
-  var reg={};S.ents.forEach(function(e){reg[e.item]=1});
+  var reg={};S.ents.forEach(function(e){reg[e.item]=1});S.queue.forEach(function(q){reg[trim(q.name)]=1});
   var todo=(R.skus?R.skus():[]).filter(function(s){return trim(s.vendor)==='半成品'&&!reg[s.name]&&bomUse(s.name).length});
-  if(todo.length)h+='<div class="ap-card"><div class="ap-h">📝 主檔標「半成品」、BOM 有甜點在用、還沒登記配方的（'+todo.length+'）</div><div class="ap-muted" style="margin-bottom:4px">含已下架甜點；出貨中心製作或外購的不用登記。</div>'
+  if(todo.length)h+='<div class="ap-card"><div class="ap-h">📝 主檔標「半成品」、BOM 有甜點在用、還沒登記的（'+todo.length+'）</div><div class="ap-muted" style="margin-bottom:4px">含已下架甜點；出貨中心製作或外購的不用登記（請到採購系統主檔把廠商改掉，就不會再出現在這裡）。</div>'
     +todo.map(function(s){return '<button class="ap-btn2" style="margin:2px 4px 2px 0" data-smreg="'+esc(s.name)+'">＋ '+esc(s.name)+'（'+bomUse(s.name).length+' 列）</button>'}).join('')+'</div>';
   return dls()+h}
 
-function newEd(){return {orig:null,name:'',kind:'',maker:'門市',yq:'',yu:'',shared:false,desserts:[],lines:[{m:'',q:'',u:''}],signed:false,signer:'',from:''}}
-function edFromEnt(e){return {orig:e,name:e.item,kind:e.kind,maker:e.maker||'門市',yq:String(e.yq),yu:e.yu,shared:e.shared,desserts:e.desserts.slice(),
-  lines:e.lines.map(function(l){return {m:l.m,q:String(l.q),u:l.u}}),signed:false,signer:'',from:''}}
-function commonUnit(item){var c={};bomUse(item).forEach(function(x){c[x.u]=(c[x.u]||0)+1});var best='',n=0;Object.keys(c).forEach(function(u){if(c[u]>n){n=c[u];best=u}});return best}
+function queueHTML(){var ok=0;
+  var h='<div class="ap-card" style="border:2px solid #E0B75A"><div class="ap-h">📥 待儲存（'+S.queue.length+' 項，還沒寫進採購系統）</div>'
+    +'<div class="ap-items"><table><tr><th>名稱</th><th>類型</th><th>適用範圍</th><th>一批做出</th><th>材料</th><th>會怎樣</th><th>檢查</th><th></th></tr>';
+  S.queue.forEach(function(q,i){var pr=problems(q),df=diffOf(q),same=df&&!df.length;if(!pr.length&&!same)ok++;
+    h+='<tr><td><b>'+esc(q.name)+'</b><div class="ap-muted">'+esc(q.from||'')+'</div></td><td>'+esc(q.kind)+'</td><td>'+(q.shared?'所有甜點共用':esc(q.desserts.join('、')))+'</td><td>'+esc(q.yq)+' '+esc(q.yu)+'</td>'
+      +'<td>'+q.lines.filter(function(l){return trim(l.m)}).length+' 項'+(q.tools.length?'＋器具 '+q.tools.length:'')+'</td><td>'+(!df?'新增':same?'<span class="ap-muted">和採購系統完全相同，會略過</span>':'<span style="color:#8A5A00">取代既有：改了'+df.map(esc).join('、')+'</span>')+'</td>'
+      +'<td>'+(pr.length?'<span class="ap-bad">缺：'+pr.map(esc).join('、')+'</span>':'<span style="color:#2E7D32">✓ 可儲存</span>')+(newMatList(q).length?'<div class="ap-muted">自動建主檔：'+newMatList(q).map(esc).join('、')+'</div>':'')+'</td>'
+      +'<td style="white-space:nowrap"><button class="ap-btn2" data-smqedit="'+i+'">核對／修改</button> <button class="ap-x" data-smqdel="'+i+'" title="移除">✕</button></td></tr>'});
+  h+='</table></div><div style="margin:8px 0"><label style="font-weight:700"><input type="checkbox" data-smqsign="1"'+(S.qSigned?' checked':'')+'> 以上配方已經主管簽核同意</label> 　簽核人 <input type="text" data-smqsigner="1" value="'+esc(S.qSigner)+'" placeholder="例：萱萱、橘子" style="width:180px"></div>'
+    +'<div class="ap-actions"><button class="ap-btn" data-smqsave="1"'+(S.qSigned&&ok&&canWrite()?'':' disabled')+'>💾 全部儲存（'+ok+' 項可存）</button><button class="ap-btn2" data-smqclear="1">清空待儲存</button>'
+    +(ok<S.queue.length?'<span class="ap-muted">有缺漏或和採購系統相同的會略過</span>':'')+'</div></div>';
+  return h}
 
-function editorHTML(){var ed=S.edit,probs=problems(),newMats=newMatList();
-  var h=dls()+'<div class="ap-card"><div class="ap-actions" style="justify-content:space-between"><div class="ap-h" style="margin:0">'+(ed.orig?'✏️ 編輯店製品項：'+esc(ed.orig.item):'＋ 新增店製品項')+'</div>'
-    +'<button class="ap-btn2" data-smback="1">← 回清單</button></div>'
-    +(ed.from?'<div class="ap-muted" style="margin-top:4px">'+esc(ed.from)+'</div>':'')+apiNote()+'</div>';
+/* ---- 查詢詳情（製作或使用時看的頁面）---- */
+function detailHTML(e){var nb=Math.max(0.01,num(S.nb)||1),i=e.info||{},tools=textToTools(i.tools);
+  var groups={'食材':[],'耗材':[],'未建主檔':[],'半成品':[]};
+  e.lines.forEach(function(l){var c=isSemiName(l.m,e.item)?'半成品':catOf(l.m);if(c==='器具'||c==='模具'){tools.push(l);return}(groups[c]=groups[c]||[]).push(l)});
+  function tbl(title,arr,scale){if(!arr.length)return '';return '<div class="ap-h" style="margin-top:10px">'+title+'</div><table style="font-size:14px"><tr><th style="text-align:left">品項</th><th style="text-align:right">'+(scale?'做 '+r3(nb)+' 批':'數量')+'</th><th></th></tr>'
+    +arr.map(function(l){var q=num(l.q);return '<tr><td>'+esc(l.m)+'</td><td style="text-align:right;font-weight:700">'+(q?r3(scale?q*nb:q):'')+'</td><td>'+esc(l.u||'')+'</td></tr>'}).join('')+'</table>'}
+  var st=entStatus(e),steps=String(i.steps||'').split(/\n+/).map(trim).filter(Boolean);
+  var h='<div class="ap-card"><div class="ap-actions" style="justify-content:space-between;flex-wrap:wrap"><div class="ap-h" style="margin:0;font-size:20px">'+esc(e.item)+' <span class="ap-muted" style="font-size:13px">'+esc(e.kind)+'｜'+esc(e.maker)+'製作</span></div>'
+    +'<div><button class="ap-btn2" data-smprint="1">🖨 列印</button> <button class="ap-btn2" data-smeditview="1">✏️ 編輯</button> <button class="ap-btn2" data-smback="1">← 回清單</button></div></div>'
+    +'<div style="margin-top:6px">一批做出 <b>'+r3(e.yq)+' '+esc(e.yu)+'</b>　｜　適用：'+(e.shared?'所有甜點共用':esc(e.desserts.join('、')))+'　｜　<span style="color:'+(st.cls==='ok'?'#2E7D32':'#8A5A00')+'">'+st.txt+'</span></div>'
+    +'<div style="margin-top:8px;padding:8px;background:#FFF8E6;border-radius:6px">要做 <input type="number" min="0.5" step="0.5" data-smnb="1" value="'+esc(S.nb)+'" style="width:70px;display:inline-block"> 批 → 共做出 <b>'+r3(e.yq*nb)+' '+esc(e.yu)+'</b>（下方用量已換算）</div></div>';
+  h+='<div class="ap-card">'+tbl('🥣 食材',groups['食材'],true)+tbl('⤷ 半成品（另見該品項）',groups['半成品'],true)+tbl('📦 耗材',groups['耗材'],true)+tbl('❓ 主檔還沒有的品項',groups['未建主檔'],true)
+    +tbl('🔧 器具／模具',tools,false)+(tools.length?'':'<div class="ap-muted" style="margin-top:10px">🔧 器具／模具：還沒填</div>')+'</div>';
+  h+='<div class="ap-card"><div class="ap-h">📋 製作步驟</div>'+(steps.length?'<ol style="margin:4px 0 0 20px;line-height:1.8">'+steps.map(function(s){return '<li>'+esc(s)+'</li>'}).join('')+'</ol>':'<div class="ap-muted">還沒填製作步驟，按「✏️ 編輯」補上。</div>')+'</div>';
+  h+='<div class="ap-card"><div class="ap-row ap-row-2" style="border:1px solid #E3ECE9;border-radius:8px;overflow:hidden">'+cell('存放方式',esc(i.store||'—'))+cell('拿取方式',esc(i.take||'—'))+'</div>'
+    +(i.usage?'<div style="margin-top:8px"><b>使用說明：</b>'+esc(i.usage).replace(/\n/g,'<br>')+'</div>':'')+(i.note?'<div style="margin-top:6px"><b>備註：</b>'+esc(i.note).replace(/\n/g,'<br>')+'</div>':'')
+    +'<div class="ap-muted" style="margin-top:8px">最後更新 '+esc(e.ts)+(e.req?'｜'+esc(e.req):'')+'</div></div>';
+  var u=usage(e.item,e.yu,e.shared,e.desserts);
+  if(u.ok.length)h+='<div class="ap-card"><div class="ap-h">📐 用到的甜點（每份用量，採購系統照這個換算）</div><table style="font-size:13px">'+u.ok.slice(0,20).map(function(x){return '<tr><td>'+esc(x.d)+'</td><td>每份 '+r3(x.q)+' '+esc(e.yu)+(x.n>1?'（'+x.n+' 處加總）':'')+'</td></tr>'}).join('')+(u.ok.length>20?'<tr><td colspan="2" class="ap-muted">…共 '+u.ok.length+' 支</td></tr>':'')+'</table></div>';
+  return h}
+
+function editorHTML(){var ed=S.edit,probs=problems(ed),newMats=newMatList(ed),inQ=ed.qi>=0;
+  var h=dls()+'<div class="ap-card"><div class="ap-actions" style="justify-content:space-between"><div class="ap-h" style="margin:0">'+(inQ?'📥 核對待儲存：':ed.orig?'✏️ 編輯店製品項：':'＋ 新增店製品項')+esc(ed.orig?ed.orig.item:ed.name)+'</div>'
+    +'<button class="ap-btn2" data-smback="1">← 回清單</button></div>'+(ed.from?'<div class="ap-muted" style="margin-top:4px">'+esc(ed.from)+'</div>':'')
+    +(ed.orig&&(inQ||ed.from)?'<div style="margin-top:4px;color:#8A5A00">採購系統已有同名同範圍的配方，儲存會取代它。</div>':'')+apiNote()+'</div>';
   h+='<div class="ap-card"><div class="ap-sheet" style="border:1px solid #E3ECE9;border-radius:8px;overflow:hidden"><div class="ap-row ap-row-3">'
     +cell('名稱','<input type="text" data-sme="name" list="smItemDL" value="'+esc(ed.name)+'" placeholder="要和 BOM 表的品項名一模一樣（可從下拉選）" autocomplete="off">')
-    +cell('類型','<select data-sme="kind"><option value="">— 請選 —</option>'+KINDS.map(function(x){return '<option'+(x===ed.kind?' selected':'')+'>'+x+'</option>'}).join('')+'</select>')
-    +cell('製作單位','<select data-sme="maker">'+MAKERS.map(function(x){return '<option'+(x===ed.maker?' selected':'')+'>'+x+'</option>'}).join('')+'</select>')+'</div>';
+    +cell('類型','<select data-sme="kind">'+opts(KINDS,ed.kind,'— 請選 —')+'</select>')
+    +cell('製作單位','<select data-sme="maker">'+opts(MAKERS,ed.maker)+'</select>')+'</div>';
   h+='<div class="ap-row ap-row-3">'
     +cell('一批做出','<input type="number" step="any" min="0" data-sme="yq" value="'+esc(ed.yq)+'" placeholder="數量" style="width:100px"> <input type="text" data-sme="yu" value="'+esc(ed.yu)+'" placeholder="g／包／片" style="width:80px">')
     +cell('適用範圍','<label style="font-weight:400;margin-right:12px"><input type="radio" name="smscope" data-smscope="shared"'+(ed.shared?' checked':'')+'> 所有甜點共用</label><label style="font-weight:400"><input type="radio" name="smscope" data-smscope="some"'+(ed.shared?'':' checked')+'> 指定甜點</label>')
-    +cell('BOM 用法',ed.name?(bomUse(ed.name).length?'<span class="ap-muted">BOM 有 '+bomUse(ed.name).length+' 列用到「'+esc(ed.name)+'」，常用單位「'+esc(commonUnit(ed.name))+'」</span>':'<span class="ap-bad">BOM 表沒有「'+esc(ed.name)+'」這個品項（新品還沒上架可先存；名稱要和 BOM 一致才會生效）</span>'):'<span class="ap-muted">先填名稱</span>')+'</div>';
+    +cell('BOM 用法',ed.name?(bomUse(ed.name).length?'<span class="ap-muted">BOM 有 '+bomUse(ed.name).length+' 列用到，常用單位「'+esc(commonUnit(ed.name))+'」</span>':'<span class="ap-bad">BOM 表沒有「'+esc(ed.name)+'」（新品還沒上架可先存；名稱要和 BOM 一致才會生效）</span>'):'<span class="ap-muted">先填名稱</span>')+'</div>';
   if(!ed.shared){var cand={};bomUse(ed.name).forEach(function(x){cand[x.d]=1});ed.desserts.forEach(function(d){cand[d]=1});var cl=Object.keys(cand).sort();
     h+='<div class="ap-row ap-row-1"><div class="ap-lbl">指定甜點</div><div class="ap-fld" style="display:block">'
       +(cl.length?cl.map(function(d){return '<label style="display:inline-block;font-weight:400;margin:2px 12px 2px 0"><input type="checkbox" data-smd="'+esc(d)+'"'+(ed.desserts.indexOf(d)>=0?' checked':'')+'> '+esc(d)+(S.bomDesserts.indexOf(d)<0?' <span class="ap-bad">（BOM 沒有這支）</span>':'')+'</label>'}).join(''):'<span class="ap-muted">BOM 裡還沒有甜點用到這個品項。</span>')
       +'<div style="margin-top:4px"><input type="text" data-smadd="1" list="smDessertDL" placeholder="加一支甜點（BOM 表甜點名稱）" style="min-width:240px;width:auto" autocomplete="off"> <button class="ap-btn2" data-smaddbtn="1">加入</button></div></div></div>'}
+  h+='<div class="ap-row ap-row-2">'+cell('存放方式','<input type="text" data-sme="store" list="smStoreDL" value="'+esc(ed.store)+'" placeholder="冷藏／冷凍／常溫，可補充說明">')
+    +cell('拿取方式','<select data-sme="take">'+opts(TAKES,ed.take,'— 請選 —')+'</select>')+'</div>';
   h+='</div></div>';
-  h+='<div class="ap-card"><div class="ap-h">一批用料</div><div class="ap-items"><table><tr><th>品項（可填另一個店製品項，例：材料包裡的油皮）</th><th>每批用量</th><th>單位</th><th></th></tr>';
+  h+='<div class="ap-card"><div class="ap-h">🥣 一批用的食材／耗材（採購系統據此叫料）</div><div class="ap-items"><table><tr><th>品項（可填另一個店製品項，例：材料包裡的油皮）</th><th>每批用量</th><th>單位</th><th></th></tr>';
   ed.lines.forEach(function(l,i){var s=skuOf(l.m),tag='';
     if(trim(l.m))tag=s?'<span class="ap-muted">'+esc(s.id)+' · '+esc(s.cat||'')+'</span>':(isSemiName(l.m,ed.name)?'<span style="color:#2E6B8A;font-weight:700">⤷ 店製品項</span>':'<span class="ap-new">🆕 儲存時自動建主檔</span>');
+    if(s&&/器具|模具/.test(trim(s.cat)))tag+=' <span class="ap-bad">這是器具／模具，請移到下方「器具／模具」</span>';
     if(badUnit(l))tag+=' <span class="ap-bad">⚠ 單位「'+esc(l.u)+'」採購系統換算不到，請改克數</span>';
     h+='<tr><td><input type="text" data-sml="m" data-i="'+i+'" list="smSkuDL" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-src">'+tag+'</div></td>'
       +'<td><input type="number" step="any" min="0" data-sml="q" data-i="'+i+'" value="'+esc(l.q)+'" style="width:100px"></td>'
       +'<td><input type="text" data-sml="u" data-i="'+i+'" value="'+esc(l.u)+'" style="width:70px"></td>'
       +'<td><button class="ap-x" data-smdel="'+i+'" title="刪除這列">✕</button></td></tr>'});
-  h+='</table></div><div class="ap-actions"><button class="ap-btn2" data-smaddline="1">＋ 加一列用料</button><span class="ap-muted">水、冰塊不用列。製作步驟、存放方式請寫在食譜系統「訓練&材料」的食譜裡。</span></div></div>';
+  h+='</table></div><div class="ap-actions"><button class="ap-btn2" data-smaddline="1">＋ 加一列</button><span class="ap-muted">水、冰塊不用列。</span></div>';
+  h+='<div class="ap-h" style="margin-top:12px">🔧 器具／模具（不叫料，只給製作時看）</div><div class="ap-items"><table><tr><th>品項</th><th>數量</th><th>單位</th><th></th></tr>';
+  ed.tools.forEach(function(t,i){h+='<tr><td><input type="text" data-smt="m" data-i="'+i+'" list="smSkuDL" value="'+esc(t.m)+'" autocomplete="off"></td><td><input type="text" data-smt="q" data-i="'+i+'" value="'+esc(t.q)+'" style="width:80px"></td><td><input type="text" data-smt="u" data-i="'+i+'" value="'+esc(t.u)+'" style="width:70px"></td><td><button class="ap-x" data-smtdel="'+i+'">✕</button></td></tr>'});
+  if(!ed.tools.length)h+='<tr><td colspan="4" class="ap-muted">還沒有器具／模具</td></tr>';
+  h+='</table></div><div class="ap-actions"><button class="ap-btn2" data-smaddtool="1">＋ 加一列器具／模具</button></div></div>';
+  h+='<div class="ap-card"><div class="ap-h">📋 製作步驟與說明</div><div class="ap-sheet" style="border:1px solid #E3ECE9;border-radius:8px;overflow:hidden">'
+    +'<div class="ap-row ap-row-1">'+cell('製作步驟','<textarea data-sme="steps" rows="6" placeholder="每行一步">'+esc(ed.steps)+'</textarea>')+'</div>'
+    +'<div class="ap-row ap-row-1">'+cell('使用說明','<textarea data-sme="usage" rows="2" placeholder="例：一包給一位客人，擠花前先回溫 10 分鐘">'+esc(ed.usage)+'</textarea>')+'</div>'
+    +'<div class="ap-row ap-row-1">'+cell('備註','<textarea data-sme="note" rows="2">'+esc(ed.note)+'</textarea>')+'</div></div></div>';
   h+='<div class="ap-card"><div class="ap-h">📐 BOM 使用情況（採購系統會這樣算）</div>'+useHTML(ed)+'</div>';
   h+='<div class="ap-card" style="position:sticky;bottom:0;z-index:5;box-shadow:0 -2px 8px rgba(0,0,0,.08)">';
   if(probs.length)h+='<div class="ap-bad">儲存前要補：'+probs.map(esc).join('｜')+'</div>';
   if(newMats.length)h+='<div>主檔沒有、儲存時會<b>自動建草稿</b>：'+newMats.map(esc).join('、')+'</div>';
-  h+='<div style="margin:6px 0"><label style="font-weight:700"><input type="checkbox" data-smsign="1"'+(ed.signed?' checked':'')+'> 本配方已經主管簽核同意</label> 　簽核人 <input type="text" data-smsigner="1" value="'+esc(ed.signer)+'" placeholder="例：萱萱、橘子" style="width:180px"></div>';
-  var can=!probs.length&&ed.signed&&!S.busy&&!!S.api&&S.apiVer>=NEED_VER;
-  h+='<div class="ap-actions"><button class="ap-btn" data-smsave="1"'+(can?'':' disabled')+'>'+(S.busy?'儲存中…':'💾 儲存到採購系統')+'</button><button class="ap-btn2" data-smback="1">取消</button>'
-    +(ed.orig?'<button class="ap-btn2" data-smdisable="1" style="margin-left:auto;color:#B3261E"'+(S.busy||S.apiVer<NEED_VER?' disabled':'')+'>🗑 停用此品項</button>':'')+'</div>';
-  if(!ed.signed&&!probs.length)h+='<div class="ap-muted">勾選「本配方已經主管簽核同意」後才能儲存。</div>';
+  if(inQ){h+='<div class="ap-actions"><button class="ap-btn" data-smqdone="1">✓ 核對完成，回待儲存清單</button><button class="ap-btn2" data-smback="1">取消</button></div>'}
+  else{
+    h+='<div style="margin:6px 0"><label style="font-weight:700"><input type="checkbox" data-smsign="1"'+(ed.signed?' checked':'')+'> 本配方已經主管簽核同意</label> 　簽核人 <input type="text" data-smsigner="1" value="'+esc(ed.signer)+'" placeholder="例：萱萱、橘子" style="width:180px;display:inline-block"></div>';
+    h+='<div class="ap-actions"><button class="ap-btn" data-smsave="1"'+(!probs.length&&ed.signed&&canWrite()?'':' disabled')+'>'+(S.busy?'儲存中…':'💾 儲存到採購系統')+'</button><button class="ap-btn2" data-smback="1">取消</button>'
+      +(ed.orig?'<button class="ap-btn2" data-smdisable="1" style="margin-left:auto;color:#B3261E"'+(canWrite()?'':' disabled')+'>🗑 停用此品項</button>':'')+'</div>';
+    if(!ed.signed&&!probs.length)h+='<div class="ap-muted">勾選「本配方已經主管簽核同意」後才能儲存。</div>'}
   if(S.status)h+='<div style="margin-top:4px">'+S.status+'</div>';
   h+='</div>';return h}
-function cell(l,f){return '<div class="ap-lbl">'+l+'</div><div class="ap-fld">'+f+'</div>'}
 
 function useHTML(ed){var yq=num(ed.yq),yu=trim(ed.yu),name=trim(ed.name);
   if(!name||!(yq>0)||!yu)return '<div class="ap-muted">填好名稱與「一批做出」後，這裡會列出每支甜點每份用多少、換算要多少原料。</div>';
   if(!ed.shared&&!ed.desserts.length)return '<div class="ap-muted">勾選至少一支甜點。</div>';
   var u=usage(name,yu,ed.shared,ed.desserts),its=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0});
-  var h='<div class="ap-muted">每支甜點用多少由 BOM 表決定；這裡只負責「一批的配方」。'+(ed.shared?'（所有甜點共用：BOM 裡每支用到的甜點都算）':'')+'</div>';
+  var h='<div class="ap-muted">每支甜點用多少由 BOM 表決定；這裡只負責「一批的配方」。</div>';
   if(!u.ok.length)h+='<div class="ap-muted" style="margin-top:4px">BOM 目前沒有'+(ed.shared?'':'所選的')+'甜點以「'+esc(yu)+'」用到「'+esc(name)+'」。新品上架後名稱一致就會生效。</div>';
   else h+='<table style="margin-top:4px;font-size:13px"><tr><th style="text-align:left">甜點</th><th style="text-align:left">每份用「'+esc(name)+'」</th><th style="text-align:left">每份需要</th></tr>'
     +u.ok.slice(0,12).map(function(x){return '<tr><td>'+esc(x.d)+'</td><td>'+r3(x.q)+' '+esc(yu)+(x.n>1?'（'+x.n+' 處加總）':'')+'</td><td>'+its.map(function(l){return esc(l.m)+' '+r3(num(l.q)*x.q/yq)+' '+esc(l.u)}).join('、')+'</td></tr>'}).join('')
@@ -2264,32 +2376,28 @@ function useHTML(ed){var yq=num(ed.yq),yu=trim(ed.yu),name=trim(ed.name);
   if(bk.length)h+='<div class="ap-bad" style="margin-top:4px">⚠ '+bk.length+' 支甜點的單位不是「'+esc(yu)+'」，採購系統算不到：'+bk.slice(0,6).map(function(d){return esc(d)+'（'+esc(u.bad[d])+'）'}).join('、')+'</div>';
   return h}
 
-function problems(){var ed=S.edit,e=[];if(!ed)return e;
-  if(!trim(ed.name))e.push('名稱');if(!ed.kind)e.push('類型');
-  if(ed.maker==='出貨中心')e.push('出貨中心製作的不寫入採購系統（出貨中心自己備料）');
-  if(!(num(ed.yq)>0)||!trim(ed.yu))e.push('一批做出（數量＋單位）');
-  if(!ed.shared&&!ed.desserts.length)e.push('至少勾一支甜點');
-  if(!ed.lines.some(function(l){return trim(l.m)&&num(l.q)>0}))e.push('至少一列用料');
-  var seen={};ed.lines.forEach(function(l){var m=trim(l.m);if(!m)return;if(seen[m])e.push('用料「'+m+'」重複');seen[m]=1;if(!(num(l.q)>0))e.push('用料「'+m+'」沒填每批用量')});
-  return e}
-function newMatList(){var ed=S.edit,o=[];if(!ed)return o;ed.lines.forEach(function(l){var m=trim(l.m);if(m&&num(l.q)>0&&!skuOf(m)&&!isSemiName(m,ed.name)&&o.indexOf(m)<0)o.push(m)});return o}
-
 /* ---- 事件 ---- */
 function wire(){var el=root();if(!el)return;
   function on(sel,ev,fn){el.querySelectorAll(sel).forEach(function(x){x['on'+ev]=function(e){fn(x,e)}})}
-  on('[data-smnew]','click',function(){S.edit=newEd();S.status='';render()});
+  on('[data-smnew]','click',function(){S.edit=newEd();S.view=null;S.status='';render()});
   on('[data-smreload]','click',function(){S.status='';S.bomRows=null;loadAll()});
+  on('[data-smimport]','click',function(){var f=el.querySelector('[data-smfile]');if(f){f.value='';f.click()}});
+  on('[data-smfile]','change',function(x){var f=x.files&&x.files[0];if(f)importFile(f,null)});
+  on('[data-smtpl]','click',function(){downloadTemplate(null)});
+  on('[data-smexport]','click',function(){var f=nz(S.fq),k=S.fkind;downloadTemplate(S.ents.filter(function(e){return (!k||e.kind===k)&&(!f||nz(e.item+e.desserts.join('')).indexOf(f)>=0)}))});
   on('[data-smq]','input',function(x){S.fq=x.value;var p=x.selectionStart;render();var n=root().querySelector('[data-smq]');if(n){n.focus();try{n.setSelectionRange(p,p)}catch(e){}}});
   on('[data-smkind]','change',function(x){S.fkind=x.value;render()});
+  on('[data-smview]','click',function(x){S.view=S.ents[+x.getAttribute('data-smview')];S.nb='1';render();try{window.scrollTo(0,0)}catch(e){}});
+  on('[data-smnb]','change',function(x){S.nb=x.value;render()});
+  on('[data-smprint]','click',function(){try{window.print()}catch(e){}});
+  on('[data-smeditview]','click',function(){S.edit=edFromEnt(S.view);S.view=null;S.status='';render()});
   on('[data-smedit]','click',function(x){S.edit=edFromEnt(S.ents[+x.getAttribute('data-smedit')]);S.status='';render()});
-  on('[data-smreg]','click',function(x){var ed=newEd(),n=x.getAttribute('data-smreg');ed.name=n;ed.yu=commonUnit(n);
-    var ds={};bomUse(n).forEach(function(b){ds[b.d]=1});ed.desserts=Object.keys(ds).sort();S.edit=ed;S.status='';render()});
-  on('[data-smback]','click',function(){S.edit=null;render()});
+  on('[data-smreg]','click',function(x){var ed=newEd(),n=x.getAttribute('data-smreg');ed.name=n;ed.yu=commonUnit(n);ed.desserts=bomDessertsOf(n);S.edit=ed;S.status='';render()});
+  on('[data-smback]','click',function(){S.edit=null;S.view=null;render()});
   on('[data-sme]','change',function(x){var k=x.getAttribute('data-sme'),ed=S.edit;ed[k]=x.value;
-    if(k==='name'){var n=trim(x.value);if(!trim(ed.yu))ed.yu=commonUnit(n);
-      if(!ed.shared&&!ed.desserts.length){var ds={};bomUse(n).forEach(function(b){ds[b.d]=1});ed.desserts=Object.keys(ds).sort()}
+    if(k==='name'){var n=trim(x.value);if(!trim(ed.yu))ed.yu=commonUnit(n);if(!ed.shared&&!ed.desserts.length)ed.desserts=bomDessertsOf(n);
       if(!ed.kind&&/材料包|食材包/.test(n))ed.kind='材料包';else if(!ed.kind&&/組合/.test(n))ed.kind='分裝包'}
-    render()});
+    if(k!=='steps'&&k!=='usage'&&k!=='note')render()});
   on('[data-sme]','input',function(x){S.edit[x.getAttribute('data-sme')]=x.value});
   on('[data-smscope]','change',function(x){S.edit.shared=x.getAttribute('data-smscope')==='shared';render()});
   on('[data-smd]','change',function(x){var d=x.getAttribute('data-smd'),a=S.edit.desserts,i=a.indexOf(d);if(x.checked&&i<0)a.push(d);if(!x.checked&&i>=0)a.splice(i,1);a.sort();render()});
@@ -2299,76 +2407,176 @@ function wire(){var el=root();if(!el)return;
     if(k==='m'&&!trim(l.u)){var s=skuOf(l.m);if(s)l.u=trim(s.useUnit)}render()});
   on('[data-smdel]','click',function(x){S.edit.lines.splice(+x.getAttribute('data-smdel'),1);if(!S.edit.lines.length)S.edit.lines.push({m:'',q:'',u:''});render()});
   on('[data-smaddline]','click',function(){S.edit.lines.push({m:'',q:'',u:''});render()});
+  on('[data-smt]','input',function(x){S.edit.tools[+x.getAttribute('data-i')][x.getAttribute('data-smt')]=x.value});
+  on('[data-smt]','change',function(x){var t=S.edit.tools[+x.getAttribute('data-i')];t[x.getAttribute('data-smt')]=x.value;if(!trim(t.u)){var s=skuOf(t.m);if(s)t.u=trim(s.useUnit)}});
+  on('[data-smtdel]','click',function(x){S.edit.tools.splice(+x.getAttribute('data-smtdel'),1);render()});
+  on('[data-smaddtool]','click',function(){S.edit.tools.push({m:'',q:'1',u:''});render()});
   on('[data-smsign]','change',function(x){S.edit.signed=x.checked;render()});
   on('[data-smsigner]','input',function(x){S.edit.signer=x.value});
-  on('[data-smsave]','click',function(){save()});
+  on('[data-smsave]','click',function(){saveOne()});
   on('[data-smdisable]','click',function(){disable()});
+  on('[data-smqedit]','click',function(x){var i=+x.getAttribute('data-smqedit');S.edit=S.queue[i];S.edit.qi=i;render()});
+  on('[data-smqdone]','click',function(){var ed=S.edit;S.queue[ed.qi]=attachOrig(ed);ed.qi=-1;S.edit=null;render()});
+  on('[data-smqdel]','click',function(x){S.queue.splice(+x.getAttribute('data-smqdel'),1);render()});
+  on('[data-smqclear]','click',function(){if(confirm('清空待儲存清單？（還沒寫進採購系統，清掉就沒了）')){S.queue=[];render()}});
+  on('[data-smqsign]','change',function(x){S.qSigned=x.checked;render()});
+  on('[data-smqsigner]','input',function(x){S.qSigner=x.value});
+  on('[data-smqsave]','click',function(){saveQueue()});
 }
 
-/* ---- 儲存／停用 ---- */
+/* ---- 儲存（單筆／批次共用）---- */
 function keysOf(item,shared,desserts){return shared?[[SHARED,item]]:desserts.map(function(d){return [d,item]})}
-function save(){var ed=S.edit;if(!ed||S.busy)return;var pr=problems();if(pr.length){alert('儲存前請先補：\n'+pr.join('\n'));return}
-  if(!ed.signed){alert('請先勾選「本配方已經主管簽核同意」');return}
-  if(!S.api||S.apiVer<NEED_VER){alert('寫入端尚未就緒（需要 diybc-semi-api v'+NEED_VER+'）');return}
-  var name=trim(ed.name),yq=num(ed.yq),yu=trim(ed.yu),lines=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0});
-  var ds=ed.shared?[SHARED]:ed.desserts.slice(),rows=[];
-  ds.forEach(function(d){lines.forEach(function(l){var s=skuOf(l.m);rows.push({dessert:d,item:name,kind:ed.kind,maker:ed.maker,yq:yq,yu:yu,mat:trim(l.m),q:num(l.q),u:trim(l.u),sku:s?s.id:''})})});
-  var newKeys=keysOf(name,ed.shared,ed.desserts),oldKeys=ed.orig?keysOf(ed.orig.item,ed.orig.shared,ed.orig.desserts):[];
-  /* 會蓋到別的店製品項（同名、同甜點）→ 先問 */
-  var nk={};newKeys.forEach(function(k){nk[k[0]+'\u0001'+k[1]]=1});
-  var hit=S.ents.filter(function(e){return e!==ed.orig&&keysOf(e.item,e.shared,e.desserts).some(function(k){return nk[k[0]+'\u0001'+k[1]]})});
-  var bu=lines.filter(badUnit).map(function(l){return l.m+' '+l.q+' '+l.u});
-  var msg='儲存到採購系統：\n'+name+'（'+ed.kind+'，一批做出 '+yq+' '+yu+'）\n適用：'+(ed.shared?'所有甜點共用':ed.desserts.join('、'))+'\n原料 '+lines.length+' 項'
-    +(hit.length?'\n⚠ 會取代既有配方：'+hit.map(function(e){return e.id}).join('、'):'')
-    +(newMatList().length?'\n主檔沒有的原料會自動建草稿：'+newMatList().join('、'):'')
-    +(bu.length?'\n⚠ 單位換算不到（先照存，算不出用量）：'+bu.join('、'):'')+'\n簽核：'+(trim(ed.signer)||'已確認')+'\n\n確定？';
-  if(!confirm(msg))return;
-  post({token:TOKEN,source:'品項：'+name,req_id:'簽核：'+(trim(ed.signer)||'已確認')+' '+ymd(),byKeys:true,removeKeys:oldKeys,rows:rows},
-    function(p){var mine=p.rows.filter(function(r){return r.item===name});
-      var okNew=newKeys.every(function(k){return lines.every(function(l){return mine.some(function(r){return r.dessert===k[0]&&r.mat===trim(l.m)&&Math.abs(r.q-num(l.q))<1e-6&&r.yq===yq})})&&mine.filter(function(r){return r.dessert===k[0]}).length===lines.length});
-      var gone=oldKeys.filter(function(k){return !nk[k[0]+'\u0001'+k[1]]}).every(function(k){return !p.rows.some(function(r){return r.dessert===k[0]&&r.item===k[1]})});
-      return okNew&&gone},
-    '✓ 已儲存「'+name+'」並讀回確認',rows)}
+function payloadOf(ed,signer){var name=trim(ed.name),yq=num(ed.yq),yu=trim(ed.yu),lines=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0}),rows=[];
+  (ed.shared?[SHARED]:ed.desserts).forEach(function(d){lines.forEach(function(l){var s=skuOf(l.m);rows.push({dessert:d,item:name,kind:ed.kind,maker:ed.maker,yq:yq,yu:yu,mat:trim(l.m),q:num(l.q),u:trim(l.u),sku:s?s.id:''})})});
+  var oldKeys=ed.orig?keysOf(ed.orig.item,ed.orig.shared,ed.orig.desserts):[];
+  return {token:TOKEN,source:'品項：'+name,req_id:'簽核：'+(trim(signer)||'已確認')+' '+ymd(),byKeys:true,removeKeys:oldKeys,rows:rows,
+    info:{store:trim(ed.store),take:trim(ed.take),usage:ed.usage||'',steps:ed.steps||'',tools:toolsToText(ed.tools),note:ed.note||''}}}
+function checkOf(ed,pl){var name=trim(ed.name),newKeys=keysOf(name,ed.shared,ed.desserts),nk={};newKeys.forEach(function(k){nk[ikey(k[0],k[1])]=1});
+  var lines=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0});
+  return function(p){var mine=p.rows.filter(function(r){return r.item===name});
+    var ok=newKeys.every(function(k){var mk=mine.filter(function(r){return r.dessert===k[0]});return mk.length===lines.length&&lines.every(function(l){return mk.some(function(r){return r.mat===trim(l.m)&&Math.abs(r.q-num(l.q))<1e-6&&r.yq===num(ed.yq)})})});
+    var gone=pl.removeKeys.filter(function(k){return !nk[ikey(k[0],k[1])]}).every(function(k){return !p.rows.some(function(r){return r.dessert===k[0]&&r.item===k[1]})});
+    return ok&&gone}}
+function sendAndVerify(pl,check){return new Promise(function(resolve){
+  var p;try{p=fetch(S.api,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify(pl)})}catch(e){p=Promise.resolve()}
+  Promise.resolve(p).catch(function(){}).then(function(){(function v(att){setTimeout(function(){
+    jq('select *').then(function(r){var p2=parseSemi(r);if(!p2)throw 'bad';S.rows=p2.rows;
+      if(check(p2)){resolve(true);return}if(att+1<VERIFY.length)v(att+1);else resolve(false)})
+    .catch(function(){if(att+1<VERIFY.length)v(att+1);else resolve(false)})},VERIFY[att])})(0)})})}
+function afterWrite(msg,allRows){return loadData().then(function(){S.busy=false;S.status=msg;render();skuReport(allRows)})}
+function saveOne(){var ed=S.edit;if(!ed||S.busy)return;var pr=problems(ed);if(pr.length){alert('儲存前請先補：\n'+pr.join('\n'));return}
+  if(!ed.signed){alert('請先勾選「本配方已經主管簽核同意」');return}if(!canWrite()){alert('寫入端尚未就緒（需要 diybc-semi-api v'+NEED_VER+'）');return}
+  var pl=payloadOf(ed,ed.signer),nk={};keysOf(trim(ed.name),ed.shared,ed.desserts).forEach(function(k){nk[ikey(k[0],k[1])]=1});
+  var hit=S.ents.filter(function(e){return e!==ed.orig&&keysOf(e.item,e.shared,e.desserts).some(function(k){return nk[ikey(k[0],k[1])]})});
+  var bu=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0&&badUnit(l)}).map(function(l){return l.m+' '+l.q+' '+l.u});
+  if(!confirm('儲存到採購系統：\n'+trim(ed.name)+'（'+ed.kind+'，一批做出 '+num(ed.yq)+' '+trim(ed.yu)+'）\n適用：'+(ed.shared?'所有甜點共用':ed.desserts.join('、'))+'\n食材／耗材 '+pl.rows.length/Math.max(1,(ed.shared?1:ed.desserts.length))+' 項、器具／模具 '+ed.tools.filter(function(t){return trim(t.m)}).length+' 項'
+    +(hit.length?'\n⚠ 會取代既有配方：'+hit.map(function(e){return e.id}).join('、'):'')+(newMatList(ed).length?'\n主檔沒有的會自動建草稿：'+newMatList(ed).join('、'):'')
+    +(bu.length?'\n⚠ 單位換算不到（先照存，算不出用量）：'+bu.join('、'):'')+'\n簽核：'+(trim(ed.signer)||'已確認')+'\n\n確定？'))return;
+  S.busy=true;S.status='<span class="ap-muted">儲存中…（寫完會自動讀回核對，約 3～15 秒）</span>';render();
+  sendAndVerify(pl,checkOf(ed,pl)).then(function(ok){
+    if(ok){S.edit=null;S.view=null;afterWrite('<span style="color:#2E7D32;font-weight:700">✓ 已儲存「'+esc(trim(ed.name))+'」並讀回確認（'+new Date().toTimeString().slice(0,5)+'）。採購系統明天 07:05 重算後生效。</span>',pl.rows)}
+    else{S.busy=false;S.status='<span class="ap-bad">✕ 讀回對不上，可能沒有寫進去。請稍後再按一次；兩次都失敗請通知 Chat。</span>';render()}})}
+function saveQueue(){if(S.busy)return;if(!S.qSigned){alert('請先勾選「以上配方已經主管簽核同意」');return}if(!canWrite()){alert('寫入端尚未就緒（需要 diybc-semi-api v'+NEED_VER+'）');return}
+  var all=S.queue.map(function(q){return attachOrig(q)}),same=all.filter(function(q){var d=diffOf(q);return d&&!d.length});
+  var list=all.filter(function(q){var d=diffOf(q);return !problems(q).length&&!(d&&!d.length)});
+  if(!list.length){alert(same.length?'待儲存的項目都和採購系統現有配方完全相同，不用儲存。':'沒有可以儲存的項目，請先核對補齊');return}
+  var rep=list.filter(function(q){return q.orig}).map(function(q){return q.orig.id});
+  if(!confirm('一次儲存 '+list.length+' 項到採購系統：\n'+list.map(function(q){return '・'+trim(q.name)+'（'+(q.shared?'共用':q.desserts.join('、'))+'）'}).join('\n')+(rep.length?'\n⚠ 會取代既有：'+rep.join('、'):'')+'\n簽核：'+(trim(S.qSigner)||'已確認')+'\n\n確定？'))return;
+  S.busy=true;var done=[],fail=[],allRows=[];
+  (function next(i){if(i>=list.length){S.queue=S.queue.filter(function(q){return done.indexOf(q)<0&&same.indexOf(q)<0});S.qSigned=false;
+      afterWrite((done.length?'<span style="color:#2E7D32;font-weight:700">✓ 已儲存 '+done.length+' 項並逐項讀回確認：'+done.map(function(q){return esc(trim(q.name))}).join('、')+'</span>':'')
+        +(same.length?'<div class="ap-muted">'+same.length+' 項和採購系統完全相同，已略過：'+same.map(function(q){return esc(trim(q.name))}).join('、')+'</div>':'')
+        +(fail.length?'<div class="ap-bad">✕ '+fail.length+' 項沒有確認寫入：'+fail.map(function(q){return esc(trim(q.name))}).join('、')+'（仍留在待儲存，請再按一次）</div>':''),allRows);return}
+    var q=list[i],pl=payloadOf(q,S.qSigner);S.status='<span class="ap-muted">儲存中… 第 '+(i+1)+'／'+list.length+' 項「'+esc(trim(q.name))+'」</span>';render();
+    sendAndVerify(pl,checkOf(q,pl)).then(function(ok){(ok?done:fail).push(q);if(ok)allRows=allRows.concat(pl.rows);S.ents=buildEnts(S.rows);next(i+1)})})(0)}
 function disable(){var ed=S.edit;if(!ed||!ed.orig||S.busy)return;var o=ed.orig,keys=keysOf(o.item,o.shared,o.desserts);
-  if(!confirm('停用「'+o.item+'」（'+(o.shared?'所有甜點共用':o.desserts.join('、'))+'）？\n採購系統會把它從配方移除，明天 07:05 起不再拆成原料。\n（主檔品項不會刪除）'))return;
-  post({token:TOKEN,source:'品項：'+o.item,req_id:'停用 '+ymd(),byKeys:true,clear:true,removeKeys:keys,rows:[]},
-    function(p){return keys.every(function(k){return !p.rows.some(function(r){return r.dessert===k[0]&&r.item===k[1]})})},
-    '✓ 已停用「'+o.item+'」並讀回確認',[])}
-function post(payload,check,okMsg,rows){S.busy=true;S.status='<span class="ap-muted">儲存中…（寫完會自動讀回核對，約 3～15 秒）</span>';render();
-  var p;try{p=fetch(S.api,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)})}catch(e){p=Promise.resolve()}
-  Promise.resolve(p).catch(function(){}).then(function(){verify(check,okMsg,rows,0)})}
-function verify(check,okMsg,rows,att){setTimeout(function(){
-  jq('select *').then(function(r){var p=parseSemi(r);if(!p)throw 'dim_semi 表頭不對';
-    if(check(p)){S.rows=p.rows;S.ents=buildEnts(p.rows);S.busy=false;S.edit=null;
-      S.status='<span style="color:#2E7D32;font-weight:700">'+esc(okMsg)+'（'+new Date().toTimeString().slice(0,5)+'）。採購系統明天 07:05 重算後生效。</span>';render();skuReport(rows);return}
-    if(att+1<VERIFY.length){verify(check,okMsg,rows,att+1);return}
-    S.rows=p.rows;S.ents=buildEnts(p.rows);S.busy=false;S.status='<span class="ap-bad">✕ 讀回對不上，可能沒有寫進去。請稍後再按一次；兩次都失敗請通知 Chat。</span>';render()})
-  .catch(function(e){if(att+1<VERIFY.length){verify(check,okMsg,rows,att+1);return}
-    S.busy=false;S.status='<span class="ap-bad">✕ 無法讀回確認（'+esc(String(e))+'），請按「重新讀取」看結果。</span>';render()})},VERIFY[att])}
-/* 寫完：讀 BOM 本主檔，告訴使用者今天自動新建了哪些原料主檔 */
+  if(!confirm('停用「'+o.item+'」（'+(o.shared?'所有甜點共用':o.desserts.join('、'))+'）？\n採購系統會把它從配方移除，明天 07:05 起不再拆成原料；製作說明一併移除。\n（主檔品項不會刪除）'))return;
+  S.busy=true;S.status='<span class="ap-muted">停用中…</span>';render();
+  var pl={token:TOKEN,source:'品項：'+o.item,req_id:'停用 '+ymd(),byKeys:true,clear:true,removeKeys:keys,rows:[]};
+  sendAndVerify(pl,function(p){return keys.every(function(k){return !p.rows.some(function(r){return r.dessert===k[0]&&r.item===k[1]})})}).then(function(ok){
+    if(ok){S.edit=null;afterWrite('<span style="color:#2E7D32;font-weight:700">✓ 已停用「'+esc(o.item)+'」並讀回確認</span>',[])}
+    else{S.busy=false;S.status='<span class="ap-bad">✕ 停用沒有確認成功，請再按一次。</span>';render()}})}
 function skuReport(rows){var mats={};rows.forEach(function(r){mats[r.mat]=1});var names=Object.keys(mats);if(!names.length)return;var d=ymd();
   jq('select A,B,N','dim_sku').then(function(r){var by={};r.rows.forEach(function(x){var n=trim(x[1]);if(n)by[n]={id:trim(x[0]),src:trim(x[2])}});
     var c=names.filter(function(n){var o=by[n];return o&&o.src.indexOf('自動草稿 '+d)===0&&o.src.indexOf('店製配方')>=0}).map(function(n){return n+'（'+by[n].id+'）'});
     if(c.length){S.status+='<div style="color:#2E6B8A;font-weight:700;margin-top:4px">🆕 已在採購系統主檔新建草稿：'+c.map(esc).join('、')+'。請到採購系統「主檔」頁檢查品類別、補廠商／包裝／單價。</div>';render()}},function(){})}
 
-/* ---- 從新品申請表帶過來 ---- */
-function openFromApply(sm,dessert){
-  if(typeof window.activateTab==='function')window.activateTab('semi');
-  if(!S.ready){S.pendingOpen={sm:sm,dessert:dessert};ensureInit();return}
-  var name=trim(sm.link||sm.name),ed=newEd();
-  var ex=S.ents.filter(function(e){return e.item===name&&(sm.shared?e.shared:e.desserts.indexOf(dessert)>=0)})[0];
-  if(ex)ed.orig=ex;
-  ed.name=name;ed.kind=sm.kind||'';ed.maker=sm.maker||'門市';ed.yq=String(sm.yq||'');ed.yu=trim(sm.yu)||commonUnit(name);ed.shared=!!sm.shared;
-  ed.desserts=sm.shared?[]:(ex?ex.desserts.slice():[]);if(!sm.shared&&dessert&&ed.desserts.indexOf(dessert)<0)ed.desserts.push(dessert);ed.desserts.sort();
-  ed.lines=(sm.items||[]).filter(function(it){return trim(it.m)}).map(function(it){return {m:trim(it.m),q:String(it.q),u:trim(it.u)}});if(!ed.lines.length)ed.lines=[{m:'',q:'',u:''}];
-  ed.from='從新品申請表「'+(dessert||'')+'」帶過來'+(ex?'；採購系統已有這個品項，儲存會取代原配方':'')+'。核對後勾選簽核再儲存。';
-  S.edit=ed;S.status='';render()}
+/* ---- Excel 標準格式 ---- */
+var xlsxP=null;
+function needXLSX(){if(window.XLSX)return Promise.resolve(window.XLSX);if(xlsxP)return xlsxP;
+  xlsxP=new Promise(function(res,rej){var s=document.createElement('script');s.src=XLSX_URL;s.onload=function(){window.XLSX?res(window.XLSX):rej('no XLSX')};s.onerror=function(){xlsxP=null;rej('讀不到 Excel 元件（網路）')};document.head.appendChild(s)});return xlsxP}
+function downloadBlob(blob,name){var u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);try{URL.revokeObjectURL(u)}catch(e){}},500)}
+function entRows(e){var i=e.info||{},out=[],first=true,tools=textToTools(i.tools);
+  function base(){return first?[e.item,e.kind,e.maker,e.shared?'共用':e.desserts.join('、'),e.yq,e.yu]:[e.item,'','','','','']}
+  function tail(){return first?[i.store||'',i.take||'',i.usage||'',i.steps||'',i.note||'']:['','','','','']}
+  e.lines.concat(tools).forEach(function(l){out.push(base().concat([l.m,l.q===''?'':num(l.q)||l.q,l.u||''],tail()));first=false});
+  return out}
+function downloadTemplate(ents){needXLSX().then(function(X){var wb=X.utils.book_new();
+  var guide=[['自己做烘焙聚樂部｜店製品項（半成品・材料包・分裝包）標準格式'],[''],
+    ['怎麼填'],['1. 到「半成品配方」分頁填寫：一列一個品項（食材、耗材、器具、模具都寫在「品項」欄），同一個半成品有幾個品項就寫幾列，「半成品名稱」每列都要寫。'],
+    ['2. 半成品層級的欄位（類型、製作單位、適用甜點、一批做出、存放方式、拿取方式、使用說明、製作步驟、備註）寫在該半成品的第一列即可。'],
+    ['3. 類型：分裝包／材料包／半成品。製作單位：門市／出貨中心（出貨中心製作的不會寫入採購系統）。'],
+    ['4. 適用甜點：填「共用」＝所有甜點共用（例：吉利丁凍）；或填 BOM 表的甜點名稱，多支用「、」分開。在新品申請表載入時可留空＝這支新品。'],
+    ['5. 一批做出：一批做出多少（例：300、g；1、包）。每批用量：做一批要用多少。每支甜點每份用多少由 BOM 表決定，系統自動換算。'],
+    ['6. 單位盡量用 g、ml、個、支、張、片、包；「勺」「匙」系統換算不到，請改成克數。水、冰塊不用列。'],
+    ['7. 製作步驟：每一步換一行（在 Excel 儲存格內按 Alt＋Enter 換行，Mac 按 Option＋Enter）。'],
+    ['8. 品項名稱要和採購系統主檔一樣；主檔沒有的，儲存時會自動建草稿。器具／模具只給製作時看，不會叫料。'],[''],
+    ['範例（請看「範例」分頁，不要把範例留在「半成品配方」分頁）']];
+  var ws0=X.utils.aoa_to_sheet(guide);ws0['!cols']=[{wch:120}];X.utils.book_append_sheet(wb,ws0,'填寫說明');
+  var data=[TPL_HEAD];(ents||[]).forEach(function(e){data=data.concat(entRows(e))});
+  var ws=X.utils.aoa_to_sheet(data);ws['!cols']=[{wch:18},{wch:8},{wch:8},{wch:24},{wch:10},{wch:8},{wch:18},{wch:9},{wch:6},{wch:10},{wch:10},{wch:24},{wch:40},{wch:20}];
+  X.utils.book_append_sheet(wb,ws,'半成品配方');
+  var ex=[TPL_HEAD,['吉利丁凍','半成品','門市','共用',300,'g','吉利丁粉',50,'g','冷藏','自取','','吉利丁粉倒入冰的飲用水，攪拌 30 下浸泡 5 分鐘\n微波 1 分鐘攪拌至融化\n倒入小紅烤盤冷藏凝固，切 2 公分塊狀',''],
+    ['吉利丁凍','','','','','','小紅烤盤',1,'個','','','','',''],['吉利丁凍','','','','','','刮刀',1,'支','','','','',''],
+    ['蜂蜜地瓜蛋糕裝飾組合','分裝包','門市','寶寶&毛孩的蜂蜜地瓜蛋糕',1,'包','造型蠟燭(小花)',1,'個','常溫','向店員拿取','一位客人一包','蠟燭、插牌、氣球裝進 5 號夾鏈袋',''],
+    ['蜂蜜地瓜蛋糕裝飾組合','','','','','','蛋糕插牌',1,'張','','','','',''],['蜂蜜地瓜蛋糕裝飾組合','','','','','','愛心氣球插件',1,'個','','','','','']];
+  var wx=X.utils.aoa_to_sheet(ex);wx['!cols']=ws['!cols'];X.utils.book_append_sheet(wb,wx,'範例');
+  var out=X.write(wb,{bookType:'xlsx',type:'array'});
+  downloadBlob(new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),(ents?'店製品項_目前資料_':'店製品項_標準格式_')+ymd()+'.xlsx')},
+  function(e){alert('下載失敗：'+e)})}
+/* 讀 Excel → 草稿陣列。defDessert＝新品申請表載入時「適用甜點」留空要帶的甜點名；null＝店製品項頁（留空就用 BOM 自動找） */
+function parseWorkbook(X,buf,defDessert){var wb=X.read(buf,{type:'array'});
+  var name=wb.SheetNames.indexOf('半成品配方')>=0?'半成品配方':wb.SheetNames.filter(function(n){return n!=='填寫說明'&&n!=='範例'})[0];
+  if(!name)return {drafts:[],errors:['找不到「半成品配方」分頁']};
+  var rows=X.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:'',raw:true});var hi=-1;
+  for(var i=0;i<Math.min(rows.length,10);i++){if(rows[i].some(function(c){return nz(c).replace(/[*＊]/g,'')==='半成品名稱'})){hi=i;break}}
+  if(hi<0)return {drafts:[],errors:['找不到表頭（第一列要有「半成品名稱」）']};
+  var ix={};rows[hi].forEach(function(c,j){ix[nz(c).replace(/[*＊]|（.*?）|\(.*?\)/g,'')]=j});
+  function g(r,k){var j=ix[k];return j===undefined?'':r[j]}
+  var drafts=[],cur=null,errs=[];
+  rows.slice(hi+1).forEach(function(r,ri){var nm=trim(g(r,'半成品名稱')),scope=trim(g(r,'適用甜點')),it=trim(g(r,'品項'));
+    if(!nm&&!it)return;
+    if(nm&&(!cur||cur._name!==nm||(scope&&cur._scope&&cur._scope!==scope))){cur={_name:nm,_scope:scope,ed:newEd()};var ed=cur.ed;drafts.push(cur);ed.name=nm;ed.lines=[]}
+    if(!cur){errs.push('第 '+(hi+ri+2)+' 列沒有半成品名稱，略過');return}
+    var ed=cur.ed;function first(k,f){var v=trim(g(r,k));if(v&&!ed['_'+f]){ed[f]=v;ed['_'+f]=1}}
+    first('類型','kind');first('製作單位','maker');first('一批做出數量','yq');first('一批做出單位','yu');first('存放方式','store');first('拿取方式','take');
+    ['使用說明','製作步驟','備註'].forEach(function(k,j){var f=['usage','steps','note'][j],v=String(g(r,k)==null?'':g(r,k)).replace(/\r\n?/g,'\n').trim();if(v&&!ed['_'+f]){ed[f]=v;ed['_'+f]=1}});
+    if(scope&&!cur._scopeSet){cur._scopeSet=1;cur._scope=scope;if(/^(共用|所有甜點共用|＊共用)$/.test(scope)){ed.shared=true;ed.desserts=[]}else{ed.shared=false;ed.desserts=scope.split(/[、,，;；\n]/).map(trim).filter(Boolean)}}
+    if(it){var q=g(r,'每批用量'),u=trim(g(r,'單位'));if(isTool(it))ed.tools.push({m:it,q:trim(q),u:u});else ed.lines.push({m:it,q:String(q===''?'':q),u:u})}});
+  var out=drafts.map(function(d){var ed=d.ed;Object.keys(ed).forEach(function(k){if(k.charAt(0)==='_')delete ed[k]});
+    if(!ed.lines.length)ed.lines=[{m:'',q:'',u:''}];if(!ed.maker)ed.maker='門市';
+    if(!ed.shared&&!ed.desserts.length){if(defDessert)ed.desserts=[defDessert];else ed.desserts=bomDessertsOf(ed.name)}
+    if(ed.kind&&KINDS.indexOf(ed.kind)<0){errs.push('「'+ed.name+'」類型「'+ed.kind+'」不是 分裝包／材料包／半成品');ed.kind=''}
+    return ed});
+  return {drafts:out,errors:errs}}
+function readFile(file){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(new Uint8Array(fr.result))};fr.onerror=function(){rej('讀檔失敗')};fr.readAsArrayBuffer(file)})}
+/* 店製品項頁的載入：放進待儲存清單 */
+function importFile(file,defDessert){S.status='<span class="ap-muted">讀取 '+esc(file.name)+'…</span>';render();
+  Promise.all([needXLSX(),readFile(file)]).then(function(a){var r=parseWorkbook(a[0],a[1],defDessert);
+    var seen={},dupIn=[],rep=0;
+    r.drafts.forEach(function(ed){ed.from='來自 '+file.name;var k=qKey(ed);
+      if(seen[k])dupIn.push(trim(ed.name));seen[k]=1;
+      var n0=S.queue.length;S.queue=S.queue.filter(function(q){return qKey(q)!==k});rep+=n0-S.queue.length;S.queue.push(attachOrig(ed))});
+    if(dupIn.length)r.errors.push('檔案裡這些品項（同名同適用甜點）出現不只一組，以後面那組為準：'+dupIn.join('、'));
+    S.status=(r.drafts.length?'<span style="color:#2E7D32;font-weight:700">📥 已載入 '+r.drafts.length+' 項到「待儲存」'+(rep?'（其中 '+rep+' 項取代了待儲存裡原本的同一項）':'')+'，請核對後簽核、按「💾 全部儲存」。</span>':'<span class="ap-bad">檔案裡沒有讀到任何半成品。</span>')
+      +(r.errors.length?'<div class="ap-bad">'+r.errors.map(esc).join('<br>')+'</div>':'');S.view=null;S.edit=null;render()},
+    function(e){S.status='<span class="ap-bad">載入失敗：'+esc(String(e))+'</span>';render()})}
+
+/* ---- 從新品申請表帶過來（單項或全部）---- */
+function fromApplySemi(sm,dessert){var ed=newEd();ed.name=trim(sm.link||sm.name);ed.kind=sm.kind||'';ed.maker=sm.maker||'門市';ed.yq=String(sm.yq||'');ed.yu=trim(sm.yu)||commonUnit(ed.name);
+  ed.shared=!!sm.shared;ed.desserts=sm.shared?[]:(dessert?[dessert]:[]);ed.store=sm.store||'';ed.take=sm.take||'';ed.usage=sm.usage||'';ed.steps=sm.steps||'';ed.note=sm.note||'';
+  ed.lines=[];ed.tools=[];(sm.items||[]).forEach(function(it){var m=trim(it.m);if(!m)return;var o={m:m,q:String(it.q==null?'':it.q),u:trim(it.u)};if(isTool(m))ed.tools.push(o);else ed.lines.push(o)});
+  if(!ed.lines.length)ed.lines=[{m:'',q:'',u:''}];ed.from='從新品申請表「'+(dessert||'')+'」帶過來';return attachOrig(ed)}
+function openFromApply(sm,dessert){if(typeof window.activateTab==='function')window.activateTab('semi');
+  if(!S.ready){S.pendingOpen=function(){openFromApply(sm,dessert)};ensureInit();return}
+  var ed=fromApplySemi(sm,dessert);ed.from+=(ed.orig?'；採購系統已有這個品項，儲存會取代原配方':'')+'。核對後勾選簽核再儲存。';S.edit=ed;S.view=null;S.status='';render()}
+function queueFromApply(list,dessert){if(typeof window.activateTab==='function')window.activateTab('semi');
+  if(!S.ready){S.pendingOpen=function(){queueFromApply(list,dessert)};ensureInit();return}
+  var n=0;(list||[]).forEach(function(sm){if(sm.maker==='出貨中心'||!trim(sm.link||sm.name))return;var ed=fromApplySemi(sm,dessert);
+    S.queue=S.queue.filter(function(q){return qKey(q)!==qKey(ed)});S.queue.push(ed);n++});
+  S.edit=null;S.view=null;S.status='<span style="color:#2E7D32;font-weight:700">📥 已從新品申請表「'+esc(dessert||'')+'」帶入 '+n+' 項到「待儲存」，核對後簽核、按「💾 全部儲存」。</span>';render()}
 
 function ensureInit(){if(S.inited){if(S.ready)render();return}S.inited=true;
   if(R&&R.ensureInit)R.ensureInit();
   (function wait(n){if(R&&R.ready){loadAll();return}if(n>240){var ld=document.getElementById('smLoading');if(ld)ld.textContent='讀不到主檔，請重新整理';return}setTimeout(function(){wait(n+1)},250)})(0)}
 
-return {ensureInit:ensureInit,openFromApply:openFromApply,get ready(){return S.ready},_state:function(){return S}};
+return {ensureInit:ensureInit,openFromApply:openFromApply,queueFromApply:queueFromApply,
+  downloadTemplate:function(){downloadTemplate(null)},
+  /* 給新品申請表「📥 載入半成品/材料包」用：回傳草稿（申請表格式） */
+  parseForApply:function(file,dessert){return Promise.all([needXLSX(),readFile(file)]).then(function(a){var r=parseWorkbook(a[0],a[1],dessert||null);
+    return {errors:r.errors,semis:r.drafts.map(function(ed){return {name:ed.name,link:ed.name,shared:ed.shared,kind:ed.kind,maker:ed.maker,yq:ed.yq,yu:ed.yu,store:ed.store,take:ed.take,usage:ed.usage,steps:ed.steps,note:ed.note,
+      items:ed.lines.filter(function(l){return trim(l.m)}).concat(ed.tools).map(function(l){return {m:l.m,q:l.q,u:l.u}})}})}})},
+  get ready(){return S.ready},_state:function(){return S}};
 })();
 
 </script>
