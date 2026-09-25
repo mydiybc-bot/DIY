@@ -993,21 +993,43 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   function zoneStores(){ if (ZONE === 'ALL') return null; for (var i = 0; i < ZONES.length; i++) if (ZONES[i][0] === ZONE) return ZONES[i][1]; return null; }
 
   function hhmm(t){ var d = new Date(t), p = function(n){ return (n < 10 ? '0' : '') + n; }; return p(d.getMonth()+1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
-  function cacheGet(){ try { var x = JSON.parse(localStorage.getItem(BLS) || 'null'); return (x && x.d && x.d.ok && x.d.latest && x.d.alerts) ? x : null; } catch(_){ return null; } }
-  function cachePut(d){ try { localStorage.setItem(BLS, JSON.stringify({at: Date.now(), d: d})); } catch(_){} }
+  /* 裝置端暫存：先用 localStorage；本網域 localStorage 已被其他儀表板用滿（約 5MB 上限）時，改存 IndexedDB（同一台裝置、另一個額度）。只存 bundle。 */
+  function okC(x){ return (x && x.at && x.d && x.d.ok && x.d.latest && x.d.alerts) ? x : null; }
+  function idb(){ return new Promise(function(res, rej){ try { var r = indexedDB.open('dec_cache', 1); r.onupgradeneeded = function(){ r.result.createObjectStore('kv'); }; r.onsuccess = function(){ res(r.result); }; r.onerror = function(){ rej(r.error); }; } catch(e){ rej(e); } }); }
+  function idbGet(){ return idb().then(function(db){ return new Promise(function(res){ try { var q = db.transaction('kv', 'readonly').objectStore('kv').get(BLS); q.onsuccess = function(){ res(q.result || null); }; q.onerror = function(){ res(null); }; } catch(_){ res(null); } }); }).catch(function(){ return null; }); }
+  function idbSet(v){ return idb().then(function(db){ try { var t = db.transaction('kv', 'readwrite'); if (v) t.objectStore('kv').put(v, BLS); else t.objectStore('kv').delete(BLS); } catch(_){} }).catch(function(){}); }
+  function cacheGet(){
+    var x = null; try { x = okC(JSON.parse(localStorage.getItem(BLS) || 'null')); } catch(_){}
+    if (x) return Promise.resolve(x);
+    return idbGet().then(okC).catch(function(){ return null; });
+  }
+  function cachePut(d){
+    var v = {at: Date.now(), d: d};
+    try { localStorage.setItem(BLS, JSON.stringify(v)); idbSet(null); return; } catch(_){}
+    try { localStorage.removeItem(BLS); } catch(_){}
+    idbSet(v);
+  }
   function show(d){
     B = d; prep(); render();
     document.getElementById('dzLoading').style.display = 'none';
     document.getElementById('dzBody').style.display = '';
   }
   function load(){
-    var cc = cacheGet(), note = document.getElementById('dzCache');
+    var cc = null, fresh = false, failed = null, note = document.getElementById('dzCache');
     document.getElementById('dzErr').innerHTML = '';
-    if (cc) { show(cc.d); note.style.display = ''; note.textContent = '上次讀取 ' + hhmm(cc.at) + '，正在更新…'; }
-    else { document.getElementById('dzLoading').style.display = ''; document.getElementById('dzBody').style.display = 'none'; }
+    document.getElementById('dzLoading').style.display = ''; document.getElementById('dzBody').style.display = 'none';
+    var cp = cacheGet().then(function(x){
+      if (!x || fresh) return;
+      cc = x; show(x.d); note.style.display = '';
+      note.textContent = '上次讀取 ' + hhmm(x.at) + '，正在更新…';
+      if (failed) failed();
+    });
     jp({action:'bundle'}).then(function(d){
       if (!d || !d.ok) throw new Error((d && d.error) || '讀取失敗');
-      cachePut(d); show(d); note.style.display = 'none';
+      fresh = true; cachePut(d); show(d); note.style.display = 'none';
+    }).catch(function(e){
+      failed = function(){ note.style.display = ''; note.innerHTML = '⚠ 更新失敗（' + esc(e.message || e) + '），目前顯示的是上次讀取 ' + hhmm(cc.at) + ' 的資料<button onclick="location.reload()">重新整理</button>'; };
+      return cp.then(function(){ if (cc) { failed(); return; } throw e; });
     }).catch(function(e){
       if (cc) { note.style.display = ''; note.innerHTML = '⚠ 更新失敗（' + esc(e.message || e) + '），目前顯示的是上次讀取 ' + hhmm(cc.at) + ' 的資料<button onclick="location.reload()">重新整理</button>'; return; }
       document.getElementById('dzLoading').style.display = 'none';
