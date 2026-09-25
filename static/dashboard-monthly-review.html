@@ -145,6 +145,13 @@ table.dz-mx{border-collapse:collapse;width:100%;table-layout:fixed}
 .dz-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
 .dz-bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#4A3228}
 .dz-bar i.ok{background:#5FA66A} .dz-bar i.bad{background:#D0543F} .dz-bar i.mid{background:#E0A43A} .dz-bar i.na{background:#C9B8B2}
+.dz-stale{color:#6F4E45;font-size:12px;font-weight:700;margin:0 0 8px 2px}
+.dz-cache{background:#FFF7E6;color:#7A5A12;border:1px solid #F0DDB0;border-radius:10px;padding:8px 12px;font-size:12px;font-weight:700;margin-bottom:10px}
+.dz-cache button{font-family:inherit;font-size:12px;font-weight:800;margin-left:8px;padding:3px 10px;border-radius:8px;border:1px solid #D9C08A;background:#fff;color:#7A5A12;cursor:pointer}
+.dz-mx td .tg{display:block;font-size:12px;font-weight:700;line-height:1.25;opacity:.9;white-space:nowrap}
+.dz-card .v.sm{font-size:16px}
+.dz-card .v .ok{color:#2F7D3A}
+.dz-card .v .bad{color:var(--red-t)}
 .dz-err{background:var(--red-f);color:var(--red-t);border:1px solid #F0BDB6;border-radius:10px;padding:14px;font-size:14px;font-weight:700}
 .dz-err button{font-family:inherit;font-size:13px;font-weight:800;margin-left:10px;padding:5px 12px;border-radius:8px;border:1px solid #D9A39A;background:#fff;color:var(--red-t);cursor:pointer}
 #dzLoading{padding:26px;text-align:center;color:var(--muted);font-weight:700}
@@ -284,7 +291,9 @@ table.dz-mx{border-collapse:collapse;width:100%;table-layout:fixed}
   <div id="dzLoading">讀取經營快照中…</div>
   <div id="dzErr"></div>
   <div id="dzBody" style="display:none">
+    <div class="dz-cache" id="dzCache" style="display:none"></div>
     <div class="dz-old" id="dzOld" style="display:none"></div>
+    <div class="dz-stale" id="dzStale" style="display:none"></div>
     <div class="dz-head">
       <span class="t" id="dzTitle"></span>
       <div class="dz-cnt" id="dzCnt"></div>
@@ -916,6 +925,27 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   var C3_FROM = '2026-09-25';          /* C3 未來 14 天訂位開始累積的日期（前 28 天標「基準累積中」） */
   var REV_TARGET = 15;                 /* 每店每月有效評論目標（快照 MONTHLY_REVIEW_TARGET） */
   var LORD = {'🔴':0,'🟠':1,'🟡':2,'🟢':3};
+  var STALE_RED_DEFAULT = '11:30';     /* 快照不是今天時，幾點以後改紅條（dim_rule PAGE_STALE_RED_AFTER 沒有時用這個） */
+  var BLS = 'dec_bundle_v1';           /* 裝置端暫存：只存讀取窗口 bundle（不存密碼、不存登入狀態） */
+  /* 格子燈號原因小標：燈號＝該店該類最嚴重警示；若造成燈號的狀況不是格子顯示的那個數字 → 數字下方加小標（≤4 字）。
+     key＝快照 briefKindOf_ 的狀況種類 id；''＝就是格子那個數字造成的（不加小標）。 */
+  var KIND_TAG = {
+    A_yoy_cur:'',        /* 本月營收比去年同期（＝格子數字） */
+    A_yoy_prev:'上月低',  /* 上月營收比去年同月 */
+    A_flag:'*',          /* 上週排班紅旗 → 依紅旗內容，見 FLAG_TAG */
+    A_nosched:'班表缺',   /* 本月班表未上傳 */
+    B_over_:'',          /* 檔期專屬料多訂（＝格子數字；id 後面接檔期名稱） */
+    B_inv_stale:'未盤點', /* 太久沒盤點 */
+    C_gb_urgent:'',      /* 團體需立即處理（＝格子數字） */
+    C_gb_nodessert:'未選', /* 團體還沒選甜點（後面接筆數，例「未選1」） */
+    C_cancel_up:'取消率', /* 本月取消率比上月高 */
+    C_unknown_store:'店名錯', /* 團體資料店名對不上對照表 */
+    D_last:'',           /* 月底前有效評論不足（＝格子數字） */
+    D_behind:'',         /* 有效評論落後進度（＝格子數字） */
+    E_behind:''          /* 自己人達成率低於進度線（＝格子數字） */
+  };
+  var FLAG_TAG = {'人效偏低':'人效低','營收偏低':'營收低','平日工時過高':'工時高','假日工時過高':'工時高'};
+  var TAG_OTHER = '見清單';           /* 對照表沒有的狀況 */
   var COLS = [
     {cat:'A', name:'營收人力', key:'本月營收比去年同期%', col:'A 同期成長%', fmt:function(v){ return v===''?'—':(v>0?'+':'')+v+'%'; }},
     {cat:'B', name:'檔期叫貨', key:'專屬料多訂金額（元）', re:/^B (.+) 超出金額合計$/, fmt:function(v){ return v===''?'—':Math.round(v).toLocaleString('en-US'); }},
@@ -962,16 +992,24 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   function num(x){ var n = Number(String(x).replace(/,/g,'')); return (x === '' || x == null || isNaN(n)) ? null : n; }
   function zoneStores(){ if (ZONE === 'ALL') return null; for (var i = 0; i < ZONES.length; i++) if (ZONES[i][0] === ZONE) return ZONES[i][1]; return null; }
 
+  function hhmm(t){ var d = new Date(t), p = function(n){ return (n < 10 ? '0' : '') + n; }; return p(d.getMonth()+1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+  function cacheGet(){ try { var x = JSON.parse(localStorage.getItem(BLS) || 'null'); return (x && x.d && x.d.ok && x.d.latest && x.d.alerts) ? x : null; } catch(_){ return null; } }
+  function cachePut(d){ try { localStorage.setItem(BLS, JSON.stringify({at: Date.now(), d: d})); } catch(_){} }
+  function show(d){
+    B = d; prep(); render();
+    document.getElementById('dzLoading').style.display = 'none';
+    document.getElementById('dzBody').style.display = '';
+  }
   function load(){
-    document.getElementById('dzLoading').style.display = '';
+    var cc = cacheGet(), note = document.getElementById('dzCache');
     document.getElementById('dzErr').innerHTML = '';
-    document.getElementById('dzBody').style.display = 'none';
+    if (cc) { show(cc.d); note.style.display = ''; note.textContent = '上次讀取 ' + hhmm(cc.at) + '，正在更新…'; }
+    else { document.getElementById('dzLoading').style.display = ''; document.getElementById('dzBody').style.display = 'none'; }
     jp({action:'bundle'}).then(function(d){
       if (!d || !d.ok) throw new Error((d && d.error) || '讀取失敗');
-      B = d; prep(); render();
-      document.getElementById('dzLoading').style.display = 'none';
-      document.getElementById('dzBody').style.display = '';
+      cachePut(d); show(d); note.style.display = 'none';
     }).catch(function(e){
+      if (cc) { note.style.display = ''; note.innerHTML = '⚠ 更新失敗（' + esc(e.message || e) + '），目前顯示的是上次讀取 ' + hhmm(cc.at) + ' 的資料<button onclick="location.reload()">重新整理</button>'; return; }
       document.getElementById('dzLoading').style.display = 'none';
       document.getElementById('dzErr').innerHTML = '<div class="dz-err">⚠ ' + esc(e.message || e) + '<button onclick="location.reload()">重新整理</button></div>';
     });
@@ -982,8 +1020,8 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   function prep(){
     LH = B.latest[0]; L = {}; ALLROW = null;
     B.latest.slice(1).forEach(function(r){ var id = String(r[0]); if (id === '全公司') ALLROW = r; else if (id) L[id] = r; });
-    var ah = B.alerts[0], iMk = ah.indexOf('新／第 N 天');
-    AL = B.alerts.slice(1).filter(function(r){ return String(r[0]) !== ''; }).map(function(r){ return {light:r[0], store:String(r[1]), cat:String(r[2]).charAt(0), desc:r[3], mk:iMk >= 0 ? r[iMk] : ''}; });
+    var ah = B.alerts[0], iMk = ah.indexOf('新／第 N 天'), iKd = ah.indexOf('狀況種類'), iV = ah.indexOf('數值');
+    AL = B.alerts.slice(1).filter(function(r){ return String(r[0]) !== ''; }).map(function(r){ return {light:r[0], store:String(r[1]), cat:String(r[2]).charAt(0), desc:r[3], mk:iMk >= 0 ? r[iMk] : '', kind:iKd >= 0 ? String(r[iKd]) : '', v:iV >= 0 ? r[iV] : ''}; });
     SN = {}; (B.stores || []).forEach(function(s){ SN[s.id] = s; });
   }
   function val(row, col){ var j = LH.indexOf(col); if (j < 0 || !row) return ''; var x = row[j]; return (x === null || x === undefined) ? '' : x; }
@@ -993,20 +1031,50 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     LH.forEach(function(h, j){ if (c.re.test(h)) { var n = num(row[j]); if (n !== null) { t += n; any = true; } } });
     return any ? t : '';
   }
-  function cellLight(sid, cat, v){
-    var best = '';
+  function kindTag(a){
+    var k = a.kind || '', t;
+    if (!k || k.indexOf('B_over_') === 0) return '';   /* 沒有狀況種類（舊版 bundle）→ 不加小標 */
+    if (!(k in KIND_TAG)) return TAG_OTHER;
+    t = KIND_TAG[k];
+    if (k === 'A_flag') { var m = String(a.desc).match(/紅旗：(.+)$/), f = m ? m[1].split('、')[0].trim() : ''; return FLAG_TAG[f] || TAG_OTHER; }
+    if (k === 'C_gb_nodessert') { var n = num(a.v); return t + (n === null ? '' : n); }
+    return t;
+  }
+  function cellInfo(sid, cat, v){
+    var best = '', hits = [];
     AL.forEach(function(a){ if (a.store === sid && a.cat === cat && (best === '' || LORD[a.light] < LORD[best])) best = a.light; });
-    return best || (v === '' ? '' : '🟢');
+    if (!best) return {lt: v === '' ? '' : '🟢', tag: '', why: ''};
+    AL.forEach(function(a){ if (a.store === sid && a.cat === cat && a.light === best) hits.push(a); });
+    var tags = hits.map(kindTag), tag = tags.indexOf('') >= 0 ? '' : tags[0];
+    return {lt: best, tag: tag, why: hits.map(function(a){ return a.light + ' ' + a.desc; }).join('\n')};
   }
 
   function render(){
     /* ① 標題列＋舊快照紅條 */
     var first = (B.brief.lines || []).filter(function(l){ return /^快照完成時間：/.test(l.text); })[0];
     document.getElementById('dzTitle').textContent = first ? first.text : ('快照完成時間：' + (B.snapAt || '不明'));
-    var old = document.getElementById('dzOld');
-    if (B.snapIsToday) old.style.display = 'none'; else { old.style.display = ''; old.textContent = '🔴 ' + B.oldSnapMsg; }
+    renderStale();
     renderCounts(); renderZones(); renderTodo(); renderMatrix(); renderOv(); renderDsb();
   }
+  /* 舊快照提示：快照日＝今天（台灣時間）→ 不顯示；不是今天且現在早於 PAGE_STALE_RED_AFTER → 灰字；之後 → 紅條（與早報同一句） */
+  function tpeNow(){
+    var f = {}; try { new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date()).forEach(function(p){ f[p.type] = p.value; }); } catch(_){ var d = new Date(Date.now() + 8 * 3600e3); return {date: d.toISOString().slice(0, 10), hm: d.toISOString().slice(11, 16)}; }
+    return {date: f.year + '-' + f.month + '-' + f.day, hm: f.hour + ':' + f.minute};
+  }
+  function staleAfter(){
+    var t = '';
+    (B.rules || []).forEach(function(r){ if (r[0] === 'PAGE_STALE_RED_AFTER') t = String(r[3] || '').trim(); });
+    var m = t.match(/^(\d{1,2}):(\d{2})$/);
+    return m ? ((m[1].length < 2 ? '0' : '') + m[1] + ':' + m[2]) : STALE_RED_DEFAULT;
+  }
+  function renderStale(){
+    var old = document.getElementById('dzOld'), gr = document.getElementById('dzStale'), n = tpeNow();
+    old.style.display = 'none'; gr.style.display = 'none';
+    if (!B || B.snapDate === n.date) return;
+    if (n.hm < staleAfter()) { gr.style.display = ''; gr.textContent = '今天的資料 11:00 更新，目前顯示 ' + String(B.snapDate || '').slice(5).replace('-', '/') + ' 的快照'; }
+    else { old.style.display = ''; old.textContent = '🔴 ' + B.oldSnapMsg; }
+  }
+  setInterval(function(){ if (B) renderStale(); }, 60000);
   function zoneAlerts(){ var zs = zoneStores(); return zs ? AL.filter(function(a){ return zs.indexOf(a.store) >= 0; }) : AL; }
   function renderCounts(){
     var c = {'🔴':0,'🟠':0,'🟡':0};
@@ -1063,17 +1131,18 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       z[1].forEach(function(sid){
         var r = L[sid], s = SN[sid] || {short: sid};
         rows.push('<tr><td class="st" title="' + esc((s.name || '') + '（' + sid + ' 號店）') + '">' + sid + ' ' + esc(s.short) + '</td>' + COLS.map(function(c){
-          var v = colVal(r, c), lt = cellLight(sid, c.cat, v), cls = {'🔴':'l-r','🟠':'l-o','🟡':'l-y','🟢':'l-g'}[lt] || 'l-n';
+          var v = colVal(r, c), ci = cellInfo(sid, c.cat, v), lt = ci.lt, cls = {'🔴':'l-r','🟠':'l-o','🟡':'l-y','🟢':'l-g'}[lt] || 'l-n';
           if (LIGHT && lt !== LIGHT) cls += ' dim';
           var id = sid + '|' + c.cat;
           if (SELCELL === id) cls += ' sel';
-          return '<td class="c ' + cls + '" data-id="' + id + '" title="' + esc(c.name + '：' + c.key) + '">' + (lt && lt !== '🟢' ? lt + ' ' : '') + '<span class="n">' + esc(c.fmt(v === '' ? '' : (num(v) === null ? v : num(v)))) + '</span></td>';
+          return '<td class="c ' + cls + '" data-id="' + id + '" title="' + esc(c.name + '：' + c.key + (ci.why ? '\n' + ci.why : '')) + '">' + (lt && lt !== '🟢' ? lt + ' ' : '') + '<span class="n">' + esc(c.fmt(v === '' ? '' : (num(v) === null ? v : num(v)))) + '</span>' + (ci.tag ? '<span class="tg">' + esc(ci.tag) + '</span>' : '') + '</td>';
         }).join('') + '</tr>');
       });
     });
     document.getElementById('dzMxB').innerHTML = rows.join('');
     document.querySelectorAll('#dzMxB td.c').forEach(function(td){ td.onclick = function(){ SELCELL = SELCELL === td.dataset.id ? null : td.dataset.id; renderMatrix(); }; });
     document.getElementById('dzLegend').innerHTML = '格子裡的數字：' + COLS.map(function(c){ return '<b>' + c.name + '</b>＝' + c.key; }).join('｜')
+      + '<br>數字下方的小字＝燈號的原因不是這個數字（例：人效低、未選1、未盤點、班表缺、取消率）'
       + '<br>燈號：🔴 今天要處理　🟠 本週留意　🟡 資料提醒　綠底＝沒有警示　灰字＝沒有資料（燈號與早報同一份快照 alerts）';
   }
   /* ④ 一覽 6 格 */
@@ -1105,10 +1174,10 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       {l:'本月人效 rev/h', v:fmtN(rph), s:'門檻 ' + rphMin + '（只算有班表的店）', b:bar(rph, rphMin)},
       {l:'評論達標店數（每店 ' + REV_TARGET + ' 則）', v:revOk + '／' + ids.length + ' 店', s:'本月有效評論 ' + fmtN(g('D 有效評論（本月）')) + ' 則', b:bar(revOk, ids.length)},
       {l:'自己人累計達成率', v:(memRate === null ? '—' : memRate + '%'), s:'年度進度線 ' + (memLine === null ? '—' : memLine + '%') , b:bar(memRate, memLine)},
-      {l:'有效團體', v:fmtN(gAct) + ' 筆', s:'需立即處理 <b style="color:var(--red-t)">' + fmtN(gUrg) + ' 件</b>', b:bar(gAct === null || gUrg === null ? null : gAct - gUrg, gAct)},
+      {l:'有效團體', vc:'sm', v:'有效 ' + fmtN(gAct) + ' 筆｜' + (gUrg ? '<span class="bad">需立即處理 ' + fmtN(gUrg) + ' 件</span>' : (gUrg === 0 ? '<span class="ok">需立即處理 0 件 ✓</span>' : '需立即處理 —')), s:'需立即處理含已取消仍掛已付款等項目，所以可能大於有效筆數', b:''},
       {l:'未來 14 天訂位（人）', v:fmtN(f14) + ' 人', s:(c3Base ? '基準累積中（第 ' + dayN + '／28 天）｜' : '') + '去年同期實際 ' + fmtN(l14) + ' 人｜訂位進度 ' + (c3r === null ? '—' : c3r + '%'), b:bar(f14, l14)}
     ];
-    document.getElementById('dzOv').innerHTML = cards.map(function(c){ return '<div class="dz-card"><div class="l">' + c.l + '</div><div class="v">' + c.v + '</div><div class="s">' + c.s + '</div>' + c.b + '</div>'; }).join('');
+    document.getElementById('dzOv').innerHTML = cards.map(function(c){ return '<div class="dz-card"><div class="l">' + c.l + '</div><div class="v' + (c.vc ? ' ' + c.vc : '') + '">' + c.v + '</div><div class="s">' + c.s + '</div>' + c.b + '</div>'; }).join('');
   }
   function renderDsb(){
     var f = B.fresh || {}, ca = B.snapCatAt || {}, t = function(x){ return x ? String(x).slice(5, 16) : '—'; };
