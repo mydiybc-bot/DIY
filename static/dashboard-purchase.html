@@ -365,20 +365,117 @@ var ST={role:"店長",storeId:"",tab:"建議",cat:"全部",period:"近4週",seas
            並在頁面上方亮橘色警示列說明「資料源忙碌中、顯示的是幾點的資料」。
    回傳陣列可能帶兩個標記：rows.__cached＝快取時間戳（用的是舊資料）／rows.__failed＝true（連舊資料都沒有）。
    呼叫端不需要改；需要區分來源的（如 loadAnalDims）自己看標記。 */
-var GV={bad:{},TIMEOUT:20000,MAXCACHE:1500000,MAXQ:40};
+var GV={bad:{},TIMEOUT:20000,MAXCACHE:8000000,MAXQ:40,MAXAGE:30*86400000,MAXTOTAL:60000000};
 function gvHash(str){var h=0;for(var i=0;i<str.length;i++){h=((h<<5)-h+str.charCodeAt(i))|0;}return (h>>>0).toString(36);}
-function gvcGet(key){try{var t=localStorage.getItem("dpc:"+key);if(!t)return null;var o=JSON.parse(t);if(!o||!o.d)return null;return o;}catch(e){return null;}}
+/* 2026-09-26 暫存搬家（Chat）：
+   原本暫存放在 localStorage（整個網站共用約 5MB，登入與盤點草稿也放這裡），而且只加不刪，已把空間塞滿。
+   改成：暫存放在這台裝置的 IndexedDB（資料庫 dpc_cache，空間大很多、不跟登入／盤點草稿搶），並且自動整理：
+     · 同一份資料只留最新版本（檔案 ID 換過的舊版本刪掉）
+     · 查詢暫存只留最近 MAXQ 筆；超過 30 天沒更新的刪掉；總量超過 MAXTOTAL 時從最舊的刪
+   用途不變：只在 Google 讀不到／逾時時拿來顯示（橘色警示列）。
+   舊的 localStorage dpc:* 開頁時搬進 IndexedDB 後刪除；登入與盤點草稿一律不動。 */
+var GVDB=null;
+function gvDb(){
+  if(GVDB)return GVDB;
+  GVDB=new Promise(function(res){
+    try{
+      if(!window.indexedDB){res(null);return;}
+      var rq=indexedDB.open("dpc_cache",1);
+      rq.onupgradeneeded=function(){try{var db=rq.result;if(!db.objectStoreNames.contains("kv"))db.createObjectStore("kv",{keyPath:"k"});if(!db.objectStoreNames.contains("meta"))db.createObjectStore("meta",{keyPath:"k"});}catch(e){}};
+      rq.onsuccess=function(){res(rq.result);};
+      rq.onerror=function(){res(null);};
+      rq.onblocked=function(){res(null);};
+    }catch(e){res(null);}
+  });
+  return GVDB;
+}
+function gvcGet(key){ /* 回傳 Promise：{t,d} 或 null */
+  return gvDb().then(function(db){
+    if(!db)return null;
+    return new Promise(function(res){
+      try{var rq=db.transaction("kv","readonly").objectStore("kv").get(key);
+        rq.onsuccess=function(){var o=rq.result;if(!o||!o.s){res(null);return;}try{var p=JSON.parse(o.s);res(p&&p.d?p:null);}catch(e){res(null);}};
+        rq.onerror=function(){res(null);};
+      }catch(e){res(null);}
+    });
+  }).catch(function(){return null;});
+}
 function gvcSet(key,rows){
-  try{var t=JSON.stringify({t:Date.now(),d:rows});if(t.length>GV.MAXCACHE)return;
-    try{localStorage.setItem("dpc:"+key,t);}catch(e1){gvcEvict(true);try{localStorage.setItem("dpc:"+key,t);}catch(e2){}}
-    if(key.indexOf("gq:")===0)gvcEvict(false);
+  try{var now=Date.now();var t=JSON.stringify({t:now,d:rows});if(t.length>GV.MAXCACHE)return;
+    gvDb().then(function(db){
+      if(!db)return;
+      try{var tx=db.transaction(["kv","meta"],"readwrite");
+        tx.objectStore("kv").put({k:key,s:t});
+        tx.objectStore("meta").put({k:key,t:now,n:t.length});
+        tx.oncomplete=function(){gvcEvictSoon();};
+      }catch(e){}
+    }).catch(function(){});
   }catch(e){}}
-function gvcEvict(hard){ /* 查詢快取只留最近 MAXQ 筆；hard＝空間不足時砍一半 */
-  try{var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf("dpc:gq:")===0)ks.push(k);}
-    var lim=hard?Math.floor(GV.MAXQ/2):GV.MAXQ;if(ks.length<=lim)return;
-    ks.sort(function(a,b){var ta=0,tb=0;try{ta=JSON.parse(localStorage.getItem(a)).t||0;}catch(e){}try{tb=JSON.parse(localStorage.getItem(b)).t||0;}catch(e){}return ta-tb;});
-    ks.slice(0,ks.length-lim).forEach(function(k){localStorage.removeItem(k);});
-  }catch(e){}}
+function gvcLogical(k){ /* 同一份資料的「身分」＝去掉檔案 ID：gv:ID:表名 → gv:表名；gq:ID:表名:查詢 → gq:表名:查詢 */
+  var p=String(k).split(":");if(p.length<3)return k;return p[0]+":"+p.slice(2).join(":");}
+var GVEV=null;
+function gvcEvictSoon(){if(GVEV)return;GVEV=setTimeout(function(){GVEV=null;gvcEvict();},4000);}
+function gvcEvict(){
+  return gvDb().then(function(db){
+    if(!db)return;
+    return new Promise(function(res){
+      try{var rq=db.transaction("meta","readonly").objectStore("meta").getAll();
+        rq.onsuccess=function(){
+          var all=(rq.result||[]).slice().sort(function(a,b){return (b.t||0)-(a.t||0);});  /* 新 → 舊 */
+          var now=Date.now(),seen={},nq=0,tot=0,del=[];
+          all.forEach(function(m){
+            var lg=gvcLogical(m.k),drop=false;
+            if(seen[lg])drop=true;                                    /* 同一份資料的舊版本 */
+            else if(now-(m.t||0)>GV.MAXAGE)drop=true;                 /* 超過 30 天沒更新 */
+            else if(m.k.indexOf("gq:")===0&&++nq>GV.MAXQ)drop=true;   /* 查詢暫存超過 MAXQ 筆 */
+            else if(tot+(m.n||0)>GV.MAXTOTAL)drop=true;               /* 總量上限 */
+            if(drop)del.push(m.k);else{seen[lg]=1;tot+=(m.n||0);}
+          });
+          if(!del.length){res();return;}
+          try{var tx=db.transaction(["kv","meta"],"readwrite");
+            del.forEach(function(k){tx.objectStore("kv").delete(k);tx.objectStore("meta").delete(k);});
+            tx.oncomplete=function(){res();};tx.onerror=tx.onabort=function(){res();};
+          }catch(e){res();}
+        };
+        rq.onerror=function(){res();};
+      }catch(e){res();}
+    });
+  }).catch(function(){});
+}
+function gvcDelMatch(re){ /* 刪除符合條件的暫存（例：上傳大平台訂單後清掉 fact_shopline 查詢暫存） */
+  try{Object.keys(localStorage||{}).forEach(function(k){if(k.indexOf("dpc:")===0&&re.test(k.slice(4)))try{localStorage.removeItem(k);}catch(e){}});}catch(e){}
+  return gvDb().then(function(db){
+    if(!db)return;
+    return new Promise(function(res){
+      try{var rq=db.transaction("meta","readonly").objectStore("meta").getAll();
+        rq.onsuccess=function(){
+          var del=(rq.result||[]).map(function(m){return m.k;}).filter(function(k){return re.test(k);});
+          if(!del.length){res();return;}
+          try{var tx=db.transaction(["kv","meta"],"readwrite");
+            del.forEach(function(k){tx.objectStore("kv").delete(k);tx.objectStore("meta").delete(k);});
+            tx.oncomplete=function(){res();};tx.onerror=tx.onabort=function(){res();};
+          }catch(e){res();}
+        };
+        rq.onerror=function(){res();};
+      }catch(e){res();}
+    });
+  }).catch(function(){});
+}
+function gvMigrate(){ /* 開頁一次：把舊的 localStorage dpc:* 搬進 IndexedDB，然後從 localStorage 刪掉（騰出空間給登入與盤點草稿） */
+  try{
+    var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf("dpc:")===0)ks.push(k);}
+    if(!ks.length)return;
+    gvDb().then(function(db){
+      ks.forEach(function(k){
+        var t=null;try{t=localStorage.getItem(k);}catch(e){}
+        if(db&&t){try{var p=JSON.parse(t);if(p&&p.d){var tx=db.transaction(["kv","meta"],"readwrite");tx.objectStore("kv").put({k:k.slice(4),s:t});tx.objectStore("meta").put({k:k.slice(4),t:p.t||0,n:t.length});}}catch(e){}}
+        try{localStorage.removeItem(k);}catch(e){}
+      });
+      if(db)gvcEvictSoon();
+    }).catch(function(){});
+  }catch(e){}
+}
+gvMigrate();
 function gvBanner(){
   var el=document.getElementById("gvWarn");if(!el)return;
   var ks=Object.keys(GV.bad);if(!ks.length){el.style.display="none";el.innerHTML="";return;}
@@ -400,11 +497,12 @@ function gvCore(url,key,tag){
   var to=new Promise(function(res){setTimeout(function(){res({ok:false,timeout:true});},GV.TIMEOUT);});
   return Promise.race([p,to]).then(function(r){
     if(r.ok){delete GV.bad[key];gvBanner();return r.rows;}
-    var c=gvcGet(key);var rows;
-    if(c){rows=c.d;rows.__cached=c.t;GV.bad[key]={cached:c.t,tag:tag};}
-    else{rows=[];rows.__failed=true;GV.bad[key]={cached:false,tag:tag};}
-    console.warn('gviz '+tag+(r.timeout?' 逾時':' 失敗')+(c?'，改用 '+new Date(c.t).toLocaleString()+' 的快取':'，且無快取'));
-    gvBanner();return rows;
+    return gvcGet(key).then(function(c){var rows;
+      if(c){rows=c.d;rows.__cached=c.t;GV.bad[key]={cached:c.t,tag:tag};}
+      else{rows=[];rows.__failed=true;GV.bad[key]={cached:false,tag:tag};}
+      console.warn('gviz '+tag+(r.timeout?' 逾時':' 失敗')+(c?'，改用 '+new Date(c.t).toLocaleString()+' 的快取':'，且無快取'));
+      gvBanner();return rows;
+    });
   });
 }
 /* ===== 2026-09-05 ap 批：分檔第二步（讀寫分離） =====
@@ -645,7 +743,10 @@ function invTag(st,s){var a=invAge(st,s);if(a==null)return '<span style="color:#
 /* ↑ invLight/invAge/invTag/estOnHand 自 2026-07-27 起盤點頁不再呈現（到貨推估不維護），函式保留備用勿刪 */
 /* ===== 盤點 session（延續／新的一週）與本機草稿：純前端 localStorage，不動 Sheet ===== */
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
-function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){lsFree();try{localStorage.setItem(k,v);}catch(e2){console.warn("本機儲存失敗："+k,e2);}}}
+function lsFree(){ /* 2026-09-26：本機空間滿時，只清各儀表板的暫存（採購 dpc:*、POS pos_cache_v2），絕不動登入與盤點草稿 */
+  try{var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&(k.indexOf("dpc:")===0||k==="pos_cache_v2"))ks.push(k);}
+    ks.forEach(function(k){try{localStorage.removeItem(k);}catch(e){}});}catch(e){}}
 function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 function escA(v){return String(v==null?"":v).replace(/"/g,'&quot;');}
 function sessStart(st){var v=lsGet("invSession_"+st);if(v==null||v==="")return null;var n=+v;return isNaN(n)?null:n;}
@@ -4719,7 +4820,7 @@ function shUploadVerify(){
       var n=rs&&rs[0]?num(rs[0][Object.keys(rs[0])[0]]):0;
       SHUP.stage="done";SHUP.verified=n>0;
       SHIST={};SHLOAD={};SUPC={};   /* 清快取，重讀 */
-      Object.keys(localStorage||{}).forEach(function(k){if(/^dpc:gq:.*fact_shopline/.test(k))try{localStorage.removeItem(k);}catch(e){}});
+      gvcDelMatch(/^gq:.*fact_shopline/);   /* 2026-09-26：暫存已搬到 IndexedDB */
       render();
     }).catch(function(){SHUP.stage="done";SHUP.verified=false;SHIST={};SHLOAD={};render();});
   },3000);}

@@ -424,6 +424,32 @@ function App(){
        有快取 → 立刻出圖（毫秒），同時背景向 GAS 取新資料，回來後靜默替換。
        無快取 → 行為與改造前完全相同。 */
     const CK = 'pos_cache_v2';
+    /* 2026-09-26 暫存搬家（Chat）：暫存原本放 localStorage（全站共用約 5MB，POS 一份就佔約 3.6MB，會擠掉其他儀表板）。
+       改放這台裝置的 IndexedDB（資料庫 pos_cache），空間大很多；只存最新一份（固定同一個 key 覆寫）；超過 POS_CACHE_MAX 不存。
+       舊的 localStorage 暫存開頁時搬過去後刪除。畫面行為不變：有暫存先出圖、背景更新。 */
+    const POS_CACHE_MAX = 30000000;
+    const idbOpen = ()=> new Promise(res=>{
+      try{
+        if(!window.indexedDB) return res(null);
+        const rq = indexedDB.open('pos_cache', 1);
+        rq.onupgradeneeded = ()=>{ try{ if(!rq.result.objectStoreNames.contains('kv')) rq.result.createObjectStore('kv'); }catch(_){} };
+        rq.onsuccess = ()=>res(rq.result);
+        rq.onerror = ()=>res(null);
+        rq.onblocked = ()=>res(null);
+      }catch(_){ res(null); }
+    });
+    const idbGet = ()=> idbOpen().then(db=>{
+      if(!db) return null;
+      return new Promise(res=>{
+        try{ const rq = db.transaction('kv','readonly').objectStore('kv').get(CK);
+          rq.onsuccess = ()=>res(rq.result || null); rq.onerror = ()=>res(null);
+        }catch(_){ res(null); }
+      });
+    }).catch(()=>null);
+    const idbPut = (v)=> idbOpen().then(db=>{
+      if(!db) return;
+      try{ db.transaction('kv','readwrite').objectStore('kv').put(v, CK); }catch(_){}
+    }).catch(()=>{});
     let dateInit = false;
     const setBadge = (txt, color)=>{
       try{ const el = document.getElementById('cacheBadge');
@@ -455,17 +481,25 @@ function App(){
       setLoading(false);
     };
 
-    /* 先吃快取 */
-    let hasCache = false;
-    try{
-      const c = JSON.parse(localStorage.getItem(CK) || 'null');
+    /* 先吃快取（新資料已到就不再用舊的） */
+    let hasCache = false, gotFresh = false;
+    const useCache = (c)=>{
+      if(gotFresh || hasCache) return;
       if(c && c.data && Array.isArray(c.data.monthly) && c.data.monthly.length){
         hasCache = true;
         applyData(c.data);
         setBadge('⚡ 快取顯示（' + fmtT(c.t) + '取得）· 背景更新中…', '#B45309');
       }
-    }catch(_){}
-    if(!hasCache){ setLoading(true); setBadge('連線中…（首次較慢）', '#B45309'); }
+    };
+    /* 舊版 localStorage 暫存：這次照用，並搬進 IndexedDB 後刪除 */
+    let legacy = null;
+    try{ legacy = JSON.parse(localStorage.getItem(CK) || 'null'); }catch(_){}
+    try{ localStorage.removeItem(CK); }catch(_){}
+    if(legacy){ useCache(legacy); if(hasCache) idbPut(legacy); }
+    if(!hasCache){
+      setLoading(true); setBadge('連線中…（首次較慢）', '#B45309');
+      idbGet().then(useCache);
+    }
 
     const cbName = '_gasCb_' + Date.now();
     const timeout = setTimeout(()=>{
@@ -478,9 +512,9 @@ function App(){
       delete window[cbName];
       try{
         if(!d || !Array.isArray(d.monthly) || !d.monthly.length) throw new Error('回傳資料為空');
+        gotFresh = true;
         applyData(d);
-        try{ localStorage.setItem(CK, JSON.stringify({ t: Date.now(), data: d })); }
-        catch(_){ try{ localStorage.removeItem(CK); }catch(__){} }
+        try{ if(JSON.stringify(d).length <= POS_CACHE_MAX) idbPut({ t: Date.now(), data: d }); }catch(_){}
         setBadge('✓ 已更新 ' + fmtT(Date.now()), '#2E7D32');
       }catch(e){
         if(!hasCache){ setError(e.message); setLoading(false); }
