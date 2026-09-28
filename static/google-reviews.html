@@ -95,6 +95,16 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 .pos-badge { display: inline-block; background: #EDFFF5; color: #2D7A55; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 14px; }
 .valid-badge { display: inline-block; background: #2D7A55; color: #fff; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 14px; white-space: nowrap; }
 .empty-badge { display: inline-block; background: #ECE6E2; color: #6F4E45; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+.fail-badge { display: inline-block; background: #D62828; color: #fff; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 14px; white-space: nowrap; }
+tbody tr.fail-row, tbody tr.fail-row:nth-child(even) { background: #FFE3E3; }
+tbody tr.fail-row td:first-child { color: #D62828; box-shadow: inset 4px 0 0 #D62828; }
+.fail-banner { background: #FFF0F0; border: 2px solid #D62828; border-radius: 10px; padding: 10px 14px; }
+.fail-banner-title { color: #B01E1E; font-weight: 800; font-size: 17px; margin-bottom: 8px; }
+.fail-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.fail-chip { display: inline-flex; align-items: center; gap: 6px; background: #D62828; color: #fff; border-radius: 16px; padding: 4px 12px; font-size: 15px; font-weight: 700; }
+.fail-chip b { background: #fff; color: #D62828; border-radius: 10px; padding: 0 7px; }
+.fail-chip em { font-style: normal; font-weight: 600; opacity: .9; }
+.pass-banner { background: #EDF8F1; border: 2px solid #2D7A55; border-radius: 10px; padding: 10px 14px; color: #1F5C3E; font-weight: 800; font-size: 17px; }
 .plain-badge { display: inline-block; background: #FBEFD6; color: #96702A; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-size: 14px; white-space: nowrap; }
 .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 16px;padding:9px 14px;border-radius:10px;font-size: 15px;line-height:1.55;border:1px solid}
 .dsb b{font-weight:800;white-space:nowrap}
@@ -310,6 +320,7 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 </div>
 <div class="section">
 <div class="chart-card">
+<div id="storeChartAlert" style="margin-bottom:12px;"></div>
 <canvas id="storeChart" style="max-height:380px;"></canvas>
 </div>
 </div>
@@ -329,7 +340,7 @@ tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 <div class="section-title">📋 門市摘要</div>
 <div class="table-wrap">
 <table>
-<thead><tr><th>門市</th><th>品牌</th><th>區域</th><th>評論數</th><th>平均星等</th><th>負評數</th><th>負評率</th></tr></thead>
+<thead><tr><th>門市</th><th>品牌</th><th>區域</th><th>評論數</th><th>有效評論</th><th>單月達標（≥15）</th><th>平均星等</th><th>負評數</th><th>負評率</th></tr></thead>
 <tbody id="storeTbody"></tbody>
 </table>
 </div>
@@ -465,6 +476,7 @@ showLoading(false);
 
 let _selectedStores = new Set();
 let _monthList = [];        // 升序月份清單
+let _defaultMonthApplied = false;   // 2026-09-28：首次載入預設「當月」只套一次
 let _storesByZone = {};     // 區域 → 該區店集合（依 J 欄資料）
 
 function populateFilters() {
@@ -487,6 +499,8 @@ document.getElementById('zone-quick-chips').innerHTML = zones.map(z =>
 const monthOpts = [..._monthList].reverse().map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
 document.getElementById('f-month-from').innerHTML = '<option value="">起始月</option>' + monthOpts;
 document.getElementById('f-month-to').innerHTML = '<option value="">結束月</option>' + monthOpts;
+/* 2026-09-28：每次打開預設顯示「當月」（本月無資料則退為最新月）；?ym deep-link 仍優先覆蓋 */
+if (!_defaultMonthApplied) { _defaultMonthApplied = true; _applyDefaultMonth(); }
 applyDeepLink();   /* 第四批：選單建好後套用 ?ym */
 /* 2026-08-05：月份膠囊 ◀▶ 快速切換（選單倒序：index 0=最新月）。
    必須掛在 window——此處位於函式內部，宣告式 function 會變區域函式，onclick 找不到。 */
@@ -556,6 +570,18 @@ function _setSel(id, val) {
 const el = document.getElementById(id);
 el.value = val || '';
 if (val && el.value !== val) el.value = '';  // 該月無資料則退為不限制此端
+}
+function _defaultMonth() {
+const d = new Date(), cur = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+return _monthList.includes(cur) ? cur : (_monthList[_monthList.length - 1] || '');
+}
+function _applyDefaultMonth() {
+const m = _defaultMonth();
+if (!m) return;
+_setSel('f-month-from', m);
+_setSel('f-month-to', m);
+const scm = document.getElementById('store-chart-month');
+if (scm && _monthList.includes(m)) scm.value = m;
 }
 function periodQuick(type) {
 if (!_monthList.length) return;
@@ -675,6 +701,7 @@ if (_starChart) _starChart.destroy();
 _starChart = new Chart(ctx, { type:'doughnut', data:{ labels:['★1','★2','★3','★4','★5'], datasets:[{ data:[d[1],d[2],d[3],d[4],d[5]], backgroundColor:['#C43030','#E87060','#F4A620','#52B788','#4A9BB8'], borderWidth:2 }] }, options:{ responsive:true, plugins:{legend:{position:'bottom'}} } });
 }
 
+const CLOSED_STORES = new Set(['台南新光西門店']);   // 已歇業：不列入達標判定
 const MONTHLY_REVIEW_TARGET = 15;  // 各店每月「有效評論」目標則數（單月固定）
 
 // 有效評論判定（統一標準）：必須 5 星（1–4 星一律不算）、清理後非空白，且提到「與人有關的服務內容」。
@@ -728,8 +755,19 @@ const target = MONTHLY_REVIEW_TARGET;
 const totals = stores.map(s => bs[s].total);
 const valids = stores.map(s => bs[s].valid);
 const negs   = stores.map(s => bs[s].neg);
-// 達標色綁在「有效評論」：達標→磚紅、未達標→灰
-const validColors = valids.map(v => v >= target ? 'rgba(196,65,47,.75)' : 'rgba(150,150,150,.55)');
+// 2026-09-28：達標色綁在「有效評論」：達標→綠、未達標→紅（原 磚紅/灰 不夠醒目）；歇業店維持灰
+const isFail = s => !CLOSED_STORES.has(s) && bs[s].valid < target;
+const validColors = stores.map((s,i) => CLOSED_STORES.has(s) ? 'rgba(150,150,150,.55)' : (valids[i] >= target ? 'rgba(45,122,85,.8)' : 'rgba(214,40,40,.95)'));
+// 未達標清單橫幅：一眼看出哪幾店沒達標、差幾則
+const active = stores.filter(s => !CLOSED_STORES.has(s));
+const fails = active.filter(isFail);
+const curYm = (() => { const d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); })();
+const partial = month === curYm ? '（本月尚未結束，數字持續累積中）' : '';
+const alertEl = document.getElementById('storeChartAlert');
+if (alertEl) alertEl.innerHTML = !active.length ? '' : fails.length
+  ? '<div class="fail-banner"><div class="fail-banner-title">⚠️ ' + esc(month) + ' 未達標 ' + fails.length + ' 店／共 ' + active.length + ' 店（有效評論未滿 ' + target + ' 則）' + partial + '</div><div class="fail-chips">'
+    + fails.map(s => '<span class="fail-chip">' + esc(s) + '<b>' + bs[s].valid + ' 則</b><em>差 ' + (target - bs[s].valid) + '</em></span>').join('') + '</div></div>'
+  : '<div class="pass-banner">✅ ' + esc(month) + ' 全部 ' + active.length + ' 店有效評論皆達 ' + target + ' 則' + partial + '</div>';
 renderStarChart();   /* 2026-09-28：圓餅圖與本圖同一個月 */
 const ctx = document.getElementById('storeChart').getContext('2d');
 if (_storeChart) _storeChart.destroy();
@@ -737,7 +775,7 @@ _storeChart = new Chart(ctx, {
 type:'bar',
 data:{ labels:stores, datasets:[
 { label:'該月評論數（總量參考）', data:totals, backgroundColor:'rgba(214,190,170,.55)', borderRadius:4, order:2 },
-{ label:'有效評論（灰＝未達標）', data:valids, backgroundColor:validColors, borderRadius:4, order:2 },
+{ label:'有效評論（綠＝達標、紅＝未達標）', data:valids, backgroundColor:validColors, borderRadius:4, order:2 },
 { label:'負評數', data:negs, backgroundColor:'rgba(74,155,184,.85)', borderRadius:4, order:2 },
 { label:'每月目標 '+target+' 則', type:'line', data:stores.map(()=>target),
   borderColor:'#8B2D1F', borderWidth:2, borderDash:[6,4], pointRadius:0, fill:false, order:1, tension:0 }
@@ -746,31 +784,47 @@ options:{ responsive:true,
 plugins:{ legend:{position:'top'},
 tooltip:{callbacks:{ label:(c)=> {
   if (c.dataset.type==='line') return '每月目標 '+target+' 則';
-  const name = c.dataset.label.replace('（灰＝未達標）','').replace('（總量參考）','');
+  const name = c.dataset.label.replace('（綠＝達標、紅＝未達標）','').replace('（總量參考）','');
   let out = name + '：' + c.parsed.y + ' 則';
   if (c.datasetIndex===1) out += '（' + (c.parsed.y>=target ? '達標' : '差 '+(target-c.parsed.y)+' 則') + '）';
   return out;
 } }}},
-scales:{y:{beginAtZero:true, suggestedMax: Math.max(target, ...totals, 1) * 1.15, ticks:{}}, x:{ticks:{}}} }
+scales:{y:{beginAtZero:true, suggestedMax: Math.max(target, ...totals, 1) * 1.15, ticks:{}}, x:{ticks:{
+  color:(c)=> isFail(stores[c.index]) ? '#D62828' : '#5A4038',
+  font:(c)=> ({ weight: isFail(stores[c.index]) ? 'bold' : 'normal' }),
+  callback:(v,i)=> (isFail(stores[i]) ? '⚠ ' : '') + stores[i] }}} }
 });
 }
 
 function renderStoreTable(rows) {
+// 2026-09-28：加「有效評論」「單月達標」欄；期間為單一月份時才判定達標，未達標整列標紅，並補上該月 0 則的店
+const fFrom = document.getElementById('f-month-from').value, fTo = document.getElementById('f-month-to').value;
+const single = fFrom && fFrom === fTo;
+const target = MONTHLY_REVIEW_TARGET;
 const bs = {};
+const add = (s, brand, region) => { if (!bs[s]) bs[s] = {brand, region, total:0, valid:0, neg:0, sum:0, cnt:0}; };
 rows.forEach(r => {
-if (!bs[r.store]) bs[r.store] = {brand:r.brand, region:r.region, total:0, neg:0, sum:0, cnt:0};
+add(r.store, r.brand, r.region);
 bs[r.store].total++;
+if (isValidReview(r)) bs[r.store].valid++;
 if (r.stars !== null) { bs[r.store].sum += r.stars; bs[r.store].cnt++; }
 if (r.stars !== null && r.stars <= 4) bs[r.store].neg++;
 });
+if (single) {
+const universe = _selectedStores.size ? [..._selectedStores] : [...new Set(_allRows.map(r => r.store).filter(Boolean))];
+universe.filter(s => !CLOSED_STORES.has(s)).forEach(s => { if (!bs[s]) { const r0 = _allRows.find(r => r.store === s) || {}; add(s, r0.brand, r0.region); } });
+}
 const stores = Object.keys(bs).sort(storeSeqCmp);
 const tb = document.getElementById('storeTbody');
-if (!stores.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">暫無資料</td></tr>'; return; }
+if (!stores.length) { tb.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">暫無資料</td></tr>'; return; }
 tb.innerHTML = stores.map(s => {
 const d = bs[s];
 const avg = d.cnt ? (d.sum/d.cnt).toFixed(2) : '—';
 const nr = d.total ? (d.neg/d.total*100).toFixed(1)+'%' : '—';
-return `<tr><td><b>${esc(s)}</b></td><td>${esc(d.brand||'—')}</td><td>${esc(d.region||'—')}</td><td>${d.total}</td><td><span class="star-badge">${avg !== '—' ? avg+' ★' : '—'}</span></td><td>${d.neg}</td><td><span class="${d.neg>0?'neg-badge':'pos-badge'}">${nr}</span></td></tr>`;
+const judge = single && !CLOSED_STORES.has(s);
+const fail = judge && d.valid < target;
+const pass = !judge ? '<span style="color:var(--muted)">—</span>' : fail ? '<span class="fail-badge">✗ 未達標・差 ' + (target - d.valid) + ' 則</span>' : '<span class="valid-badge">✓ 達標</span>';
+return `<tr${fail ? ' class="fail-row"' : ''}><td><b>${fail ? '⚠ ' : ''}${esc(s)}</b></td><td>${esc(d.brand||'—')}</td><td>${esc(d.region||'—')}</td><td>${d.total}</td><td><b>${d.valid}</b></td><td>${pass}</td><td><span class="star-badge">${avg !== '—' ? avg+' ★' : '—'}</span></td><td>${d.neg}</td><td><span class="${d.neg>0?'neg-badge':'pos-badge'}">${nr}</span></td></tr>`;
 }).join('');
 }
 
@@ -830,6 +884,7 @@ _selectedStores.clear();
 syncStoreChips();
 ['f-month-from','f-month-to','f-star'].forEach(id => document.getElementById(id).value = '');
 document.getElementById('f-keyword').value = '';
+_applyDefaultMonth();   /* 2026-09-28：重設＝回到開頁預設（當月）；要看全部請按期間「全部」 */
 applyFilters();
 }
 function showLoading(on) { document.getElementById('loadingOverlay').classList.toggle('show', on); }
