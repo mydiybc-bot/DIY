@@ -4964,8 +4964,9 @@ function hqOK(){try{var o=JSON.parse(lsGet(HQ_KEY)||"null");if(o&&o.exp&&Date.no
 /* 2026-09-28 cm 批：第二道密碼改成「依身分」——總部＝purchase_hq（原樣），出貨中心＝purchase_dc（權限中心 dim_auth 要有這一列）。
    店長不設密碼（降級不需要）。hqOK／hqVerify／hqAsk 保留原名，不帶參數時行為與原本完全相同。 */
 var ROLE_GATES={"總部":{key:HQ_KEY,dash:HQ_DASH,title:"🔒 總部／經營者",desc:'這個身分可以修改<b>主檔、季節指數、單位對照</b>與<b>全 12 店的店別參數</b>，需要密碼。',ph:"請輸入總部密碼",ok:"已切換為總部／經營者"},
-  "出貨中心":{key:"dash_auth_purchase_dc",dash:"purchase_dc",title:"🔒 出貨中心",desc:'這個身分可以修改<b>出貨中心品項</b>的主檔（規格、單價、圖片、停售）、新增品項與維護效期，需要密碼。',ph:"請輸入出貨中心密碼",ok:"已切換為出貨中心"}};
+  "出貨中心":{key:"dash_auth_purchase_dc",dash:"purchase_dc",title:"🔒 出貨中心",desc:'這個身分可以修改<b>出貨中心品項</b>的主檔（規格、單價、圖片、停售）、新增品項與維護效期，需要密碼。<b>總部／經營者的密碼也可以用。</b>',ph:"請輸入出貨中心或總部密碼",ok:"已切換為出貨中心"}};
 function roleOK(role){var g=ROLE_GATES[role];if(!g)return true;if(role==="總部")return hqOK();
+  if(role==="出貨中心"&&hqOK())return true;   /* 經營者 09-28：出貨中心負責人＝總部管理人，這台已驗過總部就不用再輸一次 */
   try{var o=JSON.parse(lsGet(g.key)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;lsDel(g.key);}catch(e){}return false;}
 function hqPing(){var pn="__hqwarm"+Date.now(),ps=document.createElement("script");   /* 先預熱，免得使用者輸完密碼還要等 GAS 冷啟動 3–8 秒 */
   window[pn]=function(){try{delete window[pn];}catch(e){}if(ps.parentNode)ps.parentNode.removeChild(ps);};
@@ -4995,13 +4996,15 @@ function hqAsk(role){
   d.querySelector("#hqCancel").onclick=close;
   function submit(){var p=inp.value;if(!p){msg.style.color="#C0392B";msg.textContent="請輸入密碼";return;}
     go.disabled=true;msg.style.color="#666";msg.textContent="驗證中…";
-    hqVerify(p,function(r){
+    hqVerify(p,function cbv(r){
+      /* 出貨中心：權限中心還沒有 purchase_dc 這一列（回「查無此儀表板設定」，不計入錯誤次數）→ 改用總部密碼驗一次 */
+      if(role==="出貨中心"&&!cbv.fb&&r&&!r.ok&&/查無此儀表板設定/.test(r.error||"")){cbv.fb=1;hqVerify(p,cbv,HQ_DASH);return;}
       if(r&&r.ok){var hrs=(+r.ttl_hours>0?+r.ttl_hours:12);
         lsSet(g.key,JSON.stringify({exp:Date.now()+hrs*3600000}));
         close();ST.role=role;ST.exp={};var sel=$("#roleSel");if(sel)sel.value=role;render();
         toast(g.ok+"（"+hrs+" 小時內免再輸入）");return;}
       go.disabled=false;msg.style.color="#C0392B";
-      msg.textContent=(r&&r.result==="not_found")?"權限中心還沒有這個身分的密碼（請總部在 dim_auth 加「"+g.dash+"」）":((r&&r.error)||"密碼錯誤");
+      msg.textContent=(r&&r.error)||"密碼錯誤";
       try{inp.select();}catch(e){}},g.dash);}
   go.onclick=submit;
   inp.onkeydown=function(e){if(e.key==="Enter")submit();};
