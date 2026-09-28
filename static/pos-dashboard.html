@@ -52,6 +52,17 @@
         不是「賣得便宜的商品」。莓果伯爵、我的生日蛋糕是客人實作產出，佔材料/檯面/工時，
         砍掉會讓備料規劃失真；低均價已在銷售額排行自動降權，兩個榜各自誠實。
     App 內 filteredProducts（讀 rawData.productRank）已移除；GAS 未動、快取版號不變（V20）。
+  【v30】（2026-09-28）去年同期改「同一天」比較＋每月營收趨勢加去年線。
+    起因：資料只到 9/27，KPI 卡「去年」卻拿 2025 年 9 月整月比 → 成長率被低估（淨營收 -2.6% 實為 -1.2%）。
+      ・cutoff＝rawData.daily 最後一天；該月未滿月 → 去年同月只算 1 日～同一天（lyTail）。
+      ・lyTail 資料源＝既有 GAS action=daily_by_store（日×店，GAS 未動），fetchDailyByStore() 模組層 JSONP＋冷啟動重試；
+        裝置暫存 IndexedDB pos_cache 版本 2、key pos_dbs_v1（去年資料不會變，先用暫存再背景更新）。
+      ・computeKpisFor(dStart,dEnd,tail) 新增第三參數：tail 月不讀月資料，改用截到同一天的合計；六張 KPI 卡同口徑。
+      ・日明細未到 → KPI 顯示「計算中…」；取不到 → 退回整月比較並紅字標示。去年該月無逐日人數（2025-01~03 月表補入）同樣退回。
+      ・KPI 上方新增「比較期間」說明列；頁首加「資料至 YYYY/M/D」。
+      ・每月營收趨勢（全店合計）：虛線＝去年同月、點上標年成長率（≤13 個月才標）、tooltip 顯示今年／去年／成長率；
+        最後未滿月的去年值同樣只算到同一天。各店比較模式不變。
+    驗算：2025/1/1～9/27 淨營收 67,783,158、來客 136,658、客單價 496 與 Python 獨立重算一致；南京店單店一致。
 -->
 
 <link rel="preconnect" href="https://script.google.com" crossorigin>
@@ -119,6 +130,8 @@ a{color:var(--accent-light);text-decoration:none}
 .kpi-value{font-size:1.6rem;font-weight:800;letter-spacing:-.5px}
 .kpi-sub{font-size:.75rem;color:var(--text-muted);margin-top:2px}
 .kpi-yoy{font-size:.8rem;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.3}
+.yoy-note{font-size:.84rem;color:var(--text-secondary);margin:0 0 12px;padding:8px 14px;background:var(--bg-card);border:1px dashed var(--border);border-radius:10px;line-height:1.6}
+.yoy-note b{color:var(--text-primary);font-weight:700}
 .kpi-yoy .yoy-base{color:var(--text-secondary);font-weight:600;font-size:.82rem}
 .kpi-yoy .yoy-delta{padding:2px 9px;border-radius:6px;font-weight:800;font-size:.84rem;white-space:nowrap}
 .kpi-yoy.up .yoy-delta{background:rgba(82,183,136,.18);color:#2F8F63}
@@ -374,6 +387,79 @@ function getQuarterRange(offset=0){
   return [s,e];
 }
 
+/* ---------- v30（2026-09-28）去年同期「同一天」比較：日期小工具 ---------- */
+function shiftYM(ym, dy){ if(!ym) return ym; const [y,m]=ym.split('-'); return (parseInt(y,10)+dy)+'-'+m; }
+function daysInYM(ym){ const [y,m]=ym.split('-').map(Number); return new Date(y,m,0).getDate(); }
+function fmtDay(ymd){ const [y,m,d]=ymd.split('-'); return y+'/'+parseInt(m,10)+'/'+parseInt(d,10); }
+
+/* ---------- v30 日×店明細（GAS action=daily_by_store，既有 endpoint，GAS 未動）----------
+   用途：今年資料只到某天（例 9/27）時，去年最後一個月也只算到同一天，才是同天數比較。
+   去年資料不會再變 → 裝置暫存（IndexedDB pos_cache 版本 2，key pos_dbs_v1）可直接先用，背景再更新。 */
+const DBS_CK = 'pos_dbs_v1';
+function dbsIdbOpen(){
+  return new Promise(res=>{
+    try{
+      if(!window.indexedDB) return res(null);
+      const rq = indexedDB.open('pos_cache', 2);
+      rq.onupgradeneeded = ()=>{ try{ if(!rq.result.objectStoreNames.contains('kv')) rq.result.createObjectStore('kv'); }catch(_){} };
+      rq.onsuccess = ()=>{ const db = rq.result; if(db.objectStoreNames.contains('kv')) res(db); else { try{ db.close(); }catch(_){} res(null); } };
+      rq.onerror = ()=>res(null);
+      rq.onblocked = ()=>res(null);
+    }catch(_){ res(null); }
+  });
+}
+function dbsIdbGet(){
+  return dbsIdbOpen().then(db=>{
+    if(!db) return null;
+    return new Promise(res=>{
+      try{ const rq = db.transaction('kv','readonly').objectStore('kv').get(DBS_CK);
+        rq.onsuccess = ()=>res(rq.result || null); rq.onerror = ()=>res(null);
+      }catch(_){ res(null); }
+    });
+  }).catch(()=>null);
+}
+function dbsIdbPut(v){
+  return dbsIdbOpen().then(db=>{
+    if(!db) return;
+    try{ db.transaction('kv','readwrite').objectStore('kv').put(v, DBS_CK); }catch(_){}
+  }).catch(()=>{});
+}
+let DBS_PROMISE = null;
+function fetchDailyByStore(){
+  if(DBS_PROMISE) return DBS_PROMISE;
+  DBS_PROMISE = new Promise((resolve, reject)=>{
+    const cb = '_dbsCb_' + Date.now();
+    let done = false;
+    const timeout = setTimeout(()=>{
+      if(done) return; done = true;
+      delete window[cb];
+      reject(new Error('日明細逾時'));
+    }, 120000);
+    window[cb] = (d)=>{
+      if(done) return; done = true;
+      clearTimeout(timeout); delete window[cb];
+      if(!Array.isArray(d) || !d.length) reject(new Error('日明細回傳為空'));
+      else resolve(d);
+    };
+    let retried = false;
+    const mount = ()=>{
+      const s = document.createElement('script');
+      s.src = API_URL + (API_URL.includes('?')?'&':'?') + 'action=daily_by_store&callback=' + cb;
+      s.onerror = ()=>{
+        if(s.parentNode) s.parentNode.removeChild(s);
+        if(!retried){ retried = true; setTimeout(mount, 3000); return; }  /* 冷啟動：靜默重試一次（地雷 18） */
+        if(done) return; done = true;
+        clearTimeout(timeout); delete window[cb];
+        reject(new Error('日明細載入失敗'));
+      };
+      document.body.appendChild(s);
+    };
+    mount();
+  });
+  DBS_PROMISE.catch(()=>{ DBS_PROMISE = null; });
+  return DBS_PROMISE;
+}
+
 /* ---------- CUSTOM TOOLTIP ---------- */
 function CustomTooltip({active,payload,label,formatter}){
   if(!active||!payload?.length) return null;
@@ -549,6 +635,22 @@ function App(){
     mountScript();
   },[]);
 
+  /* ---------- v30 日×店明細：先用裝置暫存，背景向 GAS 取新的 ---------- */
+  const [dbs, setDbs] = useState(null);
+  const [dbsErr, setDbsErr] = useState(false);
+  useEffect(()=>{
+    let alive = true, gotFresh = false;
+    dbsIdbGet().then(c=>{
+      if(alive && !gotFresh && c && Array.isArray(c.rows) && c.rows.length) setDbs(c.rows);
+    });
+    fetchDailyByStore().then(rows=>{
+      gotFresh = true;
+      if(alive) setDbs(rows);
+      dbsIdbPut({ t: Date.now(), rows });
+    }).catch(()=>{ if(alive) setDbsErr(true); });
+    return ()=>{ alive = false; };
+  },[]);
+
   /* ---------- QUICK DATE PRESETS ---------- */
   const applyQuickDate = useCallback((preset)=>{
     if(!rawData) return;
@@ -656,11 +758,44 @@ function App(){
   /* ---------- 去年同期 YoY：共用 KPI 計算（吃任意起迄月份，口徑與下方 kpis 一致） ---------- */
   const shiftYearBack = (ym)=>{ if(!ym) return ym; const [y,m]=ym.split('-'); return (parseInt(y,10)-1)+'-'+m; };
 
-  const computeKpisFor = useCallback((dStart,dEnd)=>{
+  /* v30：資料最後一天（例 2026-09-27）。該月未滿月 → partial，去年同月只算到同一天 */
+  const cutoff = useMemo(()=>{
     if(!rawData) return null;
+    const last = (rawData.daily||[]).reduce((mx,d)=>(d.date>mx?d.date:mx), '');
+    if(!last) return null;
+    const ym = last.slice(0,7), day = parseInt(last.slice(8,10),10);
+    const lyYM = shiftYM(ym,-1);
+    const lyDay = Math.min(day, daysInYM(lyYM));
+    return { date:last, ym, day, partial: day < daysInYM(ym), lyYM, lyDate: lyYM+'-'+String(lyDay).padStart(2,'0') };
+  },[rawData]);
+
+  /* v30：去年同月 1 日～同一天的合計（吃區域/分店篩選）。
+     { ym, net, desserts, companions, limitedRev, itemRev } ／ {pending} 載入中 ／ {failed} 無法取得 */
+  const lyTail = useMemo(()=>{
+    if(!cutoff || !cutoff.partial) return null;
+    if(!dbs) return dbsErr ? { failed:true } : { pending:true };
+    // 去年該月沒有逐日人數（2025-01~03 為月表補入）→ 無法截斷
+    const hasCounts = dbs.some(r=>r.date.slice(0,7)===cutoff.lyYM && ((r.dessert_count||0)+(r.companion_count||0))>0);
+    if(!hasCounts) return { failed:true };
+    let net=0, desserts=0, companions=0, limitedRev=0, itemRev=0;
+    dbs.forEach(r=>{
+      if(r.date.slice(0,7)!==cutoff.lyYM || r.date>cutoff.lyDate) return;
+      if(selRegion!=='全部' && r.region!==selRegion) return;
+      if(selStores.length>0 && !selStores.includes(r.store)) return;
+      net+=r.revenue_net||0; desserts+=r.dessert_count||0; companions+=r.companion_count||0;
+      limitedRev+=r.limited_revenue||0; itemRev+=r.item_revenue||0;
+    });
+    return { ym:cutoff.lyYM, net, desserts, companions, limitedRev, itemRev };
+  },[cutoff, dbs, dbsErr, selRegion, selStores]);
+
+  /* tail（v30）：傳入時，該月不讀月資料，改用 tail 的「截到同一天」合計 */
+  const computeKpisFor = useCallback((dStart,dEnd,tail)=>{
+    if(!rawData) return null;
+    const skipYM = tail && tail.ym ? tail.ym : null;
     const mF = rawData.monthly.filter(m=>{
       if(dStart && m.yearMonth < dStart) return false;
       if(dEnd && m.yearMonth > dEnd) return false;
+      if(skipYM && m.yearMonth===skipYM) return false;
       if(selRegion!=='全部' && m.region!==selRegion) return false;
       if(selStores.length>0 && !selStores.includes(m.store)) return false;
       return true;
@@ -670,14 +805,18 @@ function App(){
       totalRev+=m.revenue; desserts+=m.dessertCount; companions+=m.companionCount;
       if(m.mainCategory==='限定甜點') limitedRev+=m.revenue;
     });
+    if(skipYM){ totalRev+=tail.itemRev; desserts+=tail.desserts; companions+=tail.companions; limitedRev+=tail.limitedRev; }
     const mbs = (rawData.monthlyByStore||[]).filter(m=>{
       if(dStart && m.yearMonth < dStart) return false;
       if(dEnd && m.yearMonth > dEnd) return false;
+      if(skipYM && m.yearMonth===skipYM) return false;
       if(selRegion!=='全部' && m.region!==selRegion) return false;
       if(selStores.length>0 && !selStores.includes(m.store)) return false;
       return true;
     });
-    const netTotal = mbs.length>0 ? mbs.reduce((s,m)=>s+(m.revenue_net||0),0) : totalRev;
+    const netTotal = (mbs.length>0 || skipYM)
+      ? mbs.reduce((s,m)=>s+(m.revenue_net||0),0) + (skipYM ? tail.net : 0)
+      : totalRev;
     const hc = desserts + companions;
     return {
       totalRevenueNet: netTotal,
@@ -696,9 +835,17 @@ function App(){
     const minYM = (rawData.monthly||[]).reduce((mn,m)=>(!mn||m.yearMonth<mn)?m.yearMonth:mn, '');
     const lyStart = shiftYearBack(dateStart), lyEnd = shiftYearBack(dateEnd);
     const noData = !lyStart || lyStart < minYM;       // 去年同期起月早於資料最早月 → 無可比資料
-    const ly = noData ? null : computeKpisFor(lyStart, lyEnd);
-    return { noData, ly };
-  },[rawData, dateStart, dateEnd, computeKpisFor]);
+    // v30：結束月＝資料最後一個月且未滿月 → 去年最後一個月只算到同一天
+    const needTail = !noData && !!cutoff && cutoff.partial && dateEnd===cutoff.ym;
+    let tail=null, pending=false, fullMonthFallback=false;
+    if(needTail){
+      if(lyTail && lyTail.ym) tail = lyTail;
+      else if(lyTail && lyTail.pending) pending = true;
+      else fullMonthFallback = true;
+    }
+    const ly = (noData || pending) ? null : computeKpisFor(lyStart, lyEnd, tail);
+    return { noData, pending, ly, sameDay: !!tail, fullMonthFallback, needTail, lyStart, lyEnd };
+  },[rawData, dateStart, dateEnd, computeKpisFor, cutoff, lyTail]);
 
   const pctGrow = (now, prev)=> (prev>0 ? ((now-prev)/prev*100) : null);  // 金額/數量類：成長率%
   const pptGrow = (now, prev)=> (now - prev);                              // 比率類：百分點 ppt
@@ -882,6 +1029,9 @@ function App(){
 
   // 渲染一張卡的「去年同期」行；mode: 'pct'(金額/數量) | 'ppt'(比率)
   const renderYoY = (curVal, lyVal, mode, fmtBase)=>{
+    if(yoy && yoy.pending){
+      return <div className="kpi-yoy flat"><span className="yoy-base">去年同期 計算中…</span></div>;
+    }
     if(!yoy || yoy.noData || yoy.ly==null){
       return <div className="kpi-yoy flat"><span className="yoy-base">去年同期 — ｜無資料</span></div>;
     }
@@ -931,7 +1081,7 @@ function App(){
               <div className="header-data-range">
                 <div className="data-range-label">📅 資料有效期間</div>
                 <div className="data-range-value">{fmtYM(start)} ～ {fmtYM(end)}</div>
-                <div className="data-range-sub">共 {months} 個月｜最後更新 {lastUpdated}</div>
+                <div className="data-range-sub">共 {months} 個月{cutoff ? '｜資料至 '+fmtDay(cutoff.date) : ''}｜最後更新 {lastUpdated}</div>
               </div>
             );
           })()}
@@ -981,6 +1131,20 @@ function App(){
             </select>
           </div>
         </div>
+
+        {/* v30 比較期間說明：讓店長知道「去年」比的是哪幾天 */}
+        {yoy && !yoy.noData && dateStart && dateEnd && (()=>{
+          const curEnd = (cutoff && dateEnd===cutoff.ym) ? cutoff.date : dateEnd+'-'+daysInYM(dateEnd);
+          const lyEndD = yoy.sameDay ? cutoff.lyDate : yoy.lyEnd+'-'+daysInYM(yoy.lyEnd);
+          return (
+            <div className="yoy-note">
+              📅 比較期間｜今年 <b>{fmtDay(dateStart+'-01')} ～ {fmtDay(curEnd)}</b> vs 去年 <b>{fmtDay(yoy.lyStart+'-01')} ～ {fmtDay(lyEndD)}</b>
+              {yoy.sameDay && <span>（今年資料只到 {cutoff.date.slice(5).replace('-','/').replace(/^0/,'')}，去年也只算到同一天，天數相同才公平）</span>}
+              {yoy.pending && <span>（去年逐日資料載入中…）</span>}
+              {yoy.fullMonthFallback && <span style={{color:'var(--danger)'}}>（⚠ 去年逐日資料暫時取不到，這次先以去年整月比較，成長率會偏低）</span>}
+            </div>
+          );
+        })()}
 
         {/* KPI CARDS */}
         <div className="kpi-grid">
@@ -1044,7 +1208,7 @@ function App(){
         </div>
 
         {/* TAB CONTENT */}
-        {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
+        {activeTab===0 && <TabRevenue monthlyTotals={monthlyTotals} monthlyByStore={monthlyByStore} monthlyByCat={monthlyByCat} storesInData={storesInData} catTotals={catTotals} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores} cutoff={cutoff} lyTail={lyTail}/>}
         {activeTab===1 && <TabStoreCompare storeTotals={storeTotals} monthlyByStore={monthlyByStore} monthlyByStoreNoDate={monthlyByStoreNoDate} storesInData={storesInData} rawData={rawData} dateStart={dateStart} dateEnd={dateEnd} selRegion={selRegion} selStores={selStores}/>}
         {activeTab===2 && <TabProductAnalysis dateStart={dateStart} dateEnd={dateEnd} storeFilterActive={selStores.length>0 || selRegion!=='全部'}/>}
         {activeTab===3 && <TabAvgSpend priceBands={priceBands} storeTotals={storeTotals} monthlyByStore={monthlyByStore} storesInData={storesInData} overallAvg={kpis.avgSpendPerHead}/>}
@@ -1066,7 +1230,22 @@ function App(){
 /* ================================================================
    TAB 1: 營收趨勢
    ================================================================ */
-function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, catTotals, rawData, dateStart, dateEnd, selRegion, selStores}){
+/* v30：每月營收趨勢的 tooltip（今年／去年同期／成長率） */
+function RevenueYoYTooltip({active,payload,label}){
+  if(!active||!payload?.length) return null;
+  const p = payload[0].payload || {};
+  const g = p.growth;
+  return (
+    <div className="custom-tooltip">
+      <div className="label">{label}{p.partialDay ? '（1–'+p.partialDay+' 日）' : ''}</div>
+      <div className="item"><span className="dot" style={{background:'#C4412F'}}/>今年淨營收: {fmt.currency(p.revenueNet)}</div>
+      <div className="item"><span className="dot" style={{background:'#8B6A63'}}/>去年同期: {p.revenueNetLY!=null ? fmt.currency(p.revenueNetLY) : (p.lyPending ? '計算中…' : '無資料')}{p.lyFull ? '（整月）' : ''}</div>
+      {g!=null && <div className="item" style={{fontWeight:800,color:g>=0?'#2F8F63':'#C4412F'}}>年成長 {g>=0?'+':''}{g.toFixed(1)}%</div>}
+    </div>
+  );
+}
+
+function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, catTotals, rawData, dateStart, dateEnd, selRegion, selStores, cutoff, lyTail}){
   const [viewMode, setViewMode] = useState('total'); // total | byStore
 
   // Revenue line chart data (v2: adds net revenue line from monthlyByStore API data)
@@ -1085,7 +1264,30 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
       netByYM[m.yearMonth]=(netByYM[m.yearMonth]||0)+(m.revenue_net||0);
     });
 
-    if(viewMode==='total') return monthlyTotals.map(t=>({name:t.ym,revenue:t.revenue,revenueNet:netByYM[t.ym]||0}));
+    if(viewMode==='total'){
+      /* v30 去年同期：同月份往前一年（吃區域/分店，不吃期間）；未滿月的最後一個月，去年只算到同一天 */
+      const lyNetByYM={};
+      let minYM='';
+      mbs.forEach(m=>{
+        if(!minYM || m.yearMonth<minYM) minYM=m.yearMonth;
+        if(selRegion && selRegion!=='全部' && m.region!==selRegion) return;
+        if(selStores && selStores.length>0 && !selStores.includes(m.store)) return;
+        lyNetByYM[m.yearMonth]=(lyNetByYM[m.yearMonth]||0)+(m.revenue_net||0);
+      });
+      return monthlyTotals.map(t=>{
+        const net = netByYM[t.ym]||0;
+        const lyYM = shiftYM(t.ym,-1);
+        const isPartial = !!(cutoff && cutoff.partial && t.ym===cutoff.ym);
+        let ly=null, lyFull=false, lyPending=false;
+        if(lyYM>=minYM){
+          if(isPartial && lyTail && lyTail.ym) ly = lyTail.net;
+          else if(isPartial && lyTail && lyTail.pending) lyPending = true;
+          else { ly = lyNetByYM[lyYM]!=null ? lyNetByYM[lyYM] : null; lyFull = isPartial && ly!=null; }
+        }
+        const growth = (ly!=null && ly>0) ? ((net-ly)/ly*100) : null;
+        return {name:t.ym, revenue:t.revenue, revenueNet:net, revenueNetLY:ly, growth, lyFull, lyPending, partialDay: isPartial?cutoff.day:null};
+      });
+    }
     // By store: pivot（v2 改用 net 淨營收）
     const yms = [...new Set(monthlyByStore.map(m=>m.ym))].sort();
     const stores = [...new Set(monthlyByStore.map(m=>m.store))];
@@ -1097,7 +1299,7 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
       });
       return row;
     });
-  },[viewMode, monthlyTotals, monthlyByStore, rawData, dateStart, dateEnd, selRegion, selStores]);
+  },[viewMode, monthlyTotals, monthlyByStore, rawData, dateStart, dateEnd, selRegion, selStores, cutoff, lyTail]);
 
   const storeList = useMemo(()=>[...new Set(monthlyByStore.map(m=>m.store))],[monthlyByStore]);
 
@@ -1126,17 +1328,29 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
             <button className={viewMode==='byStore'?'active':''} onClick={()=>setViewMode('byStore')}>各店比較</button>
           </div>
         </div>
-        <div className="chart-subtitle">淨營收（已扣折扣）｜可切換 全店合計／各店比較</div>
+        <div className="chart-subtitle">
+          淨營收（已扣折扣）｜可切換 全店合計／各店比較
+          {viewMode==='total' && <span>｜<b style={{color:'#C4412F'}}>實線＝今年</b>、<b style={{color:'#8B6A63'}}>虛線＝去年同月</b>，點上 % ＝年成長率</span>}
+          {viewMode==='total' && cutoff && cutoff.partial && dateEnd===cutoff.ym && <span>｜{parseInt(cutoff.ym.slice(5),10)} 月只到 {cutoff.day} 日，去年同月也只算 1–{cutoff.day} 日</span>}
+        </div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={revenueLineData}>
+            <LineChart data={revenueLineData} margin={{top:22,right:36,left:8,bottom:0}}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0D9D5"/>
               <XAxis dataKey="name" stroke="#B89E97" tick={{fontSize:12}}/>
               <YAxis stroke="#B89E97" tick={{fontSize:12}} tickFormatter={fmt.short}/>
-              <Tooltip content={<CustomTooltip formatter={fmt.currency}/>}/>
+              <Tooltip content={viewMode==='total' ? <RevenueYoYTooltip/> : <CustomTooltip formatter={fmt.currency}/>}/>
               {viewMode==='total' ? (
                 <React.Fragment>
-                  <Line type="monotone" dataKey="revenueNet" stroke="#C4412F" strokeWidth={2.5} dot={{r:3}} name="淨營收"/>
+                  <Line type="monotone" dataKey="revenueNetLY" stroke="#8B6A63" strokeWidth={2} strokeDasharray="6 4" dot={{r:2.5}} name="去年同期" connectNulls={false}/>
+                  <Line type="monotone" dataKey="revenueNet" stroke="#C4412F" strokeWidth={2.5} dot={{r:3}} name="今年淨營收"
+                    label={revenueLineData.length<=13 ? (props)=>{
+                      const {x,y,index} = props;
+                      const row = revenueLineData[index];
+                      if(!row || row.growth==null || x==null || y==null) return null;
+                      const g = row.growth;
+                      return <text key={'g'+index} x={x} y={y-12} textAnchor="middle" fontSize={12} fontWeight={700} fill={g>=0?'#2F8F63':'#C4412F'}>{(g>=0?'+':'')+g.toFixed(1)+'%'}</text>;
+                    } : false}/>
                 </React.Fragment>
               ) : (
                 storeList.map((s,i)=>(
