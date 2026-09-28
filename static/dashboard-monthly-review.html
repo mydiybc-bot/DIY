@@ -1711,8 +1711,10 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       var go = f.querySelector('.go'); go.disabled = true; fe.textContent = '送出中…';
       jp({action:'track_set', key:tkey(a), store:a.store, cat:a.cat, kind:a.kind || '', light:a.light, desc:String(a.desc).slice(0, 80), status:act, note:note, who:w, role:ROLE_NAME[ROLE], snap:B.snapDate, pw:pw}, 30000).then(function(d){
         if (!d || !d.ok) { if (d && /密碼/.test(d.error || '')) PW = ''; throw new Error((d && d.error) || '送出失敗'); }
+        /* 一定要後台回傳剛存好的那一筆（同一個 key、同一個狀態）才算成功，避免「看起來回報了、其實沒存」 */
+        if (!d.item || d.item.key !== tkey(a) || d.item.status !== act) throw new Error('後台沒有確認存檔，這筆回報沒有成功，請稍後再試');
         PW = pw; lsPut(WLS, w);
-        TRK[tkey(a)] = d.item || {key:tkey(a), status:act, note:note, who:w, role:ROLE_NAME[ROLE], at:new Date().toISOString()};
+        TRK[tkey(a)] = d.item;
         renderRoles();
       }).catch(function(e){ go.disabled = false; fe.textContent = '⚠ ' + (e.message || e); if (!PW && !f.querySelector('.i-pw')) openForm(card, a, act); });
     };
@@ -1722,7 +1724,8 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   function loadTrack(){
     TRK_ST = 'loading';
     return jp({action:'track_list'}, 30000).then(function(d){
-      if (!d || !d.ok) { TRK_ST = (d && /unknown|未知|不支援|action/i.test(d.error || '')) ? 'off' : 'err'; TRK_ERR = (d && d.error) || ''; return; }
+      /* 後台必須回 items 陣列才算上線；回別的東西（例如舊版後台把不認得的指令當 ping）一律視為「還沒上線」，不可以讓人以為能回報 */
+      if (!d || !d.ok || !Array.isArray(d.items)) { TRK_ST = (!d || d.ok || /unknown|未知|不支援|action/i.test(d.error || '')) ? 'off' : 'err'; TRK_ERR = (d && d.error) || ''; return; }
       TRK = {}; (d.items || []).forEach(function(r){ if (r && r.key) TRK[r.key] = r; });
       TRK_ST = 'ok'; TRK_AT = Date.now();
     }).catch(function(e){ TRK_ST = 'err'; TRK_ERR = e.message || String(e); }).then(function(){ if (B) renderRoles(); });
