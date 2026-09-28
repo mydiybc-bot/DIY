@@ -53,6 +53,7 @@ var REQ_SYS = { req_id: 1, campaign_id: 1, seq: 1, status: 1, signers: 1, payloa
 var UNIT_SYS = { req_id: 1, '品項': 1, updated_at: 1, updated_by: 1 };
 /* 這些狀態的申請單不能再整張修改 */
 var LOCKED = { '送簽中': 1, '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
+var ADMIN = '管理者';   /* 🔑 密碼管理：簽核主管名單與 PIN、各身分密碼 */
 
 /* ================= 第一次設定 ================= */
 function setup() {
@@ -104,18 +105,33 @@ function seedRoles_(ss) {
   return rows.length;
 }
 
-function randPw_() {
-  var cs = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', s = '';
+function randPw_(len) {
+  var n = len || 8, cs = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789', s = '';
   var b = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + ':' + Date.now() + ':' + Math.random());
   var lim = 256 - (256 % cs.length);
-  for (var i = 0; i < b.length && s.length < 8; i++) { var v = (b[i] + 256) % 256; if (v < lim) s += cs.charAt(v % cs.length); }
-  while (s.length < 8) s += cs.charAt(Math.floor(Math.random() * cs.length));
+  for (var i = 0; i < b.length && s.length < n; i++) { var v = (b[i] + 256) % 256; if (v < lim) s += cs.charAt(v % cs.length); }
+  while (s.length < n) s += cs.charAt(Math.floor(Math.random() * cs.length));
   return s;
+}
+
+/* 2026-09-28：「管理者」身分（🔑 密碼管理用）——舊試算表沒有這一列 → 第一次有人呼叫 API 時自動補上；密碼 10 碼隨機，只在 dim_role 分頁 */
+function migrate_() {
+  var P = PropertiesService.getScriptProperties();
+  if (P.getProperty('MIG_ADMIN') === '1' || !P.getProperty('SHEET_ID')) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+  try {
+    if (P.getProperty('MIG_ADMIN') === '1') return;
+    var t = load_('dim_role');
+    if (!t.rows.some(function (r) { return str_(r.role).trim() === ADMIN; })) put_(t, nextRow_(t), { role: ADMIN, password: randPw_(10), fields: '*' });
+    P.setProperty('MIG_ADMIN', '1');
+  } catch (e) { /* 下次再試 */ } finally { lock.releaseLock(); }
 }
 
 /* ================= 入口 ================= */
 function doGet(e) {
   var p = (e && e.parameter) || {}, a = String(p.action || 'ping'), res;
+  migrate_();
   try {
     if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('SHEET_ID') } };
     else if (a === 'listCampaigns') res = { ok: true, data: listCampaigns_() };
@@ -125,14 +141,16 @@ function doGet(e) {
   return out_(res, p.callback);
 }
 
-var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_, saveUnit: saveUnit_, getCampaign: getCampaign_, getReq: getReq_ };
-var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1 };
+var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_, saveUnit: saveUnit_, getCampaign: getCampaign_, getReq: getReq_,
+  adminList: adminList_, adminSaveSigner: adminSaveSigner_, adminDeleteSigner: adminDeleteSigner_, adminSetPassword: adminSetPassword_ };
+var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
 
 function doPost(e) {
   var p;
   try { p = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (err) { return out_({ ok: false, msg: '送來的資料不是 JSON' }); }
   var act = String(p.action || ''), who = p.signer ? ('簽核:' + String(p.signer)) : String(p.role || ''), res;
+  migrate_();
   var fn = ACTIONS[act];
   if (!fn) { res = { ok: false, act: act, msg: '不支援的動作：' + act }; log_(who, act, '', false, res.msg); return out_(res); }
   /* 先驗身分（在鎖外面）：密碼錯 → 停 1 秒再回（拖慢亂猜，不佔鎖、不影響別人）；不做「錯太多次就鎖整個身分」——
@@ -177,7 +195,8 @@ function out_(res, cb) {
 
 function guessId_(p) {
   if (!p) return '';
-  return String(p.req_id || (p.req && p.req.req_id) || (p.campaign && p.campaign.campaign_id) || p.campaign_id || '');
+  return String(p.req_id || (p.req && p.req.req_id) || (p.campaign && p.campaign.campaign_id) || p.campaign_id ||
+    (p.entry && p.entry.name) || p.target_role || (p.action === 'adminDeleteSigner' ? p.name : '') || '');
 }
 
 /* ================= 身分 ================= */
@@ -213,6 +232,61 @@ function can_(auth, key) {
 
 function whoami_(p, auth) {
   return { id: '', data: { kind: auth.kind, role: auth.role, name: auth.name, fields: auth.fields || '' } };
+}
+
+/* ================= 🔑 密碼管理（只限「管理者」） ================= */
+function needAdmin_(auth) { if (!auth || auth.kind !== 'role' || auth.role !== ADMIN) throw fail_('這一頁要「' + ADMIN + '」密碼', 'perm'); }
+function adminList_(p, auth) {
+  needAdmin_(auth);
+  var roles = load_('dim_role').rows.filter(function (x) { return str_(x.role).trim(); })
+    .map(function (x) { return { role: str_(x.role).trim(), password: str_(x.password), fields: str_(x.fields) }; });
+  var signers = load_('dim_signer').rows.filter(function (x) { return str_(x.name).trim(); })
+    .map(function (x) { return { name: str_(x.name).trim(), role: str_(x.role), pin: str_(x.pin), enabled: signerOn_(x.enabled) ? 'Y' : 'N' }; });
+  return { id: '', data: { roles: roles, signers: signers }, msg: '身分 ' + roles.length + '、簽核主管 ' + signers.length };
+}
+function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核人 PIN 登入用，不能混用） */
+  needAdmin_(auth);
+  var g = p.entry || {}, orig = str_(g.orig_name).trim(), name = str_(g.name).trim(), title = str_(g.role).trim(), pin = str_(g.pin).trim();
+  var en = (g.enabled === false || str_(g.enabled).toUpperCase() === 'N') ? 'N' : 'Y';
+  if (!name) throw fail_('請填簽核主管姓名');
+  if (/[,，、;；\s]/.test(name)) throw fail_('姓名不能有逗號、頓號、分號或空白');   /* signers 欄用這些符號分隔 */
+  if (!/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字');
+  var t = load_('dim_signer');
+  var row = orig ? t.rows.filter(function (r) { return str_(r.name).trim() === orig; })[0] : null;
+  if (orig && !row) throw fail_('找不到簽核主管「' + orig + '」', 'notfound');
+  if (t.rows.some(function (r) { return r !== row && str_(r.name).trim() === name; })) throw fail_('已經有叫「' + name + '」的簽核主管', 'dup');
+  put_(t, row ? row._row : nextRow_(t), { name: name, role: title, pin: pin, enabled: en });
+  return {
+    id: name, data: { name: name, role: title, enabled: en, created: !row },
+    msg: (row ? '更新' : '新增') + '簽核主管 ' + name + (orig && orig !== name ? '（原名 ' + orig + '）' : '') + (en === 'N' ? '（停用）' : '')
+  };
+}
+function adminDeleteSigner_(p, auth) {
+  needAdmin_(auth);
+  var name = str_(p.name).trim();
+  if (!name) throw fail_('缺姓名');
+  var t = load_('dim_signer'), row = t.rows.filter(function (r) { return str_(r.name).trim() === name; })[0];
+  if (!row) throw fail_('找不到簽核主管「' + name + '」', 'notfound');
+  var signed = load_('fact_signoff').rows.some(function (r) { return str_(r.signer).trim() === name; });
+  var picked = load_('fact_recipe_req', true).rows.some(function (r) { return str_(r.signers).split(/[,，、;；\s]+/).indexOf(name) >= 0; });
+  if (signed || picked) throw fail_('「' + name + '」已經' + (signed ? '簽核過' : '被指定簽核') + '，為了保留紀錄不能刪除，請改成「停用」', 'used');
+  t.sh.deleteRow(row._row);
+  return { id: name, data: { name: name }, msg: '刪除簽核主管 ' + name };
+}
+/* 新密碼由網頁產生後送來（重送時是同一組，不會變成兩個不同的密碼）；回覆不含密碼。
+   注意：role／password 是管理者自己的登入，要改的身分與新密碼用 target_role／new_password */
+function adminSetPassword_(p, auth) {
+  needAdmin_(auth);
+  var role = str_(p.target_role).trim(), pw = str_(p.new_password).trim();
+  var t = load_('dim_role'), row = t.rows.filter(function (r) { return str_(r.role).trim() === role; })[0];
+  if (!row) throw fail_('找不到身分「' + role + '」', 'notfound');
+  if (pw.length < 6) throw fail_('密碼至少 6 碼');
+  if (/\s/.test(pw)) throw fail_('密碼不能有空白');
+  var obj = {};
+  t.H.forEach(function (h) { obj[h] = row[h]; });
+  obj.password = pw;
+  put_(t, row._row, obj);
+  return { id: role, data: { role: role }, msg: '更改密碼 ' + role };
 }
 
 /* ================= 檔期 ================= */

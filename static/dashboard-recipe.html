@@ -211,6 +211,17 @@
   #tab-apply .ap-2col{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
   @media(max-width:520px){#tab-apply .ap-2col{grid-template-columns:1fr}}
   #tab-apply .ap-reqtbl td{vertical-align:middle}
+  /* 2026-09-28：🔑 密碼管理 */
+  #tab-apply .ap-modal-box.ap-wide{max-width:860px}
+  #tab-apply .ap-adm-sec{font-size:14px;font-weight:800;color:#00695C;margin:14px 0 6px}
+  #tab-apply .ap-adm td input[type=text],#tab-apply .ap-adm td input[type=password]{width:100%;min-width:80px;box-sizing:border-box;font-size:13px;padding:5px 7px;border:1px solid #D8C8BF;border-radius:6px;font-family:inherit}
+  #tab-apply .ap-adm td input[data-sgf=pin]{min-width:92px;font-variant-numeric:tabular-nums;letter-spacing:.5px}
+  #tab-apply .ap-adm td input.ap-mask{-webkit-text-security:disc;text-security:disc}   /* 遮住 PIN 但不用 type=password（避免瀏覽器把存過的密碼自動填進來） */
+  #tab-apply .ap-adm td .ap-mini{margin:2px 2px 2px 0}
+  #tab-apply .ap-adm tr.ap-new-row td{background:#F6FBFA}
+  #tab-apply .ap-adm code{font-size:13px;background:#FBF8F6;border:1px solid #EFE6E1;border-radius:6px;padding:2px 6px;letter-spacing:.5px}
+  #tab-apply .ap-flash{margin:8px 0 0;padding:8px 12px;border-radius:8px;background:#EFF7EF;border:1px solid #C9E3CA;color:#2F5D33;font-size:13px}
+  #tab-apply .ap-flash.bad{background:#FFF4F2;border-color:#F2D4CC;color:#C0392B}
 </style>
 <style id="semiCss">/* 09-24：欄位裡的灰色提示字縮小，才看得到整句 */
 #tab-apply input::placeholder,#tab-apply textarea::placeholder,#tab-semi input::placeholder,#tab-semi textarea::placeholder{font-size:12px;opacity:.75}
@@ -474,7 +485,7 @@
 
   <!-- ===== TAB: 新品申請表（ApplyMod） ===== -->
   <div class="tab-panel" id="tab-apply">
-  <div class="ap-panel-head"><h2 class="ap-panel-title">📝 新品申請表 <span class="ap-sub">照 2026-02-24 新品研發工作申請單格式 → 即時成本卡 → 送件到檔期（寫進「食譜系統_申請單」，不動 BOM 本與採購系統；半成品配方到「🧪 半成品/材料包」儲存）</span></h2></div>
+  <div class="ap-panel-head"><h2 class="ap-panel-title">📝 新品申請表 <span class="ap-sub">照 2026-02-24 新品研發工作申請單格式 → 即時成本卡 → 送件到檔期（寫進「食譜系統_申請單」，不動 BOM 本與採購系統；半成品配方到「🧪 半成品/材料包」儲存）</span></h2><button class="ap-btn2 ap-mini" id="apAdminBtn" type="button" style="margin-left:auto" title="簽核主管名單與 PIN、各身分密碼（要「管理者」密碼）">🔑 密碼管理</button></div>
   <div id="apLoading" class="ap-muted" style="padding:20px 0">⏳ 等待主檔載入…（與食譜成本分析共用同一份資料）</div>
   <div id="apRoot" style="display:none"></div>
   </div>
@@ -1366,6 +1377,62 @@ return { ensureInit, fetchPos, render, get ready(){ return READY; },
 
 </script>
 <script>
+/* ================= UiKeep：整塊重畫時保住游標與捲動，「欄位改完」觸發的重畫延到操作結束（2026-09-28） =================
+   問題：新品申請表、🧪 半成品/材料包 的欄位改完（多半是點下一格時觸發 change）就整塊 innerHTML 重畫 →
+         剛點到的那一格被換掉（要點第二次）、下拉選單一打開就被關掉、Tab 跳格跑掉、表格橫向捲動跳回最左、中文選字被打斷。
+   做法：①busy()＝滑鼠／手指還按著、下拉選單或日期選單開著、中文輸入法還在選字 → 這時不重畫
+         ②later(key,fn)：排到操作結束後才執行（同一個 key 只跑最後一次）
+         ③keep(root,fn)：重畫前記住游標所在的格子（用 data-* 屬性路徑辨識）、選取範圍、各捲動框與整頁捲動位置，重畫後放回 */
+window.UiKeep=(function(){
+  var down=false,composing=false,hold=null,pend={},order=[],timer=null,fb=null;
+  function on(t,f){document.addEventListener(t,f,true)}
+  function isPicker(el){if(!el||!el.tagName)return false;if(el.tagName==='SELECT')return true;
+    return el.tagName==='INPUT'&&/^(date|time|datetime-local|month|week|color)$/i.test(el.type||'')}
+  function pickerOf(t){for(var n=t;n&&n.nodeType===1;n=n.parentNode){if(isPicker(n))return n}return null}
+  function press(e){down=true;var p=pickerOf(e.target);if(p)hold=p;armFallback()}
+  function release(){down=false;kick()}
+  on('pointerdown',press);on('mousedown',press);on('touchstart',press);
+  on('pointerup',release);on('mouseup',release);on('touchend',release);on('pointercancel',release);on('touchcancel',release);
+  on('compositionstart',function(){composing=true});
+  on('compositionend',function(){composing=false;kick()});
+  on('change',function(e){if(hold&&e.target===hold){hold=null;kick()}});
+  on('focusout',function(e){if(hold&&e.target===hold){hold=null;kick()}});
+  on('keydown',function(e){var t=e.target;if(!isPicker(t))return;
+    if(e.key===' '||e.key==='Enter'||e.key==='F4'||(e.altKey&&(e.key==='ArrowDown'||e.key==='ArrowUp')))hold=t;   /* 用鍵盤打開選單 */
+    else if(e.key==='Escape'||e.key==='Tab'){if(hold===t){hold=null;kick()}}});
+  window.addEventListener('blur',function(){down=false;composing=false;kick()});   /* 切到別的視窗 */
+  function armFallback(){clearTimeout(fb);fb=setTimeout(function(){if(down){down=false;kick()}},4000)}   /* 沒收到放開（拖到視窗外）的保險 */
+  function busy(){return down||composing||!!(hold&&document.activeElement===hold)}
+  function later(key,fn){if(!(key in pend))order.push(key);pend[key]=fn;kick()}
+  function kick(){if(timer)return;timer=setTimeout(function(){timer=null;if(busy())return;
+    var fs=order.map(function(k){return pend[k]});order=[];pend={};
+    fs.forEach(function(f){try{f()}catch(e){setTimeout(function(){throw e},0)}})},0)}
+  function esc(v){return String(v).replace(/["\\]/g,'\\$&')}
+  function selOf(n){if(n.id)return '#'+(window.CSS&&CSS.escape?CSS.escape(n.id):n.id);var s='',a=n.attributes||[];
+    for(var i=0;i<a.length;i++){if(a[i].name.indexOf('data-')===0)s+='['+a[i].name+'="'+esc(a[i].value)+'"]'}
+    return s?n.tagName.toLowerCase()+s:''}
+  function idxOf(el,root){var p=[];for(var n=el;n&&n!==root;n=n.parentElement){if(!n.parentElement)return null;p.unshift(Array.prototype.indexOf.call(n.parentElement.children,n))}return {path:p}}
+  function keyOf(el,root){if(!el||el===root||!root.contains(el))return null;var own=selOf(el);if(!own)return idxOf(el,root);
+    var parts=[own];for(var n=el.parentElement;n&&n!==root;n=n.parentElement){var s=selOf(n);if(s)parts.unshift(s)}return parts.join(' ')}
+  function find(root,k){if(!k)return null;if(typeof k==='string'){try{return root.querySelector(k)}catch(e){return null}}
+    var n=root;for(var i=0;i<k.path.length;i++){n=n&&n.children[k.path[i]];if(!n)return null}return n}
+  /* region（可省略）＝這次只重畫的那一塊（元素或判斷函式）；游標不在那一塊裡就不動它 */
+  function keep(root,fn,region){if(!root){fn();return}
+    var ae=document.activeElement,k=keyOf(ae,root),ss=null,se=null,sd=null;
+    if(k&&typeof ae.selectionStart==='number'){try{ss=ae.selectionStart;se=ae.selectionEnd;sd=ae.selectionDirection}catch(e){ss=null}}
+    var sx=window.pageXOffset,sy=window.pageYOffset,scr=[],all=root.querySelectorAll('*');
+    for(var i=0;i<all.length;i++){var el=all[i];if(el.scrollLeft||el.scrollTop)scr.push({k:keyOf(el,root),l:el.scrollLeft,t:el.scrollTop})}
+    var inRegion=!region||(typeof region==='function'?region(ae):(region.contains&&region.contains(ae)));
+    if(k&&inRegion&&ae.blur){try{ae.blur()}catch(e){}}   /* 先離開這一格：該觸發的 change 先處理完，拆節點途中就不會又改畫面 */
+    fn();
+    scr.forEach(function(s){var n=find(root,s.k);if(n){n.scrollLeft=s.l;n.scrollTop=s.t}});
+    if(k){var n=find(root,k);if(n&&n.focus){try{n.focus({preventScroll:true})}catch(e){try{n.focus()}catch(e2){}}
+      if(ss!==null&&typeof n.selectionStart==='number'){try{n.setSelectionRange(ss,se,sd||'none')}catch(e){}}}}
+    if(window.pageXOffset!==sx||window.pageYOffset!==sy)window.scrollTo(sx,sy)}
+  return {busy:busy,later:later,keep:keep}
+})();
+</script>
+<script>
 /* ================= ApplyMod：新品申請表（2026-09-05 新做；2026-09-17 階段 1 照「新品研發工作申請單 2026-02-24」四塊重做；2026-09-18 階段 1b 版面照 Excel 表格排法；階段 1c 用料拆成表一「用料（全部，成本計算用）」＋表二「新增食材/器模具（Excel 全欄，只列 🆕）」兩個視圖；Phase 1 零寫入；2026-09-23 加「店製配方 → 採購系統」唯一寫入 dim_semi；09-24 主檔沒有的原料由寫入端自動建草稿；09-24 半成品改以「一批」為單位（取消 4／8／20 人份）；09-24 保存方式加冷凍、品牌預設兩品牌、拿掉包裝方式；09-24 半成品寫入移到「🧪 半成品/材料包」分頁（SemiMod），本頁只剩「↗ 送到半成品/材料包」） =================
    資料全部借用 RecipeMod 已載入的主檔（dim_sku／dim_unitconv／產品名稱對照表 皆來自儀表板專用檔）與同一套 costLines 引擎；
    另補讀 dim_sku 的 L 預設分區／P 狀態／Q 最後有效日、產品名稱對照表 G 主類別／H 次類別（同樣走 RecipeMod.readIdOf）。
@@ -1490,7 +1557,14 @@ function targetOf(key){var m;
 function pick(key,o){var l=targetOf(key);if(!l)return;
   l.m=o.name;l.u=o.useUnit||'g';
   if(key.charAt(0)==='l'){l.id=o.id;l.cat=o.cat||'';l.zone=defaultZone(o.name,o.cat)}
-  _sugKey='';_sugList=[];OUT=null;saveDraft();render()}
+  _sugKey='';_sugList=[];OUT=null;saveDraft();
+  /* 2026-09-28：選好品項 → 等這次點擊做完再更新畫面，游標直接跳到這一列的數量（不必再點一次） */
+  var go=function(){render();var q=qtyInputOf(key);if(q){try{q.focus({preventScroll:true});q.select()}catch(e){}}};
+  if(window.UiKeep)UiKeep.later('apply',go);else go()}
+function qtyInputOf(key){var m;
+  if((m=key.match(/^l(\d+)$/)))return document.querySelector('#apRoot tr[data-ln="'+m[1]+'"] [data-lf="q"]');
+  if((m=key.match(/^s(\d+)-(\d+)$/)))return document.querySelector('#apRoot .ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"] [data-sf="q"]');
+  return null}
 
 /* ---- 成本卡：非 🆕 列走同一套 costLines 引擎；🆕 列由本表推算（原包裝成本 ÷ 規格數字 × 每份使用量）；半成品用料不進成本卡 ---- */
 function validLines(){return AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0})}
@@ -1884,7 +1958,10 @@ function semiCardInner(){var d=semiDessert(),rows=semiRows(),its={},skip=0;
   h+='<div class="ap-actions" style="margin-top:6px"><button class="ap-btn" id="apSemiWrite"'+(SEMIDB.busy?' disabled':'')+'>'+(SEMIDB.busy?'寫入中…':'🔄 寫入採購系統')+'</button><button class="ap-btn2" id="apSemiReload"'+(SEMIDB.busy?' disabled':'')+'>重新讀取</button></div>';
   if(SEMIDB.status)h+='<div style="margin-top:4px">'+SEMIDB.status+'</div>';
   return h}
-function updateSemiCard(){var n=document.getElementById('apNameChk');if(n){n.innerHTML=nameChkInner();wireSemiCard()}var el=document.getElementById('apSemiCard');if(!el)return;el.innerHTML=semiCardInner();wireSemiCard()}
+function updateSemiCard(){if(window.UiKeep&&UiKeep.busy()){UiKeep.later('apSemiCard',updateSemiCard);return}   /* 2026-09-28：正在點／選單開著就先排隊 */
+  var go=function(){var n=document.getElementById('apNameChk');if(n){n.innerHTML=nameChkInner();wireSemiCard()}var el=document.getElementById('apSemiCard');if(!el)return;el.innerHTML=semiCardInner();wireSemiCard()};
+  var root=document.getElementById('apRoot');
+  if(window.UiKeep&&root)UiKeep.keep(root,go,function(ae){var a=document.getElementById('apNameChk'),b=document.getElementById('apSemiCard');return !!((a&&a.contains(ae))||(b&&b.contains(ae)))});else go()}
 function wireSemiCard(){var w=document.getElementById('apSemiWrite');if(w)w.onclick=writeSemi;
   document.querySelectorAll('[data-usename]').forEach(function(b){b.onclick=function(){AP.head.fname=b.getAttribute('data-usename');OUT=null;saveDraft();render()}});
   var r=document.getElementById('apSemiReload');if(r)r.onclick=function(){SEMIDB.status='';loadSemiDb()}}
@@ -2017,7 +2094,10 @@ function campInfoHTML(){var h=AP.head;
   if(c['檔期備註'])p.push('備註 '+esc(c['檔期備註']));
   if(c.req_count!==undefined)p.push('已送件 '+c.req_count+' 支');
   return '<div class="ap-campinfo">'+p.join('｜')+'</div>'}
-function updCampUI(){var b=document.getElementById('apCampBox');if(b){b.outerHTML=campSelectHTML();wireCamp()}var i=document.getElementById('apCampInfo');if(i)i.innerHTML=campInfoHTML()}
+function updCampUI(){if(window.UiKeep&&UiKeep.busy()){UiKeep.later('apCamp',updCampUI);return}   /* 檔期清單晚到時，不要在使用者點選中途換掉下拉 */
+  var go=function(){var b=document.getElementById('apCampBox');if(b){b.outerHTML=campSelectHTML();wireCamp()}var i=document.getElementById('apCampInfo');if(i)i.innerHTML=campInfoHTML()};
+  var root=document.getElementById('apRoot');
+  if(window.UiKeep&&root)UiKeep.keep(root,go,document.getElementById('apCampBox'));else go()}
 function wireCamp(){var sel=document.getElementById('apCampSel'),nb=document.getElementById('apCampNew'),rt=document.getElementById('apCampRetry');
   if(sel)sel.onchange=function(){var c=campById(sel.value);if(sel.value&&!c)return;setCampSnap(c);OUT=null;saveDraft();updCampUI()};
   if(nb)nb.onclick=newCampDialog;
@@ -2057,16 +2137,21 @@ function apiPost(body,onRetry){var want=body.action,n=0;
     if(!r.ok&&RETRY_CODES[r.code])r.msg=(r.msg||'')+'；已自動重試 3 次仍失敗。畫面上的內容還在本機草稿，稍後再按一次（同一張不會重複送出）';
     return r})}
   return go()}
-/* 身分密碼：只記在這個分頁（sessionStorage），關掉分頁就要重新輸入 */
-function getCred(){try{var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
-function setCred(o){try{if(o)sessionStorage.setItem(CRED_KEY,JSON.stringify(o));else sessionStorage.removeItem(CRED_KEY)}catch(e){}}
-function withCred(role,msg,cb){var c=getCred();if(c&&(!role||c.role===role)){cb(c);return}askCred(role,msg,cb)}
+/* 身分密碼：只記在這個分頁（sessionStorage），關掉分頁就要重新輸入。
+   每個身分各記一份（rcp:cred:主廚、rcp:cred:管理者…，主廚送件和管理者密碼管理可以同時用），另記「最近用的」（rcp:cred）給不指定身分的動作 */
+function getCred(role){try{if(role){var pw=sessionStorage.getItem(CRED_KEY+':'+role);return pw?{role:role,pw:pw}:null}
+  var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
+function setCred(o,role){try{if(o){sessionStorage.setItem(CRED_KEY,JSON.stringify(o));sessionStorage.setItem(CRED_KEY+':'+o.role,o.pw);return}
+  var cur=getCred(),r=role||(cur&&cur.role);if(r)sessionStorage.removeItem(CRED_KEY+':'+r);if(cur&&(!role||cur.role===role))sessionStorage.removeItem(CRED_KEY)}catch(e){}}
+/* 密碼管理改了某身分的密碼 → 這個分頁記著的舊密碼一起換掉（不改「最近用的」是誰） */
+function updCred(role,pw){try{if(sessionStorage.getItem(CRED_KEY+':'+role)!==null)sessionStorage.setItem(CRED_KEY+':'+role,pw);var cur=getCred();if(cur&&cur.role===role)sessionStorage.setItem(CRED_KEY,JSON.stringify({role:role,pw:pw}))}catch(e){}}
+function withCred(role,msg,cb){var c=getCred(role);if(c){cb(c);return}askCred(role,msg,cb)}
 function modal(html){closeModal();var tab=document.getElementById('tab-apply'),m=document.createElement('div');m.className='ap-modal';m.id='apModal';
   m.innerHTML='<div class="ap-modal-box" role="dialog" aria-modal="true">'+html+'</div>';tab.appendChild(m);return m}
 function closeModal(){var m=document.getElementById('apModal');if(m&&m.parentNode)m.parentNode.removeChild(m)}
 function askCred(role,msg,cb){
   var m=modal('<div class="ap-h">🔑 輸入身分密碼</div><div class="ap-muted">'+esc(msg||'')+' 密碼只記在這個分頁，關掉分頁就要重新輸入。</div>'
-    +'<label>身分</label><select id="apCredRole">'+ROLES.map(function(r){return '<option'+(r===(role||'主廚')?' selected':'')+'>'+esc(r)+'</option>'}).join('')+'</select>'
+    +'<label>身分</label><select id="apCredRole">'+((role&&ROLES.indexOf(role)<0)?ROLES.concat([role]):ROLES).map(function(r){return '<option'+(r===(role||'主廚')?' selected':'')+'>'+esc(r)+'</option>'}).join('')+'</select>'
     +'<label>密碼</label><input type="password" id="apCredPw" name="rcp-role-pw" autocomplete="new-password">'
     +'<div id="apCredMsg" class="ap-bad" style="min-height:18px;margin-top:6px"></div>'
     +'<div class="ap-actions"><button class="ap-btn" id="apCredOk" type="button">確定</button><button class="ap-btn2" id="apCredNo" type="button">取消</button></div>');
@@ -2107,7 +2192,7 @@ function createCamp(o,cr,box,btn){
         if(did&&confirm((r.msg||'已經有同名的檔期')+'\n\n按「確定」＝直接選用這個檔期；按「取消」＝回去改名稱。')){
           campLoad().then(function(){var c=campById(did);if(c){setCampSnap(c);OUT=null;saveDraft()}closeModal();render()});return}
         box.textContent='已有同名檔期，請改名稱後再按「建立檔期」';return}
-      if(r.code==='auth')setCred(null);
+      if(r.code==='auth')setCred(null,cr.role);
       box.textContent=(r.msg||'建立失敗')+(r.code==='auth'?'（請按取消，重新按「＋ 新增檔期」輸入密碼）':'');return}
     var c=(r.data&&r.data.campaign)||{};c.req_count=0;CAMP.list=CAMP.list.filter(function(x){return x.campaign_id!==c.campaign_id}).concat([c]);CAMP.loaded=true;CAMP.err='';
     setCampSnap(c);OUT=null;saveDraft();closeModal();render();
@@ -2143,7 +2228,7 @@ function sendReq(force){if(_busy)return;
         SENDMSG='<span class="ap-okline">✓ 已送件：<b>'+esc(d.req_id)+'</b>｜'+esc(d.campaign_name)+'｜第 '+esc(d.seq)+' 支｜'+esc(d.updated_at)
           +(d.created?'（新增）':(d.same_form?'（之前已送成功，這次更新同一張）':(d.same?'（內容和系統上相同）':(d.moved?'（已移到這個檔期）':'（已更新同一張）'))))+'</span>';
         OUT=null;saveDraft();render();campLoad();return}
-      if(r.code==='auth'){setCred(null);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg)+'，請再按一次「📨 送件到檔期」重新輸入密碼</span>';updSendUI();return}
+      if(r.code==='auth'){setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg)+'，請再按一次「📨 送件到檔期」重新輸入密碼</span>';updSendUI();return}
       if(r.code==='conflict'){SENDMSG='';updSendUI();if(confirm('⚠ '+r.msg+'\n\n要用你畫面上的版本覆蓋嗎？（按取消＝這次不送；可先用「📂 從檔期載入」看最新版）'))sendReq(true);return}
       if(r.code==='locked'&&r.data&&r.data.status){AP.sub.status=r.data.status;saveDraft();render()}
       SENDMSG='<span class="ap-bad">✕ 沒有送出：'+esc(r.msg||'未知錯誤')+'</span>';updSendUI()})})}
@@ -2163,7 +2248,7 @@ function openLoad(cr,cid){
   function show(id){if(!id){box.innerHTML='';return}box.innerHTML='<span class="ap-muted">讀取中…</span>';
     apiPost({action:'getCampaign',role:cr.role,password:cr.pw,campaign_id:id,lite:true},function(k){if(sel.value===id)box.innerHTML='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次）…</span>'}).then(function(r){
       if(sel.value!==id)return;
-      if(!r.ok){if(r.code==='auth')setCred(null);box.innerHTML='<span class="ap-bad">'+esc(r.msg)+'</span>';return}
+      if(!r.ok){if(r.code==='auth')setCred(null,cr.role);box.innerHTML='<span class="ap-bad">'+esc(r.msg)+'</span>';return}
       var reqs=(r.data&&r.data.reqs)||[];if(!reqs.length){box.innerHTML='<span class="ap-muted">這個檔期還沒有申請單。</span>';return}
       box.innerHTML='<div style="overflow-x:auto"><table class="ap-reqtbl"><thead><tr><th>#</th><th>商品</th><th>狀態</th><th>最後更新</th><th></th></tr></thead><tbody>'+reqs.map(function(q){var lk=LOCK_ST[q.status];
         return '<tr><td>'+esc(q.seq)+'</td><td><b>'+esc(q['商品正式名稱']||q['商品暫定名稱']||'（未命名）')+'</b><div class="ap-muted">'+esc(q.req_id)+(q['定價']!==''?'｜定價 '+esc(q['定價']):'')+(q['成本']!==''?'｜成本 '+esc(q['成本']):'')+'</div></td>'
@@ -2176,7 +2261,7 @@ function loadReq(cr,rid,btn){
   if(!confirm('載回 '+rid+' 會取代目前畫面上的申請表（本機草稿也會被取代）。\n畫面上目前的內容如果還要，請先按「💾 存成檔案」。\n\n確定載回？'))return;
   var t0=btn.textContent;btn.disabled=true;btn.textContent='載入中…';
   apiPost({action:'getReq',role:cr.role,password:cr.pw,req_id:rid},function(k){btn.textContent='重試中（'+k+'）…'}).then(function(r){btn.disabled=false;btn.textContent=t0;
-    if(!r.ok){if(r.code==='auth')setCred(null);alert('載入失敗：'+(r.msg||''));return}
+    if(!r.ok){if(r.code==='auth')setCred(null,cr.role);alert('載入失敗：'+(r.msg||''));return}
     var d=r.data||{},q=d.req||{},j;
     try{j=JSON.parse(q.payload||'')}catch(e){alert('這張單的內容讀不出來（'+rid+'），請通知 Claude');return}
     fromJson(j);
@@ -2186,13 +2271,120 @@ function loadReq(cr,rid,btn){
     SENDMSG='<span class="ap-okline">已從檔期載回 <b>'+esc(q.req_id)+'</b>（'+esc(d.campaign?d.campaign['檔期名稱']:q.campaign_id)+'｜第 '+esc(q.seq)+' 支｜'+esc(q.status)+'）</span>';
     OUT=null;ERRS=[];saveDraft();closeModal();render();
     var t=document.getElementById('tab-apply');if(t)t.scrollIntoView({behavior:'smooth',block:'start'})})}
+/* ===== 2026-09-28：🔑 密碼管理（只有「管理者」）：簽核主管名單＋PIN、各身分密碼 =====
+   新 PIN／新密碼在這台電腦產生後才送出（重試時是同一組）；伺服器回覆與紀錄都不含密碼 */
+function rnd(n){var a=new Uint32Array(n);try{crypto.getRandomValues(a)}catch(e){for(var i=0;i<n;i++)a[i]=Math.floor(Math.random()*4294967295)}return a}
+function randDigits(n){var a=rnd(n),s='';for(var i=0;i<n;i++)s+=String(a[i]%10);return s}
+function randPw(n){var cs='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=rnd(n),s='';for(var i=0;i<n;i++)s+=cs.charAt(a[i]%cs.length);return s}
+function adminDialog(){withCred('管理者','密碼管理要「管理者」密碼。',function(cr){openAdmin(cr)})}
+function openAdmin(cr){
+  var m=modal('<div class="ap-h">🔑 密碼管理</div><div class="ap-muted">只有「管理者」看得到這一頁。改完立即生效；密碼和 PIN 請私下交給本人。</div>'
+    +'<div id="apAdmMsg"></div><div id="apAdmBody" class="ap-adm" style="margin-top:6px"><span class="ap-muted">讀取中…</span></div>'
+    +'<div class="ap-actions"><button class="ap-btn2" id="apAdmReload" type="button">🔄 重新讀取</button><button class="ap-btn2" id="apAdmClose" type="button">關閉</button></div>');
+  m.querySelector('.ap-modal-box').classList.add('ap-wide');
+  m.querySelector('#apAdmClose').onclick=closeModal;
+  var body=m.querySelector('#apAdmBody'),msgBox=m.querySelector('#apAdmMsg'),reveal={},D=null,busy=false;
+  m.querySelector('#apAdmReload').onclick=function(){if(!gate())return;busy=true;flash('讀取中…');load()};
+  function flash(h,bad){msgBox.innerHTML=h?'<div class="ap-flash'+(bad?' bad':'')+'">'+h+'</div>':''}
+  function gate(){if(busy){flash('上一個動作還在處理中，請稍等幾秒再按',true);return false}return true}   /* 一次只做一件事：存檔中不能同時刪除或改別列 */
+  function fail(r,pre){var au=r.code==='auth'||r.code==='perm';if(au)setCred(null,'管理者');
+    var mm=String(r.msg||'失敗').replace(/；已自動重試 3 次仍失敗.*$/,'；已自動重試 3 次仍失敗，請稍後再按一次（重按不會重複寫入）');   /* 送件用的「本機草稿」說法這裡不適用 */
+    flash((pre||'')+'✕ '+esc(mm)+(au?'（請關掉這個視窗，重新按「🔑 密碼管理」輸入管理者密碼）':''),true)}
+  /* 重新讀取後重畫整張表：別列「打了還沒存」的內容、游標、捲動位置都保留；滑鼠按住或中文選字中先不畫，放開再畫（不會點不到） */
+  function load(opt){opt=opt||{};
+    apiPost({action:'adminList',role:cr.role,password:cr.pw},function(k){flash((opt.done?opt.done+'<br>':'')+'連線不穩，自動重試中（第 '+k+' 次）…')}).then(function(r){
+      if(!r.ok){busy=false;if(!D)body.innerHTML='';fail(r,opt.done?opt.done+'<br>畫面沒有更新，請按「🔄 重新讀取」：':'');return}
+      var fin=function(){var d=snapDirty(),sc=m.scrollTop;D=r.data||{roles:[],signers:[]};
+        var run=function(){paint();applyDirty(d,opt)};
+        if(window.UiKeep)UiKeep.keep(body,run);else run();
+        m.scrollTop=sc;busy=false;flash(opt.done||'')};
+      if(window.UiKeep&&UiKeep.busy())UiKeep.later('apAdmin',fin);else fin()})}
+  function rawVals(tr){var o={};tr.querySelectorAll('[data-sgf]').forEach(function(x){o[x.getAttribute('data-sgf')]=x.type==='checkbox'?(x.checked?'Y':'N'):String(x.value||'')});return o}
+  function rowVals(tr){var o=rawVals(tr);Object.keys(o).forEach(function(k){o[k]=o[k].trim()});return o}
+  function setVals(tr,v){tr.querySelectorAll('[data-sgf]').forEach(function(x){var k=x.getAttribute('data-sgf');if(!(k in v))return;if(x.type==='checkbox')x.checked=v[k]==='Y';else x.value=v[k]})}
+  function snapDirty(){var d={rows:{},nw:null,forms:{}};if(!D)return d;
+    body.querySelectorAll('tr[data-sg]').forEach(function(tr){var s=D.signers[+tr.getAttribute('data-sg')],v=rawVals(tr);if(!s)return;
+      if(v.name!==s.name||v.role!==s.role||v.pin!==s.pin||v.enabled!==s.enabled)d.rows[s.name]=v});
+    var nr=body.querySelector('tr[data-sgnew]');if(nr)d.nw=rawVals(nr);
+    body.querySelectorAll('tr[data-rlform]').forEach(function(tr){var r=D.roles[+tr.getAttribute('data-rlform')],inp=tr.querySelector('input');
+      if(r&&tr.style.display!=='none')d.forms[r.role]=inp?inp.value:''});
+    return d}
+  function applyDirty(d,opt){
+    body.querySelectorAll('tr[data-sg]').forEach(function(tr){var s=D.signers[+tr.getAttribute('data-sg')];if(s&&d.rows[s.name]&&s.name!==opt.saved)setVals(tr,d.rows[s.name])});
+    var nr=body.querySelector('tr[data-sgnew]');if(nr&&d.nw&&!opt.added)setVals(nr,d.nw);
+    body.querySelectorAll('tr[data-rlform]').forEach(function(tr){var r=D.roles[+tr.getAttribute('data-rlform')],inp=tr.querySelector('input');
+      if(!r||!(r.role in d.forms)||r.role===opt.pw)return;tr.style.display='';if(inp)inp.value=d.forms[r.role]})}
+  function paint(){var h='<div class="ap-adm-sec">✍️ 簽核主管（B 階段送簽時勾選；主管在簽核頁用 PIN 登入）</div>'
+    +'<div style="overflow-x:auto"><table class="ap-reqtbl"><thead><tr><th>姓名</th><th>職稱</th><th>PIN（4～8 位數字）</th><th>啟用</th><th></th></tr></thead><tbody>';
+    D.signers.forEach(function(s,i){var sh=!!reveal['s:'+s.name];
+      h+='<tr data-sg="'+i+'"><td><input type="text" data-sgf="name" value="'+esc(s.name)+'"></td><td><input type="text" data-sgf="role" value="'+esc(s.role)+'"></td>'
+        +'<td style="white-space:nowrap"><input type="text" class="'+(sh?'':'ap-mask')+'" data-sgf="pin" inputmode="numeric" autocomplete="off" value="'+esc(s.pin)+'" style="width:110px"> <button class="ap-btn2 ap-mini" type="button" data-sgshow="'+i+'">'+(sh?'隱藏':'顯示')+'</button><button class="ap-btn2 ap-mini" type="button" data-sgrand="'+i+'" title="換一組隨機 6 位數">🎲</button></td>'
+        +'<td style="text-align:center"><input type="checkbox" data-sgf="enabled"'+(s.enabled==='Y'?' checked':'')+'></td>'
+        +'<td style="white-space:nowrap"><button class="ap-btn ap-mini" type="button" data-sgsave="'+i+'">儲存</button><button class="ap-btn2 ap-mini" type="button" data-sgdel="'+i+'">刪除</button></td></tr>'});
+    if(!D.signers.length)h+='<tr><td colspan="5" class="ap-muted">還沒有簽核主管，用下面這一列新增。</td></tr>';
+    h+='<tr class="ap-new-row" data-sgnew="1"><td><input type="text" data-sgf="name" placeholder="姓名（例：王大明）"></td><td><input type="text" data-sgf="role" placeholder="職稱（例：研發主管）"></td>'
+      +'<td style="white-space:nowrap"><input type="text" data-sgf="pin" inputmode="numeric" autocomplete="off" value="'+randDigits(6)+'" style="width:110px"> <button class="ap-btn2 ap-mini" type="button" data-sgrand="new" title="換一組隨機 6 位數">🎲</button></td>'
+      +'<td style="text-align:center"><input type="checkbox" data-sgf="enabled" checked></td><td><button class="ap-btn ap-mini" type="button" data-sgadd="1">＋ 新增</button></td></tr>';
+    h+='</tbody></table></div><div class="ap-muted">停用＝保留紀錄但不能再簽；已經簽過或被指定簽核的主管不能刪除，只能停用。每一列改完按該列的「儲存」。</div>';
+    h+='<div class="ap-adm-sec">🔐 各身分密碼（送件、新增檔期、從檔期載入、密碼管理）</div><div style="overflow-x:auto"><table class="ap-reqtbl"><thead><tr><th>身分</th><th>密碼</th><th>可填欄位</th><th></th></tr></thead><tbody>';
+    D.roles.forEach(function(r,i){var sh=!!reveal['r:'+r.role];
+      h+='<tr data-rl="'+i+'"><td><b>'+esc(r.role)+'</b></td><td style="white-space:nowrap"><code data-rlcode="'+i+'">'+(sh?esc(r.password):'••••••••')+'</code> <button class="ap-btn2 ap-mini" type="button" data-rlshow="'+i+'">'+(sh?'隱藏':'顯示')+'</button></td>'
+        +'<td class="ap-muted" style="max-width:260px">'+esc(r.fields)+'</td>'
+        +'<td style="white-space:nowrap"><button class="ap-btn2 ap-mini" type="button" data-rlrand="'+i+'">換成隨機新密碼</button><button class="ap-btn2 ap-mini" type="button" data-rlset="'+i+'">自己設定…</button></td></tr>'
+        +'<tr data-rlform="'+i+'" style="display:none"><td></td><td colspan="3"><input type="text" data-rlnew="'+i+'" placeholder="新密碼（至少 6 碼，不能有空白）" autocomplete="off" style="max-width:260px"> <button class="ap-btn ap-mini" type="button" data-rlok="'+i+'">確定更改</button><button class="ap-btn2 ap-mini" type="button" data-rlcancel="'+i+'">取消</button></td></tr>'});
+    h+='</tbody></table></div><div class="ap-muted">換密碼後舊密碼立刻失效；正在用的人下次操作會被要求重新輸入。「可填欄位」B 階段才會用到，要改請告訴 Claude。</div>';
+    body.innerHTML=h;wireAdm()}
+  function checkSigner(o){if(!o.name)return '請填姓名';if(/[,，、;；\s]/.test(o.name))return '姓名不能有逗號、頓號、分號或空白';if(!/^\d{4,8}$/.test(o.pin))return 'PIN 要 4～8 位數字';return ''}
+  function saveSigner(entry,btn,doneMsg,added){busy=true;var t0=btn.textContent;btn.disabled=true;btn.textContent='儲存中…';
+    apiPost({action:'adminSaveSigner',role:cr.role,password:cr.pw,entry:entry,rq:rqToken()},function(k){btn.textContent='重試中（'+k+'）…'}).then(function(r){btn.disabled=false;btn.textContent=t0;
+      if(!r.ok){busy=false;fail(r);return}reveal['s:'+entry.name]=true;load({saved:entry.name,added:added,done:doneMsg})})}
+  function setPw(r,pw,btn){if(!gate())return;
+    if(!confirm('把「'+r.role+'」的密碼換成：'+pw+'\n\n換了之後舊密碼立刻失效，要把新密碼告訴使用的人。確定？'))return;
+    busy=true;btn.disabled=true;apiPost({action:'adminSetPassword',role:cr.role,password:cr.pw,target_role:r.role,new_password:pw,rq:rqToken()},function(k){flash('連線不穩，自動重試中（第 '+k+' 次）…')}).then(function(res){
+      /* 換的是管理者自己的密碼：第一次其實已經換好、只是回覆在路上掉了 → 重試時舊密碼已失效會回「密碼不對」→ 用新密碼確認一次 */
+      if(!res.ok&&res.code==='auth'&&r.role===cr.role)return apiPost({action:'whoami',role:cr.role,password:pw}).then(function(w){return w.ok?{ok:true}:res});
+      return res}).then(function(res){btn.disabled=false;
+      if(!res.ok){busy=false;fail(res);return}
+      updCred(r.role,pw);if(r.role===cr.role)cr={role:cr.role,pw:pw};   /* 這個分頁記著的舊密碼一起換掉 */
+      reveal['r:'+r.role]=true;load({pw:r.role,done:'✓「'+esc(r.role)+'」的新密碼：<b>'+esc(pw)+'</b>（已生效，請記下並告訴使用的人）'})})}
+  function wireAdm(){
+    body.querySelectorAll('[data-sgshow]').forEach(function(b){b.onclick=function(){var s=D.signers[+b.getAttribute('data-sgshow')],k='s:'+s.name;reveal[k]=!reveal[k];
+      var inp=b.parentNode.querySelector('[data-sgf=pin]');inp.classList.toggle('ap-mask',!reveal[k]);b.textContent=reveal[k]?'隱藏':'顯示'}});
+    body.querySelectorAll('[data-sgrand]').forEach(function(b){b.onclick=function(){var inp=b.parentNode.querySelector('[data-sgf=pin]');inp.value=randDigits(6);inp.classList.remove('ap-mask');
+      var sb=b.parentNode.querySelector('[data-sgshow]');if(sb){reveal['s:'+D.signers[+sb.getAttribute('data-sgshow')].name]=true;sb.textContent='隱藏'}}});
+    body.querySelectorAll('[data-sgsave]').forEach(function(b){b.onclick=function(){if(!gate())return;var s=D.signers[+b.getAttribute('data-sgsave')],o=rowVals(b.closest('tr')),e=checkSigner(o);if(e){flash('✕ '+esc(e),true);return}
+      var chg=[];if(o.name!==s.name)chg.push('姓名 '+s.name+' → '+o.name);if(o.role!==s.role)chg.push('職稱');if(o.pin!==s.pin)chg.push('PIN');if(o.enabled!==s.enabled)chg.push(o.enabled==='Y'?'改成啟用':'改成停用');
+      if(!chg.length){flash('「'+esc(s.name)+'」沒有變更');return}
+      if(!confirm('儲存簽核主管「'+s.name+'」的變更：'+chg.join('、')+'\n\n確定？'))return;
+      o.orig_name=s.name;saveSigner(o,b,'✓ 已儲存「'+esc(o.name)+'」'+(o.pin!==s.pin?'，新 PIN：<b>'+esc(o.pin)+'</b>（請私下告訴本人）':''),false)}});
+    body.querySelectorAll('[data-sgadd]').forEach(function(b){b.onclick=function(){if(!gate())return;var o=rowVals(b.closest('tr')),e=checkSigner(o);if(e){flash('✕ '+esc(e),true);return}
+      if(D.signers.some(function(s){return s.name===o.name})){flash('✕ 已經有叫「'+esc(o.name)+'」的簽核主管',true);return}
+      if(!confirm('新增簽核主管「'+o.name+'」'+(o.role?'（'+o.role+'）':'')+'，PIN '+o.pin+'？'))return;
+      saveSigner(o,b,'✓ 已新增簽核主管「'+esc(o.name)+'」，PIN：<b>'+esc(o.pin)+'</b>（請私下告訴本人）',true)}});
+    body.querySelectorAll('[data-sgdel]').forEach(function(b){b.onclick=function(){if(!gate())return;var s=D.signers[+b.getAttribute('data-sgdel')];
+      if(!confirm('刪除簽核主管「'+s.name+'」？\n（已經簽過或被指定簽核的不能刪，請改成停用）'))return;
+      busy=true;b.disabled=true;apiPost({action:'adminDeleteSigner',role:cr.role,password:cr.pw,name:s.name,rq:rqToken()},function(k){flash('連線不穩，自動重試中（第 '+k+' 次）…')}).then(function(r){b.disabled=false;
+        if(!r.ok){busy=false;fail(r);return}load({done:'✓ 已刪除「'+esc(s.name)+'」'})})}});
+    body.querySelectorAll('[data-rlshow]').forEach(function(b){b.onclick=function(){var i=+b.getAttribute('data-rlshow'),r=D.roles[i],k='r:'+r.role;reveal[k]=!reveal[k];
+      var c=body.querySelector('[data-rlcode="'+i+'"]');if(c)c.textContent=reveal[k]?r.password:'••••••••';b.textContent=reveal[k]?'隱藏':'顯示'}});
+    body.querySelectorAll('[data-rlset]').forEach(function(b){b.onclick=function(){var f=body.querySelector('[data-rlform="'+b.getAttribute('data-rlset')+'"]');if(f){f.style.display='';var inp=f.querySelector('input');if(inp)inp.focus()}}});
+    body.querySelectorAll('[data-rlcancel]').forEach(function(b){b.onclick=function(){var f=body.querySelector('[data-rlform="'+b.getAttribute('data-rlcancel')+'"]');if(f)f.style.display='none'}});
+    body.querySelectorAll('[data-rlrand]').forEach(function(b){b.onclick=function(){var r=D.roles[+b.getAttribute('data-rlrand')];setPw(r,randPw(r.role==='管理者'?10:8),b)}});
+    body.querySelectorAll('[data-rlok]').forEach(function(b){b.onclick=function(){var i=+b.getAttribute('data-rlok'),r=D.roles[i],v=String((body.querySelector('[data-rlnew="'+i+'"]')||{}).value||'').trim();
+      if(v.length<6){flash('✕ 密碼至少 6 碼',true);return}if(/\s/.test(v)){flash('✕ 密碼不能有空白',true);return}setPw(r,v,b)}})}
+  load()}
 /* 送簽中／已核准：整張唯讀，只留查看、複製、下載、開新單 */
 function applyLock(root){if(!lockedReq())return;
   var keep={apGo:1,apClr:1,apLoadCamp:1,apSemiAll:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-copy')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     el.disabled=true})}
+/* 2026-09-28：重畫一律經 UiKeep——使用者還在點、選單開著、中文選字中就先排隊；重畫時保住游標所在格子與捲動位置。
+   欄位 change 觸發的重畫用 renderSoon（等這次點擊／Tab 移動做完再畫，剛點到的格子不會被換掉） */
+function renderSoon(){if(window.UiKeep)UiKeep.later('apply',render);else render()}
 function render(){var root=document.getElementById('apRoot');if(!_ready||!root)return;
+  if(window.UiKeep){if(UiKeep.busy()){UiKeep.later('apply',render);return}UiKeep.keep(root,paint)}else paint()}
+function paint(){var root=document.getElementById('apRoot');
   var c=computeCost();
   var s='<div class="ap-grid"><div class="ap-area-head">'
     +(lockedReq()?'<div class="ap-lockbar">🔒 這張單目前是「'+esc(AP.sub.status)+'」，只能查看、複製與下載，不能修改或再送件。要開新的一張請按最下方「清空整張」。</div>':'')
@@ -2258,7 +2450,7 @@ function showSug(key,list){var box=document.querySelector('[data-sug="'+key+'"]'
 function hideSug(){document.querySelectorAll('#tab-apply .ap-sug').forEach(function(b){b.style.display='none'});_sugKey='';_sugList=[]}
 function wireSearch(el,key,onBlur){
   el.oninput=function(){var l=targetOf(key);if(!l)return;l.m=el.value;if(key.charAt(0)==='l')l.id='';OUT=null;showSug(key,search(el.value));saveDraft()};
-  el.onblur=function(){setTimeout(function(){hideSug();onBlur();render()},120)};
+  el.onblur=function(){setTimeout(function(){hideSug();onBlur();renderSoon()},120)};
   el.onkeydown=function(e){if(_sugKey!==key||!_sugList.length)return;
     if(e.key==='ArrowDown'){_sugIdx=Math.min(_sugIdx+1,_sugList.length-1)}else if(e.key==='ArrowUp'){_sugIdx=Math.max(_sugIdx-1,0)}
     else if(e.key==='Enter'){if(_sugIdx>=0){e.preventDefault();pick(key,_sugList[_sugIdx])}return}else return;
@@ -2267,21 +2459,21 @@ function wire(){var root=document.getElementById('apRoot');
   /* 表頭＋頁尾 */
   root.querySelectorAll('[data-hf]').forEach(function(el){var k=el.dataset.hf;
     el.oninput=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='price'||k==='qty')refreshCost()};
-    el.onchange=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='cat')render();else if(k==='name'||k==='fname')updateSemiCard()}});
+    el.onchange=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='cat')renderSoon();else if(k==='name'||k==='fname')updateSemiCard()}});
   /* 半成品 */
   root.querySelectorAll('.ap-semi').forEach(function(box){var si=+box.dataset.semi,sm=AP.semis[si];if(!sm)return;
     box.querySelectorAll('[data-sh]').forEach(function(el){var k=el.dataset.sh;el.oninput=function(){sm[k]=el.value;OUT=null;saveDraft()};
       el.onchange=function(){sm[k]=el.value;OUT=null;
         if(k==='link'){var l=lineByName(sm.link);if(l){if(!String(sm.yu||'').trim())sm.yu=String(l.u||'').trim();if(!sm.maker)sm.maker=l.supply==='出貨中心出貨'?'出貨中心':(l.supply==='店內自製'?'門市':'')}
-          if(!sm.kind&&/材料包|食材包/.test(sm.link))sm.kind='材料包';saveDraft();render();return}
-        saveDraft();if(k==='maker'||k==='yq'||k==='yu'||k==='nb'||k==='name')render();else updateSemiCard()}});
+          if(!sm.kind&&/材料包|食材包/.test(sm.link))sm.kind='材料包';saveDraft();renderSoon();return}
+        saveDraft();if(k==='maker'||k==='yq'||k==='yu'||k==='nb'||k==='name')renderSoon();else updateSemiCard()}});
     box.querySelectorAll('[data-sgo]').forEach(function(b){b.onclick=function(){if(window.SemiMod)SemiMod.openFromApply(sm,semiDessert());else alert('半成品/材料包分頁尚未載入，請重新整理')}});
     box.querySelectorAll('[data-shc]').forEach(function(el){el.onchange=function(){sm.shared=!!el.checked;OUT=null;saveDraft();updateSemiCard()}});
     box.querySelectorAll('tr[data-sk]').forEach(function(tr){var k=+tr.dataset.sk,it=sm.items[k];if(!it)return;var key='s'+si+'-'+k;
       tr.querySelectorAll('[data-sf]').forEach(function(el){var f=el.dataset.sf;
         if(f==='m')wireSearch(el,key,function(){var s=skuOf(it.m);if(s&&!it.u)it.u=s.useUnit||'g'});
         else if(f==='q'){el.oninput=function(){it.q=el.value;OUT=null;saveDraft();var q=num(it.q),u=String(it.u||'').trim();var tds=tr.querySelectorAll('.ap-tier');if(tds[0])tds[0].textContent=q>0?r1(q*2)+' '+u:'—';if(tds[1])tds[1].textContent=q>0?r1(q*5)+' '+u:'—'}}
-        else{el.oninput=function(){it.u=el.value;OUT=null;saveDraft()};el.onchange=function(){render()}}})})});
+        else{el.oninput=function(){it.u=el.value;OUT=null;saveDraft()};el.onchange=function(){renderSoon()}}})})});
   root.querySelectorAll('[data-sdel]').forEach(function(b){b.onclick=function(){var p=b.dataset.sdel.split('-'),sm=AP.semis[+p[0]];if(!sm)return;sm.items.splice(+p[1],1);if(!sm.items.length)sm.items=[newSemiItem()];OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
     var box=root.querySelector('.ap-semi[data-semi="'+b.dataset.sadd+'"]');if(box){var rows=box.querySelectorAll('tr[data-sk]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-sf="m"]');if(inp)inp.focus()}}}});
@@ -2308,7 +2500,7 @@ function wire(){var root=document.getElementById('apRoot');
     tr.querySelectorAll('[data-lf]').forEach(function(el){var f=el.dataset.lf;
       if(f==='m'){wireSearch(el,'l'+i,function(){var l=AP.lines[i];var s=skuOf(l.m);
           if(s){l.id=s.id;if(!l.u)l.u=s.useUnit||'g';if(!l.zone)l.zone=defaultZone(s.name,s.cat)}else if(l.m&&!l.zone)l.zone=defaultZone(l.m,l.cat||'')})}
-      else if(f==='u'){el.oninput=function(){AP.lines[i].u=el.value;OUT=null;saveDraft();refreshCost()};el.onchange=function(){render()}}
+      else if(f==='u'){el.oninput=function(){AP.lines[i].u=el.value;OUT=null;saveDraft();refreshCost()};el.onchange=function(){renderSoon()}}
       else if(f==='q'){el.oninput=function(){AP.lines[i].q=el.value;OUT=null;saveDraft();refreshCost();
           var m=document.querySelector('tr[data-n2="'+i+'"] td:nth-child(5)');if(m){m.textContent=el.value||'—';m.title=el.value}}}})});
   root.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){AP.lines.splice(+b.dataset.del,1);if(!AP.lines.length)AP.lines=[newLine()];OUT=null;saveDraft();render()}});
@@ -2355,6 +2547,7 @@ function boot(){
     render();
     campLoad()})}   /* 檔期清單讀不到只顯示提醒，不擋其他功能 */
 function ensureInit(){if(_inited)return;_inited=true;
+  var ab=document.getElementById('apAdminBtn');if(ab)ab.onclick=adminDialog;   /* 密碼管理不靠主檔，讀取中也能開 */
   if(!window.RecipeMod){document.getElementById('apLoading').textContent='⚠ 食譜成本分析模組未載入，申請表無法使用';return}
   RecipeMod.ensureInit();
   var n=0;(function wait(){
@@ -2555,10 +2748,15 @@ function newMatList(ed){var o=[];if(!ed)return o;ed.lines.forEach(function(l){va
 
 /* ---- 畫面 ---- */
 function root(){return document.getElementById('smRoot')}
-function render(){var el=root();if(!el)return;var ld=document.getElementById('smLoading');
+/* 2026-09-28：重畫一律經 UiKeep（使用者還在點、選單開著、中文選字中就先排隊；保住游標所在格子與捲動）；欄位 change／打字觸發的用 renderSoon */
+function renderSoon(){if(window.UiKeep)UiKeep.later('semi',render);else render()}
+function render(){var el=root();if(!el)return;
+  if(window.UiKeep&&UiKeep.busy()){UiKeep.later('semi',render);return}
+  var ld=document.getElementById('smLoading');
   if(!S.ready&&S.loading){if(ld){ld.style.display='';ld.textContent='⏳ 讀取採購系統的店製配方與 BOM 表…'}el.style.display='none';return}
   if(ld)ld.style.display='none';el.style.display='';
-  el.innerHTML=S.edit?editorHTML():(S.view?detailHTML(S.view):listHTML());wire()}
+  var paint=function(){el.innerHTML=S.edit?editorHTML():(S.view?detailHTML(S.view):listHTML());wire()};
+  if(window.UiKeep)UiKeep.keep(el,paint);else paint()}
 function cell(l,f){return '<div class="ap-lbl">'+l+'</div><div class="ap-fld">'+f+'</div>'}
 function opts(list,v,ph){return (ph?'<option value="">'+ph+'</option>':'')+list.map(function(x){return '<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>'}).join('')}
 function dls(){return '<datalist id="smItemDL">'+S.bomItems.map(function(n){return '<option value="'+esc(n)+'">'}).join('')+'</datalist>'
@@ -2718,15 +2916,15 @@ function wire(){var el=root();if(!el)return;
   function on(sel,ev,fn){el.querySelectorAll(sel).forEach(function(x){x['on'+ev]=function(e){fn(x,e)}})}
   on('[data-smnew]','click',function(){S.edit=newEd();S.view=null;S.status='';render()});
   on('[data-smreload]','click',function(){S.status='';S.bomRows=null;S.sold=null;loadAll()});
-  on('[data-smtodoall]','change',function(x){S.todoAll=x.checked;render()});
+  on('[data-smtodoall]','change',function(x){S.todoAll=x.checked;renderSoon()});
   on('[data-smimport]','click',function(){var f=el.querySelector('[data-smfile]');if(f){f.value='';f.click()}});
   on('[data-smfile]','change',function(x){var f=x.files&&x.files[0];if(f)importFile(f,null)});
   on('[data-smtpl]','click',function(){downloadTemplate(null)});
   on('[data-smexport]','click',function(){var f=nz(S.fq),k=S.fkind;downloadTemplate(S.ents.filter(function(e){return (!k||e.kind===k)&&(!f||nz(e.item+e.desserts.join('')).indexOf(f)>=0)}))});
-  on('[data-smq]','input',function(x){S.fq=x.value;var p=x.selectionStart;render();var n=root().querySelector('[data-smq]');if(n){n.focus();try{n.setSelectionRange(p,p)}catch(e){}}});
-  on('[data-smkind]','change',function(x){S.fkind=x.value;render()});
+  on('[data-smq]','input',function(x){S.fq=x.value;renderSoon()});   /* 游標與中文選字由 UiKeep 保住 */
+  on('[data-smkind]','change',function(x){S.fkind=x.value;renderSoon()});
   on('[data-smview]','click',function(x){S.view=S.ents[+x.getAttribute('data-smview')];S.nb='1';render();try{window.scrollTo(0,0)}catch(e){}});
-  on('[data-smnb]','change',function(x){S.nb=x.value;render()});
+  on('[data-smnb]','change',function(x){S.nb=x.value;renderSoon()});
   on('[data-smprint]','click',function(){try{window.print()}catch(e){}});
   on('[data-smeditview]','click',function(){S.edit=edFromEnt(S.view);S.view=null;S.status='';render()});
   on('[data-smedit]','click',function(x){S.edit=edFromEnt(S.ents[+x.getAttribute('data-smedit')]);S.status='';render()});
@@ -2738,25 +2936,25 @@ function wire(){var el=root();if(!el)return;
   on('[data-sme]','change',function(x){var k=x.getAttribute('data-sme'),ed=S.edit;ed[k]=x.value;
     if(k==='name'){var n=trim(x.value);if(!trim(ed.yu))ed.yu=commonUnit(n);if(!ed.shared&&!ed.desserts.length)ed.desserts=bomDessertsOf(n);
       if(!ed.kind&&/材料包|食材包/.test(n))ed.kind='材料包';else if(!ed.kind&&/組合/.test(n))ed.kind='分裝包'}
-    if(k!=='steps'&&k!=='usage'&&k!=='note'&&k!=='chkWhy')render()});
-  on('[data-smchk]','change',function(x){S.edit.chk=x.checked;render()});
-  on('[data-smfchk]','change',function(x){S.fchk=x.checked;render()});
+    if(k!=='steps'&&k!=='usage'&&k!=='note'&&k!=='chkWhy')renderSoon()});
+  on('[data-smchk]','change',function(x){S.edit.chk=x.checked;renderSoon()});
+  on('[data-smfchk]','change',function(x){S.fchk=x.checked;renderSoon()});
   on('[data-smign]','click',function(x){var a=ignList(),n=x.getAttribute('data-smign');if(a.indexOf(n)<0)a.push(n);ignSet(a);render()});
   on('[data-smunign]','click',function(){if(confirm('把「不用登記」的品項全部放回提醒清單？')){ignSet([]);render()}});
   on('[data-sme]','input',function(x){S.edit[x.getAttribute('data-sme')]=x.value});
-  on('[data-smscope]','change',function(x){S.edit.shared=x.getAttribute('data-smscope')==='shared';render()});
-  on('[data-smd]','change',function(x){var d=x.getAttribute('data-smd'),a=S.edit.desserts,i=a.indexOf(d);if(x.checked&&i<0)a.push(d);if(!x.checked&&i>=0)a.splice(i,1);a.sort();render()});
+  on('[data-smscope]','change',function(x){S.edit.shared=x.getAttribute('data-smscope')==='shared';renderSoon()});
+  on('[data-smd]','change',function(x){var d=x.getAttribute('data-smd'),a=S.edit.desserts,i=a.indexOf(d);if(x.checked&&i<0)a.push(d);if(!x.checked&&i>=0)a.splice(i,1);a.sort();renderSoon()});
   on('[data-smaddbtn]','click',function(){var inp=root().querySelector('[data-smadd]'),d=trim(inp&&inp.value);if(d&&S.edit.desserts.indexOf(d)<0){S.edit.desserts.push(d);S.edit.desserts.sort()}render()});
   on('[data-sml]','input',function(x){S.edit.lines[+x.getAttribute('data-i')][x.getAttribute('data-sml')]=x.value});
   on('[data-sml]','change',function(x){var l=S.edit.lines[+x.getAttribute('data-i')],k=x.getAttribute('data-sml');l[k]=x.value;
-    if(k==='m'&&!trim(l.u)){var s=skuOf(l.m);if(s)l.u=trim(s.useUnit)}render()});
+    if(k==='m'&&!trim(l.u)){var s=skuOf(l.m);if(s)l.u=trim(s.useUnit)}renderSoon()});
   on('[data-smdel]','click',function(x){S.edit.lines.splice(+x.getAttribute('data-smdel'),1);if(!S.edit.lines.length)S.edit.lines.push({m:'',q:'',u:''});render()});
   on('[data-smaddline]','click',function(){S.edit.lines.push({m:'',q:'',u:''});render()});
   on('[data-smt]','input',function(x){S.edit.tools[+x.getAttribute('data-i')][x.getAttribute('data-smt')]=x.value});
-  on('[data-smt]','change',function(x){var t=S.edit.tools[+x.getAttribute('data-i')],k=x.getAttribute('data-smt');t[k]=x.value;if(!trim(t.u)){var s=skuOf(t.m);if(s)t.u=trim(s.useUnit)}if(k==='m')render()});
+  on('[data-smt]','change',function(x){var t=S.edit.tools[+x.getAttribute('data-i')],k=x.getAttribute('data-smt');t[k]=x.value;if(!trim(t.u)){var s=skuOf(t.m);if(s)t.u=trim(s.useUnit)}if(k==='m')renderSoon()});
   on('[data-smtdel]','click',function(x){S.edit.tools.splice(+x.getAttribute('data-smtdel'),1);render()});
   on('[data-smaddtool]','click',function(){S.edit.tools.push({m:'',q:'1',u:'',par:1});render()});
-  on('[data-smsign]','change',function(x){S.edit.signed=x.checked;render()});
+  on('[data-smsign]','change',function(x){S.edit.signed=x.checked;renderSoon()});
   on('[data-smsigner]','input',function(x){S.edit.signer=x.value;refreshSaveBtn()});
   on('[data-smsave]','click',function(){saveOne()});
   on('[data-smdisable]','click',function(){disable()});
@@ -2764,7 +2962,7 @@ function wire(){var el=root();if(!el)return;
   on('[data-smqdone]','click',function(){var ed=S.edit;S.queue[ed.qi]=attachOrig(ed);ed.qi=-1;S.edit=null;render()});
   on('[data-smqdel]','click',function(x){S.queue.splice(+x.getAttribute('data-smqdel'),1);render()});
   on('[data-smqclear]','click',function(){if(confirm('清空待儲存清單？（還沒寫進採購系統，清掉就沒了）')){S.queue=[];render()}});
-  on('[data-smqsign]','change',function(x){S.qSigned=x.checked;render()});
+  on('[data-smqsign]','change',function(x){S.qSigned=x.checked;renderSoon()});
   on('[data-smqsigner]','input',function(x){S.qSigner=x.value;refreshSaveBtn()});
   on('[data-smqsave]','click',function(){saveQueue()});
 }
