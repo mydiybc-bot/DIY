@@ -6,7 +6,8 @@
  *       核准後寫入採購系統 BOM 本（C 階段，2026-09-29：產品名稱對照表／BOM表／dim_sku，只新增列、不改既有列）
  *
  * 規則
- *   - doGet（JSONP，公開、不含申請單內容）：ping／listCampaigns／signInfo（簽核連結用：只回狀態與簽核人名字）
+ *   - doGet（JSONP，公開、不含申請單內容）：ping／listCampaigns／signInfo（簽核連結用：只回狀態與簽核人名字）／
+ *       newItemsPub（D 階段：採購系統「🆕 檔期新品」用，只回已核准新品的品項名、貼紙名稱、購買連結、供應商覆寫、提供方式，不含價格與用量）
  *   - doPost（JSON 字串，Content-Type text/plain，前端直接讀回 {ok, data|msg}）：
  *       每筆帶 role＋password（或 signer＋pin）；伺服器依 dim_role.fields 過濾可寫欄位；
  *       全部包 LockService 10 秒；成功、失敗都寫 log 分頁。
@@ -17,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v3';   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v4';   /* v4＝D 階段：公開查詢 newItemsPub */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -152,6 +153,7 @@ function doGet(e) {
     if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('SHEET_ID') } };
     else if (a === 'listCampaigns') res = { ok: true, data: listCampaigns_() };
     else if (a === 'signInfo') res = { ok: true, data: signInfo_(p.req_id) };
+    else if (a === 'newItemsPub') res = { ok: true, data: newItemsPub_() };
     else res = { ok: false, msg: '不支援的查詢：' + a + '（讀申請單內容要用 POST 並帶密碼）' };
   } catch (err) { res = { ok: false, msg: errMsg_(err) }; }
   res.act = a;   /* 回覆註明是哪個動作的結果（Google 回傳鏈偶爾會把請求導回預設 ping，前端靠這個判斷要不要重試） */
@@ -1124,6 +1126,38 @@ function pushInfo_(rid) {
   return { live: st.live, ts: st.ts || '', backup: st.backup || '',
     written: st.live ? Object.keys(st.tables).filter(function (k) { return PT[k]; }).map(function (k) { var d = st.tables[k] || {}; return { table: k, name: PT[k], start: d.start, n: (d.rows || []).length, show: d.show || [] }; }) : [],
     history: rows.map(function (r) { return { ts: r.ts, action: r.action, table: r.table, rows: r.rows, ok: r.ok, msg: r.msg }; }) };
+}
+
+/* ================= D 階段：採購系統「🆕 檔期新品」公開查詢（2026-09-29） =================
+   只給已核准（含已寫入採購、採購寫入失敗）、檔期沒有封存的申請單；每支甜點只回品項名＋貼紙名稱＋購買連結＋供應商覆寫＋提供方式＋是否新品項。
+   不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
+var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
+function newItemsPub_() {
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v2', hit = cache.get(ck);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
+  ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
+  var ok = t.rows.filter(function (r) { return PUB_ST[str_(r.status)] && str_((camp[str_(r.campaign_id)] || {}).status) !== '封存'; }), ids = {};   /* 封存的檔期（測試資料）不出現 */
+  ok.forEach(function (r) { ids[str_(r.req_id)] = 1; });
+  var units = {};
+  (ok.length ? safeRows_('fact_req_unit', ids) : []).forEach(function (u) { (units[u.req_id] = units[u.req_id] || {})[str_(u['品項']).trim()] = u; });
+  var out = ok.map(function (r) {
+    var pl = {};
+    try { pl = JSON.parse(readPayload_(t, r._row) || '{}') || {}; } catch (e) { pl = {}; }
+    var h = pl.head || {}, c = camp[str_(r.campaign_id)] || {}, U = units[str_(r.req_id)] || {}, seen = {};
+    var lines = (pl.lines || []).map(function (l) {
+      var nm = str_(l.name).trim(); if (!nm || seen[nm]) return null; seen[nm] = 1;
+      var u = U[nm] || {};
+      var o = { name: nm, is_new: !!l.is_new, sticker: str_(l.sticker).trim(), supply: str_(l.supply).trim(),
+        link: str_(u['購買連結']).trim(), vendor_override: str_(u['供應商覆寫']).trim(), note: str_(u['品項備註']).trim() };
+      return (o.sticker || o.link || o.vendor_override || o.supply || o.note || o.is_new) ? o : null;
+    }).filter(Boolean);
+    return { req_id: str_(r.req_id), status: str_(r.status), dessert: str_(h.fname).trim() || str_(h.name).trim() || str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(),
+      campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), lines: lines };
+  }).filter(function (x) { return x.dessert; });
+  var res = { at: now_(), items: out };
+  try { var js = JSON.stringify(res); if (js.length < 90000) cache.put(ck, js, 120); } catch (e) { }
+  return res;
 }
 
 /* ================= 試算表工具 ================= */
