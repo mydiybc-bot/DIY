@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v4';   /* v4＝D 階段：公開查詢 newItemsPub */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v5';   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -527,7 +527,7 @@ var FILL_ROLES = ['主廚', '出貨中心', '採購', '行銷設計', '營運POS
 var PIN_MAX = 10, PIN_LOCK_SEC = 900;
 var VOID = '作廢：';   /* 重新送簽／撤回時，上一輪的簽核在 decision 前面加這個字（紀錄保留） */
 /* 衍生欄：能改「原包裝規格」就能一起更新由它算出來的「內容量」 */
-var PATCH_DERIVED = { 'lines.pack': 'lines.pkg_spec' };
+var PATCH_DERIVED = { 'lines.pack': 'lines.pkg_spec', 'lines.vname': 'lines.vendor' };   /* E 階段：能改進貨廠商就能改廠商品名 */
 
 function meOf_(auth) { return auth.kind === 'role' ? { kind: 'role', role: auth.role, fields: auth.fields || '' } : { kind: 'signer', name: auth.name }; }
 function signersOf_(row) { return str_(row.signers).split(/[,，、;；\s]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
@@ -832,7 +832,7 @@ function planPush_(rid) {
   var lines = (pl.lines || []).map(function (l) {
     return { name: ptName_(l.name), qty: Number(l.qty) || 0, unit: ptName_(l.unit), cat: ptName_(l.cat), vendor: ptName_(l.vendor),
       pkgCost: Number(l.pkg_cost) || 0, pkgSpec: ptName_(l.pkg_spec), pack: Number(l.pack) || 0, zone: ptName_(l.zone),
-      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜') };
+      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname) };
   }).filter(function (l) { return l.name; });
   var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null };
   try { P.sku2 = ptRead_('sku2'); } catch (e) { P.sku2 = null; P.sku2err = errMsg_(e); }
@@ -867,13 +867,13 @@ function planPush_(rid) {
     var u = l.unit || 'g', buy = u, pack = 1, price = 0;
     if (l.pack > 1) { var cm = l.pkgSpec.match(/[包袋箱盒罐瓶桶組件套盤打]/); buy = cm ? cm[0] : '包'; pack = l.pack; price = l.pkgCost; }
     else if (l.pack === 1) price = l.pkgCost;
-    var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '')
+    var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '') + (l.vname && l.vname !== l.name ? '；廠商品名 ' + l.vname : '')
       + ((l.pkgCost || l.pkgSpec) ? '；原包裝 ' + (l.pkgCost ? l.pkgCost + ' 元' : '—') + '／' + (l.pkgSpec || '—') : '') + '）';
     var o = { sku_id: id, '品名': l.name, '品類別': cat, '廠商': l.vendor || (isSemi ? '半成品' : ''), '使用單位': u, '採購單位': buy,
       '每採購單位內容量': pack, '單價': price, '預設分區': l.zone, '來源': src, '效期': l.shelf };
     var arr = S.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; });
     var arr2 = P.sku2 ? P.sku2.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; }) : null;
-    skuRows.push({ sku_id: id, name: l.name, cat: cat, vendor: o['廠商'], unit: u, buy: buy, pack: pack, price: price, semi: isSemi, arr: arr, arr2: arr2 });
+    skuRows.push({ sku_id: id, name: l.name, vname: l.vname, cat: cat, vendor: o['廠商'], unit: u, buy: buy, pack: pack, price: price, semi: isSemi, arr: arr, arr2: arr2 });
   });
 
   /* ② BOM表：同品項＋同單位合併（同前端「複製 BOM 表貼上列」）；只收數量 > 0 */
@@ -907,7 +907,7 @@ function planPush_(rid) {
 }
 function planView_(pl) {
   return { req_id: pl.rid, name: pl.name, campaign: pl.campaign, from: pl.from, to: pl.to, warn: pl.warn, dash: !!pl.P.sku2,
-    sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
+    sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, vname: r.vname || '', cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
     existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip };
 }
 
@@ -1129,11 +1129,11 @@ function pushInfo_(rid) {
 }
 
 /* ================= D 階段：採購系統「🆕 檔期新品」公開查詢（2026-09-29） =================
-   只給已核准（含已寫入採購、採購寫入失敗）、檔期沒有封存的申請單；每支甜點只回品項名＋貼紙名稱＋購買連結＋供應商覆寫＋提供方式＋是否新品項。
+   只給已核准（含已寫入採購、採購寫入失敗）、檔期沒有封存的申請單；每支甜點只回品項名＋廠商品名＋貼紙名稱＋購買連結＋供應商覆寫＋提供方式＋區域＋容器＋是否新品項（E 階段加廠商品名、區域、容器）。
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v2', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v3', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -1148,9 +1148,10 @@ function newItemsPub_() {
     var lines = (pl.lines || []).map(function (l) {
       var nm = str_(l.name).trim(); if (!nm || seen[nm]) return null; seen[nm] = 1;
       var u = U[nm] || {};
-      var o = { name: nm, is_new: !!l.is_new, sticker: str_(l.sticker).trim(), supply: str_(l.supply).trim(),
+      var o = { name: nm, is_new: !!l.is_new, vname: str_(l.vname).trim(), sticker: str_(l.sticker).trim(), supply: str_(l.supply).trim(),
+        zone: str_(l.zone).trim(), container: str_(u['容器']).trim(),
         link: str_(u['購買連結']).trim(), vendor_override: str_(u['供應商覆寫']).trim(), note: str_(u['品項備註']).trim() };
-      return (o.sticker || o.link || o.vendor_override || o.supply || o.note || o.is_new) ? o : null;
+      return (o.vname || o.sticker || o.link || o.vendor_override || o.supply || o.note || o.zone || o.container || o.is_new) ? o : null;
     }).filter(Boolean);
     return { req_id: str_(r.req_id), status: str_(r.status), dessert: str_(h.fname).trim() || str_(h.name).trim() || str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(),
       campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), lines: lines };
