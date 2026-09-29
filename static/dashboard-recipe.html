@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🍰 食譜系統</title>
+<!-- 2026-09-29 C 階段：核准 → 自動寫入採購系統 BOM 本（申請單 API recipe-req-v3，部署 @8）。「✍️ 送簽核」卡：送簽前「🔍 預覽」會寫什麼（pushPreview）；
+     已核准／寫入失敗 →「📦 寫入採購系統」重試（pushPurchase，回覆遺失自動回頭確認）；已寫入採購 → 顯示寫在哪幾列＋備份分頁＋「↩ 還原採購寫入（管理者）」（rollbackPurchase）。
+     簽核頁最後一位同意 → 顯示「並已自動寫入採購系統」。新函式：pushInfo pushLastFail pvTable planHTML pushPvHTML pushDoneHTML pushPreviewFlow pushFlow rollbackFlow（ApplyMod）；RecipeMod 逐字未動 -->
 <!-- 2026-09-29 經營者指示「刪掉食譜成本分析」：拿掉第一層分頁按鈕與畫面（6 個子分頁不再顯示），預設／#cost 改開 #apply。
      RecipeMod 成本引擎保留（新品申請表、半成品/材料包都靠它讀主檔與算成本）；#tab-cost 只剩隱藏的 #loading/#app/#fail 給引擎用。 -->
 <!-- 2026-09-24 十三（採購 ci 批配套）：新品申請表「新增食材/器模具」表二加第 20 欄「保存期限」（NI_KEYS 多 shelf；格式 未開封 …｜分裝 …｜開封後 …）。「複製 dim_sku 新品項列」表頭改成主檔 A–S 全欄（O 適用店～R 調撥方式留空、S＝效期）；申請單摘要每列多「保存期限：」；.json lines 多 shelf（載入相容舊檔）。「複製新增食材/器模具表」仍 19 格（Excel 範本不動）。改 NI_KEYS／COLW2／t2HeadHTML／t2RowHTML／skuText／摘要一行／jsonObj／fromJson 一處，其餘零改動。 -->
@@ -241,6 +244,10 @@
   #tab-apply .ap-sgn{border:1px solid #D8C8BF;border-radius:18px;padding:5px 12px;font-size:13px;cursor:pointer;background:#fff}
   #tab-apply .ap-sgn.on{border-color:#00796B;background:#E6F3F1}
   #tab-apply .ap-sgprog{display:flex;flex-direction:column;gap:4px;margin:6px 0;font-size:13px}
+  #tab-apply .ap-pushpv{margin:8px 0;padding:10px 12px;border:1px solid #CFE3DE;border-radius:10px;background:#F6FBFA;font-size:13px;display:flex;flex-direction:column;gap:6px}
+  #tab-apply .ap-pushpv .ap-tblwrap{overflow-x:auto;max-width:100%}
+  #tab-apply .ap-pushpv table.ap-unit{min-width:420px}
+  #tab-apply .ap-pushwarn{color:#8A5A00;background:#FFF4E5;border:1px solid #F0B35A;border-radius:8px;padding:6px 8px}
   #tab-apply .ap-sgprog .ok{color:#2E7D32;font-weight:700}
   #tab-apply .ap-sgprog .no{color:#C0392B;font-weight:700}
   #tab-apply .ap-sgprog .wait{color:#8A7F78}
@@ -528,7 +535,8 @@
         <li>各單位補填（出貨中心、採購、行銷設計、營運POS）：「📂 從檔期載入」用自己的身分密碼載回 → 黃色框是自己負責的欄位（檔期作業、品項補充、廠商／成本／貼紙名稱、POS 分類…）→ 按「💾 儲存「身分」填的欄位」；每支商品會顯示「已填：主廚✓ 出貨中心✓…」</li>
         <li>送簽（主廚）：各單位填好後，在最下方「✍️ 送簽核」勾選簽核主管 →「📤 送簽」→ 複製 LINE 文字貼給主管；主管點連結、選自己的名字、輸入 PIN → 同意或退回。全部同意＝已核准；有人退回＝主廚修改後再送簽（上一輪簽核標記作廢、紀錄保留）。簽核主管名單與 PIN 由管理者在「🔑 密碼管理」維護</li>
         <li>主檔沒有的品項可「🆕 暫列」並手填估價；停售／過季品項會提醒但不擋</li>
-        <li>按「產出申請單」→ 可複製申請單摘要、BOM 表貼上列、dim_sku 新品項列、新增食材/器模具表（核准後寫入採購系統由 C 階段處理）</li>
+        <li>按「產出申請單」→ 可複製申請單摘要、BOM 表貼上列、dim_sku 新品項列、新增食材/器模具表</li>
+        <li>核准後自動寫入採購系統（BOM 本）：產品名稱對照表 1 列、BOM 表（用料全部）、主檔新品項（標「🆕 待確認」，採購補單價、單位換算、適用店）。送簽前可在「✍️ 送簽核」按「🔍 預覽」先看會寫什麼；寫入失敗不影響核准，主廚按「📦 寫入採購系統」重試；寫錯由管理者「↩ 還原」</li>
         <li>半成品／材料包：簽呈核准後，到「🧪 半成品/材料包」分頁勾選「主管簽核同意」、填簽核人，按「💾 儲存到採購系統」</li>
         <li>草稿自動存在本機瀏覽器，重整不會消失；要交給下一位接手或留存，按「💾 存成檔案」，對方用「📂 開啟檔案」</li>
       </ol>
@@ -2352,7 +2360,8 @@ function applyLoaded(d){var q=d.req||{},j;
   AP.base=q.payload||'';
   var U={};(d.units||[]).forEach(function(u){var nm=String(u['品項']||'').trim();if(nm)U[nm]=u});
   var camp={};if(d.campaign)CAMP_OPS.forEach(function(op){['時間','備註'].forEach(function(t){var k=op[1]+t;camp[k]=d.campaign[k]==null?'':String(d.campaign[k])})});
-  AP.ext={units:U,unitsBase:JSON.parse(JSON.stringify(U)),camp:camp,campBase:JSON.parse(JSON.stringify(camp)),fills:d.fills||[],signoffs:d.signoffs||[]};
+  AP.ext={units:U,unitsBase:JSON.parse(JSON.stringify(U)),camp:camp,campBase:JSON.parse(JSON.stringify(camp)),fills:d.fills||[],signoffs:d.signoffs||[],push:d.push||null};
+  if(PUSHPV.rid!==q.req_id)PUSHPV={rid:'',loading:false,err:'',plan:null};
   OUT=null;ERRS=[];saveDraft();render();return true}
 function loadReq(cr,rid,btn){
   if(!confirm('載回 '+rid+' 會取代目前畫面上的申請表（本機草稿也會被取代）。\n畫面上目前的內容如果還要，請先按「💾 存成檔案」。\n\n確定載回？'))return;
@@ -2479,6 +2488,7 @@ var RULE_LABEL={'P:head.cat':'POS 分類','P:head.catOther':'','P:lines.vendor':
   'P:lines.split':'分裝方式','P:lines.first':'第一單處理','P:lines.sticker':'食譜／貼紙名稱','U:容器':'容器','U:出貨中心預估出貨量':'出貨中心預估出貨量','U:購買連結':'購買連結',
   'U:供應商覆寫':'供應商覆寫','U:品項備註':'品項備註','C:作業_第一批出貨_*':'檔期作業「第一批出貨」','C:作業_貼紙_*':'檔期作業「貼紙」','C:作業_POS_*':'檔期作業「POS 上架」'};
 var SIGNERS={list:null,loading:false,err:''};
+var PUSHPV={rid:'',loading:false,err:'',plan:null};   /* C 階段：「🔍 預覽寫入採購系統」的結果（只在這張單有效） */
 function parseRules(s){return String(s||'').split(/[,，、;；\s]+/).map(function(x){return x.trim()}).filter(Boolean).map(function(x){var neg=x.charAt(0)==='!';if(neg)x=x.slice(1);return {neg:neg,pat:x}})}
 function matchRule(pat,key){if(pat==='*')return true;if(pat.slice(-1)==='*')return key.indexOf(pat.slice(0,-1))===0;return pat===key}
 /* 目前載入身分能不能改某個欄位（和伺服器 can_ 同一套規則）；沒有從檔期載入的本機草稿＝不限制（送件時才要主廚密碼） */
@@ -2580,8 +2590,16 @@ function signCardHTML(){var h=AP.head,s=AP.sub||{};if(!h.req_id||unitMode())retu
     x+='<label class="ap-lbl2">簽核連結（主管點這個連結簽核）</label><div class="ap-linkrow"><input type="text" readonly id="apSgLink" value="'+esc(signLink())+'"><button class="ap-btn2 ap-mini" id="apSgLinkCopy" type="button">複製連結</button></div>';
     x+='<label class="ap-lbl2">LINE 文字（複製後貼到 LINE 給簽核主管；系統不會自動發 LINE）</label><textarea readonly id="apSgText" class="ap-sgtext">'+esc(lineText())+'</textarea>'
       +'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apSgCopy" type="button">📋 複製 LINE 文字</button><button class="ap-btn2" id="apSgRefresh" type="button">🔄 看最新簽核狀態</button><button class="ap-btn2" id="apSgWithdraw" type="button">↩ 撤回送簽</button></div>'}
-  else if(st==='已核准'){x+='<div class="ap-okline">✅ 已核准（'+p.agreed.length+' 位主管同意）</div>'+progressHTML(p)
-    +'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apSgRefresh" type="button">🔄 重新整理</button><span class="ap-muted">下一步：核准後寫入採購系統（C 階段上線後自動進行）。</span></div>'}
+  else if(st==='已核准'||st==='已核准（採購寫入失敗）'){var pi=pushInfo(),lf=pushLastFail(pi);
+    x+='<div class="ap-okline">✅ 已核准（'+p.agreed.length+' 位主管同意）</div>'+progressHTML(p);
+    if(st==='已核准（採購寫入失敗）')x+='<div class="ap-rejbox"><b>✕ 寫入採購系統沒有成功</b>'+(lf?'<div>'+esc(lf.msg)+' <span class="ap-muted">'+esc(lf.ts)+'</span></div>':'')
+      +'<div class="ap-muted">核准不受影響。排除問題後按「📦 寫入採購系統」重試（同一張不會重複寫）；看不懂原因請通知 Claude。</div></div>';
+    else x+='<div class="ap-muted">這張單已核准，還沒有寫入採購系統'+(pi&&(pi.history||[]).some(function(o){return o.action==='rollback'})?'（先前的寫入已由管理者還原）':'')+'。</div>';
+    x+='<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apPushBtn" type="button">📦 寫入採購系統</button><button class="ap-btn2" id="apPvBtn" type="button">🔍 預覽會寫什麼</button><button class="ap-btn2" id="apSgRefresh" type="button">🔄 重新整理</button></div>'+pushPvHTML()}
+  else if(st==='已寫入採購'){var pw=pushInfo();
+    x+='<div class="ap-okline">✅ 已核准，已寫入採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+progressHTML(p)+pushDoneHTML(pw)
+      +'<div class="ap-muted">下一步：採購到採購系統「主檔」頁 →「🆕 待確認」補單價、單位換算、適用店。對照表明天 07:05 同步到採購系統，開賣前 14 天起各店會看到新品備料。</div>'
+      +'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apSgRefresh" type="button">🔄 重新整理</button><button class="ap-btn2" id="apRbBtn" type="button" title="只有管理者可以：把這張單寫進採購系統的列刪掉">↩ 還原採購寫入（管理者）</button></div>'}
   else if(LOCK_ST[st]){x+='<div class="ap-muted">這張單目前是「'+esc(st)+'」。</div>'+progressHTML(p)}
   else{
     if(st==='退回'){var rj=p.live.filter(function(o){return o.decision==='退回'});
@@ -2589,8 +2607,68 @@ function signCardHTML(){var h=AP.head,s=AP.sub||{};if(!h.req_id||unitMode())retu
         +(p.agreed.length?'<div class="ap-muted">已同意：'+esc(p.agreed.join('、'))+'</div>':'')+'<div class="ap-muted">修改後再按「📤 送簽」重新送；上一輪的簽核會標記作廢（紀錄保留）。</div></div>'}
     x+='<div class="ap-muted" style="margin:4px 0 6px">各單位都填好後，勾選要簽核的主管 → 按「📤 送簽」。送出前會先自動存一次畫面上的內容（同「📨 送件到檔期」）；送簽後這張單鎖住，直到主管全部同意或有人退回。</div>';
     x+=signerPickHTML();
-    x+='<div class="ap-actions" style="padding:6px 0 0"><label class="ap-muted" style="font-size:13px">請主管在 <input type="date" id="apSgDl" value="'+esc(s.deadline||defDeadline())+'"> 前簽</label><button class="ap-btn" id="apSgSend" type="button">📤 送簽</button></div>'}
+    x+='<div class="ap-actions" style="padding:6px 0 0"><label class="ap-muted" style="font-size:13px">請主管在 <input type="date" id="apSgDl" value="'+esc(s.deadline||defDeadline())+'"> 前簽</label><button class="ap-btn" id="apSgSend" type="button">📤 送簽</button></div>'
+    +'<div class="ap-actions" style="padding:4px 0 0"><button class="ap-btn2 ap-mini" id="apPvBtn" type="button">🔍 預覽：核准後會寫進採購系統的內容</button><span class="ap-muted">（照系統上已存的版本；畫面有改請先送件）</span></div>'+pushPvHTML()}
   return x+voidHTML()+'</div>'}
+/* ---- C 階段：核准 → 寫入採購系統（BOM 本） ---- */
+function pushInfo(){return (AP.ext&&AP.ext.push)||null}
+function pushLastFail(pi){var h=(pi&&pi.history)||[],f=null;h.forEach(function(o){if(o.action==='fail')f=o;else if(o.action==='write'&&o.ok==='Y')f=null});return f}
+function pvTable(head,rows){return '<div class="ap-tblwrap"><table class="ap-unit"><thead><tr>'+head.map(function(x){return '<th>'+esc(x)+'</th>'}).join('')+'</tr></thead><tbody>'
+  +rows.map(function(r){return '<tr>'+r.map(function(x){return '<td>'+esc(x==null?'':x)+'</td>'}).join('')+'</tr>'}).join('')+'</tbody></table></div>'}
+function planHTML(pl){var m=pl.map||[],x='<div class="ap-pushpv"><div><b>核准後會寫進採購系統（BOM 本）</b>：'+esc(pl.name)+(pl.campaign?'｜'+esc(pl.campaign):'')+'</div>';
+  x+='<div><b>① 產品名稱對照表</b>：'+(pl.mapSkip?'<span class="ap-muted">'+esc(pl.mapSkip)+'</span>':'新增 1 列｜'+esc(m[2]||'（沒有起日）')+'～'+esc(m[3]||'（沒有迄日）')+'｜主類別 '+esc(m[4])+'｜次類別 '+esc(m[5]))+'</div>';
+  x+='<div><b>② BOM 表</b>：'+(pl.bomSkip?'<span class="ap-muted">'+esc(pl.bomSkip)+'</span>':'新增 '+pl.bom.length+' 列（用料全部；同品項同單位合併）')+'</div>';
+  if(!pl.bomSkip&&pl.bom.length)x+=pvTable(['品項','數量','單位','容器'],pl.bom.map(function(r){return [r[1],r[2],r[3],r[4]]}));
+  x+='<div><b>③ 主檔新品項（dim_sku）</b>：'+(pl.sku.length?'新增 '+pl.sku.length+' 項，標「🆕 待確認」由採購補單價、單位換算、適用店':'沒有新品項')+'</div>';
+  if(pl.sku.length)x+=pvTable(['編號','品名','品類別','廠商','使用單位','採購單位','內容量','單價'],pl.sku.map(function(r){return [r.sku_id,r.name+(r.semi?'（店製半成品）':''),r.cat,r.vendor,r.unit,r.buy,r.pack,r.price||'（待補）']}));
+  if((pl.existing||[]).length)x+='<div class="ap-muted">主檔已有、一格都不動：'+esc(pl.existing.join('、'))+'</div>';
+  if((pl.warn||[]).length)x+='<div class="ap-pushwarn">⚠ '+pl.warn.map(esc).join('<br>⚠ ')+'</div>';
+  x+='<div class="ap-muted">編號是預估；實際寫入時照當下主檔最大號接下去。</div>';
+  return x+'</div>'}
+function pushPvHTML(){if(PUSHPV.rid!==AP.head.req_id)return '';
+  if(PUSHPV.loading)return '<div class="ap-muted" style="margin-top:6px">讀取採購系統、計算要寫的內容…（約 10～30 秒）</div>';
+  if(PUSHPV.err)return '<div class="ap-bad" style="margin-top:6px">✕ '+esc(PUSHPV.err)+'</div>';
+  return PUSHPV.plan?planHTML(PUSHPV.plan):''}
+function pushDoneHTML(pi){var w=(pi&&pi.written)||[];if(!w.length)return '<div class="ap-muted">三張表都已經有這支甜點，沒有寫新的列。</div>';
+  var nm={sku:'主檔新品項（BOM 本）',sku2:'主檔新品項（儀表板專用檔）',bom:'BOM 表',map:'產品名稱對照表'};
+  var x='<div class="ap-pushpv"><div>'+w.map(function(d){return '<b>'+esc(nm[d.table]||d.name)+'</b> 第 '+esc(d.start)+'～'+esc(d.start+d.n-1)+' 列（'+esc(d.n)+' 列）'}).join('<br>')+'</div>';
+  var sk=w.filter(function(d){return d.table==='sku'})[0],bm=w.filter(function(d){return d.table==='bom'})[0];
+  if(sk&&sk.show.length)x+='<details><summary>主檔新品項 '+sk.show.length+' 項</summary>'+pvTable(['編號','品名','品類別','廠商'],sk.show)+'</details>';
+  if(bm&&bm.show.length)x+='<details><summary>BOM 表 '+bm.show.length+' 列</summary>'+pvTable(['品項','數量','單位','容器'],bm.show.map(function(r){return [r[1],r[2],r[3],r[4]]}))+'</details>';
+  if(pi.backup)x+='<div class="ap-muted">寫入前備份：申請單試算表「'+esc(pi.backup)+'」分頁</div>';
+  return x+'</div>'}
+function pushPreviewFlow(){var rid=AP.head.req_id;if(!rid)return;var role=((AP.sub||{}).role==='管理者')?'管理者':'主廚';
+  withCred(role,'預覽要「'+role+'」密碼。',function(cr){PUSHPV={rid:rid,loading:true,err:'',plan:null};renderSoon();
+    apiPost({action:'pushPreview',role:cr.role,password:cr.pw,req_id:rid}).then(function(r){if(AP.head.req_id!==rid)return;
+      if(!r.ok){if(r.code==='auth')setCred(null,cr.role);PUSHPV={rid:rid,loading:false,err:r.msg||'讀取失敗',plan:null};renderSoon();return}
+      PUSHPV={rid:rid,loading:false,err:'',plan:(r.data||{}).plan||null};renderSoon()})})}
+function pushFlow(){if(_busy)return;var rid=AP.head.req_id,h=AP.head;if(!rid)return;
+  var nm=String(h.fname||'').trim()||String(h.name||'').trim()||'（未命名）';
+  if(!confirm('把 '+rid+' '+nm+' 寫入採購系統（BOM 本）？\n\n會新增：產品名稱對照表 1 列、BOM 表（用料全部）、主檔新品項。\n已經有的不會重複寫、既有品項一格都不動。'))return;
+  if(!confirm('再確認一次：寫入採購系統 BOM 本（寫前自動備份、寫錯可由管理者還原）。確定？'))return;
+  var role=((AP.sub||{}).role==='管理者')?'管理者':'主廚';
+  withCred(role,'寫入採購系統要「'+role+'」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">寫入採購系統中…（約 10～40 秒，請不要關頁）</span>';updSendUI();
+    var onR=function(k){SENDMSG='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次；同一張不會重複寫）…</span>';updSendUI()};
+    var tk=rqToken();
+    apiPost({action:'pushPurchase',role:cr.role,password:cr.pw,req_id:rid,rq:tk},onR).then(function(r){
+      if(!r.ok&&RETRY_CODES[r.code]){SENDMSG='<span class="ap-muted">回覆沒收到，確認系統上的狀態…</span>';updSendUI();
+        return fetchReq(cr,rid,onR).then(function(g){_busy=false;
+          if(g.ok&&g.data&&g.data.req&&g.data.req.status==='已寫入採購'&&applyLoaded(g.data)){SENDMSG='<span class="ap-okline">✓ 已寫入採購系統（剛才回覆沒收到，系統上已經寫好了）</span>';updSendUI();return}
+          if(g.ok)applyLoaded(g.data);SENDMSG='<span class="ap-bad">✕ 沒有寫入：'+esc(r.msg||'連線不穩')+'</span>';updSendUI()})}
+      return fetchReq(cr,rid,onR).then(function(g){_busy=false;var ok2=g&&g.ok&&applyLoaded(g.data);
+        if(!r.ok){if(r.code==='auth')setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg||'寫入失敗')+'</span>';updSendUI();return}
+        var v=(r.data&&r.data.push)||{},w=v.written||[];
+        SENDMSG='<span class="ap-okline">✓ 已寫入採購系統：'+esc(w.length?w.filter(function(d){return d.table!=='sku2'}).map(function(d){return d.name+' '+d.n+' 列'}).join('、'):'三張表都已經有了，沒有寫新的列')+'</span>'
+          +((v.warn||[]).length?'<div class="ap-pushwarn">⚠ '+v.warn.map(esc).join('<br>⚠ ')+'</div>':'')+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');updSendUI()})})})}
+function rollbackFlow(){if(_busy)return;var rid=AP.head.req_id;if(!rid)return;
+  if(!confirm('還原 '+rid+' 的採購系統寫入？\n\n會刪掉這張單當初寫進 產品名稱對照表／BOM 表／主檔 的列（內容相符的才刪）。\n如果採購已經在主檔補了單價，那些也會一起刪掉。'))return;
+  if(!confirm('再確認一次：刪除採購系統裡這張單寫入的列。確定？'))return;
+  withCred('管理者','還原要「管理者」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">還原中…（約 10～40 秒）</span>';updSendUI();
+    apiPost({action:'rollbackPurchase',role:cr.role,password:cr.pw,req_id:rid,rq:rqToken()}).then(function(r){
+      return fetchReq(cr,rid).then(function(g){_busy=false;var ok2=g&&g.ok&&applyLoaded(g.data);
+        if(!r.ok){if(r.code==='auth')setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg||'還原失敗')+'</span>';updSendUI();return}
+        var t=((r.data||{}).rollback||{}).tables||[];
+        SENDMSG='<span class="ap-okline">↩ 已還原：'+esc(t.map(function(x){return x.name+' 刪 '+x.removed+' 列'+(x.backToBackup===true?'（回到寫入前）':x.backToBackup===false?'（和寫入前不同，期間有人改過）':'')}).join('、'))+'</span>'+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');updSendUI()})})})}
 /* ---- 動作 ---- */
 function loadSigners(cr){SIGNERS.loading=true;SIGNERS.err='';renderSoon();
   apiPost({action:'listSigners',role:cr.role,password:cr.pw}).then(function(r){SIGNERS.loading=false;
@@ -2669,7 +2747,7 @@ function applyRoleLock(root){if(!unitMode()||lockedReq())return;
     el.disabled=true})}
 /* 送簽中／已核准：整張唯讀，只留查看、複製、下載、開新單 */
 function applyLock(root){if(!lockedReq())return;
-  var keep={apGo:1,apClr:1,apLoadCamp:1,apSemiAll:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1};
+  var keep={apGo:1,apClr:1,apLoadCamp:1,apSemiAll:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-copy')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     el.disabled=true})}
@@ -2839,6 +2917,9 @@ function wire(){var root=document.getElementById('apRoot');
   var bSc=document.getElementById('apSgCopy');if(bSc)bSc.onclick=function(){copyText(lineText(),'已複製 LINE 文字，貼到 LINE 給簽核主管')};
   var bSk=document.getElementById('apSgLinkCopy');if(bSk)bSk.onclick=function(){copyText(signLink(),'已複製簽核連結')};
   var bSr=document.getElementById('apSgRefresh');if(bSr)bSr.onclick=refreshSign;
+  var bPv=document.getElementById('apPvBtn');if(bPv)bPv.onclick=pushPreviewFlow;
+  var bPu=document.getElementById('apPushBtn');if(bPu)bPu.onclick=pushFlow;
+  var bRb=document.getElementById('apRbBtn');if(bRb)bRb.onclick=rollbackFlow;
   var bSw=document.getElementById('apSgWithdraw');if(bSw)bSw.onclick=withdrawFlow;
   root.querySelectorAll('[data-sgn]').forEach(function(b){b.onchange=function(){var l=b.closest('.ap-sgn');if(l)l.classList.toggle('on',b.checked)}});
   var bDl=document.getElementById('apSgDl');if(bDl)bDl.onchange=function(){AP.sub.deadline=bDl.value;saveDraft()};
@@ -3529,12 +3610,12 @@ function decide(dec){if(S.busy)return;var ta=document.getElementById('sgCm'),cm=
       if(r.code==='locked'&&r.data&&r.data.status&&S.view)S.view.req.status=r.data.status;if(r.code==='auth'||r.code==='pinlock'){ssDel(S.who)}S.msg='✕ '+(r.msg||'送出失敗');paint();return}
     var d=r.data||{};S.view.req.status=d.status;
     S.view.signoffs=((S.view.signoffs||[]).filter(function(o){return !isLive(o.decision)})).concat(d.signoffs||[]);
-    S.last={decision:dec,status:d.status,agreed:(d.agreed||[]).length,total:(d.signers||[]).length};
+    S.last={decision:dec,status:d.status,agreed:(d.agreed||[]).length,total:(d.signers||[]).length,push:d.push||null};
     S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}})}
 function kv(k,v){v=String(v==null?'':v).trim();return v?'<dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd>':''}
 function safeUrl(u){u=String(u||'').trim();return /^https?:\/\//i.test(u)?u:''}
 function loginHTML(){var i=S.info;if(!i)return '';var st=i.status,x='<div class="sg-card">';
-  if(st!=='送簽中')x+='<div class="sg-muted" style="margin-bottom:8px">這張單目前是「<b>'+esc(st)+'</b>」'+(st==='已核准'?'，已經全部同意。':st==='退回'?'，已退回給主廚修改。':'，不在簽核中。')+'簽核人仍可以登入查看。</div>';
+  if(st!=='送簽中')x+='<div class="sg-muted" style="margin-bottom:8px">這張單目前是「<b>'+esc(st)+'</b>」'+(/^已核准|^已寫入採購/.test(st)?'，已經全部同意。':st==='退回'?'，已退回給主廚修改。':'，不在簽核中。')+'簽核人仍可以登入查看。</div>';
   if(!i.signers.length)return x+'<div class="sg-bad">這張單沒有指定簽核人。</div></div>';
   if(!S.who){x+='<div class="sg-h2">請選你的名字</div><div class="sg-names">'+i.signers.map(function(n){var d=i.decided.indexOf(n)>=0;
       return '<button type="button" class="sg-name'+(d?' done':'')+'" data-who="'+esc(n)+'">'+esc(n)+(d?'<small>已簽</small>':'')+'</button>'}).join('')+'</div>';return x+'</div>'}
@@ -3544,7 +3625,7 @@ function loginHTML(){var i=S.info;if(!i)return '';var st=i.status,x='<div class=
 function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')}catch(e){j={}}
   var hd=j.head||{},cost=j.cost||{},camp=v.campaign||{},st=q.status,lv=live(),mine=lv.filter(function(o){return o.signer===S.who})[0],x='';
   if(S.last)x+='<div class="sg-card '+(S.last.decision==='同意'?'sg-okbox':'sg-badbox')+'">'+(S.last.decision==='同意'?'✓ 已記錄你的「同意」。':'✕ 已記錄你的「退回」。')
-    +(S.last.status==='已核准'?'全部 '+S.last.total+' 位都同意了 → 這張單已核准。':S.last.status==='退回'?'這張單已退回給主廚修改。':'目前 '+S.last.agreed+'／'+S.last.total+' 位同意。')+'</div>';
+    +(/^已核准|^已寫入採購/.test(S.last.status)?'全部 '+S.last.total+' 位都同意了 → 這張單已核准'+(S.last.status==='已寫入採購'?'，並已自動寫入採購系統。':S.last.status==='已核准（採購寫入失敗）'?'（自動寫入採購系統沒有成功，主廚會在申請表重試；核准不受影響）。':'。'):S.last.status==='退回'?'這張單已退回給主廚修改。':'目前 '+S.last.agreed+'／'+S.last.total+' 位同意。')+'</div>';
   x+='<div class="sg-card"><div class="sg-h">'+(q.seq?'第 '+esc(q.seq)+' 支　':'')+esc(prodName())+'</div>'
     +'<div class="sg-muted">'+esc(camp['檔期名稱']||q.campaign_id||'')+((camp['起']||camp['迄'])?'　'+esc((camp['起']||'?')+'～'+(camp['迄']||'?')):'')+(camp['第一批配貨日']?'　第一批配貨 '+esc(camp['第一批配貨日']):'')+'</div>'
     +'<div class="sg-kpi"><div><span>定價</span><b>'+esc(hd.price||q['定價']||'—')+' 元</b></div><div><span>每份成本</span><b>'+money(hd.cost!=null?hd.cost:q['成本'])+' 元</b></div>'
