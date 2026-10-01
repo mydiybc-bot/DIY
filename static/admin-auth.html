@@ -6,6 +6,7 @@
 <title>權限管理後台｜自己做烘焙聚樂部</title>
 <!-- v1.1：列表加「錯誤數／解鎖」欄（對應 GAS admin_unlock），涵蓋 pnl/monthly -->
 <!-- v1.2 2026-07-30：修正過期說明文字（原稱 pnl/月會仍走 PWD_B，實際已納管） -->
+<!-- v1.3 2026-10-02：加入全站共用 AUTH-CORE v2；登入／重新載入列表（admin_list，唯讀）改為慢或 404 自動補發＋開頁預熱；儲存、解鎖、改管理密碼（寫入）仍只送一次 -->
 <!-- 2026-07-30 v1：10 個儀表板密碼集中管理（讀寫「權限中心」GAS／dim_auth）。
      本頁不放任何密碼；管理密碼僅存在記憶體，關頁即清。變更紀錄見 Sheet 的 auth_log 分頁。 -->
 <style>
@@ -95,6 +96,126 @@ td input.ttl{width:58px}
 </div>
 
 <script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = jsonp('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(jsonp(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify };
+})();
+/* ===== AUTH-CORE v2 END ===== */
+</script>
+<script>
 /* ★★ 部署權限中心 GAS 後，把網頁應用程式 URL 貼在下一行（見 auth_center.gs 頭部 SOP 第 7 步） ★★ */
 const AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 
@@ -125,8 +246,10 @@ async function doLogin(){
   const pwd = (document.getElementById('admPwd').value||'').trim();
   if(!pwd) return;
   const btn = document.getElementById('loginBtn');
+  if(btn.disabled) return;   /* 2026-10-02 驗證中再按 Enter 不重送 */
   btn.disabled = true; btn.textContent = '驗證中…';
-  const r = await jsonp({action:'admin_list', admin_pwd:pwd});
+  /* 2026-10-02：讀取（admin_list）改走 AUTH-CORE 自動補發；寫入（儲存／解鎖／改管理密碼）仍用下方 jsonp 只送一次 */
+  const r = await new Promise(res => window.__dashAuth.read('action=admin_list&admin_pwd=' + encodeURIComponent(pwd), res, t => setMsg('loginMsg', t, true)));
   btn.disabled = false; btn.textContent = '登入';
   if(r && r.ok){
     ADM = pwd;
@@ -135,16 +258,17 @@ async function doLogin(){
     renderList(r.list || []);
   } else {
     setMsg('loginMsg', (r && r.error) || '登入失敗', false);
-    document.getElementById('admPwd').value = '';
+    if(/密碼錯誤/.test((r && r.error) || '')) document.getElementById('admPwd').value = '';   /* 2026-10-02 只有密碼錯誤才清空 */
   }
 }
 document.getElementById('admPwd').addEventListener('keydown', e => { if(e.key === 'Enter') doLogin(); });
 /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在載入後才把別頁已存密碼填進來，分三個時點強制清空 */
 (function(){ var _a = document.getElementById('admPwd'); _a.value=''; setTimeout(function(){ _a.value=''; }, 60); setTimeout(function(){ _a.value=''; }, 300); })();
+window.__dashAuth.warm();   /* 2026-10-02 開頁先預熱權限中心（全站 90 秒節流） */
 
 async function loadList(){
   setMsg('listMsg', '載入中…', true);
-  const r = await jsonp({action:'admin_list', admin_pwd:ADM});
+  const r = await new Promise(res => window.__dashAuth.read('action=admin_list&admin_pwd=' + encodeURIComponent(ADM), res, t => setMsg('listMsg', t, true)));
   if(r && r.ok){ renderList(r.list || []); setMsg('listMsg', '', true); }
   else setMsg('listMsg', (r && r.error) || '載入失敗', false);
 }

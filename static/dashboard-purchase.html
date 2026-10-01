@@ -266,37 +266,148 @@ table.nwt.nwin{min-width:520px;background:#fff}
 .nwtag.ex{background:#F3E5F5;color:#6A1B9A}
 </style>
 <script>
-/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL */
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = jsonp('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(jsonp(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify };
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
 (function(){
   var DASH_ID = 'purchase';
   var DASH_NAME = '採購系統';   /* 與 dim_auth 的 name 欄一致 */
-  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
-  var KEY = 'dash_auth_' + DASH_ID;
-  try {
-    var o = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (o && o.exp && Date.now() < o.exp) return;      /* 效期內 → 放行 */
-    localStorage.removeItem(KEY);
-  } catch(_){}
-  document.documentElement.style.visibility = 'hidden';
-  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機，verify 由 3-8 秒降到 <1 秒 */
-  (function warmup(){
-    var pn = '__agwarm' + Date.now();
-    var ps = document.createElement('script');
-    window[pn] = function(){ try { delete window[pn]; } catch(_){} if (ps.parentNode) ps.parentNode.removeChild(ps); };
-    ps.onerror = window[pn];
-    ps.src = AUTH_API + '?action=ping&callback=' + pn;
-    document.head.appendChild(ps);
-  })();
-  function verify(pwd, cb){
-    var name = '__agcb' + Date.now();
-    var s = document.createElement('script');
-    var to = setTimeout(function(){ done({ok:false, error:'連線逾時，請重試（GAS 冷啟動可能較慢）'}); }, 30000);
-    function done(d){ clearTimeout(to); delete window[name]; if (s.parentNode) s.parentNode.removeChild(s); cb(d); }
-    window[name] = done;
-    s.onerror = function(){ done({ok:false, error:'連線失敗，請重試'}); };
-    s.src = AUTH_API + '?action=verify&callback=' + name + '&dashboard=' + encodeURIComponent(DASH_ID) + '&pwd=' + encodeURIComponent(pwd);
-    document.head.appendChild(s);
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
   }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
   function show(){
     var d = document.createElement('div');
     d.id = 'authGate';
@@ -305,7 +416,7 @@ table.nwt.nwin{min-width:520px;background:#fff}
       + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
       + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
       + '<div style="position:relative">'
-      + '<input id="agPwd" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
       + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
       + '</div>'
       + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
@@ -313,6 +424,8 @@ table.nwt.nwin{min-width:520px;background:#fff}
       + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
     document.body.appendChild(d);
     var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
     var eye = document.getElementById('agEye');
     if (eye) eye.onclick = function(){
       var showPw = inp.type === 'password';
@@ -320,25 +433,31 @@ table.nwt.nwin{min-width:520px;background:#fff}
       eye.textContent = showPw ? '🙈' : '👁';
       inp.focus();
     };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
     function go(){
-      var v = inp.value; if (!v) return;
-      btn.disabled = true; btn.textContent = '驗證中…';
-      verify(v, function(r){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
         if (r && r.ok) {
-          try { localStorage.setItem(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 })); } catch(_){}
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
           /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
              頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
              改為就地拆除遮罩即可。 */
           if (d && d.parentNode) d.parentNode.removeChild(d);
           document.documentElement.style.visibility = '';
+          pass();
         } else {
-          err.textContent = (r && r.error) || '驗證失敗';
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
           btn.disabled = false; btn.textContent = '進入';
-          inp.value = '';
           if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
           inp.focus();
         }
-      });
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
     }
     btn.onclick = go;
     inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
@@ -809,8 +928,9 @@ function invTag(st,s){var a=invAge(st,s);if(a==null)return '<span style="color:#
 /* ===== 盤點 session（延續／新的一週）與本機草稿：純前端 localStorage，不動 Sheet ===== */
 function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){lsFree();try{localStorage.setItem(k,v);}catch(e2){console.warn("本機儲存失敗："+k,e2);}}}
-function lsFree(){ /* 2026-09-26：本機空間滿時，只清各儀表板的暫存（採購 dpc:*、POS pos_cache_v2），絕不動登入與盤點草稿 */
-  try{var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&(k.indexOf("dpc:")===0||k==="pos_cache_v2"))ks.push(k);}
+function lsFree(){ /* 2026-09-26：本機空間滿時，只清各儀表板的暫存（採購 dpc:*、POS pos_cache_v2），絕不動登入與盤點草稿
+                    2026-10-02：補上 P&L（pnlc1:*，一次約 3MB）、訂位、決策中心的暫存，與 AUTH-CORE 的清單一致 */
+  try{var ks=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&(k.indexOf("dpc:")===0||k.indexOf("pnlc1:")===0||k==="pos_cache_v2"||k==="resv_pos_net_v1"||k==="resv_revisit_monthly_v1"||k==="dec_bundle_v1"))ks.push(k);}
     ks.forEach(function(k){try{localStorage.removeItem(k);}catch(e){}});}catch(e){}}
 function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 function escA(v){return String(v==null?"":v).replace(/"/g,'&quot;');}
@@ -5531,23 +5651,17 @@ function shWire(){
    定位同整頁閘門：防誤操作與防路人，不是資安邊界（Console 改 ST.role 仍可繞過，見 auth-center skill 地雷 3）。 */
 var HQ_KEY="dash_auth_purchase_hq",HQ_DASH="purchase_hq";
 var HQ_API="https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec";
-function hqOK(){try{var o=JSON.parse(lsGet(HQ_KEY)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;lsDel(HQ_KEY);}catch(e){}return false;}
+function hqOK(){var A=window.__dashAuth;try{var o=JSON.parse(A.get(HQ_KEY)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(HQ_KEY);}catch(e){}return false;}   /* 2026-10-02 讀寫改走 AUTH-CORE（空間滿時改存本分頁也讀得到） */
 /* 2026-09-28 cm 批：第二道密碼改成「依身分」——總部＝purchase_hq（原樣），出貨中心＝purchase_dc（權限中心 dim_auth 要有這一列）。
    店長不設密碼（降級不需要）。hqOK／hqVerify／hqAsk 保留原名，不帶參數時行為與原本完全相同。 */
 var ROLE_GATES={"總部":{key:HQ_KEY,dash:HQ_DASH,title:"🔒 總部／經營者",desc:'這個身分可以修改<b>主檔、季節指數、單位對照</b>與<b>全 12 店的店別參數</b>，需要密碼。',ph:"請輸入總部密碼",ok:"已切換為總部／經營者"},
   "出貨中心":{key:"dash_auth_purchase_dc",dash:"purchase_dc",title:"🔒 出貨中心",desc:'這個身分處理<b>出貨中心訂單、庫存</b>與查看<b>檔期備貨</b>，需要密碼。<b>總部／經營者的密碼也可以用。</b>（主檔與效期已併入總部主檔，請切「總部／經營者」維護）',ph:"請輸入出貨中心或總部密碼",ok:"已切換為出貨中心"}};
 function roleOK(role){var g=ROLE_GATES[role];if(!g)return true;if(role==="總部")return hqOK();
   if(role==="出貨中心"&&hqOK())return true;   /* 經營者 09-28：出貨中心負責人＝總部管理人，這台已驗過總部就不用再輸一次 */
-  try{var o=JSON.parse(lsGet(g.key)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;lsDel(g.key);}catch(e){}return false;}
-function hqPing(){var pn="__hqwarm"+Date.now(),ps=document.createElement("script");   /* 先預熱，免得使用者輸完密碼還要等 GAS 冷啟動 3–8 秒 */
-  window[pn]=function(){try{delete window[pn];}catch(e){}if(ps.parentNode)ps.parentNode.removeChild(ps);};
-  ps.onerror=window[pn];ps.src=HQ_API+"?action=ping&callback="+pn;document.head.appendChild(ps);}
-function hqVerify(pwd,cb,dash){var n="__hq"+Date.now(),s=document.createElement("script");
-  var to=setTimeout(function(){done({ok:false,error:"連線逾時，請重試（權限中心冷啟動可能較慢）"});},30000);
-  function done(d){clearTimeout(to);try{delete window[n];}catch(e){}if(s.parentNode)s.parentNode.removeChild(s);cb(d);}
-  window[n]=done;s.onerror=function(){done({ok:false,error:"連線失敗，請重試"});};
-  s.src=HQ_API+"?action=verify&callback="+n+"&dashboard="+encodeURIComponent(dash||HQ_DASH)+"&pwd="+encodeURIComponent(pwd);
-  document.head.appendChild(s);}
+  var A=window.__dashAuth;try{var o=JSON.parse(A.get(g.key)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(g.key);}catch(e){}return false;}
+function hqPing(){window.__dashAuth.warm();}   /* 先預熱，免得使用者輸完密碼還要等 GAS 冷啟動（2026-10-02 改走 head 的 AUTH-CORE：全站 90 秒節流＋沒回應補一次） */
+function hqVerify(pwd,cb,dash){   /* 2026-10-02 改走 AUTH-CORE：慢或被 Google 回 404 自動補發（每按一次最多 3 發），密碼錯誤等明確答案立刻停；進度顯示在框內。HQ_API 保留備查（＝AUTH-CORE 的 AUTH_API） */
+  window.__dashAuth.verify(dash||HQ_DASH,pwd,cb,function(t){var m=document.getElementById("hqMsg");if(m){m.style.color="#666";m.textContent=t;}});}
 function hqAsk(role){
   if(document.getElementById("hqGate"))return;
   role=ROLE_GATES[role]?role:"總部";var g=ROLE_GATES[role];
@@ -5565,13 +5679,13 @@ function hqAsk(role){
   var inp=d.querySelector("#hqPwd"),msg=d.querySelector("#hqMsg"),go=d.querySelector("#hqGo");
   function close(){if(d.parentNode)d.parentNode.removeChild(d);}
   d.querySelector("#hqCancel").onclick=close;
-  function submit(){var p=inp.value;if(!p){msg.style.color="#C0392B";msg.textContent="請輸入密碼";return;}
+  function submit(){if(go.disabled)return;var p=inp.value;if(!p){msg.style.color="#C0392B";msg.textContent="請輸入密碼";return;}   /* 2026-10-02 驗證中再按 Enter 不重送 */
     go.disabled=true;msg.style.color="#666";msg.textContent="驗證中…";
     hqVerify(p,function cbv(r){
       /* 出貨中心：權限中心還沒有 purchase_dc 這一列（回「查無此儀表板設定」，不計入錯誤次數）→ 改用總部密碼驗一次 */
       if(role==="出貨中心"&&!cbv.fb&&r&&!r.ok&&/查無此儀表板設定/.test(r.error||"")){cbv.fb=1;hqVerify(p,cbv,HQ_DASH);return;}
       if(r&&r.ok){var hrs=(+r.ttl_hours>0?+r.ttl_hours:12);
-        lsSet(g.key,JSON.stringify({exp:Date.now()+hrs*3600000}));
+        window.__dashAuth.put(g.key,JSON.stringify({exp:Date.now()+hrs*3600000}));   /* 2026-10-02 空間滿時先清可重抓的暫存再寫，仍不行改存本分頁 */
         close();ST.role=role;ST.exp={};var sel=$("#roleSel");if(sel)sel.value=role;render();
         toast(g.ok+"（"+hrs+" 小時內免再輸入）");return;}
       go.disabled=false;msg.style.color="#C0392B";
