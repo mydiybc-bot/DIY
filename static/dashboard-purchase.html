@@ -3691,11 +3691,13 @@ function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
   var list=all.filter(function(o){return o.status===seg;});
   if(seg==="待處理"||seg==="備貨中")list.sort(function(a,b){return a.time<b.time?-1:1;});   /* 先進先出 */
   if(!list.length)return h+'<div class="card muted">沒有「'+seg+'」的訂單 ✅</div>';
+  h+=slipBatchBar(seg);   /* cw 批：🖨 列印全部出貨單 */
   list.forEach(function(o){h+=dcoCard(o);});
   return h;}
 function dcoCard(o){var open=(o.status==="待處理"||o.status==="備貨中"),q=(ST.dcoShipQ||{})[o.id]||{},tot=0;
   var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+dcoStBadge(o.status)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
-    +(o.status==="已出貨"?'<span class="muted">出貨 '+dcoTime(o.shipTime)+'</span>':'')+'<span style="flex:1"></span><span>'+o.lines.length+' 項</span></div>';
+    +(o.status==="已出貨"?'<span class="muted">出貨 '+dcoTime(o.shipTime)+'</span>':'')+'<span style="flex:1"></span><span>'+o.lines.length+' 項</span>'
+    +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoslip="'+escA(o.id)+'" title="印 A4 出貨單，放進箱子給門市收貨核對">🖨 出貨單</button>':'')+'</div>';   /* cw 批 */
   if(o.note)h+='<div class="banner" style="margin:6px 0 0;padding:5px 8px">📝 '+escH(o.note)+'</div>';
   h+='<div style="overflow-x:auto"><table class="dcot" style="margin-top:6px"><tr><th></th><th>品名</th><th class="right">訂購</th><th class="right">實出</th><th class="right">單價</th><th class="right">小計</th><th class="right" title="記數量的品項：庫存－其他待出貨">庫存</th></tr>';
   o.lines.forEach(function(l){var s=SKU[l.sku_id],sv=(q[l.line]!=null)?q[l.line]:(l.ship!=null?l.ship:l.qty),amt=num(sv)*l.price;tot+=amt;
@@ -3753,6 +3755,139 @@ function dcoCsv(kind){var ym=ST.dcoMonth||ymd(new Date()).slice(0,7),list=DCO.mo
     list.slice().sort(function(a,b){return num(a.store)-num(b.store)||(a.time<b.time?-1:1);}).forEach(function(o){o.lines.forEach(function(l){rows.push([ym,storeName(o.store),o.id,o.time,o.shipTime,o.hct,l.sku_id,l.name,l.unit,l.qty,l.ship,l.price,l.amount,o.note]);});});}
   var csv="﻿"+rows.map(function(r){return r.map(q).join(",");}).join("\r\n"),a=document.createElement("a");
   a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download="出貨中心月結_"+ym+(kind==="sum"?"_各店彙總":"_明細")+".csv";document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},1000);}
+/* ===== 2026-10-02 cw 批：出貨單列印（經營者 1002 待處理事項 #5）=====
+   用途：出貨中心把「出貨單」印出來放進寄給門市的箱子，門市收到貨時逐項打勾，核對品項與數量。
+   入口：📥 出貨中心訂單 → 待處理／備貨中／已出貨，每張訂單卡片右上「🖨 出貨單」；列表上方「🖨 列印全部出貨單」
+        （待處理、備貨中＝畫面列出的全部；已出貨＝今天出貨的）。另開視窗，A4 直式，每張訂單從新的一頁開始。
+   只讀：不改訂單狀態、不送任何資料（沒有 POST）。
+   只印系統真的有的資料：訂單號、店號（storeLabel）、下單時間、狀態、出貨時間、新竹貨號、備註，
+        各行 sku_id／品名／單位／訂購量／單價／實出量／小計；分類＝主檔品類別。地址、電話、下單人、送貨方式系統沒有 → 不印。
+   實出：已出貨＝存檔的實出量；還沒出貨＝卡片「實出」欄現在的數字（沒改過＝訂購量），也就是現在按「✅ 出貨完成」會存進去的數字。
+   金額：與月結同一套——已出貨＝訂單存的小計與合計（月結加總的就是它）；還沒出貨＝實出×下單時單價、逐行四捨五入後加總（＝按出貨完成後後端的算法）。
+        單價未填（0）＝單價、小計印「—」，不計入合計，表下註明幾項。
+   分頁：在列印視窗裡逐列量高度、自己切頁（每頁都有表頭、「第 x / y 頁」，每張訂單各自算頁數）；最後一頁放總計、備註欄、簽名欄。
+   條碼：訂單號的 Code 128（B 字集），純 JS 畫，不用外部套件。 */
+var SLIP_SAFE=26;   /* 每頁底部多留的空間（px，約 7mm）：列印與螢幕排版若有些微差異，也不會擠出頁面 */
+var SLIP_C128="212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112".split(" ");
+/* Code 128（B 字集）：回傳模組字串（1＝黑、0＝白，不含左右留白）；有 B 字集以外的字就回空字串＝不印條碼 */
+function slipC128(txt){txt=String(txt==null?"":txt);if(!txt||!/^[\x20-\x7e]+$/.test(txt))return "";
+  var v=[104],sum=104,i,k,out="";
+  for(i=0;i<txt.length;i++){k=txt.charCodeAt(i)-32;v.push(k);sum+=k*(i+1);}
+  v.push(sum%103);v.push(106);
+  v.forEach(function(c){var p=SLIP_C128[c];for(var j=0;j<p.length;j++)out+=(j%2?"0":"1").repeat(+p.charAt(j));});
+  return out;}
+function slipBarSvg(txt){var b=slipC128(txt);if(!b)return "";
+  var q=10,n=b.length+2*q,r="",i=0,j;   /* 左右各留 10 個模組空白；每模組 0.25mm */
+  while(i<b.length){if(b.charAt(i)==="1"){j=i;while(j<b.length&&b.charAt(j)==="1")j++;r+='<rect x="'+(q+i)+'" y="0" width="'+(j-i)+'" height="10"/>';i=j;}else i++;}
+  return '<svg class="bc" xmlns="http://www.w3.org/2000/svg" width="'+(n*0.25).toFixed(2)+'mm" height="9mm" viewBox="0 0 '+n+' 10" preserveAspectRatio="none" shape-rendering="crispEdges"><rect width="'+n+'" height="10" fill="#fff"/><g fill="#000">'+r+'</g></svg>';}
+function slipNow(){var d=new Date();function p(n){return (n<10?"0":"")+n;}return ymd(d)+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds());}
+function slipPrice(p){return Math.round(p)===p?fmt(p):(Math.round(p*100)/100).toLocaleString("en-US",{maximumFractionDigits:2});}
+/* 一張訂單在出貨單上的各行與合計（實出、金額規則見上方說明）；行的順序＝訂單行號（出貨中心卡片、門市訂單清單同一順序） */
+function slipData(o){var open=(o.status==="待處理"||o.status==="備貨中"),shipped=(o.status==="已出貨"),q=(ST.dcoShipQ||{})[o.id]||{};
+  var t={n:o.lines.length,qty:0,ship:0,amt:0,noPrice:0,diff:0},rows=[];
+  o.lines.forEach(function(l,i){var s=SKU[l.sku_id],price=num(l.price),hasP=price>0,qty=num(l.qty);
+    var sv=open?num(q[l.line]!=null?q[l.line]:(l.ship!=null?l.ship:l.qty)):(l.ship==null?null:num(l.ship));   /* 與 dcoCard 的實出欄同一個值 */
+    var amt=shipped?num(l.amount):((sv==null||!hasP)?0:Math.round(sv*price));
+    var diff=(sv==null)?0:Math.round((sv-qty)*1000)/1000;
+    t.qty+=qty;if(sv!=null)t.ship+=sv;if(!hasP)t.noPrice++;if(diff)t.diff++;if(!shipped)t.amt+=amt;
+    rows.push({no:i+1,cat:s?s.cat:"",sku:l.sku_id,name:l.name,unit:l.unit,qty:qty,ship:sv,price:price,hasP:hasP,amt:amt,diff:diff});});
+  if(shipped)t.amt=num(o.total);   /* 月結＝各訂單 total 加總 */
+  return {rows:rows,t:t,open:open};}
+/* 出貨單的各段 HTML（給 slipBuild 排版用） */
+function slipParts(o,now){var D=slipData(o),t=D.t,lab=storeLabel(o.store);
+  var cols='<colgroup><col style="width:10mm"><col style="width:11mm"><col style="width:14mm"><col><col style="width:13mm"><col style="width:15mm"><col style="width:14mm"><col style="width:18mm"><col style="width:11mm"></colgroup>';
+  var thead='<thead><tr><th>序號</th><th>分類</th><th>品號</th><th>品名／規格</th><th>訂購<br>數量</th><th>實出<br>數量</th><th>單價</th><th>小計</th><th>收貨<br>核對</th></tr></thead>';
+  var head='<div class="ttl">出貨單</div><div class="top"><div>列印時間：'+escH(now)+'</div><div class="co">自己做烘焙聚樂部</div><div class="oid">訂單編號：<b>'+escH(o.id)+'</b>'+slipBarSvg(o.id)+'</div></div>'
+    +'<div class="who"><div class="st">收件門市：'+escH(lab)+'</div><div>下單時間：'+escH(o.time||"—")+'</div><div>狀態：'+escH(o.status)+'</div>'
+    +(o.shipTime?'<div>出貨時間：'+escH(o.shipTime)+'</div>':'')+(o.hct?'<div>新竹物流貨號：'+escH(o.hct)+'</div>':'')
+    +(o.note?'<div class="nt">訂單備註：'+escH(o.note)+'</div>':'')+'</div>';
+  var headC='<div class="ttl2">出貨單（續）<span>訂單編號：'+escH(o.id)+'　收件門市：'+escH(lab)+'</span></div>';
+  var rows=D.rows.map(function(r){var dt=r.diff<0?'缺 '+dec(-r.diff):(r.diff>0?'多 '+dec(r.diff):'');
+    return '<tr'+(dt?' class="df"':'')+'><td class="c">'+r.no+'</td><td class="c">'+escH(r.cat||"—")+'</td><td class="c">'+escH(r.sku)+'</td>'
+      +'<td>'+escH(r.name)+(r.unit?'<span class="u"> ／'+escH(r.unit)+'</span>':'')+'</td><td class="n">'+dec(r.qty)+'</td>'
+      +'<td class="n">'+(r.ship==null?'—':dec(r.ship))+(dt?'<span class="dt">'+dt+'</span>':'')+'</td>'
+      +'<td class="n">'+(r.hasP?slipPrice(r.price):'—')+'</td><td class="n">'+((r.hasP||r.amt)?fmt(r.amt):'—')+'</td><td class="c"><span class="box"></span></td></tr>';});
+  var tot='<tr class="tot"><td colspan="4">總計　共 '+t.n+' 項</td><td class="n">'+dec(t.qty)+'</td><td class="n">'+dec(t.ship)+'</td><td></td><td class="n">$'+fmt(t.amt)+'</td><td></td></tr>';
+  var fn=[];
+  if(t.diff)fn.push('實出與訂購不同 '+t.diff+' 項（整列粗體，標「缺／多」），收貨時請特別核對。');
+  if(t.noPrice)fn.push('單價未填 '+t.noPrice+' 項（印「—」），沒有算進金額；出貨中心補上單價後以月結為準。');
+  var tail='<div class="tail">'+(fn.length?'<div class="fn">'+fn.map(function(x){return '＊'+escH(x);}).join('<br>')+'</div>':'')
+    +'<div class="memo">備註（缺件、破損請寫在這裡）</div><div class="sign"><div>出貨人簽名／日期</div><div>收貨人簽名／日期</div></div></div>';
+  return {head:head,headC:headC,cols:cols,thead:thead,rows:rows,tot:tot,tail:tail,foot:'訂單編號 '+escH(o.id)+'　'+escH(lab),open:D.open};}
+function slipCss(){return '@page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0}'
+  +'body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif;font-size:13px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+  +'.pg{position:relative;width:209mm;min-height:296mm;margin:0 auto;padding:11mm 12mm 0;background:#fff;break-after:page;page-break-after:always}'
+  +'.pg:last-child{break-after:auto;page-break-after:auto}.pg.flow{width:auto;min-height:0;padding:0}'
+  +'.pgf{position:absolute;left:12mm;right:12mm;bottom:8mm;display:flex;justify-content:space-between;gap:4mm;font-size:12px;border-top:1px solid #000;padding-top:1.2mm}'
+  +'.ttl{text-align:center;font-size:24px;font-weight:800;letter-spacing:.5em;margin:0 0 1mm;padding-left:.5em}'
+  +'.ttl2{font-size:16px;font-weight:800;margin:0 0 1mm}.ttl2 span{font-size:13px;font-weight:700;margin-left:4mm}'
+  +'.top{display:flex;align-items:flex-end;justify-content:space-between;gap:4mm;font-size:12px}.top>div{flex:1 1 0}.top .co{text-align:center;font-size:15px;font-weight:800}.top .oid{text-align:right;white-space:nowrap}'
+  +'.bc{display:block;margin:1mm 0 0 auto}'
+  +'.who{border:1.5px solid #000;margin-top:2.5mm;padding:2mm 3mm;display:flex;flex-wrap:wrap;gap:1mm 8mm;font-size:13px}.who .st{flex-basis:100%;font-size:19px;font-weight:800}.who .nt{flex-basis:100%;word-break:break-word}'
+  +'table.lt{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:2.5mm}'
+  +'.lt th,.lt td{border:1px solid #000;padding:1.5mm 1.2mm;font-size:12.5px;line-height:1.35;vertical-align:middle;overflow-wrap:anywhere}'
+  +'.lt th{font-size:12px;background:#e6e6e6;text-align:center;line-height:1.25}.lt thead{display:table-header-group}.lt tr{break-inside:avoid;page-break-inside:avoid}'
+  +'.lt .c{text-align:center}.lt .n{text-align:right;white-space:nowrap}.lt .u{font-size:12px}'
+  +'.lt tr.df td{font-weight:800;background:#ececec}.lt .dt{display:block;font-size:12px;font-weight:800}'
+  +'.lt tr.tot td{font-weight:800;background:#e6e6e6;font-size:13px}'
+  +'.box{display:inline-block;width:5mm;height:5mm;border:1.3px solid #000;vertical-align:middle;background:#fff}'
+  +'.fn{margin-top:2mm;font-size:12px;line-height:1.5}'
+  +'.memo{border:1.5px solid #000;height:24mm;margin-top:3mm;padding:1.5mm 2mm;font-size:12px}'
+  +'.sign{display:flex;gap:10mm;margin-top:4mm}.sign div{flex:1;border-bottom:1px solid #000;height:11mm;font-size:12px}'
+  +'.bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#fff;border-bottom:1px solid #999;padding:8px 14px;font-size:14px}'
+  +'.bar button{font-size:15px;padding:6px 16px;border-radius:8px;border:1px solid #0369a1;background:#0369a1;color:#fff;cursor:pointer}'
+  +'.warn{background:#FFF4E5;border-bottom:1px solid #F0B35A;color:#8A5A00;padding:6px 14px;font-size:13px}'
+  +'@media screen{body{background:#8f8f8f;padding-bottom:16px}.pg{margin:12px auto;box-shadow:0 2px 12px rgba(0,0,0,.35)}.pg.flow{padding:8mm}}'
+  +'@media print{body{background:#fff}.noprint{display:none!important}}';}
+/* 在列印視窗裡排版：逐列放進頁面並量高度，放不下就換新的一頁（每頁重印表頭）；總計、備註欄、簽名欄放最後一頁。回傳總頁數 */
+function slipBuild(doc,orders,now){var host=doc.getElementById("pages"),total=0;
+  orders.forEach(function(o){var P=slipParts(o,now),pages=[],p,q,tr;
+    function page(first){var el=doc.createElement("div");el.className="pg";
+      el.innerHTML='<div class="pgc">'+(first?P.head:P.headC)+'<table class="lt">'+P.cols+P.thead+'<tbody></tbody></table></div><div class="pgf"><span>'+P.foot+'</span><span class="pno"></span></div>';
+      host.appendChild(el);var c=el.querySelector(".pgc"),f=el.querySelector(".pgf");
+      var pp={el:el,c:c,tb:el.querySelector("tbody"),n:0,cap:f.offsetTop-c.offsetTop-SLIP_SAFE};pages.push(pp);return pp;}
+    function fits(pp){return pp.c.offsetHeight<=pp.cap;}
+    p=page(true);
+    P.rows.forEach(function(r){p.tb.insertAdjacentHTML("beforeend",r);p.n++;
+      if(p.n>1&&!fits(p)){tr=p.tb.lastElementChild;p.tb.removeChild(tr);p.n--;p=page(false);p.tb.appendChild(tr);p.n++;}});
+    p.tb.insertAdjacentHTML("beforeend",P.tot);p.c.insertAdjacentHTML("beforeend",P.tail);
+    if(!fits(p)){p.tb.removeChild(p.tb.lastElementChild);p.c.removeChild(p.c.lastElementChild);   /* 總計＋簽名欄放不下 → 換頁，並帶最後一列過去（續頁不會只有總計） */
+      q=page(false);if(p.n>1){tr=p.tb.lastElementChild;p.tb.removeChild(tr);p.n--;q.tb.appendChild(tr);q.n++;}
+      q.tb.insertAdjacentHTML("beforeend",P.tot);q.c.insertAdjacentHTML("beforeend",P.tail);}
+    pages.forEach(function(pp,i){pp.el.querySelector(".pno").textContent="第 "+(i+1)+" / "+pages.length+" 頁";});
+    total+=pages.length;});
+  return total;}
+/* 開列印視窗（被擋會提示；只讀，不送任何資料） */
+function slipPrint(orders){orders=(orders||[]).filter(function(o){return o&&o.lines&&o.status!=="已取消";});
+  if(!orders.length){toast("沒有可以列印的出貨單");return;}
+  var w=window.open("","_blank");if(!w){toast("瀏覽器擋了新視窗，請允許彈出視窗後再按一次");return;}
+  var now=slipNow(),nOpen=orders.filter(function(o){return o.status!=="已出貨";}).length,n=0;
+  var title=orders.length===1?("出貨單 "+orders[0].id+" "+storeLabel(orders[0].store)):("出貨單 "+orders.length+" 張 "+now.slice(0,10));
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+escH(title)+'</title><style>'+slipCss()+'</style></head><body>'
+    +'<div class="bar noprint"><b>🖨 '+escH(title)+'</b><span id="slipInfo"></span><span style="flex:1"></span><button type="button" onclick="window.print()">🖨 列印</button></div>'
+    +(nOpen?'<div class="warn noprint">⚠️ 有 '+nOpen+' 張還沒按「✅ 出貨完成」：實出數量是出貨中心畫面上目前填的數字。之後如果再改實出，請重新列印。</div>':'')
+    +'<div id="pages"></div></body></html>');
+  w.document.close();
+  try{n=slipBuild(w.document,orders,now);}
+  catch(e){n=0;try{var css=w.document.querySelector("style");if(css)css.textContent=slipCss().replace("@page{size:A4 portrait;margin:0}","@page{size:A4 portrait;margin:11mm 12mm}");   /* 備援：不自己切頁，交給瀏覽器（表頭照樣每頁重印，只是沒有頁碼） */
+    w.document.getElementById("pages").innerHTML=orders.map(function(o){var P=slipParts(o,now);
+      return '<div class="pg flow"><div class="pgc">'+P.head+'<table class="lt">'+P.cols+P.thead+'<tbody>'+P.rows.join("")+P.tot+'</tbody></table>'+P.tail+'</div></div>';}).join("");}catch(e2){}}
+  var info=w.document.getElementById("slipInfo");if(info)info.textContent="共 "+orders.length+" 張訂單"+(n?"、"+n+" 頁":"")+"　·　紙張 A4 直式、縮放 100%";
+  setTimeout(function(){try{w.focus();w.print();}catch(e){}},400);}
+/* 「🖨 列印全部出貨單」印哪些：待處理／備貨中＝畫面列出的全部（同畫面順序，先進先出）；已出貨＝今天出貨的 */
+function slipListOf(seg){var L=(DCO.all||[]).filter(function(o){return o.status===seg;});
+  if(seg==="待處理"||seg==="備貨中")return L.sort(function(a,b){return a.time<b.time?-1:1;});
+  if(seg==="已出貨"){var td=ymd(new Date());return L.filter(function(o){return String(o.shipTime||"").slice(0,10)===td;});}
+  return [];}
+function slipBatchBar(seg){if(seg!=="待處理"&&seg!=="備貨中"&&seg!=="已出貨")return "";var n=slipListOf(seg).length,sh=(seg==="已出貨");
+  return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 8px"><button class="btn sm" data-dcosliplist="'+escA(seg)+'"'+(n?'':' disabled')+'>🖨 '+(sh?'列印今天出貨的出貨單':'列印全部出貨單')+'（'+n+' 張）</button>'
+    +'<span class="muted" style="font-size:12px">A4 直式，一張訂單從新的一頁開始；放進寄給門市的箱子，門市收貨時逐項核對'+(sh?'。其他天的請按各張訂單的「🖨 出貨單」':'')+'</span></div>';}
+document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target:null;if(!t)return;   /* cw 批：出貨單按鈕（事件委派；只讀） */
+  var b=t.closest("[data-dcoslip]");
+  if(b){ev.preventDefault();var id=b.getAttribute("data-dcoslip"),o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];
+    if(!o){toast("找不到訂單 "+id+"，請按「🔄 重新整理」");return;}slipPrint([o]);return;}
+  b=t.closest("[data-dcosliplist]");
+  if(b){ev.preventDefault();slipPrint(slipListOf(b.getAttribute("data-dcosliplist")));}});
 /* ── 出貨中心庫存：多數品項＝無限量；少數記數量（同 Shopline 做法） ── */
 function viewDcStock(){if(!dcoOn())return dcoSetupNote();
   if(DCO.stock===null&&!DCO.stockLd)dcoLoadStock();
