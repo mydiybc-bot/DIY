@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#2E7D32">
 <link rel="manifest" href="purchase-manifest.json">
 <title>自己做 · 採購系統</title>
+<!-- 2026-10-02 cx 批（經營者 10/02 裁示）：「🥮 檔期備貨」新增「🔧 本檔期甜點用到的器具／模具」清單（campDurList）：新甜點的器具模具是全新品項、還沒設標配，所以<b>不算各店需求量（留空）</b>，但列出名稱、用在哪些甜點、每份用量與標配狀態，避免各店漏叫貨。只讀 BOM 本產品名稱對照表＋BOM表（loadAnalDims），計算與既有欄位零改動。 -->
 <!-- 2026-10-01 cu 批（待處理事項 #6，搭配 EventLayer v1.9／申請單 API newItemsPub v4）：①「🥮 檔期備貨」檔期＝曲線 ∪ agg_evneed（campEvs），開賣前計畫（新品申請表預估銷售數、沒有去年曲線）顯示「📋 開賣前計畫」卡、已出貨起算日改用 dim_event 開始日（campStartOf；campHQShipped 同步）②「🆕 檔期新品」每支甜點顯示申請表預估銷售數與首批量來源。只選一檔、有曲線的檔期畫面不變。 -->
 <!-- 2026-10-01 ct 批（待處理事項 #5，經營者裁示先做進行中檔期）：①「🥮 檔期備貨」檔期可複選（viewCampHQ 外層負責選擇與逐檔列出、計算本體改名 viewCampHQOne 原封不動；只選一檔＝畫面不變；多檔各自計算、不相加）②「🆕 檔期新品」加檔期複選鈕（候選＝次類別是檔期、結束日在 35 天內到 120 天內開賣；沒選＝原本即將開賣清單），已結束檔期首批量欄顯示「檔期已結束」。已結束檔期的檔期備貨要改 EventLayer，暫不做。 -->
 <!-- 2026-10-01 cs 批（經營者 20261001 待處理事項 #4）：出貨中心「主檔」「效期」併入總部主檔。①出貨中心身分分頁只留 訂單／庫存／檔期備貨 ②總部主檔加「🏬 出貨中心品項」開關（＝原出貨中心主檔畫面：只列 dcAny、健檢列、整理規則、新增品項廠商預帶出貨中心；可與單價未填／缺圖／停售疊加）③主檔加「效期」欄（精簡文字＋✎，沿用 shSave2 寫入＋回讀）與「🕐 效期未填」篩選 ④「🕐 食材效期」分頁改唯讀（列印／CSV 照舊），維護一律在主檔 ⑤GAS 零改動（兩身分本來就寫同一份 dim_sku）。viewMaster 的出貨中心分支保留（不可達），函式只增不減。 -->
@@ -2072,6 +2073,34 @@ var CAMPHQ_TINY=0.5;
 /* 2026-10-01 ct 批（待處理事項 #5）：檔期備貨可複選多個「進行中」檔期（經營者裁示：先做進行中檔期；已結束檔期要改 EventLayer，暫不做）。
    只選一檔＝原畫面逐字不變；選多檔＝依序各列一份（每檔數字與單選時完全相同、不跨檔相加——同一筆大平台出貨若跨檔相加會被算兩次）。
    計算本體 viewCampHQOne 原封不動（只加 sub 參數控制「說明只印一次、逐檔標題」），決策快照照抄的算式不受影響。 */
+/* 2026-10-02 cx 批（經營者裁示）：新甜點用到的器具／模具是全新品項、還沒有設定標配，
+   檔期備貨不算各店需求量（留空），但要列出名稱，避免各店遺漏叫貨。
+   甜點範圍＝產品名稱對照表次類別（H）去年份後＝這個檔期、且年份＝這一檔的年份；用料＝BOM表；器具／模具＝主檔品類別。 */
+function campDurList(ev){
+  if(!ANMAP||!ANBOM){if(!ANLOAD)loadAnalDims().then(function(){if(ST.tab==="檔期備貨")render();});return null;}
+  var w0=(EVCV[ev]||[])[0],st0=campStartOf(ev),y=(w0?w0.cFrom:(st0?ymd(st0):ymd(TODAY))).slice(0,4);
+  var ds={};Object.keys(ANMAP).forEach(function(pn){var m=ANMAP[pn],c2=String(m.c2||"");if(nwEvKey(c2)!==ev)return;var yy=(c2.match(/^(\d{4})/)||[])[1];if(yy&&yy!==y)return;ds[m.cn||pn]=1;});
+  var idx=anSkuIdx(),out={};
+  Object.keys(ds).forEach(function(dn){(ANBOM[dn]||[]).forEach(function(r){var s=idx[r.m];if(!s||!isDur(s))return;
+    var o=out[s.id]||(out[s.id]={s:s,who:[],per:[]});if(o.who.indexOf(dn)<0){o.who.push(dn);o.per.push(dn+' '+fmt(r.q)+(r.u?' '+r.u:''));}});});
+  return Object.keys(out).map(function(id){var o=out[id];o.noPar=STORES.filter(function(st){return !(parOf(st.id,o.s)>0);}).map(function(st){return String(st.id);});o.parN=STORES.length-o.noPar.length;return o;})
+    .sort(function(a,b){return (a.parN-b.parN)||String(a.s.name).localeCompare(String(b.s.name),"zh-Hant");});}
+function campDurCard(ev){
+  var L=campDurList(ev);
+  if(L===null)return '<div class="card"><div class="muted">🔧 讀取本檔期甜點的器具／模具中…</div></div>';
+  if(!L.length)return '';
+  var need=L.filter(function(o){return o.noPar.length>0;}),full=L.filter(function(o){return !o.noPar.length;}),nNew=L.filter(function(o){return !o.parN;}).length;
+  var row=function(o){var s=o.s;return '<tr><td><span class="badge b-'+s.cat+'">'+s.cat+'</span><b>'+escA(s.name)+'</b> <span class="muted">'+escA(s.vendor||"")+'</span></td>'
+      +'<td class="sub">'+o.per.map(escA).join('<br>')+'</td>'
+      +'<td>'+(!o.parN?'<span style="color:#B3261E;font-weight:700">🆕 每家店都還沒設</span>':(o.noPar.length?'已設 '+o.parN+' 店<div class="sub" style="color:#B45309">未設：'+o.noPar.join('、')+' 號店</div>':'<span class="muted">每家店都已設</span>'))+'</td>'
+      +'<td class="muted">—</td></tr>';};
+  var head='<tr><th>品項</th><th>用在哪些甜點（每份用量）</th><th>標配</th><th>各店需求</th></tr>';
+  var h='<div class="card" style="border-color:#E8C27A;background:#FFFBF0"><div style="font-weight:700;font-size:15px">🔧 本檔期甜點用到的器具／模具（'+L.length+' 項'+(nNew?'，其中 <span style="color:#B3261E">'+nNew+' 項是新品、每家店都還沒設標配</span>':'')+'）</div>'
+    +'<div class="sub" style="margin:4px 0 6px">器具模具可重複使用，<b>各店需求量不自動計算（留空）</b>——新品還沒有標配數量。請各店對照下表確認店裡有沒有、夠不夠，<b>不夠的自己在訂貨單叫</b>，別漏了。標配設好之後，盤點頁會照標配自動補。</div>';
+  if(need.length)h+='<div style="overflow-x:auto"><table>'+head+need.map(row).join('')+'</table></div>';
+  else h+='<div class="sub">✅ 用到的器具模具每家店都已設好標配，盤點頁會照標配補。</div>';
+  if(full.length)h+='<details style="margin-top:6px"><summary class="sub" style="cursor:pointer">其他 '+full.length+' 項每家店都已設標配（點開看）</summary><div style="overflow-x:auto"><table>'+head+full.map(row).join('')+'</table></div></details>';
+  return h+'</div>';}
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}   /* cu 批：先讀 agg_evneed（開賣前計畫的檔期只在這張表） */
@@ -2129,6 +2158,8 @@ function viewCampHQOne(sub){
     h+='<tr'+(now?' style="background:#fff8e1;font-weight:700"':'')+'><td>'+w.cFrom.slice(5)+'～'+w.cTo.slice(5)+(now?' ◀ 本週':'')+'</td><td class="muted">'+w.pFrom.slice(5)+'～'+w.pTo.slice(5)+'</td><td class="right">'+fmt(w.pQty)+'</td><td class="right">×'+dec(w.rel)+'</td><td class="right">'+(w.cSold?fmt(w.cSold):'<span class="muted">—</span>')+'</td><td class="right">'+(w.cTo<_td?('<b>'+fmt(w.cSold)+'</b><div class="sub muted">實際</div>'):(w.cFrom<=_td?('<b>'+fmt(Math.max(w.cEst,w.cSold))+'</b><div class="sub muted">已售 '+fmt(w.cSold)+' ＋ 推估 '+fmt(Math.max(0,w.cEst-w.cSold))+'</div>'):('<b>'+fmt(w.cEst)+'</b><div class="sub muted">推估</div>')))+'</td></tr>';});
   h+='</table></div><div class="sub muted" style="margin-top:4px">週序以節日當天所在週為 0，負數＝節前。相對開賣週＝去年該週份數 ÷ 去年第一個完整週。<br><b>每天早上用 POS 到昨天的銷售重算</b>：推估總量＝今年已售 ÷ 去年同位置的累積佔比，今年賣得比去年快或慢，總量和後面每一週都會跟著變。已過的週顯示<b>實際</b>，本週＝已售＋剩下幾天的推估，之後各週＝推估（算到產品名稱對照表的結束日）。</div></div>';
   }   /* cu 批：曲線摘要 else 結束 */
+  /* 2026-10-02 cx 批：本檔期甜點用到的器具／模具——只列名稱、不算各店需求量（新品還沒有標配） */
+  h+=campDurCard(ev);
   /* 逐品項 × 店 */
   var q=(ST.chQ||"").toLowerCase();
   var rowsAll=SHIST.ALL||null;
@@ -2186,7 +2217,7 @@ function viewCampHQOne(sub){
     +'<span class="seg">'+[["1","只看還要備的"],["0","全部"]].map(function(o){return '<div class="'+((ST.chNeedOnly?"1":"0")===o[0]?"on":"")+'" data-chneed="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
     +'<span class="seg">'+[["0","不限"],["1","🎯 檔期專屬"+(nExcl?" "+nExcl:"")]].map(function(o){return '<div class="'+((ST.chExclOnly?"1":"0")===o[0]?"on":"")+'" data-chexcl="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
     +'<span class="muted">'+shown.length+' / '+items.length+' 品項'+(rowsAll?'':'　<span style="color:#B45309">大平台紀錄載入中，已出貨暫顯示 —</span>')+'</span></div>'
-    +(hiddenDur.length?'<div class="sub muted" style="margin-bottom:6px">🔧 器具／模具可重複使用、依各店標配，不列入檔期備貨（已隱藏 '+hiddenDur.length+' 項：'+hiddenDur.map(function(id){return escA(SKU[id].name);}).join('、')+'）</div>':'');
+    +(hiddenDur.length?'<div class="sub muted" style="margin-bottom:6px">🔧 器具／模具可重複使用、依各店標配，不列入下表的數量計算（名稱請看上方「🔧 本檔期甜點用到的器具／模具」；已隱藏 '+hiddenDur.length+' 項：'+hiddenDur.map(function(id){return escA(SKU[id].name);}).join('、')+'）</div>':'');
   if(!shown.length){h+='<div class="muted">沒有符合的品項。</div></div>';return h;}
   var _chHead='<th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th>';
   h+='<div class="chWrap"><table><thead class="chThead"><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
