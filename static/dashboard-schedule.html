@@ -173,13 +173,20 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
 /* Tab A: 日曆熱力圖 */
 .cal-wrap { background: var(--bg); border-radius: 10px; padding: 14px; position: relative; }
 .cal-grid { display: grid; grid-template-columns: 30px repeat(7, 1fr); gap: 4px; }
-.cal-cell { aspect-ratio: 1 / 1.05; min-height: 78px; border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; position: relative; transition: transform .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 2px; }
+.cal-cell { aspect-ratio: 1 / 1.05; min-height: 94px; border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; position: relative; transition: transform .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 2px; }
 .cal-cell:hover { transform: scale(1.06); box-shadow: 0 3px 10px rgba(0,0,0,.13); z-index: 2; }
 .cal-cell.empty { background: transparent; cursor: default; }
 .cal-cell.flagged { box-shadow: inset 0 0 0 2px var(--flag-red); }
 .cal-cell .day-num { font-weight: 800; color: var(--text); font-size: 13px; line-height: 1; }
 .cal-cell .cell-hrs { font-size: 12px; color: var(--text); line-height: 1.1; opacity: 0.85; }
 .cal-cell .cell-rev { font-size: 12px; color: var(--text); line-height: 1.1; opacity: 0.85; }
+/* 2026-10-01 日獎金（待處理事項 #3） */
+.cal-cell .cell-bonus { font-size: 12px; line-height: 1.15; font-weight: 800; color: #7A4A00; }
+.cal-cell .cell-bonus.miss { font-weight: 600; color: var(--muted); }
+.cal-cell .cell-bonus.x2 { color: #B3261E; }
+.bonus-sum { font-size: 13px; background: #FFF8E1; border: 1px solid #F0D58C; color: #6B4A00; border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; line-height: 1.6; }
+.bonus-sum b { color: #7A4A00; }
+.tt-bonus { font-size: 12px; background: #FFF8E1; border-radius: 6px; padding: 6px 8px; margin-top: 6px; line-height: 1.5; color: #4A3A30; }
 .cal-cell .cell-rph { display: inline-block; align-self: flex-start; font-size: 12px; font-weight: 800; padding: 1px 6px; border-radius: 4px; line-height: 1.3; margin-top: auto; }
 .cal-cell .cell-rph.good   { background: #2E7D5B; color: #FFFFFF; }
 .cal-cell .cell-rph.normal { background: #B8861C; color: #FFFFFF; }
@@ -1387,7 +1394,7 @@ function _csvDownload(headers, rows, baseName){
 }
 function exportHeatCSV(){ _csvDownload(['門市','週','rev/h','工時','旗標'], _csvHeat, '排班熱力矩陣'); }
 function exportDailyCSV(){
-  _csvDownload(['日期','週','工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常'], _csvDaily, '排班月份明細');
+  _csvDownload(['日期','週','工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常','甜點券$100','獎金營收','日獎金'], _csvDaily, '排班月份明細');
 }
 function exportEmpCSV(){
   if(!_csvEmp) return;
@@ -1674,8 +1681,8 @@ function loadDailyData() {
     renderDailyTab();
   };
   const scriptEl = document.createElement('script');
-  scriptEl.src = API_BASE + '?action=getStoreDailyData&store_id=' + sid + '&month=' + encodeURIComponent(ym) + '&callback=' + cbName;
-  scriptEl.onerror = jsonpRetry(() => API_BASE + '?action=getStoreDailyData&store_id=' + sid + '&month=' + encodeURIComponent(ym) + '&callback=' + cbName, () => {
+  scriptEl.src = API_BASE + '?action=getStoreDailyData&store_id=' + sid + '&month=' + encodeURIComponent(ym) + '&bonus=1&callback=' + cbName;   // 2026-10-01：bonus=1 多回傳甜點券$100（日獎金）
+  scriptEl.onerror = jsonpRetry(() => API_BASE + '?action=getStoreDailyData&store_id=' + sid + '&month=' + encodeURIComponent(ym) + '&bonus=1&callback=' + cbName, () => {
     document.getElementById('dailyLoading').style.display = 'none';
     document.getElementById('dailyContent').style.display = '';
     document.getElementById('dailyTabCalendar').innerHTML = '<div class="empty-state"><div class="icon">⚠️</div>無法連到 API（已自動重試 2 次）</div>';
@@ -1773,6 +1780,58 @@ function renderDailyCalendar() {
   }
 }
 
+/* ===== 2026-10-01 日獎金（經營者「20261001 待處理事項」#3；規則＝公告 23051201 日達成業績獎金第五版）=====
+   ・日獎金營收＝POS 淨營收＋「甜點券$100」折抵額（GAS v5.8 bonus_rev；折扣名稱完全相等，「自己人$100甜點券」不算）
+   ・店日工時＝當天排班工時合計：實作夥伴照算（公告：實作夥伴一律須計算工時）；請假（特休、病假、喪假…）不算
+   ・級距：店日工時 ≤10h 門檻 10,000 … ≤100h 門檻 110,000；營收「≥」門檻＝達標（經營者 2026-10-01 裁示：剛好等於也算）
+   ・跨級：營收 ≥ 下一級門檻＝獎金加倍（最多 ×2，經營者 10-01 裁示）
+   ・每人＝200 元 × 個人工時 ÷ 8（跨級 ×2）；實作夥伴不發；請假不發；店日工時超過 100h 沒有級距＝不計
+   ・實作夥伴辨識：班表姓名格寫「0-姓名 實作夥伴」（職稱含「實作」）
+   ・這裡依「排班工時」估算，實際發放以人資核算為準 */
+const BONUS_TIERS = [[10,10000],[20,14000],[30,29000],[40,42000],[50,53000],[60,65000],[70,77000],[80,88000],[90,100000],[100,110000]];
+const BONUS_BASE = 200, BONUS_STD_H = 8;
+const BONUS_LEAVE_RE = /特休|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|生理假|家庭照顧假/;
+function bonusIsTrainee(e){ return /實作/.test(String(e.role || '') + ' ' + String(e.name || '')); }
+function bonusIsLeave(e){ return BONUS_LEAVE_RE.test(String(e.cell || '') + ' ' + String(e.note || '') + ' ' + String(e.shift || '')); }
+function calcDayBonus(r){
+  if (!r || r.bonus_rev == null) return null;   // GAS 沒回傳（舊版本或甜點券查詢失敗）→ 不顯示
+  const emps = Array.isArray(r.employees) ? r.employees : [];
+  let hours = 0; const staff = [];
+  emps.forEach(e => {
+    const h = Number(e.hours) || 0, leave = bonusIsLeave(e), trainee = bonusIsTrainee(e);
+    if (!leave) hours += h;
+    staff.push({ name: e.name, hours: h, leave: leave, trainee: trainee, bonus: 0 });
+  });
+  hours = Math.round(hours * 100) / 100;
+  const rev = Number(r.bonus_rev) || 0;
+  let k = -1;
+  for (let i = 0; i < BONUS_TIERS.length; i++) { if (hours <= BONUS_TIERS[i][0]) { k = i; break; } }
+  const res = { hours: hours, rev: rev, net: Number(r.revenue) || 0, voucher: Number(r.voucher100) || 0, voucherQty: Number(r.voucher100_qty) || 0,
+    tier: k, cap: k >= 0 ? BONUS_TIERS[k][0] : null, threshold: k >= 0 ? BONUS_TIERS[k][1] : null,
+    next: (k >= 0 && k + 1 < BONUS_TIERS.length) ? BONUS_TIERS[k + 1][1] : null,
+    hit: false, cross: false, mult: 0, total: 0, staff: staff, noTier: hours > 0 && k < 0 };
+  if (hours <= 0 || k < 0 || rev <= 0) return res;
+  res.hit = rev >= res.threshold;
+  res.cross = res.hit && res.next != null && rev >= res.next;
+  res.mult = res.hit ? (res.cross ? 2 : 1) : 0;
+  staff.forEach(st => { st.bonus = (res.mult && !st.leave && !st.trainee) ? Math.round(BONUS_BASE * st.hours / BONUS_STD_H * res.mult) : 0; res.total += st.bonus; });
+  return res;
+}
+function bonusCellHtml(b){
+  if (!b || b.hours <= 0 || b.rev <= 0) return '';
+  if (b.noTier) return '<div class="cell-bonus miss">🎁 超過100h</div>';
+  if (!b.hit) return '<div class="cell-bonus miss">🎁 未達標</div>';
+  return '<div class="cell-bonus' + (b.cross ? ' x2' : '') + '">🎁 $' + b.total.toLocaleString() + (b.cross ? ' ×2' : '') + '</div>';
+}
+function bonusMonthSummary(rows){
+  let tot = 0, hit = 0, cross = 0, days = 0, voucher = 0, has = false;
+  rows.forEach(r => { const b = calcDayBonus(r); if (!b) return; has = true; voucher += b.voucher;
+    if (b.hours > 0 && b.rev > 0) days++; if (b.hit) hit++; if (b.cross) cross++; tot += b.total; });
+  if (!has) return '<div class="bonus-sum">🎁 日獎金：這次沒有取得甜點券$100 資料（GAS 未回傳），暫不顯示日獎金。</div>';
+  return '<div class="bonus-sum">🎁 <b>本月日獎金（依排班估算）合計 $' + tot.toLocaleString() + '</b>　達標 ' + hit + ' 天（其中跨級加倍 ' + cross + ' 天）／有營業 ' + days + ' 天　·　甜點券$100 加回 $' + Math.round(voucher).toLocaleString()
+    + '<br><span style="color:var(--muted)">規則：日獎金營收＝POS 淨營收＋甜點券$100（不含自己人$100甜點券）；店日工時 ≤10h 門檻 $10,000、≤20h $14,000、≤30h $29,000、≤40h $42,000、≤50h $53,000、≤60h $65,000、≤70h $77,000、≤80h $88,000、≤90h $100,000、≤100h $110,000，營收達門檻即達標；達到下一級門檻＝跨級 ×2；每人 200 元×工時÷8；實作夥伴計工時不發獎金（班表寫「0-姓名 實作夥伴」）；請假不計。實發以人資核算為準。</span></div>';
+}
+
 function _renderDailyCalendarImpl() {
   // 重置 tooltip 資料表
   window._calTipMap = {};
@@ -1834,6 +1893,7 @@ function _renderDailyCalendarImpl() {
             date: dStr, isOff: isOff, tier: tier,
             hours: r.hours, revenue: r.revenue, rph: r.rev_per_hour,
             employees: empList.map(e => ({name: e.name, hours: e.hours, shift: e.shift, note: e.note})),
+            bonus: calcDayBonus(r),
             date_note: r.date_note || '',
             off_notes: Array.isArray(r.off_notes) ? r.off_notes : [],
             flags: flags.map(f => ({label: f.label, reason: f.reason}))
@@ -1843,6 +1903,7 @@ function _renderDailyCalendarImpl() {
             + '<div class="cell-hrs">⏱ ' + (r.hours > 0 ? r.hours + 'h' : '—') + '</div>'
             + '<div class="cell-rev">💰 ' + revShort + '</div>'
             + '<div class="cell-rph ' + rphCls + '">' + rphTxt + '/h</div>'
+            + bonusCellHtml(calcDayBonus(r))
             + '</div>';
         }
         dayIdx++;
@@ -1852,7 +1913,8 @@ function _renderDailyCalendarImpl() {
   }
 
   document.getElementById('dailyTabCalendar').innerHTML =
-    '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">🟢 優秀(平日>$750, 假日>$1500) ・ 🟡 正常 ・ 🚩 偏低(平日<$' + thresholds.dayWd + ', 假日<$' + thresholds.dayWe + ') ・ hover 看員工班表</div>'
+    bonusMonthSummary(rows)
+    + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">🟢 優秀(平日>$750, 假日>$1500) ・ 🟡 正常 ・ 🚩 偏低(平日<$' + thresholds.dayWd + ', 假日<$' + thresholds.dayWe + ') ・ 🎁 日獎金（紅色 ×2＝跨級加倍）・ hover 看員工班表與每人獎金</div>'
     + '<div class="cal-grid">' + cells + '</div>'
     + '<div id="calTooltip" class="cal-tooltip"></div>';
 
@@ -1890,13 +1952,21 @@ function buildTooltipHtml(d) {
     html += '<div class="tt-date-note">📋 ' + _escNote(d.date_note) + '</div>';
   }
 
+  if (d.bonus && d.bonus.hours > 0 && d.bonus.rev > 0) {
+    const b = d.bonus;
+    html += '<div class="tt-bonus">🎁 <b>日獎金</b>：POS 淨營收 $' + Math.round(b.net).toLocaleString() + ' ＋ 甜點券$100 $' + Math.round(b.voucher).toLocaleString() + (b.voucherQty ? '（' + b.voucherQty + ' 張）' : '') + ' ＝ <b>$' + Math.round(b.rev).toLocaleString() + '</b>'
+      + '<br>店日工時 ' + b.hours + 'h' + (b.noTier ? '（超過 100h，公告沒有級距，不計）' : '（≤' + b.cap + 'h 級，門檻 $' + b.threshold.toLocaleString() + (b.next ? '；跨級門檻 $' + b.next.toLocaleString() : '') + '）')
+      + '<br>' + (b.noTier ? '' : (b.cross ? '✅ <b style="color:#B3261E">跨級達成，獎金 ×2</b>' : (b.hit ? '✅ 達標' : '— 未達標（還差 $' + Math.round(b.threshold - b.rev).toLocaleString() + '）')) + '　合計 <b>$' + b.total.toLocaleString() + '</b>') + '</div>';
+  }
   html += '<div class="tt-sect-title">當日班表 (' + d.employees.length + ' 人)</div>';
   if (d.employees.length === 0) {
     html += '<div class="tt-empty">無排班</div>';
   } else {
     d.employees.forEach(e => {
       const shift = e.shift ? '<span class="tt-emp-shift">' + e.shift + '</span>' : '<span class="tt-emp-shift">(無時段)</span>';
-      html += '<div class="tt-emp-row">' + e.name + '(' + e.hours + 'h) ' + shift + '</div>';
+      const bs = (d.bonus && d.bonus.staff) ? d.bonus.staff.find(x => x.name === e.name && x.hours === (Number(e.hours) || 0)) : null;
+      const bTxt = !bs ? '' : (bs.trainee ? ' <span style="color:#6F4E45">實作夥伴・不發</span>' : (bs.leave ? ' <span style="color:#6F4E45">請假・不計</span>' : (bs.bonus > 0 ? ' <b style="color:#7A4A00">🎁$' + bs.bonus + '</b>' : '')));
+      html += '<div class="tt-emp-row">' + e.name + '(' + e.hours + 'h) ' + shift + bTxt + '</div>';
       if (e.note) {
         html += '<div class="tt-emp-note">📌 ' + _escNote(e.note) + '</div>';
       }
@@ -1954,7 +2024,7 @@ function renderDailyTable() {
 
   let html = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportDailyCSV()">⬇ 匯出 CSV</button></div>'
     + '<table class="daily-table"><thead><tr>'
-    + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th>'
+    + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
     + '</tr></thead><tbody>';
 
   rows.forEach(r => {
@@ -1976,13 +2046,15 @@ function renderDailyTable() {
     const rDelta = baseline.avg_revenue > 0 ? ((r.revenue / baseline.avg_revenue - 1) * 100) : 0;
     const hCls = Math.abs(hDelta) < 5 ? '' : (hDelta > 0 ? 'delta-pos' : 'delta-neg');
     const rCls = Math.abs(rDelta) < 5 ? '' : (rDelta > 0 ? 'delta-pos' : 'delta-neg');
+    const bn = calcDayBonus(r);   // 2026-10-01 日獎金
 
     _csvDaily.push([
       r.date, wkday, (r.hours > 0 ? r.hours : ''), (r.revenue > 0 ? Math.round(r.revenue) : ''),
       (r.rev_per_hour > 0 ? r.rev_per_hour : ''), tierLabel.replace(/^[^ ]+ /,''),
       (r.rev_per_head > 0 ? Math.round(r.rev_per_head) : ''),
       (r.hours > 0 ? hDelta.toFixed(0) : ''), (r.revenue > 0 ? rDelta.toFixed(0) : ''),
-      flags.map(f => f.label).join('；')
+      flags.map(f => f.label).join('；'),
+      (bn ? Math.round(bn.voucher) : ''), (bn && bn.rev > 0 ? Math.round(bn.rev) : ''), (bn && bn.hours > 0 && bn.rev > 0 ? bn.total + (bn.cross ? '（×2）' : '') : '')
     ]);
     html += '<tr' + (flagged ? ' class="flagged-row"' : '') + '>'
       + '<td>' + r.date.substring(5) + (r.is_holiday ? ' 🎉' : '') + '</td>'
@@ -1995,6 +2067,9 @@ function renderDailyTable() {
       + '<td class="num ' + hCls + '">' + (r.hours > 0 ? (hDelta >= 0 ? '+' : '') + hDelta.toFixed(0) + '%' : '—') + '</td>'
       + '<td class="num ' + rCls + '">' + (r.revenue > 0 ? (rDelta >= 0 ? '+' : '') + rDelta.toFixed(0) + '%' : '—') + '</td>'
       + '<td>' + flags.map(f => '<span class="flag-pill ' + f.sev + '" title="' + f.reason.replace(/"/g,'&quot;') + '">' + f.label + '</span>').join('') + '</td>'
+      + '<td class="num">' + (bn && bn.voucher > 0 ? '$' + Math.round(bn.voucher).toLocaleString() : '—') + '</td>'
+      + '<td class="num">' + (bn && bn.rev > 0 ? '$' + Math.round(bn.rev).toLocaleString() : '—') + '</td>'
+      + '<td class="num">' + (!bn || !(bn.hours > 0 && bn.rev > 0) ? '—' : (bn.noTier ? '超過100h' : (bn.hit ? '<b style="color:' + (bn.cross ? '#B3261E' : '#7A4A00') + '">$' + bn.total.toLocaleString() + (bn.cross ? ' ×2' : '') + '</b>' : '未達標'))) + '</td>'
       + '</tr>';
   });
 
