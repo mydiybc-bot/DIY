@@ -116,6 +116,10 @@
 /* 2026-09-29 cr 批（經營者同意）：盤點「現有」輸入框固定 110px（原本沒設寬度＝瀏覽器預設約 182px），左欄多出約 72px：
    375 寬左欄 127→199px、320 寬 72→144px。字級 16px 不動（iPhone 點輸入框才不會自動放大）。 */
 .row[data-invrow] input[data-inv]{width:110px;box-sizing:border-box}
+/* 2026-10-02 cv 批：盤點頁搜尋改「就地篩選」——沒命中搜尋的列／分區／品類分隔列加 .qh 藏起來（不重畫整頁）；
+   .qlast＝分區裡最後一張「看得到」的卡，和原本 :last-child 一樣不畫底線（被藏起來的列可能排在它後面） */
+.qh{display:none!important}
+.row.qlast{border-bottom:none}
 .imgov{position:fixed;inset:0;background:rgba(15,23,42,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
 .imgov .box{background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:12px 14px;box-sizing:border-box}
 .imgov .big{display:block;max-width:100%;max-height:60vh;margin:8px auto;object-fit:contain;border-radius:8px}
@@ -679,8 +683,12 @@ async function bootstrap(keep){ try {
 
 /* ===== 工具 ===== */
 function $(s){return document.querySelector(s);}
-function fmt(n){return (Math.round(n)).toLocaleString("en-US");}
-function dec(n){return (Math.round(n*10)/10).toLocaleString("en-US");}
+/* 2026-10-02 cv 批：fmt／dec 共用同一個 Intl.NumberFormat("en-US")。輸出與原本 toLocaleString("en-US") 逐字相同
+   （規格上 toLocaleString 就是每次新建這個格式器；headless Chrome 實測 46 萬組數字含 -0／NaN／∞ 全部相同），
+   原本每呼叫一次就新建一個，盤點頁重畫一次要上千次，約佔重畫 JS 時間 4 成。瀏覽器沒有 Intl 時照舊用 toLocaleString。 */
+var NF_EN=(function(){try{return (typeof Intl!=="undefined"&&Intl.NumberFormat)?new Intl.NumberFormat("en-US"):null;}catch(e){return null;}})();
+function fmt(n){var x=Math.round(n);return NF_EN?NF_EN.format(x):x.toLocaleString("en-US");}
+function dec(n){var x=Math.round(n*10)/10;return NF_EN?NF_EN.format(x):x.toLocaleString("en-US");}
 function isDur(s){return s.cat==="器具"||s.cat==="模具";}
 /* 2026-09-03 y 批：食材/耗材也能改走「標配」路徑（經營者需求）。
    開關＝dim_store_par「標配數量」有填>0 就生效，不新增欄位、不動 GAS。
@@ -871,12 +879,20 @@ function searchBar(store){
   var live=liveItems(store),vs={};
   live.forEach(function(s){var v=String(vendorOf(store,s)||"").trim();if(v)vs[v]=1;});
   var vopts=Object.keys(vs).sort().map(function(v){return '<option value="'+escA(v)+'"'+(ST.vq===v?' selected':'')+'>'+v+'</option>';}).join('');
-  var dl=live.map(function(s){return '<option value="'+escA(dispName(store,s))+'">';}).join('');
+  skuDLEnsure(store,live);   /* cv 批：品項清單 datalist 移到 #view 外面，內容沒變就不重建（原本每打一個字重建 200～300 個選項） */
   return '<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">'
     +'<input class="sm" id="skuQ" list="skuDL" style="flex:2;min-width:150px;max-width:340px" placeholder="🔍 品項（輸入或點選）" value="'+escA(ST.q||'')+'">'
-    +(ST.q?'<button class="btn ghost sm" id="skuQx">✕</button>':'')
+    +'<button class="btn ghost sm'+(ST.q?'':' qh')+'" id="skuQx">✕</button>'   /* cv 批：一律畫、沒字時藏起來（就地篩選切換） */
     +'<select class="sm" id="vsel" style="flex:1;min-width:110px;max-width:200px;width:auto"><option value="">全部廠商</option>'+vopts+'</select>'
-    +'</div><datalist id="skuDL">'+dl+'</datalist>';}
+    +'</div>';}
+/* 2026-10-02 cv 批：#skuDL 只建一次、掛在 body（#view 每次 innerHTML 都會整個換掉，放裡面就得每次重建）。
+   選項字串照原本的寫法組，跟上次一樣就不動 DOM；換店／重新讀資料／改店別品名時字串不同才重建。 */
+var SKUDL_HTML=null;
+function skuDLEnsure(store,live){
+  var h=(live||liveItems(store)).map(function(s){return '<option value="'+escA(dispName(store,s))+'">';}).join('');
+  var dl=document.getElementById("skuDL");
+  if(!dl){dl=document.createElement("datalist");dl.id="skuDL";document.body.appendChild(dl);SKUDL_HTML=null;}
+  if(SKUDL_HTML!==h){dl.innerHTML=h;SKUDL_HTML=h;}}
 function upcomingBk(st){var t=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()),e=new Date(t.getTime()+14*864e5);return BOOKINGS.filter(function(b){if(b.status==="取消"||b.store!==String(st))return false;var d=new Date(b.date);return d>=t&&d<=e;});}
 function dispName(st,s){var n=pOf(st,s).custName;return n||s.name;}
 function vendorOf(st,s){var v=pOf(st,s).custVendor;return v||s.vendor;}
@@ -1546,7 +1562,16 @@ function dsbRole(){
   if(sp)sp.innerHTML=hq
     ?'今天存的盤點，明早 07:05 後建議量會重新計算'
     :'今天存的盤點，明早 07:05 後建議量會重新計算　·　<b>平常不用按更新</b>；只有<b>改完店別參數</b>、或<b>換一台裝置／別人剛存過盤點</b>想立刻看到最新數字時，才按右上「🔄 更新」。';}
-function render(){paintStoreId();renderTabs();dsbRole();
+/* 2026-10-02 cv 批：背景重畫（資料晚到、跨日）會把搜尋框整個換掉。
+   ① 游標在搜尋框裡、注音／手寫正在組字 → 這次重畫先延後，組字結束（compositionend）再補做，免得組到一半被打斷
+   ② 游標在搜尋框裡、沒在組字 → 照常重畫，畫完把焦點與游標放回去（原本只有打字觸發的重畫會放回，背景重畫會讓搜尋框失焦）
+   只看 bindQ／invQBind 綁過的搜尋框（__qb），其他輸入框不受影響。 */
+var RENDER_DEFER=false;
+function render(){var __ae=(typeof document!=="undefined")?document.activeElement:null;
+  if(__ae&&__ae.__qb&&__ae.__ime&&document.body.contains(__ae)){RENDER_DEFER=true;return;}
+  RENDER_DEFER=false;
+  if(__ae&&__ae.__qb&&__ae.id&&!QF&&document.body.contains(__ae)){var __pp=null;try{__pp=__ae.selectionStart;}catch(e){}QF={id:__ae.id,pos:__pp};}
+  paintStoreId();renderTabs();dsbRole();
   $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡"||ST.tab==="效期"||ST.tab==="檔期備貨"||ST.tab==="新品"||ST.tab==="訂單"||ST.tab==="庫存"||(ST.tab==="申請"&&ST.role==="總部"))?"none":"block";
   var __sy=(window.pageYOffset||document.documentElement.scrollTop||0);
   $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"效期":viewShelf,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog,"對帳":viewRecon,"大平台":viewShist,"檔期備貨":viewCampHQ,"新品":viewNewItems,"申請":viewSkuReq,"訂單":viewDcOrders,"庫存":viewDcStock}[ST.tab])();wire();if(ST.tab==="申請")srWire();if(ST.tab==="新品")nwWire();
@@ -1620,23 +1645,32 @@ function reasonBox(s,r,up){var b=r.basis,pq=pqOf(ST.storeId,s);
 /* ===== 盤點 ===== */
 function zonesOrdered(store,items){var g={};items.forEach(function(s){var p=pOf(store,s),z=p.zone||"未分區",o=(p.ord==null?9999:p.ord);g[z]=g[z]||{name:z,minOrd:o,items:[]};if(o<g[z].minOrd)g[z].minOrd=o;g[z].items.push({s:s,o:o});});
   var arr=Object.keys(g).map(function(k){return g[k];});arr.sort(function(a,b){return a.minOrd-b.minOrd;});arr.forEach(function(x){x.items.sort(function(a,b){return a.o-b.o;});});return arr;}
-function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcLoad(store);ZCST=store;}supplyEnsure(store);   /* 2026-09-04 ak 批：載入本店下單紀錄供 📦 供給倍數徽章 */
-  var ss=sessStart(store),liveAll=liveItems(store);
+/* 2026-10-02 cv 批：盤點頁的清單與計數抽成 invSets（viewCount 與搜尋框就地篩選 invQApply 共用同一份，結果與原本逐項相同）。
+   itemsAll＝沒套搜尋（品項＋廠商）的清單，畫面上全部畫出來；items＝再套 matchQ＝原本的清單；hit＝items 的 sku_id。
+   各 filter 只是換順序（先類別、篩選籤，後 matchQ），集合與排序都和原本一樣。 */
+function invSets(store){var liveAll=liveItems(store);
   /* 2026-09-01 v 批：零需求品項移出預設清單，另立「💤 零需求」籤；進度、未盤、下一個未盤皆不計它們 */
   var live=liveAll.filter(function(s){return !zeroDemand(store,s);}),zero=liveAll.filter(function(s){return zeroDemand(store,s);});
-  var allZ=zero.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
-  var allX=expiredItems(store).filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
-  var allT=tailItems(store).filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});   /* av 批：清貨尾 */
-  var all=live.filter(function(s){return (ST.cat==="全部"||s.cat===ST.cat)&&matchQ(s);});
-  var nEv=all.filter(function(s){return !!markOf(store,s);}).length;
-  var nUn=all.filter(function(s){return !countedNow(store,s);}).length;
-  var nDC=all.filter(function(s){return isDC(store,s);}).length;
-  var items=(ST.invFilter==="零需求"?allZ:ST.invFilter==="過季"?allX:ST.invFilter==="清貨尾"?allT:all).filter(function(s){var f=ST.invFilter;
+  function catOK(s){return ST.cat==="全部"||s.cat===ST.cat;}
+  var zC=zero.filter(catOK),xC=expiredItems(store).filter(catOK),tC=tailItems(store).filter(catOK),lC=live.filter(catOK);   /* av 批：清貨尾 */
+  var allZ=zC.filter(matchQ),allX=xC.filter(matchQ),allT=tC.filter(matchQ),all=lC.filter(matchQ);
+  var f=ST.invFilter;
+  var itemsAll=(f==="零需求"?zC:f==="過季"?xC:f==="清貨尾"?tC:lC).filter(function(s){
     if(f==="本次未盤")return !countedNow(store,s);
     if(f==="檔期")return !!markOf(store,s);
     if(f==="出貨中心")return isDC(store,s);
     return true;});
-  var groups=zonesOrderedZ(store,items);
+  var items=itemsAll.filter(matchQ),hit={};items.forEach(function(s){hit[s.id]=1;});
+  return {live:live,all:all,allZ:allZ,allX:allX,allT:allT,itemsAll:itemsAll,items:items,hit:hit,
+    nEv:all.filter(function(s){return !!markOf(store,s);}).length,
+    nUn:all.filter(function(s){return !countedNow(store,s);}).length,
+    nDC:all.filter(function(s){return isDC(store,s);}).length};}
+function invfChipsHtml(S){return [["全部","全部("+S.all.length+")"],["本次未盤","📝 本次未盤("+S.nUn+")"]].concat(S.nEv?[["檔期","🎉 檔期("+S.nEv+")"]]:[]).concat(S.nDC?[["出貨中心","🏬 出貨中心("+S.nDC+")"]]:[]).concat(S.allZ.length?[["零需求","💤 零需求("+S.allZ.length+")"]]:[]).concat(S.allT.length?[["清貨尾","🧹 清貨尾("+S.allT.length+")"]]:[]).concat(S.allX.length?[["過季","🗓 過季("+S.allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("");}
+function invfWire(root){Array.prototype.forEach.call((root||document).querySelectorAll("[data-invf]"),function(el){el.onclick=function(){ST.invFilter=el.dataset.invf;render();};});}
+function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcLoad(store);ZCST=store;}supplyEnsure(store);   /* 2026-09-04 ak 批：載入本店下單紀錄供 📦 供給倍數徽章 */
+  var ss=sessStart(store),S=invSets(store);   /* cv 批：清單與計數見 invSets */
+  var live=S.live,nUn=S.nUn,items=S.items,hit=S.hit;
+  var groups=zonesOrderedZ(store,S.itemsAll);   /* cv 批：全部列都畫，沒命中搜尋的加 .qh（打字只切換顯示，見 invQApply） */
   var done=live.filter(function(s){return countedNow(store,s);}).length,tot=live.length;
   var dn=Object.keys(DIRTY[store]||{}).length;
   var __mine=myStore(),html=(!__mine?alertBig("stop","⛔ 這台裝置還沒選門市","按頁首左上角紅色的「⚠️ 還沒選門市」選一次；選好之前，盤點與訂貨都存不進去。"):(__mine!==store?alertBig("stop","⛔ 你現在看的是 "+storeLabel(store)+"，不是本機的 "+storeLabel(__mine),"店長身分只能存本機門市 <b>"+escH(storeLabel(__mine))+"</b>，這一頁的存檔會被擋下。請重新整理頁面。"):""))+seasonStrip()+'<div class="note">門市：'+storeChip(store)+'　·　依現場實際數量填寫，填入後即時顯示建議訂貨量；目視明顯夠用的可按「✓ 足夠」跳過不數；離開前記得按「儲存盤點」送出。</div>';
@@ -1648,40 +1682,83 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   if(ST.saveWarn){var sw=ST.saveWarn;
     html+=alertBig("stop","⛔ 盤點還沒存進去，請再按一次「儲存盤點」",(sw.net?'目前連不上資料表，無法確認。':(sw.bad+' / '+sw.total+' 筆在資料表中查不到。'))+'你填的數字都還在，<b>離開或重整也不會消失</b>；確認網路後再按一次就好。');}
   html+='<div class="stickyctl">'+catChips();
-  html+='<div class="chips">'+[["全部","全部("+all.length+")"],["本次未盤","📝 本次未盤("+nUn+")"]].concat(nEv?[["檔期","🎉 檔期("+nEv+")"]]:[]).concat(nDC?[["出貨中心","🏬 出貨中心("+nDC+")"]]:[]).concat(allZ.length?[["零需求","💤 零需求("+allZ.length+")"]]:[]).concat(allT.length?[["清貨尾","🧹 清貨尾("+allT.length+")"]]:[]).concat(allX.length?[["過季","🗓 過季("+allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("")+'</div>';
+  html+='<div class="chips" id="invfChips">'+invfChipsHtml(S)+'</div>';   /* cv 批：籤的數字跟著搜尋變，就地篩選時整列重寫（invQApply） */
   html+=searchBar(store)+'</div>';
   if(ST.invFilter==="零需求")html+='<div class="note">💤 這些品項目前<b>訂貨點／標配為 0</b>（近 4 週無用量、無手動週用、無預約或檔期需求；器具模具＝標配未設），盤了也不會產生訂貨，所以不列在「全部」。若已停售，請回報總部在主檔處理；若本店確實不用，可到「店別參數」取消啟用；若是器具模具，請在店別參數填標配。</div>';
   if(ST.invFilter==="出貨中心")html+='<div class="note">🏬 廠商為出貨中心的品項。盤完後到「訂貨單」的出貨中心區塊即可整批下單。</div>';
   if(ST.invFilter==="清貨尾")html+='<div class="note" style="background:#FFF6E5;border-color:#F0B35A">🧹 這些品項的檔期已結束，正在<b>用完剩餘庫存</b>（結束後 '+EXPIRE_GRACE_DAYS+' 天內）。系統<b>不建議採購</b>、不列進「全部」、不算進度。不用刻意盤；真的不夠用才在卡片填「仍需補」，填了才會進訂貨單。'+EXPIRE_GRACE_DAYS+' 天後自動移到「🗓 過季」。</div>';
   if(ST.invFilter==="過季")html+='<div class="note">🗓 用到這些品項的甜點，結束有效日都已過 '+EXPIRE_GRACE_DAYS+' 天以上，系統不再為它們建議訂貨、也不列進「全部」。<b>只列最近 '+EXPIRE_WINDOW_DAYS+' 天內結束的檔期</b>（更早的不再提醒，免得清單長到沒人看）。剩料用完、該退該報廢就處理掉；若甜點回鍋，對照表更新有效日後隔天自動回到清單。</div>';
-  if(!items.length)html+='<div class="note">此篩選目前沒有品項 ✅</div>';
+  html+='<div class="note'+(items.length?' qh':'')+'" id="invEmpty">此篩選目前沒有品項 ✅</div>';   /* cv 批：一律畫、有品項時藏起來（就地篩選切換） */
   html+='<div class="groups">';
-  groups.forEach(function(gp){var zc=!!ZC[gp.name];var zDone=gp.items.filter(function(o){return countedNow(store,o.s);}).length;
-    html+='<div class="group" data-zname="'+escA(gp.name)+'"><div class="vh zhead" data-zc="'+escA(gp.name)+'"><span class="vn">📍 '+gp.name+'</span><span class="vl"></span><span class="muted" data-zcnt="'+escA(gp.name)+'">'+zDone+'/'+gp.items.length+' 項 '+(zc?'▸ 展開':'▾')+'</span></div>';
-    if(!zc){html+='<div class="card" style="padding:4px 12px">';
-    var lastCat="";
-    gp.items.forEach(function(o){var s=o.s,iv=ivOf(store,s),dur=isDur(s),r=rowFor(store,s);
-      if(s.cat!==lastCat){lastCat=s.cat;html+='<div class="catsep">'+s.cat+'</div>';}
-      var xv=((ST.invFilter==="過季"||ST.invFilter==="清貨尾")&&s.lastValid)?'<span class="muted" style="margin-left:6px;font-size:12px">最後有效 '+s.lastValid+'</span>':'';
-      var _cv2=(pqEff(store,s)>0?pqOf(store,s):1),_u2=(pqEff(store,s)>0?s.buyUnit:s.useUnit);
-      var rpP=dec((r.reorderPoint==null?0:r.reorderPoint)/_cv2);
-      var ref=skuTail(s)?('<span style="color:#8A5A00">🧹 檔期結束 '+s.lastValid+'，清剩料中</span>'):(dur||r.reorderPoint==null)?parRefTxt(store,s):('訂貨點 '+rpP+' '+_u2);   /* av 批：清貨尾不顯示訂貨點／標配，免得被當成要補 */
-      var psp=skuTail(s)?'':packSpec(store,s);if(psp)ref+='　📦 '+psp;
-      if(!skuTail(s))ref+=adjLink(s.id);
-      var ok=okOf(store,s),numed=(((DIRTY[store]||{})[s.id])||(countedNow(store,s)&&!ok));
-      var vOn=(numed&&iv.onHand!=null)?iv.onHand:"";
-      html+='<div class="row" data-invrow="'+s.id+'"><div>'+skuThumb(s,"f")+'<b>'+dispName(store,s)+'</b>'+shelfBtn(s)+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+shelfBlock(s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'/* 2026-09-10 bp 批：同一張卡上「📦 600 g／罐」（packSpec）與右上「1 罐=600g」是同一件事，重複。
-   packSpec 本來就含（本店）標記，資訊零損失，右上這行移除。 */+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填"'+(ok?' data-ok="1"':'')+'>'+'<div style="margin-top:5px"><button class="btn ghost sm okbtn'+(ok?' on':'')+'" data-ok-btn="'+s.id+'" type="button">'+(ok?'↩ 取消足夠':'✓ 足夠')+'</button></div></div></div>';});
-    html+='</div>';}
+  groups.forEach(function(gp){var zc=!!ZC[gp.name];
+    var gm=gp.items.filter(function(o){return hit[o.s.id];});   /* cv 批：分區計數只算命中搜尋的（＝原本 gp.items） */
+    html+='<div class="group'+(gm.length?'':' qh')+'" data-zname="'+escA(gp.name)+'"><div class="vh zhead" data-zc="'+escA(gp.name)+'"><span class="vn">📍 '+gp.name+'</span><span class="vl"></span><span class="muted" data-zcnt="'+escA(gp.name)+'">'+invZoneCnt(store,gp,hit,zc)+'</span></div>';
+    if(!zc)html+=invZoneCardHtml(store,gp,hit);   /* cv 批：分區卡片抽成 invZoneCardHtml（分區就地展開共用），內容逐字相同 */
     html+='</div>';});
   html+='</div>';
   html+='<div class="padbot"></div>';
-  if(ss!=null&&nUn>0)html+='<div class="fabtn" id="nextUn">⬇ 下一個未盤</div>';
+  if(ss!=null)html+='<div class="fabtn" id="nextUn"'+(nUn>0?'':' style="display:none"')+'>⬇ 下一個未盤</div>';   /* cv 批：一律畫、沒有未盤時藏起來（搜尋就地篩選與 invPatch 會切換） */
   html+='<div class="savebar"><div class="prog">'+storeChip(store)+' '+(dn?('<b style="color:#C0392B">'+dn+' 筆</b>已填未送出'):'<span>目前沒有待送出的變更</span>')+(ss!=null?('<br>本次已盤 '+done+' / '+tot+' 項'):'')+'</div>'
     +'<button class="btn" id="saveCount"'+(dn?'':' disabled')+'>💾 儲存盤點'+(dn?('（'+dn+'）'):'')+'</button></div>';
   if(ss==null)html+=sessModal();
   if(ST.adjSku)html+=adjModal(store);
   return html;}
+/* 2026-10-02 cv 批：分區標頭的「已盤／項數」與一張分區卡片（從 viewCount 原樣抽出；viewCount、搜尋就地篩選、分區就地收合展開共用） */
+function invZoneCnt(store,gp,hit,zc){var gm=gp.items.filter(function(o){return hit[o.s.id];});
+  var zDone=gm.filter(function(o){return countedNow(store,o.s);}).length;
+  return zDone+'/'+gm.length+' 項 '+(zc?'▸ 展開':'▾');}
+function invZoneCardHtml(store,gp,hit){
+  var gm=gp.items.filter(function(o){return hit[o.s.id];}),lastHit=gm.length?gm[gm.length-1].s.id:"";
+  var html='<div class="card" style="padding:4px 12px">';
+    var lastCat="";
+    gp.items.forEach(function(o){var s=o.s,iv=ivOf(store,s),dur=isDur(s),r=rowFor(store,s);
+      if(s.cat!==lastCat){lastCat=s.cat;var cHit=gm.some(function(x){return x.s.cat===s.cat;});html+='<div class="catsep'+(cHit?'':' qh')+'" data-catsep="'+escA(s.cat)+'">'+s.cat+'</div>';}
+      var xv=((ST.invFilter==="過季"||ST.invFilter==="清貨尾")&&s.lastValid)?'<span class="muted" style="margin-left:6px;font-size:12px">最後有效 '+s.lastValid+'</span>':'';
+      var _cv2=(pqEff(store,s)>0?pqOf(store,s):1),_u2=(pqEff(store,s)>0?s.buyUnit:s.useUnit);
+      var rpP=dec((r.reorderPoint==null?0:r.reorderPoint)/_cv2);
+      var ref=skuTail(s)?('<span style="color:#8A5A00">🧹 檔期結束 '+s.lastValid+'，清剩料中</span>'):(dur||r.reorderPoint==null)?parRefTxt(store,s):('訂貨點 '+rpP+' '+_u2+useEqTxt(store,s,r.reorderPoint));   /* av 批：清貨尾不顯示訂貨點／標配，免得被當成要補。cv 批：訂貨點後面附使用單位數量（useEqTxt） */
+      var psp=skuTail(s)?'':packSpec(store,s);if(psp)ref+='　📦 '+psp;
+      if(!skuTail(s))ref+=adjLink(s.id);
+      var ok=okOf(store,s),numed=(((DIRTY[store]||{})[s.id])||(countedNow(store,s)&&!ok));
+      var vOn=(numed&&iv.onHand!=null)?iv.onHand:"";
+      html+='<div class="row'+(hit[s.id]?'':' qh')+(s.id===lastHit?' qlast':'')+'" data-invrow="'+s.id+'"><div>'+skuThumb(s,"f")+'<b>'+dispName(store,s)+'</b>'+shelfBtn(s)+newBadgeAll(store,s)+xv+supplyBadge(store,s)+'<div class="sub">'+ref+origSub(store,s)+'</div>'+wBadge(store,s)+lastWkTxt(store,s)+shelfBlock(s)+'<div id="sug_'+s.id+'">'+invSugHtml(store,s)+'</div></div><div class="right"><span class="ipt-lbl">現有('+(dur?s.useUnit:s.buyUnit)+')</span>'/* 2026-09-10 bp 批：同一張卡上「📦 600 g／罐」（packSpec）與右上「1 罐=600g」是同一件事，重複。
+   packSpec 本來就含（本店）標記，資訊零損失，右上這行移除。 */+'<input type="text" inputmode="decimal" data-inv="'+s.id+'" data-f="onHand" value="'+vOn+'" placeholder="未填"'+(ok?' data-ok="1"':'')+'>'+'<div style="margin-top:5px"><button class="btn ghost sm okbtn'+(ok?' on':'')+'" data-ok-btn="'+s.id+'" type="button">'+(ok?'↩ 取消足夠':'✓ 足夠')+'</button></div></div></div>';});
+  return html+'</div>';}
+/* 2026-10-02 cv 批：盤點卡片上的四種綁定（原本寫在 wire() 裡，逐字搬過來，只把 document 換成 root）：
+   清貨尾「仍需補」、⚙ 調整、現有（盤點數字）、✓ 足夠。wire() 用 document 呼叫一次＝原本行為；分區就地展開時只綁新插進來的卡片。 */
+function invRowWire(root){root=root||document;
+  Array.prototype.forEach.call(root.querySelectorAll("[data-tailord]"),function(el){el.onchange=function(){var v=num(el.value);if(v>0)ST.orderEdit[el.dataset.tailord]=v;else delete ST.orderEdit[el.dataset.tailord];};});   /* av 批：清貨尾手動填量，不重繪免失焦 */
+  Array.prototype.forEach.call(root.querySelectorAll("[data-adj]"),function(el){el.onclick=function(){ST.adjSku=el.dataset.adj;ST.adjVal="";ST.adjNote="";render();};});
+  Array.prototype.forEach.call(root.querySelectorAll("[data-inv]"),function(el){el.onchange=function(){var id=el.dataset.inv,f=el.dataset.f;INV[ST.storeId]=INV[ST.storeId]||{};INV[ST.storeId][id]=INV[ST.storeId][id]||{};INV[ST.storeId][id][f]=el.value===""?null:+el.value;INV[ST.storeId][id].t=Date.now();DIRTY[ST.storeId]=DIRTY[ST.storeId]||{};DIRTY[ST.storeId][id]=true;saveDraft(ST.storeId,id);if(SKU[id]&&okOf(ST.storeId,SKU[id]))okSet(ST.storeId,id,false);if(ST.tab==="盤點"){if(!invPatch(ST.storeId,id))render();}};});
+  Array.prototype.forEach.call(root.querySelectorAll("[data-ok-btn]"),function(el){el.onclick=function(){var id=el.getAttribute("data-ok-btn"),st=ST.storeId,s=SKU[id];if(!s)return;
+    if(sessStart(st)==null){toast("請先選擇「延續」或「新的一週」");return;}
+    var on=!okOf(st,s);okSet(st,id,on);
+    if(on){var inp=document.querySelector('input[data-inv="'+id+'"][data-f="onHand"]');if(inp)inp.value="";
+      if(INV[st]&&INV[st][id])INV[st][id].onHand=null;saveDraft(st,id);}   /* bb 批：清掉本輪數字但「保留在 DIRTY」——足夠旗標要跟著儲存盤點送上雲端，不能像舊版那樣把整項從待送清單移除 */
+    if(!invPatch(st,id))render();};});}
+/* 2026-10-02 cv 批：畫面上的分區與卡片，是否正好等於「現在這份清單」（沒套搜尋、收合的分區不算卡片）。
+   對得上才可以就地改（搜尋篩選、分區收合／展開）；對不上（例：在「本次未盤」盤完幾項還沒重畫）就整頁重畫。 */
+function invDomOK(root,groups){
+  var gEls=root.querySelectorAll(".group[data-zname]"),rows=root.querySelectorAll("[data-invrow]"),want=[],have=[],i,k;
+  groups.forEach(function(gp){want.push("@"+gp.name);if(!ZC[gp.name])gp.items.forEach(function(o){want.push(o.s.id);});});
+  for(i=0;i<gEls.length;i++){have.push("@"+gEls[i].getAttribute("data-zname"));
+    var rs=gEls[i].querySelectorAll("[data-invrow]");for(k=0;k<rs.length;k++)have.push(rs[k].getAttribute("data-invrow"));}
+  return have.length===rows.length+gEls.length&&want.join("\u0001")===have.join("\u0001");}
+/* 2026-10-02 cv 批：分區收合／展開就地做（原本整頁重畫，一次要排 200～300 張卡）。
+   收合＝拿掉該分區卡片；展開＝用 invZoneCardHtml 畫回該分區卡片並綁定。結果與整頁重畫逐字相同；條件不符回 false，由呼叫端照舊整頁重畫。 */
+function invZoneToggle(z){
+  if(ST.tab!=="盤點")return false;
+  var view=document.getElementById("view"),root=view?view.querySelector(".groups"):null;if(!root)return false;
+  var store=ST.storeId,S=invSets(store),groups=zonesOrderedZ(store,S.itemsAll);
+  if(!invDomOK(root,groups))return false;
+  var gp=null,g=null,gEls=root.querySelectorAll(".group[data-zname]");
+  groups.forEach(function(x,i){if(x.name===z){gp=x;g=gEls[i];}});
+  if(!gp||!g||g.getAttribute("data-zname")!==z)return false;
+  ZC[z]=!ZC[z];lsSet("invZC_"+store,JSON.stringify(ZC));
+  var card=g.querySelector(":scope>.card");if(card)card.parentNode.removeChild(card);
+  if(!ZC[z]){g.insertAdjacentHTML("beforeend",invZoneCardHtml(store,gp,S.hit));var nc=g.querySelector(":scope>.card");if(nc)invRowWire(nc);}
+  var zc=g.querySelector("[data-zcnt]");if(zc)zc.textContent=invZoneCnt(store,gp,S.hit,!!ZC[z]);
+  return true;}
 /* ===== 2026-09-08 az 批 ①：器具／模具卡片的參考值要顯示「生效基準」 =====
    引擎（computeRow 的 par 分支）用的是 max(標配, 檔期需求)，但卡片原本只印 dim_store_par 的標配。
    檔期需求高於標配時（小矽膠模 標配 8、中秋檔期 12），店長看卡片心算「補 3」，系統卻建議 7 ⇒ 對不起來。
@@ -1693,8 +1770,20 @@ function parRefTxt(store,s){
      標配未設時直接講白話，因為那正是目前 1,164 格裡 1,161 格的狀態。 */
   if(dur&&pb<=0)return '<span style="color:#8A5A00">標配未設定</span><span class="muted" style="font-size:12px">（器具／模具靠標配補貨。設好標配後，低於標配才會建議補）</span>';
   var ni=num(newOf(store,s)),eff=Math.max(pb,ni);
-  if(!dur&&ni>pb)return '需備 '+dec(eff/cv)+' '+u+'<span class="muted" style="font-size:12px">（🎉 檔期需求 '+dec(ni/cv)+' ＞ 標配 '+dec(pb/cv)+'，檔期結束自動回歸標配）</span>';
-  return '標配 '+dec(pb/cv)+' '+u+(dur?'':'（本店設定）');}
+  if(!dur&&ni>pb)return '需備 '+dec(eff/cv)+' '+u+useEqTxt(store,s,eff)+'<span class="muted" style="font-size:12px">（🎉 檔期需求 '+dec(ni/cv)+' ＞ 標配 '+dec(pb/cv)+'，檔期結束自動回歸標配）</span>';
+  /* 2026-10-02 cv 批（待處理事項 1002 #1）：拿掉「（本店設定）」，改附使用單位克數（標配 0.6 罐（360 g）），方便員工換算；原字樣留在滑鼠提示 */
+  if(dur)return '標配 '+dec(pb/cv)+' '+u;
+  return '<span title="標配由本店設定（店別參數）">標配 '+dec(pb/cv)+' '+u+'</span>'+useEqTxt(store,s,pb);}
+/* 2026-10-02 cv 批（待處理事項 1002 #1）：盤點卡片「標配／訂貨點 N 採購單位」後面附使用單位數量，例：標配 0.6 罐（360 g）、訂貨點 13.9 盒（13,893 g）。
+   v＝引擎實際用的值（使用單位）：標配＝店別參數存的數（本來就存使用單位）、訂貨點＝computeRow 的 reorderPoint；內容量用卡片同一個 pqEff（店內容量優先）。
+   不是把畫面上四捨五入到 0.1 的罐數再乘回去——22 kg 一包的麵粉訂貨點畫面是「0 包」，實際是 81 g，乘回去會變 0。
+   只在 使用單位≠採購單位、內容量>0 且≠1 時顯示（顆／顆、g／g 換算沒有意義）；值為 0 不顯示。數字：千分位整數，小於 10 且非整數留 1 位小數。只改顯示，不動任何計算。 */
+function useEqTxt(st,s,v){
+  if(isDur(s))return '';
+  var pe=pqEff(st,s);if(!(pe>0)||pe===1||String(s.useUnit||"")===String(s.buyUnit||""))return '';
+  v=num(v);if(!(v>0))return '';
+  var t=(v<10&&Math.round(v)!==v)?dec(v):fmt(v);if(t==="0")return '';
+  return '（'+t+' '+s.useUnit+'）';}
 /* ===== 2026-09-08 az 批 ②：權數離群守門 =====
    2026-07 週用量系統性低估 50% 的時期，各店在 ⚙ 設了補償權數；7/27 對照表表頭修好後用量已正確，
    但權數沒有跟著歸位 ⇒ 雙重放大。實測 2,150 筆參數有 258 筆 >1.5，其中 25 筆是離群
@@ -1759,7 +1848,7 @@ function invPatch(store,id){var s=SKU[id];if(!s)return false;var el=document.get
   var bar=$("#invBar");if(bar)bar.style.width=(tot?Math.round(done/tot*100):0)+"%";
   var ch=document.querySelector('[data-invf="本次未盤"]');if(ch)ch.textContent="📝 本次未盤("+nUn+")";
   var z=zoneOf(store,s),zc=document.querySelector('[data-zcnt="'+escA(z)+'"]');
-  if(zc){var g=zc.parentNode.parentNode,rows=g.querySelectorAll('[data-invrow]'),zd=0;for(var i=0;i<rows.length;i++){var sk=SKU[rows[i].getAttribute("data-invrow")];if(sk&&countedNow(store,sk))zd++;}zc.textContent=zd+"/"+rows.length+" 項 ▾";}
+  if(zc){var g=zc.parentNode.parentNode,rows=g.querySelectorAll('[data-invrow]:not(.qh)'),zd=0;   /* cv 批：只算沒被搜尋藏起來的卡（＝原本畫出來的那些） */for(var i=0;i<rows.length;i++){var sk=SKU[rows[i].getAttribute("data-invrow")];if(sk&&countedNow(store,sk))zd++;}zc.textContent=zd+"/"+rows.length+" 項 ▾";}
   var sb=document.querySelector(".savebar .prog");if(sb)sb.innerHTML=(dn?('<b style="color:#C0392B">'+dn+' 筆</b>已填未送出'):'<span>目前沒有待送出的變更</span>')+(sessStart(store)!=null?('<br>本次已盤 '+done+' / '+tot+' 項'):'');
   var sc0=$("#saveCount");if(sc0){sc0.disabled=!dn;sc0.textContent="💾 儲存盤點"+(dn?("（"+dn+"）"):"");}
   var fab=$("#nextUn");if(fab)fab.style.display=nUn>0?"":"none";
@@ -4417,8 +4506,9 @@ function qSubmit(el,apply){
 function bindQ(el,apply){
   if(!el)return;
   el.__last=el.value;                       /* 綁定時對齊現值：重繪後補發的同值 input 不會再送一次 */
+  el.__qb=1;                                /* cv 批：標記「搜尋框」，render() 用來判斷背景重畫要不要延後／放回焦點 */
   el.addEventListener("compositionstart",function(){el.__ime=1;});
-  el.addEventListener("compositionend",function(){el.__ime=0;qSubmit(el,apply);});
+  el.addEventListener("compositionend",function(){el.__ime=0;qSubmit(el,apply);if(RENDER_DEFER)render();});   /* cv 批：組字中被延後的背景重畫，組字結束補做 */
   el.oninput=function(e){
     if(el.__ime||(e&&e.isComposing))return; /* 組字中只讓輸入法自己顯示，不重繪 */
     qSubmit(el,apply);
@@ -4428,6 +4518,60 @@ function bindQ(el,apply){
     try{el.focus();if(p==null)p=el.value.length;el.setSelectionRange(p,p);}catch(e2){}
   }
 }
+/* ===== 2026-10-02 cv 批：盤點頁搜尋框不卡（待處理事項 1002 #2）=====
+   經營者：店內平板登入採購系統，輸入文字查詢只要打 1 個字就卡住，要等很久才能打第二個字。
+   原因：盤點頁每打一個字就 render() 整頁重畫——200～300 張卡、datalist 200～300 個選項、整頁重新排版，搜尋框本身也被換掉
+         （平板鍵盤要重新接上新的輸入框；資料晚到的背景重畫還會讓搜尋框失焦）。
+   改法（只動盤點頁的 #skuQ／#vsel／✕；其他頁搜尋框仍走 bindQ）：
+   ① 就地篩選：viewCount 把卡片全部畫好（沒命中的加 .qh），打字只切換顯示與各計數（invQApply），搜尋框、datalist 都不重建
+   ② 停手 INVQ_WAIT 毫秒才篩；注音／手寫組字中不篩（沿用 r 批：compositionend 才算打完）；按 Enter 或從清單點選立即篩
+   ③ 手指還按在畫面上時先不篩（卡片位移會點錯），放開後再篩
+   ④ 篩選語意不變：ST.q／ST.vq＋matchQ，計數與 viewCount 同一份 invSets
+   ⑤ 畫面上的卡片跟目前清單對不上（例：在「本次未盤」盤完幾項）→ 改走整頁重畫，焦點與游標照舊放回搜尋框 */
+var INVQ_WAIT=250,INVQ={t:0,down:false,up:0,at:0};
+if(typeof document!=="undefined"){
+  document.addEventListener("pointerdown",function(){INVQ.down=true;INVQ.at=Date.now();clearTimeout(INVQ.up);},true);
+  ["pointerup","pointercancel"].forEach(function(tp){document.addEventListener(tp,function(){clearTimeout(INVQ.up);INVQ.up=setTimeout(function(){INVQ.down=false;},100);},true);});}   /* 放開後再等 0.1 秒（讓這次點擊先處理完） */
+function invQBind(el){
+  if(!el||el.__invq)return;el.__invq=1;el.__qb=1;
+  el.__last=el.value;
+  function commit(now){if(el.__ime)return;
+    if(el.__last!==el.value){el.__last=el.value;ST.q=el.value;}   /* ST.q 立刻跟上（中途若整頁重畫，搜尋字不會掉）；畫面延後篩 */
+    if(INVQ.t)clearTimeout(INVQ.t);INVQ.t=setTimeout(invQRun,now?0:INVQ_WAIT);}
+  el.addEventListener("compositionstart",function(){el.__ime=1;if(INVQ.t){clearTimeout(INVQ.t);INVQ.t=0;}});
+  el.addEventListener("compositionend",function(){el.__ime=0;commit(false);if(RENDER_DEFER)render();});
+  el.addEventListener("input",function(e){if(el.__ime||(e&&e.isComposing))return;commit(!!(e&&e.inputType==="insertReplacementText"));});   /* 從 datalist 點選＝立即篩 */
+  el.addEventListener("keydown",function(e){if(e.key==="Enter"&&!el.__ime&&!e.isComposing)commit(true);});
+  if(QF&&QF.id&&QF.id===el.id){var p=QF.pos;QF=null;
+    try{el.focus();if(p==null)p=el.value.length;el.setSelectionRange(p,p);}catch(e2){}}}
+function invQRun(){INVQ.t=0;
+  if(INVQ.down&&Date.now()-INVQ.at<1500){INVQ.t=setTimeout(invQRun,120);return;}   /* 手指還按著：等放開（最多等 1.5 秒，萬一放開的事件沒收到也不會卡住） */
+  var el=document.getElementById("skuQ");if(el&&el.__ime)return;   /* 組字中：compositionend 會再排一次 */
+  invQApply();}
+function invQClear(){if(INVQ.t){clearTimeout(INVQ.t);INVQ.t=0;}
+  ST.q="";var el=document.getElementById("skuQ");if(el){el.value="";el.__last="";}invQApply();}
+function invQApply(){
+  if(ST.tab!=="盤點")return;
+  var view=document.getElementById("view"),root=view?view.querySelector(".groups"):null;if(!root)return;
+  var store=ST.storeId,S=invSets(store),hit=S.hit,groups=zonesOrderedZ(store,S.itemsAll);
+  if(!invDomOK(root,groups)){   /* 畫面上的卡片跟目前清單不一樣 → 整頁重畫（焦點與游標放回搜尋框） */
+    var qe=document.getElementById("skuQ");
+    if(qe&&document.activeElement===qe){var pp=null;try{pp=qe.selectionStart;}catch(e){}QF={id:"skuQ",pos:pp};}
+    render();return;}
+  var gEls=root.querySelectorAll(".group[data-zname]");
+  groups.forEach(function(gp,gi){var g=gEls[gi],gm=gp.items.filter(function(o){return hit[o.s.id];});
+    g.classList.toggle("qh",!gm.length);
+    var zc=g.querySelector("[data-zcnt]");
+    if(zc)zc.textContent=invZoneCnt(store,gp,hit,!!ZC[gp.name]);
+    var lastHit=gm.length?gm[gm.length-1].s.id:"",sep=null,sepOn=false,ch=g.querySelectorAll(".catsep,[data-invrow]");
+    for(var j=0;j<ch.length;j++){var c=ch[j];
+      if(c.classList.contains("catsep")){if(sep)sep.classList.toggle("qh",!sepOn);sep=c;sepOn=false;continue;}
+      var id=c.getAttribute("data-invrow"),on=!!hit[id];c.classList.toggle("qh",!on);c.classList.toggle("qlast",id===lastHit);if(on)sepOn=true;}
+    if(sep)sep.classList.toggle("qh",!sepOn);});
+  var fc=document.getElementById("invfChips");if(fc){fc.innerHTML=invfChipsHtml(S);invfWire(fc);}
+  var em=document.getElementById("invEmpty");if(em)em.classList.toggle("qh",!!S.items.length);
+  var fab=document.getElementById("nextUn");if(fab)fab.style.display=S.nUn>0?"":"none";
+  var x=document.getElementById("skuQx");if(x)x.classList.toggle("qh",!ST.q);}
 /* 2026-09-24 cg3：拿掉店長表單「其他店也會用」（經營者裁定：各店要用就各自申請，同名自動合併、各店帶自己的數量）；fact_sku_req「其他店」欄保留、送空白，舊資料照常讀 */
 /* ===== 2026-09-24 cg 批：📝 新品項申請（店長送申請 → 總部每月審 → 核准轉入主檔） =====
    ① 店長只能「送申請」：寫進獨立 GAS diybc-skureq-api 的 fact_sku_req（申請池），碰不到 dim_sku／dim_store_par。
@@ -4799,11 +4943,11 @@ function srWire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-srno]"),function(el){el.onclick=function(){srDecideOnly(el.getAttribute("data-srno"),"退回");};});}
 
 function wire(){
-  Array.prototype.forEach.call(document.querySelectorAll("[data-tailord]"),function(el){el.onchange=function(){var v=num(el.value);if(v>0)ST.orderEdit[el.dataset.tailord]=v;else delete ST.orderEdit[el.dataset.tailord];};});   /* av 批：清貨尾手動填量，不重繪免失焦 */
+  invRowWire(document);   /* cv 批：盤點卡片的 清貨尾仍需補／⚙ 調整／現有／✓ 足夠 四種綁定原樣搬進 invRowWire（分區就地展開時只綁新卡片） */
   Array.prototype.forEach.call(document.querySelectorAll(".chip"),function(el){el.onclick=function(){ST.cat=el.dataset.cat;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-period]"),function(el){el.onclick=function(){ST.period=el.dataset.period;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-need]"),function(el){el.onclick=function(){ST.needOnly=el.dataset.need==="1";render();};});
-  Array.prototype.forEach.call(document.querySelectorAll("[data-invf]"),function(el){el.onclick=function(){ST.invFilter=el.dataset.invf;render();};});
+  invfWire(document);   /* cv 批：原本這一行的內容搬進 invfWire（就地篩選重寫籤列時共用） */
   Array.prototype.forEach.call(document.querySelectorAll("[data-qmode]"),function(el){el.onclick=function(){ST.qmode=el.dataset.qmode;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-qperiod]"),function(el){el.onclick=function(){ST.qperiod=el.dataset.qperiod;render();};});
   var af=$("#anFrom");if(af)af.onchange=function(){ST.anFrom=af.value;};
@@ -4884,9 +5028,11 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-drill]'),function(el){el.onclick=function(){ST.totSku=el.dataset.drill;runTotal(el.dataset.drill);};});
   bindQ($("#qbox"),function(v){ST.q=v;render();});
   // 2026-07-27 雙搜尋（品項 datalist ＋ 廠商下拉）
-  bindQ($("#skuQ"),function(v){ST.q=v;render();});
-  var skx=$("#skuQx");if(skx)skx.onclick=function(){ST.q="";render();};
-  var vv=$("#vsel");if(vv)vv.onchange=function(){ST.vq=vv.value;render();};
+  /* 2026-10-02 cv 批：盤點頁改就地篩選（invQBind／invQApply），不重畫整頁；其他頁（建議）照舊 */
+  if(ST.tab==="盤點")invQBind($("#skuQ"));
+  else bindQ($("#skuQ"),function(v){ST.q=v;render();});
+  var skx=$("#skuQx");if(skx)skx.onclick=function(){if(ST.tab==="盤點"){invQClear();return;}ST.q="";render();};
+  var vv=$("#vsel");if(vv)vv.onchange=function(){ST.vq=vv.value;if(ST.tab==="盤點"){invQApply();return;}render();};
   // 盤點 session
   var mSb=$("#myStBtn");if(mSb)mSb.onclick=function(){askStore(true);};
   var sCt=$("#sessCont");if(sCt)sCt.onclick=function(){setSess(ST.storeId,0);render();};
@@ -4904,13 +5050,12 @@ function wire(){
     var msg=dnn>0?("尚有 "+dnn+" 筆已填未送出，重新盤點將捨棄這些數值並重新載入頁面。確定開始新的一週？"):"確定開始新的一週嗎？欄位將清空重新清點（歷史紀錄完整保留）。";
     if(!confirm(msg))return;setSess(ST.storeId,Date.now());clearDraft(ST.storeId);okClearAll(ST.storeId);
     if(dnn>0){location.reload();}else{DIRTY[ST.storeId]={};render();}};
-  Array.prototype.forEach.call(document.querySelectorAll("[data-zc]"),function(el){el.onclick=function(){var z=el.dataset.zc;ZC[z]=!ZC[z];lsSet("invZC_"+ST.storeId,JSON.stringify(ZC));render();};});
-  // 調整基準值
-  Array.prototype.forEach.call(document.querySelectorAll("[data-adj]"),function(el){el.onclick=function(){ST.adjSku=el.dataset.adj;ST.adjVal="";ST.adjNote="";render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-zc]"),function(el){el.onclick=function(){var z=el.dataset.zc;if(invZoneToggle(z))return;ZC[z]=!ZC[z];lsSet("invZC_"+ST.storeId,JSON.stringify(ZC));render();};});   /* cv 批：先試就地收合／展開，不行才整頁重畫 */
+  // 調整基準值（[data-adj] 的綁定在 invRowWire）
   var av=$("#adjVal");if(av){av.oninput=function(){var s2=SKU[ST.adjSku];if(s2)$("#adjPrev").innerHTML=adjPrevTxt(ST.storeId,s2,av.value);};av.focus();av.select();}
   var ac=$("#adjCancel");if(ac)ac.onclick=function(){ST.adjSku="";ST.adjVal="";ST.adjNote="";render();};
   var as2=$("#adjSave");if(as2)as2.onclick=function(){adjSave(ST.storeId);};
-  var nu=$("#nextUn");if(nu)nu.onclick=function(){var els=document.querySelectorAll('input[data-inv][data-f="onHand"]');
+  var nu=$("#nextUn");if(nu)nu.onclick=function(){var els=document.querySelectorAll('.group:not(.qh) [data-invrow]:not(.qh) input[data-inv][data-f="onHand"]');   /* cv 批：跳過搜尋藏起來的卡 */
     for(var i=0;i<els.length;i++){if(els[i].value===""&&!els[i].getAttribute("data-ok")){try{els[i].scrollIntoView({block:"center",behavior:"smooth"});}catch(e){els[i].scrollIntoView();}els[i].focus();return;}}
     toast("畫面上都盤完了 🎉（收合的分區請先展開）");};
   /* 日期與備註隨打隨存進 ST，render 後不會被清掉 */
@@ -5098,13 +5243,7 @@ function wire(){
   var tg=$('[data-toggleexcl]');if(tg)tg.onclick=function(){ST.showExcl=!ST.showExcl;render();};
   Array.prototype.forEach.call(document.querySelectorAll("[data-chexcl]"),function(el){el.onclick=function(){ST.chExclOnly=(el.dataset.chexcl==="1");render();};});   /* 2026-09-10 bp 批 */
   Array.prototype.forEach.call(document.querySelectorAll('[data-smode]'),function(el){el.onclick=function(){ST.seasonMode=el.dataset.smode;ST.season=(ST.seasonMode!=='關');render();};});
-  Array.prototype.forEach.call(document.querySelectorAll("[data-inv]"),function(el){el.onchange=function(){var id=el.dataset.inv,f=el.dataset.f;INV[ST.storeId]=INV[ST.storeId]||{};INV[ST.storeId][id]=INV[ST.storeId][id]||{};INV[ST.storeId][id][f]=el.value===""?null:+el.value;INV[ST.storeId][id].t=Date.now();DIRTY[ST.storeId]=DIRTY[ST.storeId]||{};DIRTY[ST.storeId][id]=true;saveDraft(ST.storeId,id);if(SKU[id]&&okOf(ST.storeId,SKU[id]))okSet(ST.storeId,id,false);if(ST.tab==="盤點"){if(!invPatch(ST.storeId,id))render();}};});
-  Array.prototype.forEach.call(document.querySelectorAll("[data-ok-btn]"),function(el){el.onclick=function(){var id=el.getAttribute("data-ok-btn"),st=ST.storeId,s=SKU[id];if(!s)return;
-    if(sessStart(st)==null){toast("請先選擇「延續」或「新的一週」");return;}
-    var on=!okOf(st,s);okSet(st,id,on);
-    if(on){var inp=document.querySelector('input[data-inv="'+id+'"][data-f="onHand"]');if(inp)inp.value="";
-      if(INV[st]&&INV[st][id])INV[st][id].onHand=null;saveDraft(st,id);}   /* bb 批：清掉本輪數字但「保留在 DIRTY」——足夠旗標要跟著儲存盤點送上雲端，不能像舊版那樣把整項從待送清單移除 */
-    if(!invPatch(st,id))render();};});
+  /* cv 批：[data-inv]／[data-ok-btn] 的綁定在 invRowWire（wire 開頭呼叫） */
   var sc=$("#saveCount");if(sc)sc.onclick=function(){var store=ST.storeId,iv=INV[store]||{},dirty=DIRTY[store]||{},ids=Object.keys(dirty);
     if(!ids.length){toast("沒有變更的盤點");return;}
     /* 2026-09-08 bf 批 C：跨店存檔是唯一會真的污染資料的路徑——店長沒注意到自己停在 1 號店，
