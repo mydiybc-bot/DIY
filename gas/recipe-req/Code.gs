@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v5';   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v6';   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -125,7 +125,7 @@ function randPw_(len) {
 function migrate_() {
   var P = PropertiesService.getScriptProperties();
   if (!P.getProperty('SHEET_ID')) return;
-  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1') return;
+  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1') return;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
   try {
@@ -141,6 +141,15 @@ function migrate_() {
     if (P.getProperty('MIG_PUSH') !== '1') {
       ensureTab_(ss_(), 'fact_push');
       P.setProperty('MIG_PUSH', '1');
+    }
+    if (P.getProperty('MIG_BOM') !== '1') {   /* ④ 2026-10-01 需求 7：BOM 管理異動紀錄分頁＋預設權限（主廚可改 BOM、營運POS 可改對照表；只加不減） */
+      ensureTab_(ss_(), 'fact_bom_log');
+      var tr = load_('dim_role'), add = { '主廚': 'B:bom.edit', '營運POS': 'B:map.edit' };
+      tr.rows.forEach(function (r) {
+        var nm = str_(r.role).trim(), f = str_(r.fields);
+        if (add[nm] && f.indexOf(add[nm]) < 0) putCols_(tr, r._row, { fields: f + (f.trim() ? ', ' : '') + add[nm] }, function (h) { return h === 'fields'; });
+      });
+      P.setProperty('MIG_BOM', '1');
     }
   } catch (e) { /* 下次再試 */ } finally { lock.releaseLock(); }
 }
@@ -888,13 +897,25 @@ function planPush_(rid) {
   var bomHave = P.bom.vals.filter(function (r) { return ptName_(r[0]) === name; }).length;
   var bom = { rows: bomRows, skip: bomHave ? 'BOM 表已經有「' + name + '」的配方 ' + bomHave + ' 列，沒有重寫（要改配方請在 BOM 本手動改）' : (bomRows.length ? '' : '用料（全部）沒有數量 > 0 的品項') };
 
-  /* ③ 對照表：主類別＝對照表裡同一個次類別最常用的主類別（沒有就「限定甜點」）；次類別＝POS 分類（沒選或選「無」就用檔期名稱） */
+  /* ③ 對照表
+     2026-10-01 需求 7（POS 分類改選「主類別」，head.cat_kind==='main'）：G＝選的主類別（要在對照表現有主類別內，否則用預設）；
+       H＝檔期名稱（「YYYY 名稱」統一一個空白）——採購系統 EventLayer 靠 H 認檔期啟動首批備料，H 一律寫檔期名，不寫主類別。
+     舊單（cat＝次類別）：沿用舊規則＝主類別取對照表裡同一個次類別最常用的主類別（沒有就「限定甜點」）；次類別＝POS 分類（沒選或選「無」就用檔期名稱） */
   var catTxt = ptName_(h.cat_text || (h.cat === '__other' ? h.catOther : h.cat));
   var campName = camp ? ptName_(camp['檔期名稱']) : '';
-  var sub = (catTxt && catTxt !== '無') ? catTxt : (campName || catTxt || '無');
-  var cnt = {}, main = '', best = 0;
-  P.map.vals.forEach(function (r) { if (ptName_(r[7]) === sub) { var g = ptName_(r[6]); if (g) cnt[g] = (cnt[g] || 0) + 1; } });
-  Object.keys(cnt).forEach(function (g) { if (cnt[g] > best) { best = cnt[g]; main = g; } });
+  var sub, cnt = {}, main = '', best = 0, mainsAll = {};
+  P.map.vals.forEach(function (r) { var g0 = ptName_(r[6]); if (g0) mainsAll[g0] = 1; });
+  if (h.cat_kind === 'main' || (catTxt && mainsAll[catTxt])) {   /* 營運POS 局部修改時 cat_kind 不一定有 → 值是現有主類別就當主類別 */
+    main = mainsAll[catTxt] ? catTxt : '';
+    if (catTxt && !main) warn.push('POS 分類「' + catTxt + '」不在對照表現有主類別，改用「' + DEFAULT_MAIN + '」');
+    var campSub = campName.replace(/^(20\d{2})\s*/, '$1 ');
+    sub = campSub || '無';
+    if (campSub && !/^20\d{2} \S/.test(campSub)) warn.push('檔期名稱「' + campName + '」不是「YYYY 名稱」格式（例：2026 萬聖節）：採購系統的檔期備料會認不出這個檔期');
+  } else {
+    sub = (catTxt && catTxt !== '無') ? catTxt : (campName || catTxt || '無');
+    P.map.vals.forEach(function (r) { if (ptName_(r[7]) === sub) { var g = ptName_(r[6]); if (g) cnt[g] = (cnt[g] || 0) + 1; } });
+    Object.keys(cnt).forEach(function (g) { if (cnt[g] > best) { best = cnt[g]; main = g; } });
+  }
   main = main || DEFAULT_MAIN;
   var d1 = camp ? normDate_(camp['起']) : '', d2 = camp ? normDate_(camp['迄']) : '';
   if (!d1 || !d2) warn.push('檔期沒有填起訖日：對照表的有效日期留空，採購系統的新品備料不會啟動（到對照表補日期即可）');
@@ -1274,6 +1295,339 @@ function log_(who, act, id, ok, msg) {
     if (r > LOG_KEEP + 500) sh.deleteRows(2, r - 1 - LOG_KEEP);
   } catch (e) { /* log 失敗不影響主流程 */ }
 }
+
+/* ================= 📚 BOM 管理（2026-10-01 經營者「20261001 待處理事項」#7）=================
+   目的：BOM表／產品名稱對照表 改在食譜系統「📚 BOM 管理」維護，人不再直接改 BOM 本（Google 試算表繼續當後端資料庫）。
+   讀：bomMeta（清單、選項、權限）、bomGet（一支甜點：列＋指紋）、mapGet（對照表全部列＋每列指紋）、bomLog（異動紀錄）
+   寫：bomSave（新增甜點／整支取代）、bomDelete、bomRename（連同對照表 B 欄）、mapSave（新增／修改 A,B,E,F,G,H；C/D 永不寫）、mapDelete、bomUndo
+   安全：①寫前指紋比對（不同＝有人改過 → 不覆蓋，回最新內容）②只寫 BOM表 A–E、對照表 A,B,E–H，表頭不對就停（ptRead_）
+         ③寫後讀回逐格比對，不一致自動寫回原值 ④每次寫入記「食譜系統_申請單」fact_bom_log（before/after JSON＝版本紀錄，可一鍵還原）
+         ⑤06:00–07:45 採購系統在讀 BOM 重算（autodraft／rebuild／EventLayer）→ 不寫
+   權限（dim_role.fields，管理者 * 全有）：B:bom.edit（新增／修改／匯入食譜）、B:bom.delete（刪除／改名）、
+         B:map.edit（對照表新增、改 B／日期）、B:map.cat（改既有列的主／次類別＝會改寫該品名全部歷史分類）、B:map.delete、B:undo */
+var BOM_MAX_ROWS = 300;
+var BOM_BASE_UNITS = ['g', 'ml', 'kg', '個', '支', '張', '片', '顆', '包', '罐', '條', '組', '份', '雙', '對', '朵', '段', '捲', '卷', '杯', '碗', '台', '盒', '瓶', '袋', '塊', '根', '匙', '平匙', '滴'];
+var BOM_CONTAINERS = ['', '彩色塑膠碗', '白色瓷碗', '擠花袋', '水杯', '量杯', '無', '工作盆'];
+/* POS 儀表板白名單（計甜點數／來客數的主類別）：這些主類別的對照列必須對到 BOM 甜點（找不到＝暫時佔位，可空） */
+var BOM_DESSERT_MAINS = { '乳酪&奶蓋&慕斯': 1, '巧克力': 1, '裝飾蛋糕': 1, '限定甜點': 1, '水果': 1, '生日蛋糕': 1, '慶祝蛋糕': 1, '其他': 1,
+  '主題活動＆群友限定': 1, '雙層蛋糕': 1, '蛋糕': 1, '點心&餅乾': 1, '塔派': 1, '吳寶春大獎麵包': 1, '吳寶春麵包': 1 };
+var BOM_QUIET = [6 * 60, 7 * 60 + 45];
+var BOM_PERM_LABEL = { 'bom.edit': 'BOM 新增／修改', 'bom.delete': 'BOM 刪除／改名', 'map.edit': '對照表新增／修改', 'map.cat': '對照表改主／次類別',
+  'map.delete': '對照表刪除', 'undo': '還原異動' };
+TABS.fact_bom_log = ['ts', 'batch', 'role', 'action', 'table', 'key', 'source', 'before_json', 'after_json', 'digest_before', 'digest_after', 'rows_before', 'rows_after', 'ok', 'msg'];
+NUM_COLS.rows_before = 1; NUM_COLS.rows_after = 1;
+
+function bomPerm_(auth, key) { return !!(auth && auth.kind === 'role' && can_(auth, 'B:' + key)); }
+function needB_(auth, key) { if (!bomPerm_(auth, key)) throw fail_('這個動作要有「' + (BOM_PERM_LABEL[key] || key) + '」權限（管理者可以；其他身分請管理者在 🔑 密碼管理開權限）', 'perm'); }
+function bomQuiet_() {
+  var hm = Utilities.formatDate(new Date(), TZ, 'HH:mm').split(':'), m = (+hm[0]) * 60 + (+hm[1]);
+  if (m >= BOM_QUIET[0] && m < BOM_QUIET[1]) throw fail_('採購系統每天 06:00–07:45 在讀 BOM 表重算建議量，這段時間先不寫（避免讀到寫一半的配方）。請 07:45 以後再按儲存。', 'quiet');
+}
+function bomDigest_(rows) {
+  var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(rows || []));
+  return d.slice(0, 8).map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('') + '·' + (rows || []).length + '列';
+}
+function bomRowNorm_(r) { return [ptName_(r[0]), ptName_(r[1]), ptNorm_(r[2] === '' ? '' : Number(r[2])), ptName_(r[3]), ptName_(r[4])]; }
+/* 一支甜點在 BOM表 的列（列號、正規化值、是否連續） */
+function bomBlock_(tab, name) {
+  var idx = [], rows = [];
+  for (var i = 0; i < tab.lastA - 1; i++) if (ptName_(tab.vals[i][0]) === name) { idx.push(i + 2); rows.push(bomRowNorm_(tab.vals[i])); }
+  var contiguous = idx.every(function (rn, k) { return k === 0 || rn === idx[k - 1] + 1; });
+  return { idx: idx, rows: rows, contiguous: contiguous };
+}
+function bomDesserts_(tab) {
+  var o = {}, order = [];
+  for (var i = 0; i < tab.lastA - 1; i++) { var n = ptName_(tab.vals[i][0]); if (!n) continue; if (!o[n]) { o[n] = 0; order.push(n); } o[n]++; }
+  return order.map(function (n) { return { name: n, n: o[n] }; });
+}
+function bomUnits_(tab) {
+  var u = {};
+  BOM_BASE_UNITS.forEach(function (x) { u[x] = 1; });
+  tab.vals.forEach(function (r) { var x = ptName_(r[3]); if (x) u[x] = 1; });
+  try {
+    var sh = pss_().getSheetByName('dim_unitconv');
+    if (sh && sh.getLastRow() > 1) sh.getRange(2, 2, sh.getLastRow() - 1, 2).getValues().forEach(function (r) { [r[0], r[1]].forEach(function (x) { x = ptName_(x); if (x) u[x] = 1; }); });
+  } catch (e) { /* 讀不到單位對照表 → 只用 BOM 現有單位＋基本單位 */ }
+  return u;
+}
+function bomContainers_(tab) {
+  var c = {};
+  BOM_CONTAINERS.forEach(function (x) { c[x] = 1; });
+  tab.vals.forEach(function (r) { c[ptName_(r[4])] = 1; });
+  return c;
+}
+/* 驗證：甜點名、列數、品項、數量、單位、容器；錯誤一次全部列出（code invalid，extra＝錯誤清單） */
+function bomCheckRows_(name, rows, tab) {
+  var err = [];
+  if (!name) err.push('甜點名稱必填');
+  else if (name.length > 60 || /[\r\n\t]/.test(name)) err.push('甜點名稱太長或含換行');
+  if (!Array.isArray(rows) || !rows.length) err.push('至少要有 1 列用料');
+  else if (rows.length > BOM_MAX_ROWS) err.push('一支甜點最多 ' + BOM_MAX_ROWS + ' 列（現在 ' + rows.length + ' 列）');
+  var U = bomUnits_(tab), C = bomContainers_(tab), out = [];
+  (rows || []).slice(0, BOM_MAX_ROWS).forEach(function (r, i) {
+    var k = '第 ' + (i + 1) + ' 列';
+    var m = ptName_(r && r[0]), q = Number(r && r[1]), u = ptName_(r && r[2]), c = ptName_(r && r[3]);
+    if (!m) err.push(k + '：品項必填');
+    else if (m.length > 60 || /[\r\n\t]/.test(m)) err.push(k + '：品項名稱太長或含換行');
+    if (r && (r[1] === '' || r[1] === null || r[1] === undefined)) err.push(k + '「' + m + '」：數量必填');
+    else if (!isFinite(q) || q <= 0) err.push(k + '「' + m + '」：數量要是大於 0 的數字');
+    else if (q > 1e6) err.push(k + '「' + m + '」：數量太大');
+    if (!u) err.push(k + '「' + m + '」：單位必填');
+    else if (!U[u]) err.push(k + '「' + m + '」：單位「' + u + '」不在允許清單（BOM 現有單位＋單位對照表）');
+    if (!C[c]) err.push(k + '「' + m + '」：容器「' + c + '」不在允許清單');
+    out.push([name, m, Math.round(q * 1e4) / 1e4, u, c]);
+  });
+  if (err.length) throw fail_('資料沒有通過檢查，沒有寫入：' + err.slice(0, 8).join('；') + (err.length > 8 ? '…等 ' + err.length + ' 項' : ''), 'invalid', { errors: err });
+  return out;
+}
+/* 整支取代：同列數原地寫、變多在區塊尾插列、變少刪多的；0 列＝刪除；新甜點接在 A 欄最後一列之後。寫完讀回逐格比對 */
+function bomWriteBlock_(tab, blk, rows) {
+  var sh = tab.sh, w = 5, n = blk.idx.length, m = rows.length, start;
+  var put = rows.map(function (r) { return [safe_(r[0]), safe_(r[1]), Number(r[2]), safe_(r[3]), safe_(r[4])]; });
+  if (n && !blk.contiguous) throw fail_('這支甜點在 BOM 表的列不連續（第 ' + blk.idx.join('、') + ' 列），為了安全不自動改，請管理者先整理', 'layout');
+  if (!n) {
+    if (!m) return 0;
+    start = tab.lastA + 1;
+    if (start + m - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), start + m - 1 - sh.getMaxRows());   /* 只加剛好需要的列（BOM 本容量吃緊） */
+    var before = sh.getRange(start, 1, m, w).getValues();
+    if (before.some(function (r) { return r.some(function (v) { return ptNorm_(v) !== ''; }); })) throw fail_('BOM 表第 ' + start + ' 列之後不是空的（可能剛好有人在寫），這次先不寫', 'busy');
+  } else {
+    start = blk.idx[0];
+    if (m > n) sh.insertRowsAfter(start + n - 1, m - n);
+  }
+  if (m) {
+    [1, 2, 4].forEach(function (c) { sh.getRange(start, c, m, 1).setNumberFormat('@'); });
+    sh.getRange(start, 1, m, w).setValues(put);
+  }
+  if (n && m < n) sh.deleteRows(start + m, n - m);
+  SpreadsheetApp.flush();
+  if (m) {
+    var back = sh.getRange(start, 1, m, w).getValues();
+    back.forEach(function (r, i) {
+      for (var j = 0; j < w; j++) if (!ptSame_(r[j], rows[i][j])) throw fail_('BOM 表第 ' + (start + i) + ' 列第 ' + (j + 1) + ' 欄讀回不一致（寫「' + ptNorm_(rows[i][j]) + '」讀到「' + ptNorm_(r[j]) + '」）', 'verify');
+    });
+  }
+  return start;
+}
+/* 失敗時把這支甜點寫回原內容（盡力而為） */
+function bomRestore_(name, before) {
+  try { var tab = ptRead_('bom'); bomWriteBlock_(tab, bomBlock_(tab, name), before.map(function (r) { return [r[0], r[1], Number(r[2]), r[3], r[4]]; })); return true; }
+  catch (e) { return false; }
+}
+function bomBatch_() { return 'B' + stamp_() + '-' + ('000' + Math.floor(Math.random() * 1000)).slice(-3); }
+function bomLogW_(rec) {
+  try {
+    var t = load_('fact_bom_log');
+    ['before_json', 'after_json'].forEach(function (k) { if (str_(rec[k]).length > 45000) rec[k] = '（內容超過 45,000 字，未存；此批無法一鍵還原）'; });
+    put_(t, nextRow_(t), rec);
+  } catch (e) { /* 紀錄失敗不影響主流程 */ }
+}
+function mapRowVals_(r) { return [ptName_(r[0]), ptName_(r[1]), normDate_(r[4]), normDate_(r[5]), ptName_(r[6]), ptName_(r[7])]; }
+function mapRowDigest_(v) { return bomDigest_([v]).split('·')[0]; }
+function mapDesserts_(tab) { var o = {}; for (var i = 0; i < tab.lastA - 1; i++) { var b = ptName_(tab.vals[i][1]); if (b) (o[b] = o[b] || []).push(ptName_(tab.vals[i][0])); } return o; }
+
+function bomMeta_(p, auth) {
+  var tab = ptRead_('bom'), map = ptRead_('map'), U = bomUnits_(tab), C = bomContainers_(tab), mains = {}, subs = {};
+  for (var i = 0; i < map.lastA - 1; i++) { var g = ptName_(map.vals[i][6]), h = ptName_(map.vals[i][7]); if (g) mains[g] = 1; if (h) subs[h] = 1; }
+  var perms = {}; Object.keys(BOM_PERM_LABEL).forEach(function (k) { perms[k] = bomPerm_(auth, k); });
+  return { id: '', data: { desserts: bomDesserts_(tab), units: Object.keys(U), containers: Object.keys(C), mains: Object.keys(mains), subs: Object.keys(subs),
+    dessertMains: Object.keys(BOM_DESSERT_MAINS), mapB: mapDesserts_(map), perms: perms, role: auth.role, quiet: ['06:00', '07:45'], maxRows: BOM_MAX_ROWS } };
+}
+function bomGet_(p, auth) {
+  var name = ptName_(p.dessert); if (!name) throw fail_('缺甜點名稱');
+  var tab = ptRead_('bom'), blk = bomBlock_(tab, name);
+  var map = ptRead_('map'), pos = mapDesserts_(map)[name] || [];
+  return { id: name, data: { dessert: name, rows: blk.rows, start: blk.idx[0] || 0, contiguous: blk.contiguous, digest: bomDigest_(blk.rows), pos: pos, exists: blk.idx.length > 0 } };
+}
+function bomSave_(p, auth) {
+  needB_(auth, 'bom.edit'); bomQuiet_();
+  var name = ptName_(p.dessert), isNew = !!p.is_new, src = str_(p.source).trim().slice(0, 200) || '手動';
+  var tab = ptRead_('bom'), blk = bomBlock_(tab, name);
+  if (isNew && blk.idx.length) throw fail_('BOM 表已經有「' + name + '」（' + blk.idx.length + ' 列），請改用修改', 'dup', { digest: bomDigest_(blk.rows), rows: blk.rows });
+  if (!isNew) {
+    if (!blk.idx.length) throw fail_('BOM 表找不到「' + name + '」（可能剛被改名或刪除），請重新讀取', 'notfound');
+    var cur = bomDigest_(blk.rows);
+    if (cur !== str_(p.base_digest)) throw fail_('「' + name + '」剛被別人改過（版本不同），為了不蓋掉別人的修改，這次沒有存。請按「重新讀取」看最新內容再改。', 'conflict', { digest: cur, rows: blk.rows });
+  }
+  var rows = bomCheckRows_(name, p.rows, tab), after = rows.map(bomRowNorm_), before = blk.rows;
+  if (!isNew && bomDigest_(after) === bomDigest_(before)) return { id: name, data: { unchanged: true, digest: bomDigest_(before), rows: before, start: blk.idx[0] }, msg: '沒有變更' };
+  var batch = bomBatch_(), start;
+  try { start = bomWriteBlock_(tab, blk, rows); }
+  catch (e) {
+    var restored = before.length ? bomRestore_(name, before) : bomRestore_(name, []);
+    bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: isNew ? 'bom.create' : 'bom.replace', table: 'BOM表', key: name, source: src, before_json: JSON.stringify(before), after_json: JSON.stringify(after),
+      digest_before: bomDigest_(before), digest_after: '', rows_before: before.length, rows_after: after.length, ok: 'N', msg: errMsg_(e) + (restored ? '（已寫回原內容）' : '（⚠️ 寫回原內容失敗，請看備份）') });
+    throw e;
+  }
+  bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: isNew ? 'bom.create' : 'bom.replace', table: 'BOM表', key: name, source: src, before_json: JSON.stringify(before), after_json: JSON.stringify(after),
+    digest_before: bomDigest_(before), digest_after: bomDigest_(after), rows_before: before.length, rows_after: after.length, ok: 'Y', msg: '第 ' + start + ' 列起' });
+  return { id: name, data: { batch: batch, start: start, digest: bomDigest_(after), rows: after }, msg: (isNew ? '新增' : '更新') + ' BOM「' + name + '」' + after.length + ' 列（' + src + '）' };
+}
+function bomDelete_(p, auth) {
+  needB_(auth, 'bom.delete'); bomQuiet_();
+  var name = ptName_(p.dessert), tab = ptRead_('bom'), blk = bomBlock_(tab, name);
+  if (!blk.idx.length) throw fail_('BOM 表找不到「' + name + '」', 'notfound');
+  var cur = bomDigest_(blk.rows);
+  if (cur !== str_(p.base_digest)) throw fail_('「' + name + '」剛被別人改過，這次沒有刪除，請重新讀取', 'conflict', { digest: cur, rows: blk.rows });
+  var pos = mapDesserts_(ptRead_('map'))[name] || [];
+  if (pos.length) throw fail_('產品名稱對照表還有 ' + pos.length + ' 個 POS 品名對到「' + name + '」（' + pos.slice(0, 5).join('、') + '）：刪掉配方後這些銷售會展不出用料。請先到對照表改 B 欄或設結束日，再刪除。', 'inuse', { pos: pos });
+  var batch = bomBatch_();
+  try { bomWriteBlock_(tab, blk, []); }
+  catch (e) { bomRestore_(name, blk.rows); throw e; }
+  var left = bomBlock_(ptRead_('bom'), name);
+  if (left.idx.length) throw fail_('刪除後讀回還有 ' + left.idx.length + ' 列，請重新讀取確認', 'verify');
+  bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: 'bom.delete', table: 'BOM表', key: name, source: str_(p.source).slice(0, 200) || '手動',
+    before_json: JSON.stringify(blk.rows), after_json: '[]', digest_before: cur, digest_after: bomDigest_([]), rows_before: blk.rows.length, rows_after: 0, ok: 'Y', msg: '' });
+  return { id: name, data: { batch: batch, removed: blk.rows.length }, msg: '刪除 BOM「' + name + '」' + blk.rows.length + ' 列' };
+}
+function bomRename_(p, auth) {
+  needB_(auth, 'bom.delete'); bomQuiet_();
+  var name = ptName_(p.dessert), to = ptName_(p.to);
+  if (!to || to === name) throw fail_('請填新的甜點名稱');
+  if (to.length > 60 || /[\r\n\t]/.test(to)) throw fail_('新名稱太長或含換行');
+  var tab = ptRead_('bom'), blk = bomBlock_(tab, name);
+  if (!blk.idx.length) throw fail_('BOM 表找不到「' + name + '」', 'notfound');
+  if (bomBlock_(tab, to).idx.length) throw fail_('BOM 表已經有「' + to + '」，不能改成同名', 'dup');
+  var cur = bomDigest_(blk.rows);
+  if (cur !== str_(p.base_digest)) throw fail_('「' + name + '」剛被別人改過，這次沒有改名，請重新讀取', 'conflict', { digest: cur, rows: blk.rows });
+  var rows = blk.rows.map(function (r) { return [to, r[1], Number(r[2]), r[3], r[4]]; }), batch = bomBatch_();
+  try { bomWriteBlock_(tab, blk, rows); } catch (e) { bomRestore_(to, blk.rows); throw e; }
+  bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: 'bom.rename', table: 'BOM表', key: name + ' → ' + to, source: '改名',
+    before_json: JSON.stringify(blk.rows), after_json: JSON.stringify(rows.map(bomRowNorm_)), digest_before: cur, digest_after: bomDigest_(rows.map(bomRowNorm_)), rows_before: blk.rows.length, rows_after: rows.length, ok: 'Y', msg: '' });
+  /* 對照表 B 欄跟著改（同一批次記錄，可一起還原） */
+  var map = ptRead_('map'), changed = [];
+  for (var i = 0; i < map.lastA - 1; i++) {
+    if (ptName_(map.vals[i][1]) !== name) continue;
+    var rn = i + 2, bv = mapRowVals_(map.vals[i]);
+    map.sh.getRange(rn, 2).setNumberFormat('@').setValue(safe_(to));
+    var av = bv.slice(); av[1] = to; changed.push(bv[0]);
+    bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: 'map.edit', table: '產品名稱對照表', key: bv[0], source: '甜點改名連動', before_json: JSON.stringify(bv), after_json: JSON.stringify(av),
+      digest_before: mapRowDigest_(bv), digest_after: mapRowDigest_(av), rows_before: 1, rows_after: 1, ok: 'Y', msg: '第 ' + rn + ' 列 B 欄' });
+  }
+  SpreadsheetApp.flush();
+  return { id: name, data: { batch: batch, to: to, mapChanged: changed }, msg: '改名「' + name + '」→「' + to + '」（BOM ' + rows.length + ' 列；對照表 ' + changed.length + ' 列）' };
+}
+
+function mapGet_(p, auth) {
+  var map = ptRead_('map'), rows = [];
+  for (var i = 0; i < map.lastA - 1; i++) {
+    var v = mapRowVals_(map.vals[i]); if (!v[0] && !v[1]) continue;
+    rows.push({ row: i + 2, a: v[0], b: v[1], e: v[2], f: v[3], g: v[4], h: v[5], digest: mapRowDigest_(v) });
+  }
+  var desserts = bomDesserts_(ptRead_('bom')).map(function (d) { return d.name; });
+  return { id: '', data: { rows: rows, desserts: desserts } };
+}
+function mapCheck_(m, tab, bomNames, auth, isNew, curG) {
+  var err = [], a = ptName_(m.a), b = ptName_(m.b), e = normDate_(m.e), f = normDate_(m.f), g = ptName_(m.g), h = ptName_(m.h) || '無';
+  if (!a) err.push('POS 資料產品名稱必填'); else if (a.length > 80 || /[\r\n\t]/.test(a)) err.push('POS 產品名稱太長或含換行');
+  var re = /^\d{4}-\d{2}-\d{2}$/;
+  if ((e && !f) || (!e && f)) err.push('起始有效日、結束有效日要同時填或同時空白');
+  if (e && !re.test(e)) err.push('起始有效日格式要 YYYY-MM-DD'); if (f && !re.test(f)) err.push('結束有效日格式要 YYYY-MM-DD');
+  if (e && f && re.test(e) && re.test(f) && e > f) err.push('起始有效日不能晚於結束有效日');
+  var mains = {}, subs = {};
+  for (var i = 0; i < tab.lastA - 1; i++) { mains[ptName_(tab.vals[i][6])] = 1; subs[ptName_(tab.vals[i][7])] = 1; }
+  if (!g) err.push('主類別必填');
+  else if (!mains[g] && !(auth.role === ADMIN && m.new_main === true)) err.push('主類別「' + g + '」不在現有清單（新增主類別只限管理者，且 POS 儀表板白名單要同步改）');
+  if (h !== '無' && !subs[h] && !/^20\d{2} \S/.test(h)) err.push('次類別要是「無」或「YYYY 檔期名」（例：2026 萬聖節，年份後一個空白）');
+  if (g === '限定甜點' && (h === '無' || (!/^20\d{2} \S/.test(h) && !subs[h]))) err.push('主類別「限定甜點」的次類別要是檔期名（例：2026 萬聖節），採購系統靠它啟動檔期備料');
+  if (b && !bomNames[b]) err.push('手動對應產品名稱「' + b + '」在 BOM 表找不到（要和 BOM 表甜點名稱一模一樣；新甜點請先建 BOM）');
+  if (!b && BOM_DESSERT_MAINS[g]) err.push('主類別「' + g + '」是甜點，手動對應產品名稱（BOM 甜點名稱）必填，否則採購系統展不出用料');
+  if (err.length) throw fail_('資料沒有通過檢查，沒有寫入：' + err.join('；'), 'invalid', { errors: err });
+  return { a: a, b: b, e: e, f: f, g: g, h: h };
+}
+function mapSave_(p, auth) {
+  needB_(auth, 'map.edit'); bomQuiet_();
+  var origA = ptName_(p.orig_a), isNew = !origA, tab = ptRead_('map');
+  var bomNames = {}; bomDesserts_(ptRead_('bom')).forEach(function (d) { bomNames[d.name] = 1; });
+  var cur = null, curRow = 0;
+  if (!isNew) {
+    for (var i = 0; i < tab.lastA - 1; i++) if (ptName_(tab.vals[i][0]) === origA) { cur = mapRowVals_(tab.vals[i]); curRow = i + 2; break; }
+    if (!cur) throw fail_('對照表找不到「' + origA + '」（可能剛被改名或刪除），請重新讀取', 'notfound');
+    if (mapRowDigest_(cur) !== str_(p.base)) throw fail_('「' + origA + '」剛被別人改過，這次沒有存，請重新讀取', 'conflict', { row: cur });
+  }
+  var v = mapCheck_(p.row || {}, tab, bomNames, auth, isNew);
+  for (var j = 0; j < tab.lastA - 1; j++) if (ptName_(tab.vals[j][0]) === v.a && (isNew || j + 2 !== curRow)) throw fail_('對照表已經有「' + v.a + '」（第 ' + (j + 2) + ' 列），POS 品名不能重複', 'dup');
+  if (!isNew && (cur[4] !== v.g || cur[5] !== v.h)) needB_(auth, 'map.cat');
+  var after = [v.a, v.b, v.e, v.f, v.g, v.h], batch = bomBatch_(), rn;
+  var rowArr = [v.a, v.b, '', '', ymd_(v.e), ymd_(v.f), v.g, v.h];
+  if (isNew) {
+    var res = ptAppend_(tab, [rowArr]); rn = res.start;
+  } else {
+    rn = curRow;
+    if (!isNew && mapRowDigest_(after) === mapRowDigest_(cur)) return { id: v.a, data: { unchanged: true, row: rn, digest: mapRowDigest_(cur) }, msg: '沒有變更' };
+    var sh = tab.sh;
+    sh.getRange(rn, 1, 1, 2).setNumberFormat('@').setValues([[safe_(v.a), safe_(v.b)]]);
+    sh.getRange(rn, 5, 1, 2).setValues([[ymd_(v.e), ymd_(v.f)]]);
+    sh.getRange(rn, 7, 1, 2).setNumberFormat('@').setValues([[safe_(v.g), safe_(v.h)]]);
+    SpreadsheetApp.flush();
+    var back = mapRowVals_(sh.getRange(rn, 1, 1, 8).getValues()[0]);
+    if (JSON.stringify(back) !== JSON.stringify(after)) {
+      sh.getRange(rn, 1, 1, 2).setValues([[safe_(cur[0]), safe_(cur[1])]]); sh.getRange(rn, 5, 1, 2).setValues([[ymd_(cur[2]), ymd_(cur[3])]]); sh.getRange(rn, 7, 1, 2).setValues([[safe_(cur[4]), safe_(cur[5])]]);
+      throw fail_('對照表第 ' + rn + ' 列讀回不一致（' + JSON.stringify(back) + '），已寫回原值', 'verify');
+    }
+  }
+  bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: isNew ? 'map.add' : 'map.edit', table: '產品名稱對照表', key: v.a, source: str_(p.source).slice(0, 200) || '手動',
+    before_json: isNew ? '' : JSON.stringify(cur), after_json: JSON.stringify(after), digest_before: isNew ? '' : mapRowDigest_(cur), digest_after: mapRowDigest_(after), rows_before: isNew ? 0 : 1, rows_after: 1, ok: 'Y', msg: '第 ' + rn + ' 列' });
+  return { id: v.a, data: { batch: batch, row: rn, digest: mapRowDigest_(after), vals: after }, msg: (isNew ? '新增' : '更新') + '對照「' + v.a + '」→「' + (v.b || '（空）') + '」' };
+}
+function mapDelete_(p, auth) {
+  needB_(auth, 'map.delete'); bomQuiet_();
+  if (p.confirm_history !== true) throw fail_('刪除對照列會讓這個 POS 品名的全部歷史銷售變成「找不到」分類，請改設結束日；確定要刪請勾選確認', 'confirm');
+  var a = ptName_(p.a), tab = ptRead_('map'), cur = null, rn = 0;
+  for (var i = 0; i < tab.lastA - 1; i++) if (ptName_(tab.vals[i][0]) === a) { cur = mapRowVals_(tab.vals[i]); rn = i + 2; break; }
+  if (!cur) throw fail_('對照表找不到「' + a + '」', 'notfound');
+  if (mapRowDigest_(cur) !== str_(p.base)) throw fail_('「' + a + '」剛被別人改過，這次沒有刪除，請重新讀取', 'conflict', { row: cur });
+  var batch = bomBatch_();
+  tab.sh.deleteRow(rn); SpreadsheetApp.flush();
+  bomLogW_({ ts: now_(), batch: batch, role: auth.role, action: 'map.delete', table: '產品名稱對照表', key: a, source: '手動', before_json: JSON.stringify(cur), after_json: '',
+    digest_before: mapRowDigest_(cur), digest_after: '', rows_before: 1, rows_after: 0, ok: 'Y', msg: '原第 ' + rn + ' 列' });
+  return { id: a, data: { batch: batch }, msg: '刪除對照「' + a + '」' };
+}
+function bomLog_(p, auth) {
+  var t = load_('fact_bom_log'), key = ptName_(p.key), lim = Math.min(Number(p.limit) || 80, 300), out = [];
+  for (var i = t.rows.length - 1; i >= 0 && out.length < lim; i--) {
+    var r = t.rows[i];
+    if (key && str_(r.key).indexOf(key) < 0) continue;
+    out.push({ ts: str_(r.ts), batch: str_(r.batch), role: str_(r.role), action: str_(r.action), table: str_(r.table), key: str_(r.key), source: str_(r.source),
+      rows_before: r.rows_before, rows_after: r.rows_after, ok: str_(r.ok), msg: str_(r.msg), undoable: str_(r.ok) === 'Y' && str_(r.action) !== 'undo' && str_(r.before_json).charAt(0) !== '（' });
+  }
+  return { id: key, data: { rows: out } };
+}
+/* 還原一批：目前內容要等於該批寫入後的內容（指紋相同）才還原，避免蓋掉之後別人的修改 */
+function bomUndo_(p, auth) {
+  needB_(auth, 'undo'); bomQuiet_();
+  var batch = str_(p.batch).trim(), t = load_('fact_bom_log');
+  var recs = t.rows.filter(function (r) { return str_(r.batch) === batch && str_(r.ok) === 'Y' && str_(r.action) !== 'undo'; });
+  if (!recs.length) throw fail_('找不到可還原的異動批次 ' + batch, 'notfound');
+  if (t.rows.some(function (r) { return str_(r.action) === 'undo' && str_(r.source) === batch && str_(r.ok) === 'Y'; })) throw fail_('這一批已經還原過了', 'done');
+  var done = [], nb = bomBatch_();
+  recs.slice().reverse().forEach(function (r) {
+    var before = str_(r.before_json) ? JSON.parse(str_(r.before_json)) : null, after = str_(r.after_json) ? JSON.parse(str_(r.after_json)) : null;
+    if (str_(r.table) === 'BOM表') {
+      var key = str_(r.action) === 'bom.rename' ? str_(r.key).split(' → ')[1] : str_(r.key), orig = str_(r.action) === 'bom.rename' ? str_(r.key).split(' → ')[0] : key;
+      var tab = ptRead_('bom'), blk = bomBlock_(tab, key), curD = bomDigest_(blk.rows);
+      if (curD !== str_(r.digest_after)) throw fail_('「' + key + '」在這批之後又被改過（版本不同），不能自動還原；請在 BOM 管理手動改回', 'conflict');
+      bomWriteBlock_(tab, blk, (before || []).map(function (x) { return [orig, x[1], Number(x[2]), x[3], x[4]]; }));
+      done.push('BOM「' + key + '」→ ' + (before || []).length + ' 列');
+    } else {
+      var map = ptRead_('map'), a = after ? after[0] : str_(r.key), rn = 0, cur = null;
+      for (var i = 0; i < map.lastA - 1; i++) if (ptName_(map.vals[i][0]) === a) { cur = mapRowVals_(map.vals[i]); rn = i + 2; break; }
+      if (after && (!cur || mapRowDigest_(cur) !== str_(r.digest_after))) throw fail_('對照「' + a + '」在這批之後又被改過，不能自動還原', 'conflict');
+      if (!after && cur) throw fail_('對照「' + a + '」已經又被建立，不能自動還原', 'conflict');
+      if (before && after) {
+        map.sh.getRange(rn, 1, 1, 2).setValues([[safe_(before[0]), safe_(before[1])]]); map.sh.getRange(rn, 5, 1, 2).setValues([[ymd_(before[2]), ymd_(before[3])]]); map.sh.getRange(rn, 7, 1, 2).setValues([[safe_(before[4]), safe_(before[5])]]);
+      } else if (!before && after) { map.sh.deleteRow(rn); }
+      else if (before && !after) { ptAppend_(map, [[before[0], before[1], '', '', ymd_(before[2]), ymd_(before[3]), before[4], before[5]]]); }
+      SpreadsheetApp.flush();
+      done.push('對照「' + a + '」');
+    }
+  });
+  bomLogW_({ ts: now_(), batch: nb, role: auth.role, action: 'undo', table: '', key: done.join('；').slice(0, 300), source: batch, before_json: '', after_json: '', digest_before: '', digest_after: '', rows_before: '', rows_after: '', ok: 'Y', msg: '還原批次 ' + batch });
+  return { id: batch, data: { batch: nb, done: done }, msg: '還原 ' + batch + '：' + done.join('；') };
+}
+ACTIONS.bomMeta = bomMeta_; ACTIONS.bomGet = bomGet_; ACTIONS.bomSave = bomSave_; ACTIONS.bomDelete = bomDelete_; ACTIONS.bomRename = bomRename_;
+ACTIONS.mapGet = mapGet_; ACTIONS.mapSave = mapSave_; ACTIONS.mapDelete = mapDelete_; ACTIONS.bomLog = bomLog_; ACTIONS.bomUndo = bomUndo_;
+WRITES.bomSave = 1; WRITES.bomDelete = 1; WRITES.bomRename = 1; WRITES.mapSave = 1; WRITES.mapDelete = 1; WRITES.bomUndo = 1;
 
 /* ================= 小工具 ================= */
 function now_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
