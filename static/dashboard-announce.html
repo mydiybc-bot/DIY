@@ -1,0 +1,738 @@
+<!-- 2026-10-02 v1：新頁「📢 公告及工作清單」（經營者「20261001 待處理事項」#1：把 NUEIP 公告管理／工作清單搬到 Google 雲端硬碟）。
+     資料：雲端硬碟資料夾「自己做 公告及工作清單」裡的試算表「公告及工作清單_資料庫」＋附檔子資料夾；後端＝獨立 GAS 專案「公告及工作清單 API」。
+     讀內容要「看公告」密碼（dim_auth：announce），發佈／修改／刪除／匯入要「發佈者」密碼（dim_auth：announce_pub）；兩組密碼都在 GAS 端驗（repo 公開，前端遮罩擋不住）。
+     寫入一律兩層確認；刪除＝標記刪除＋附檔搬「_已刪除」，不永久刪。內文顯示前用 DOMPurify 清掉危險程式碼。 -->
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>公告及工作清單 | 自己做烘焙聚樂部</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root{
+  --main:#2E6F7E; --main-dark:#1F4F5B; --main-light:#5E9CAB; --tint:#E8F3F5;
+  --bg:#F7FAFA; --card:#FFFFFF; --text:#22312F; --muted:#5B6B69; --border:#D5E3E5; --hover:#EEF6F7;
+  --red:#C43030; --orange:#D9822B; --green:#3C8D5A; --gray:#8A9694;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px}
+.header{background:linear-gradient(135deg,var(--main-dark),var(--main),var(--main-light));color:#fff;padding:18px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;box-shadow:0 4px 16px rgba(31,79,91,.3)}
+.header h1{font-size:20px;font-weight:800}
+.header p{font-size:12px;opacity:.88;margin-top:3px}
+.hdr-r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.header-back{color:#fff;text-decoration:none;font-size:13px;font-weight:700;background:rgba(255,255,255,.18);padding:7px 14px;border-radius:8px}
+.pubbtn{font-family:inherit;font-size:13px;font-weight:800;border:1.5px solid rgba(255,255,255,.7);background:transparent;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer}
+.pubbtn.on{background:#FFE7A8;color:#5B3B00;border-color:#FFE7A8}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 16px 40px}
+.dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+.dsb b{font-weight:800;white-space:nowrap}
+.dsb-auto{background:#EFF7EF;border-color:#C9E3CA;color:#2F5D33}
+.dsb-warn{background:#FFF4E5;border-color:#F3D19C;color:#7A4B00}
+.dsb-err{background:#FDECEC;border-color:#F2B8B8;color:#8A1F1F}
+.dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+.dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A4A48;font-size:13px}
+.dsb-sop.open{display:block}
+.dsb-sop ol{margin:0;padding-left:20px}.dsb-sop li{margin:3px 0}
+@media(max-width:600px){.dsb-info{margin-left:0}.header{padding:14px 16px}input[type=search]{min-width:0;flex-basis:100%}}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;border-bottom:2px solid var(--border)}
+.tab{font-family:inherit;font-size:14px;font-weight:800;color:var(--muted);background:none;border:none;border-bottom:3px solid transparent;padding:9px 14px;cursor:pointer;margin-bottom:-2px}
+.tab.on{color:var(--main-dark);border-bottom-color:var(--main)}
+.tab .c{font-size:12px;background:var(--tint);color:var(--main-dark);border-radius:10px;padding:1px 8px;margin-left:4px}
+.panel{display:none}.panel.on{display:block}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+.bar label{font-size:12px;color:var(--muted);font-weight:700}
+.seg{display:inline-flex;border:1.5px solid var(--border);border-radius:9px;overflow:hidden}
+.seg button{font-family:inherit;font-size:13px;font-weight:700;border:none;background:#fff;color:var(--muted);padding:6px 11px;cursor:pointer}
+.seg button.on{background:var(--main);color:#fff}
+.seg button .c{font-size:12px;opacity:.85;margin-left:3px}
+select,input[type=text],input[type=date],input[type=search],textarea{font-family:inherit;font-size:13px;border:1.5px solid var(--border);border-radius:8px;padding:6px 9px;background:#fff;color:var(--text)}
+input[type=search]{min-width:200px;flex:1}
+.btn{font-family:inherit;font-size:13px;font-weight:800;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;background:var(--main);color:#fff}
+.btn.ghost{background:#fff;color:var(--main-dark);border:1.5px solid var(--border)}
+.btn.danger{background:#fff;color:var(--red);border:1.5px solid #F2B8B8}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.pubonly{display:none!important}
+body.pub .pubonly{display:inline-flex!important}
+body.pub div.pubonly,body.pub section.pubonly{display:block!important}
+.list{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer;display:flex;gap:12px;align-items:flex-start}
+.card:hover{background:var(--hover)}
+.card .main{flex:1;min-width:0}
+.card .ttl{font-size:15px;font-weight:800;line-height:1.45;word-break:break-word}
+.card .meta{font-size:12px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 10px}
+.card .snip{font-size:13px;color:#43524F;margin-top:6px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pill{display:inline-block;font-size:12px;font-weight:800;border-radius:10px;padding:1px 8px;white-space:nowrap}
+.p-on{background:#E3F4E8;color:var(--green)}.p-off{background:#EEF0EF;color:var(--gray)}.p-soon{background:#FFF1DC;color:var(--orange)}
+.p-pin{background:#FDE7E7;color:var(--red)}.p-cat{background:var(--tint);color:var(--main-dark)}.p-nu{background:#F1ECF8;color:#5B4690}
+.empty{padding:30px;text-align:center;color:var(--muted);background:#fff;border:1px dashed var(--border);border-radius:12px}
+mark{background:#FFF2A8;padding:0 1px}
+.more{display:block;margin:10px auto 0}
+.tblw{overflow-x:auto;background:#fff;border:1px solid var(--border);border-radius:12px}
+table.t{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
+table.t th{background:var(--tint);color:var(--main-dark);text-align:left;padding:8px 10px;font-weight:800;white-space:nowrap;position:sticky;top:0}
+table.t td{border-top:1px solid var(--border);padding:8px 10px;vertical-align:top}
+table.t tr.r{cursor:pointer}table.t tr.r:hover td{background:var(--hover)}
+.late{color:var(--red);font-weight:800}
+/* 對話框 */
+.mask{position:fixed;inset:0;background:rgba(20,35,33,.55);z-index:900;display:none;align-items:flex-start;justify-content:center;padding:24px 12px;overflow-y:auto}
+.mask.on{display:flex}
+.dlg{background:#fff;border-radius:14px;width:min(920px,100%);padding:18px 20px 20px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+.dlg h2{font-size:18px;font-weight:800;line-height:1.45;word-break:break-word}
+.dlg .x{float:right;border:none;background:none;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
+.dlg .meta{font-size:12px;color:var(--muted);margin:6px 0 12px;display:flex;flex-wrap:wrap;gap:4px 12px}
+.content{font-size:14px;line-height:1.8;word-break:break-word;border-top:1px solid var(--border);padding-top:12px}
+.content img{max-width:100%;height:auto}
+.content table{border-collapse:collapse;max-width:100%;display:block;overflow-x:auto}
+.content td,.content th{border:1px solid #C9D6D8;padding:4px 8px}
+.content p{margin:0 0 6px}
+.content ul,.content ol{padding-left:22px}
+.atts{margin-top:14px;border-top:1px dashed var(--border);padding-top:10px}
+.atts a{display:inline-flex;gap:6px;align-items:center;margin:0 10px 6px 0;font-size:13px;color:var(--main-dark);font-weight:700}
+.dlg .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;justify-content:flex-end}
+.form{display:grid;grid-template-columns:110px 1fr;gap:9px 12px;align-items:center;margin-top:10px}
+.form>label{font-size:13px;font-weight:800;color:var(--main-dark)}
+.form .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+@media(max-width:640px){.form{grid-template-columns:1fr}.form>label{margin-top:4px}}
+.tb{display:flex;flex-wrap:wrap;gap:4px;padding:6px;border:1.5px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0;background:var(--tint)}
+.tb button{font-family:inherit;font-size:13px;min-width:32px;height:30px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer;padding:0 7px}
+.ed{min-height:220px;max-height:55vh;overflow-y:auto;border:1.5px solid var(--border);border-radius:0 0 8px 8px;padding:10px 12px;line-height:1.8;font-size:14px;background:#fff}
+.ed:focus{outline:2px solid var(--main-light)}
+.ed img{max-width:100%}
+.ed table{border-collapse:collapse}.ed td,.ed th{border:1px solid #C9D6D8;padding:4px 8px;min-width:40px}
+.hint{font-size:12px;color:var(--muted);line-height:1.6}
+.err{color:var(--red);font-size:13px;font-weight:700;min-height:18px;margin-top:8px}
+.prog{font-size:13px;color:var(--main-dark);font-weight:700;margin-top:8px}
+.attrow{display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0}
+.disc{margin-top:14px;border-top:1px dashed var(--border);padding-top:10px}
+.disc .d{background:var(--tint);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px;line-height:1.6;white-space:pre-wrap}
+.disc .d b{color:var(--main-dark)}
+.imp-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0}
+.imp-sum div{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.imp-sum b{display:block;font-size:20px;color:var(--main-dark)}
+.imp-sum span{font-size:12px;color:var(--muted)}
+pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;overflow-x:auto;line-height:1.5}
+.footer{text-align:center;padding:20px;font-size:12px;color:var(--muted)}
+/* 密碼閘門 */
+#gate{position:fixed;inset:0;z-index:99999;background:#1F4F5B;display:flex;align-items:center;justify-content:center}
+#gate .box{background:#fff;border-radius:14px;padding:28px 26px;width:min(330px,88vw);text-align:center}
+#gate h3{font-size:17px;font-weight:800;color:#1F4F5B;margin-bottom:4px}
+#gate input{width:100%;padding:10px 40px 10px 10px;border:1px solid #C9D6D8;border-radius:8px;font-size:15px}
+#gate .eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer}
+#gate .go{width:100%;padding:10px;border:none;border-radius:8px;background:#2E6F7E;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px}
+#gate a{font-size:12px;color:#5B6B69}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="box">
+    <h3 id="gTitle">🔐 公告及工作清單</h3>
+    <div style="font-size:12px;color:#5B6B69;margin-bottom:14px" id="gSub">請輸入「看公告」密碼</div>
+    <div style="position:relative"><input id="gPwd" type="password" autocomplete="new-password" name="pw-announce" data-lpignore="true" data-1p-ignore><button type="button" class="eye" id="gEye" aria-label="顯示密碼">👁</button></div>
+    <div id="gErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>
+    <button class="go" id="gBtn">進入</button>
+    <div style="margin-top:12px" id="gFoot"><a href="hub.html">⬅ 回首頁</a></div>
+  </div>
+</div>
+
+<div class="header">
+  <div>
+    <h1>📢 公告及工作清單</h1>
+    <p>公告發佈・查詢・查閱 ｜ 工作清單 ｜ 資料存在 Google 雲端硬碟（取代 NUEIP）</p>
+  </div>
+  <div class="hdr-r">
+    <button class="pubbtn" id="pubBtn" title="發佈、修改、刪除要另一組密碼">✏️ 發佈模式</button>
+    <a class="header-back" href="hub.html">⬅ 回首頁</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>📦 資料狀態</b><span id="dsbTxt">讀取中…</span>
+    <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 詳細說明</button>
+    <div class="dsb-sop" id="dsbSop"><ol>
+      <li><b>資料放哪裡：</b>雲端硬碟資料夾「自己做 公告及工作清單」裡的試算表「公告及工作清單_資料庫」；附檔在同資料夾的「附檔／公告編號」子資料夾。</li>
+      <li><b>怎麼改：</b>一律在本頁按「✏️ 發佈模式」輸入發佈者密碼後新增、修改、刪除。<b>請不要直接改試算表</b>（本頁會檢查格式、記錄是誰改的）。</li>
+      <li><b>刪除：</b>只是標記刪除，資料列還在、附檔搬到「_已刪除」資料夾，可以找回。</li>
+      <li><b>公告狀態：</b>用公告的開始日／結束日跟今天比：今天在期間內＝進行中；結束日已過＝已過期；開始日還沒到＝尚未開始；沒填結束日＝長期有效。</li>
+      <li><b>密碼：</b>看內容要「看公告」密碼，發佈要「發佈者」密碼；兩組都在「儀表板權限中心」管理。關掉分頁就要重新輸入。</li>
+      <li><b>從 NUEIP 搬過來的公告</b>標「NUEIP」字樣，保留原建立者與建立時間。</li>
+    </ol></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab on" data-tab="ann">📢 公告<span class="c" id="cAnn">–</span></button>
+    <button class="tab" data-tab="work">✅ 工作清單<span class="c" id="cWork">–</span></button>
+    <button class="tab pubonly" data-tab="imp">📥 匯入（NUEIP 搬家）</button>
+  </div>
+
+  <!-- 公告 -->
+  <section class="panel on" id="p-ann">
+    <div class="bar">
+      <div class="seg" id="annSt">
+        <button data-v="on" class="on">進行中<span class="c"></span></button><button data-v="soon">尚未開始<span class="c"></span></button><button data-v="off">已過期<span class="c"></span></button><button data-v="all">全部<span class="c"></span></button>
+      </div>
+      <select id="annCat"><option value="">全部分類</option></select>
+      <select id="annType"><option value="">全部類型</option></select>
+      <button class="btn pubonly" id="annNew">＋ 新增公告</button>
+    </div>
+    <div class="bar">
+      <input type="search" id="annQ" placeholder="🔍 搜尋標題、內文、建立者（空白分隔＝都要有）">
+      <label>開始日</label><input type="date" id="annFrom"><label>～</label><input type="date" id="annTo">
+      <button class="btn ghost" id="annClr">清除條件</button>
+    </div>
+    <div class="list" id="annList"></div>
+    <button class="btn ghost more" id="annMore" style="display:none">顯示更多</button>
+  </section>
+
+  <!-- 工作清單 -->
+  <section class="panel" id="p-work">
+    <div class="bar">
+      <div class="seg" id="wkSt">
+        <button data-v="open" class="on">未完成<span class="c"></span></button><button data-v="done">已完成<span class="c"></span></button><button data-v="all">全部<span class="c"></span></button>
+      </div>
+      <select id="wkProg"><option value="">全部進度</option></select>
+      <select id="wkImp"><option value="">全部重要性</option></select>
+      <select id="wkOrigin"><option value="">全部來源</option></select>
+      <button class="btn pubonly" id="wkNew">＋ 新增工作</button>
+    </div>
+    <div class="bar"><input type="search" id="wkQ" placeholder="🔍 搜尋工作項目、負責人、內容"><button class="btn ghost" id="wkClr">清除條件</button></div>
+    <div class="tblw"><table class="t"><thead><tr><th>工作項目</th><th>負責人</th><th>日期</th><th>期限</th><th>進度</th><th>重要性</th><th>來源</th><th>討論</th></tr></thead><tbody id="wkBody"></tbody></table></div>
+  </section>
+
+  <!-- 匯入 -->
+  <section class="panel" id="p-imp">
+    <div class="dsb dsb-warn"><b>📥 一次性搬家用</b><span>選 Claude 從 NUEIP 匯出整理好的 JSON 檔 → 先看預覽 → 確認後才寫入。同一則（NUEIP 編號相同）重匯會自動略過，不會重複。</span></div>
+    <div class="bar"><input type="file" id="impFile" accept=".json,application/json"><button class="btn" id="impGo" disabled>確認寫入</button></div>
+    <div id="impPrev"></div>
+    <div class="prog" id="impProg"></div>
+    <details style="margin-top:14px"><summary class="hint" style="cursor:pointer">匯入檔格式（給整理資料的人看）</summary>
+<pre class="fmt">{ "kind": "announce", "source": "NUEIP 公告管理 2026-10-xx 匯出",
+  "items": [ { "nueip_id": "12345", "title": "…", "category": "公告", "type": "一般公告",
+               "start_date": "2026-01-01", "end_date": "2026-01-31", "pinned": false, "audience": "全體",
+               "creator": "…", "created_at": "2026-01-01 09:00:00", "html": "&lt;p&gt;…&lt;/p&gt;",
+               "att": [ { "name": "規章.pdf", "mime": "application/pdf", "b64": "…" } ] } ] }
+{ "kind": "work", "items": [ { "nueip_id": "W1", "item": "…", "owner": "…", "creator": "…", "date": "2026-01-01",
+               "due_date": "", "done_date": "", "progress": "進行中", "importance": "★★", "origin": "工作交辦",
+               "html": "…", "created_at": "…", "discuss": [ { "author": "…", "ts": "…", "text": "…" } ] } ] }</pre></details>
+  </section>
+</div>
+
+<div class="footer">自己做烘焙聚樂部 ｜ 公告及工作清單 v1（2026-10-02）</div>
+
+<!-- 讀公告 -->
+<div class="mask" id="mView"><div class="dlg">
+  <button class="x" data-close>×</button>
+  <h2 id="vTitle"></h2>
+  <div class="meta" id="vMeta"></div>
+  <div class="content" id="vBody"></div>
+  <div class="atts" id="vAtt"></div>
+  <div class="acts"><button class="btn danger pubonly" id="vDel">🗑 刪除</button><button class="btn ghost pubonly" id="vEdit">✎ 編輯</button><button class="btn ghost" data-close>關閉</button></div>
+</div></div>
+
+<!-- 編輯公告 -->
+<div class="mask" id="mEdit"><div class="dlg">
+  <button class="x" data-close>×</button>
+  <h2 id="eHead">新增公告</h2>
+  <div class="form">
+    <label>標題 *</label><input type="text" id="eTitle" maxlength="200">
+    <label>分類</label><div class="row"><select id="eCat"></select><button class="btn ghost" id="eCatAdd" type="button">＋ 新分類</button></div>
+    <label>類型</label><select id="eType"></select>
+    <label>公告期間</label><div class="row"><input type="date" id="eStart"><span>～</span><input type="date" id="eEnd"><span class="hint">結束日空白＝長期有效</span></div>
+    <label>置頂</label><label style="font-weight:600;color:var(--text);font-size:13px"><input type="checkbox" id="ePin"> 放在最上面</label>
+    <label>發布對象</label><input type="text" id="eAud" maxlength="300" placeholder="例：全體夥伴／店長／3 店">
+  </div>
+  <div style="margin-top:12px">
+    <div class="tb" id="eTb">
+      <button type="button" data-c="bold" title="粗體"><b>B</b></button><button type="button" data-c="italic" title="斜體"><i>I</i></button><button type="button" data-c="underline" title="底線"><u>U</u></button>
+      <button type="button" data-c="formatBlock" data-v="h3" title="小標題">標題</button><button type="button" data-c="formatBlock" data-v="p" title="一般文字">內文</button>
+      <button type="button" data-c="insertUnorderedList" title="項目符號">• 清單</button><button type="button" data-c="insertOrderedList" title="編號">1. 清單</button>
+      <button type="button" data-c="foreColor" data-v="#C43030" title="紅字" style="color:#C43030;font-weight:800">紅</button><button type="button" data-c="foreColor" data-v="#22312F" title="黑字">黑</button>
+      <button type="button" data-c="link" title="插入連結">🔗</button><button type="button" data-c="table" title="插入表格">▦ 表格</button><button type="button" data-c="img" title="插入圖片">🖼 圖片</button>
+      <button type="button" data-c="removeFormat" title="清除格式">清除格式</button>
+    </div>
+    <div class="ed" id="eBody" contenteditable="true"></div>
+    <div class="hint">可以直接從 Word／網頁貼上（會自動清掉不安全的內容）；貼上或插入的圖片，存檔時會自動放到雲端硬碟。</div>
+  </div>
+  <div style="margin-top:12px">
+    <b style="font-size:13px;color:var(--main-dark)">附檔</b> <span class="hint">（每個 ≤10MB、每則最多 10 個）</span>
+    <div id="eAtts"></div>
+    <input type="file" id="eFiles" multiple>
+  </div>
+  <div class="err" id="eErr"></div><div class="prog" id="eProg"></div>
+  <div class="acts"><button class="btn ghost" data-close>取消</button><button class="btn" id="eSave">💾 儲存並發佈</button></div>
+</div></div>
+
+<!-- 工作 -->
+<div class="mask" id="mWork"><div class="dlg">
+  <button class="x" data-close>×</button>
+  <h2 id="wHead"></h2>
+  <div id="wView"></div>
+  <div id="wForm" style="display:none">
+    <div class="form">
+      <label>工作項目 *</label><input type="text" id="wItem" maxlength="200">
+      <label>負責人</label><input type="text" id="wOwner" maxlength="100" placeholder="例：3 店 店長／王小明">
+      <label>日期</label><div class="row"><input type="date" id="wDate"><span>期限</span><input type="date" id="wDue"><span>完成日</span><input type="date" id="wDone"></div>
+      <label>進度</label><select id="wProg"></select>
+      <label>重要性</label><select id="wImp"></select>
+      <label>來源</label><select id="wOrigin"><option value="">（不指定）</option><option>個人</option><option>主管</option><option>工作交辦</option></select>
+      <label>工作內容</label><textarea id="wText" rows="6"></textarea>
+    </div>
+  </div>
+  <div class="err" id="wErr"></div>
+  <div class="acts"><button class="btn danger pubonly" id="wDel">🗑 刪除</button><button class="btn ghost pubonly" id="wEditBtn">✎ 編輯</button><button class="btn ghost" data-close>關閉</button><button class="btn" id="wSave" style="display:none">💾 儲存</button></div>
+</div></div>
+
+<script>
+(function(){
+'use strict';
+/* ===== 設定 ===== */
+var API_PROD = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';
+var API = API_PROD;
+try { var qa = new URLSearchParams(location.search).get('annapi'); if (qa && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) API = qa; } catch(_){}
+var K_VIEW = 'ann:pw', K_PUB = 'ann:pub', MAX_FILE = 10*1024*1024, MAX_ATT = 10, PAGE = 40, BATCH = 20;
+var S = { pw:'', pub:'', anns:[], works:[], opts:{}, loadedAt:'', annSt:'on', wkSt:'open', annShown:PAGE, cur:null, curWork:null, editId:'', editBase:'', editAtts:[], newFiles:[], imp:null };
+
+/* ===== 小工具 ===== */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function today(){ var d=new Date(Date.now()+8*3600e3); return d.toISOString().slice(0,10); }
+function rq(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function ss(k,v){ try{ if(v===undefined) return sessionStorage.getItem(k)||''; if(v===null) sessionStorage.removeItem(k); else sessionStorage.setItem(k,v); }catch(_){ return ''; } }
+function fmtSize(n){ if (!(n>0)) return '0 KB'; return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB'; }
+DOMPurify.addHook('afterSanitizeAttributes', function(n){ if(n.tagName==='A'){ n.setAttribute('target','_blank'); n.setAttribute('rel','noopener noreferrer'); } });
+function clean(h){ return DOMPurify.sanitize(String(h||''), { FORBID_TAGS:['style','script','iframe','form','input','button','textarea','select','object','embed','link','meta','base'], FORBID_ATTR:['class','id'] }); }
+function call(body, pw, ms){
+  body = Object.assign({}, body, { password: pw });
+  var ctl = window.AbortController ? new AbortController() : null, to = setTimeout(function(){ if(ctl) ctl.abort(); }, ms||60000);
+  return fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body), signal: ctl?ctl.signal:undefined })
+    .then(function(r){ return r.json(); })
+    .then(function(j){ clearTimeout(to); return j; }, function(e){ clearTimeout(to); return { ok:false, code:'net', msg: (e && e.name==='AbortError') ? '連線逾時' : '連線失敗（'+(e&&e.message||e)+'）' }; });
+}
+/* 寫入：帶回條；網路斷掉時用同一張回條再送一次（後端認得回條，不會重複寫） */
+function write(body, ms){
+  body.rq = body.rq || rq();
+  return call(body, S.pub, ms).then(function(r){
+    if (r.ok || r.code !== 'net') return r;
+    return call(body, S.pub, ms);
+  }).then(function(r){ if (!r.ok && r.code==='auth') { S.pub=''; ss(K_PUB,null); setPub(false); } return r; });
+}
+function twice(a, b){ return confirm(a) && confirm('再確認一次：\n' + b); }
+function stOf(a){ var t=today(); if (a.start_date && a.start_date>t) return 'soon'; if (a.end_date && a.end_date<t) return 'off'; return 'on'; }
+var ST_TXT = { on:['進行中','p-on'], soon:['尚未開始','p-soon'], off:['已過期','p-off'] };
+
+/* ===== 密碼閘門（看公告）＋發佈模式 ===== */
+function gate(mode){
+  var g=$('gate'), inp=$('gPwd'), btn=$('gBtn'), err=$('gErr');
+  g.style.display='flex'; err.textContent=''; inp.value=''; setTimeout(function(){ inp.value=''; inp.focus(); }, 120);
+  $('gTitle').textContent = mode==='pub' ? '✏️ 發佈模式' : '🔐 公告及工作清單';
+  $('gSub').textContent = mode==='pub' ? '請輸入「發佈者」密碼（只發給總部）' : '請輸入「看公告」密碼';
+  $('gFoot').innerHTML = mode==='pub' ? '<a href="#" id="gCancel">取消</a>' : '<a href="hub.html">⬅ 回首頁</a>';
+  if (mode==='pub') $('gCancel').onclick = function(e){ e.preventDefault(); g.style.display='none'; };
+  function go(){
+    var v=(inp.value||'').trim(); if(!v) return;
+    btn.disabled=true; btn.textContent='驗證中…'; err.textContent='';
+    call({ action:'whoami', role: mode==='pub'?'pub':'' }, v, 40000).then(function(r){
+      btn.disabled=false; btn.textContent='進入';
+      if (r.ok) {
+        g.style.display='none';
+        if (mode==='pub') { S.pub=v; ss(K_PUB,v); setPub(true); }
+        else { S.pw=v; ss(K_VIEW,v); loadAll(); }
+      } else {
+        err.textContent = (r.msg || '驗證失敗') + (r.code==='net' ? '（若是剛啟用，可能後端還沒完成 Google 授權）' : ''); inp.value=''; inp.focus();
+      }
+    });
+  }
+  btn.onclick=go; inp.onkeydown=function(e){ if(e.key==='Enter') go(); };
+}
+$('gEye').onclick=function(){ var i=$('gPwd'); i.type = i.type==='password'?'text':'password'; this.textContent = i.type==='password'?'👁':'🙈'; };
+function setPub(on){
+  document.body.classList.toggle('pub', !!on);
+  $('pubBtn').classList.toggle('on', !!on);
+  $('pubBtn').textContent = on ? '✏️ 發佈模式：開（點一下關閉）' : '✏️ 發佈模式';
+  if (!on && document.querySelector('.tab.on').dataset.tab==='imp') showTab('ann');
+}
+$('pubBtn').onclick=function(){ if (S.pub) { S.pub=''; ss(K_PUB,null); setPub(false); } else gate('pub'); };
+
+/* ===== 分頁 ===== */
+function showTab(t){
+  document.querySelectorAll('.tab').forEach(function(b){ b.classList.toggle('on', b.dataset.tab===t); });
+  document.querySelectorAll('.panel').forEach(function(p){ p.classList.toggle('on', p.id==='p-'+t); });
+  try{ history.replaceState(null,'','#'+t); }catch(_){}
+}
+document.querySelectorAll('.tab').forEach(function(b){ b.onclick=function(){ showTab(b.dataset.tab); }; });
+document.querySelectorAll('[data-close]').forEach(function(b){ b.onclick=function(){ b.closest('.mask').classList.remove('on'); }; });
+document.querySelectorAll('.mask').forEach(function(m){ m.addEventListener('mousedown', function(e){ if (e.target===m && m.id!=='mEdit') m.classList.remove('on'); }); });
+
+/* ===== 讀資料 ===== */
+function dsb(cls, html){ var d=$('dsb'); d.className='dsb '+cls; $('dsbTxt').innerHTML=html; }
+function loadAll(){
+  dsb('dsb-auto','讀取中…');
+  return Promise.all([ call({action:'list'}, S.pw), call({action:'workList'}, S.pw), call({action:'options'}, S.pw) ]).then(function(rs){
+    var bad = rs.filter(function(r){ return !r.ok; })[0];
+    if (bad) {
+      if (bad.code==='auth') { S.pw=''; ss(K_VIEW,null); gate('view'); return; }
+      dsb('dsb-err','❌ 讀取失敗：'+esc(bad.msg)+'　<a href="#" onclick="location.reload();return false">重新整理</a>'); return;
+    }
+    S.anns = rs[0].data.rows; S.works = rs[1].data.rows; S.opts = rs[2].data || {};
+    S.loadedAt = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
+    var nu = S.anns.filter(function(a){ return a.src==='nueip'; }).length;
+    dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 <b>'+S.works.length+'</b> 件 ｜ 讀取時間 '+S.loadedAt+' ｜ 🔒 內容需密碼');
+    fillOpts(); renderAnn(); renderWork();
+  });
+}
+function optList(kind, extra){ var o=(S.opts[kind]||[]).slice(); (extra||[]).forEach(function(v){ if(v && o.indexOf(v)<0) o.push(v); }); return o; }
+function fillSel(sel, vals, first){ var cur=sel.value; sel.innerHTML=(first!==undefined?'<option value="">'+first+'</option>':'')+vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join(''); if (vals.indexOf(cur)>-1||cur==='') sel.value=cur; }
+function uniq(arr){ var o=[]; arr.forEach(function(v){ if(v && o.indexOf(v)<0) o.push(v); }); return o; }
+function fillOpts(){
+  fillSel($('annCat'), optList('category', uniq(S.anns.map(function(a){return a.category;}))), '全部分類');
+  fillSel($('annType'), optList('type', uniq(S.anns.map(function(a){return a.type;}))), '全部類型');
+  fillSel($('wkProg'), optList('progress', uniq(S.works.map(function(a){return a.progress;}))), '全部進度');
+  fillSel($('wkImp'), optList('importance', uniq(S.works.map(function(a){return a.importance;}))), '全部重要性');
+  fillSel($('wkOrigin'), uniq(['個人','主管','工作交辦'].concat(S.works.map(function(a){return a.origin;}))), '全部來源');
+}
+
+/* ===== 公告列表 ===== */
+function terms(q){ return String(q||'').trim().toLowerCase().split(/\s+/).filter(Boolean); }
+function hit(text, ts){ text=String(text||'').toLowerCase(); return ts.every(function(t){ return text.indexOf(t)>-1; }); }
+function hl(s, ts){ s=esc(s); ts.forEach(function(t){ var e=esc(t).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); s=s.replace(new RegExp('('+e+')','gi'),'<mark>$1</mark>'); }); return s; }
+function snip(text, ts){ text=String(text||'').replace(/\s+/g,' '); if(!ts.length) return text.slice(0,140); var i=text.toLowerCase().indexOf(ts[0]); return (i>40?'…':'')+text.slice(Math.max(0,i-40), Math.max(0,i-40)+150); }
+function annFiltered(stOverride){
+  var st = stOverride || S.annSt, cat=$('annCat').value, ty=$('annType').value, f=$('annFrom').value, t=$('annTo').value, ts=terms($('annQ').value);
+  return S.anns.filter(function(a){
+    if (st!=='all' && stOf(a)!==st) return false;
+    if (cat && a.category!==cat) return false;
+    if (ty && a.type!==ty) return false;
+    if (f && (a.start_date||'')<f) return false;
+    if (t && (a.start_date||'')>t) return false;
+    if (ts.length && !hit(a.title+' '+a.text+' '+a.creator+' '+a.category+' '+a.audience, ts)) return false;
+    return true;
+  }).sort(function(a,b){ if (a.pinned!==b.pinned) return a.pinned?-1:1; return (b.start_date||b.created_at||'').localeCompare(a.start_date||a.created_at||''); });
+}
+function renderAnn(){
+  ['on','soon','off','all'].forEach(function(k){ var b=document.querySelector('#annSt [data-v="'+k+'"] .c'); if(b) b.textContent=annFiltered(k).length; });
+  var rows=annFiltered(), ts=terms($('annQ').value), box=$('annList');
+  $('cAnn').textContent = S.anns.filter(function(a){ return stOf(a)==='on'; }).length;
+  if (!rows.length) { box.innerHTML='<div class="empty">沒有符合條件的公告'+(S.anns.length?'':'（目前資料庫是空的）')+'</div>'; $('annMore').style.display='none'; return; }
+  box.innerHTML = rows.slice(0,S.annShown).map(function(a){
+    var st=ST_TXT[stOf(a)];
+    return '<div class="card" data-id="'+esc(a.ann_id)+'"><div class="main">'
+      + '<div class="ttl">'+(a.pinned?'<span class="pill p-pin">📌 置頂</span> ':'')+hl(a.title,ts)+'</div>'
+      + '<div class="meta"><span class="pill '+st[1]+'">'+st[0]+'</span>'+(a.category?'<span class="pill p-cat">'+esc(a.category)+'</span>':'')+(a.type?'<span>'+esc(a.type)+'</span>':'')
+      + '<span>📅 '+esc(a.start_date||'—')+' ～ '+esc(a.end_date||'長期')+'</span>'+(a.creator?'<span>✍️ '+esc(a.creator)+'</span>':'')
+      + (a.att_count?'<span>📎 '+a.att_count+'</span>':'')+(a.src==='nueip'?'<span class="pill p-nu">NUEIP</span>':'')+'</div>'
+      + '<div class="snip">'+hl(snip(a.text,ts),ts)+'</div></div></div>';
+  }).join('');
+  $('annMore').style.display = rows.length>S.annShown ? 'block' : 'none';
+  $('annMore').textContent = '顯示更多（還有 '+(rows.length-S.annShown)+' 則）';
+}
+document.querySelectorAll('#annSt button').forEach(function(b){ b.onclick=function(){ S.annSt=b.dataset.v; S.annShown=PAGE; document.querySelectorAll('#annSt button').forEach(function(x){ x.classList.toggle('on', x===b); }); renderAnn(); }; });
+['annCat','annType','annFrom','annTo'].forEach(function(id){ $(id).onchange=function(){ S.annShown=PAGE; renderAnn(); }; });
+var qT; $('annQ').oninput=function(){ clearTimeout(qT); qT=setTimeout(function(){ S.annShown=PAGE; renderAnn(); }, 200); };
+$('annClr').onclick=function(){ ['annCat','annType','annFrom','annTo','annQ'].forEach(function(id){ $(id).value=''; }); renderAnn(); };
+$('annMore').onclick=function(){ S.annShown+=PAGE; renderAnn(); };
+$('annList').onclick=function(e){ var c=e.target.closest('.card'); if(c) openAnn(c.dataset.id); };
+
+/* ===== 讀一則公告 ===== */
+function openAnn(id){
+  var a=S.anns.filter(function(x){ return x.ann_id===id; })[0]; if(!a) return;
+  $('vTitle').textContent = (a.pinned?'📌 ':'')+a.title;
+  var st=ST_TXT[stOf(a)];
+  $('vMeta').innerHTML = '<span class="pill '+st[1]+'">'+st[0]+'</span>'+(a.category?'<span class="pill p-cat">'+esc(a.category)+'</span>':'')+'<span>'+esc(a.type||'')+'</span><span>📅 '+esc(a.start_date||'—')+' ～ '+esc(a.end_date||'長期')+'</span>'
+    + (a.audience?'<span>👥 '+esc(a.audience)+'</span>':'')+'<span>✍️ '+esc(a.creator||'')+'</span><span>建立 '+esc(a.created_at||'')+'</span>'+(a.updated_at&&a.updated_at!==a.created_at?'<span>最後修改 '+esc(a.updated_at)+'</span>':'')+(a.src==='nueip'?'<span class="pill p-nu">NUEIP 搬來</span>':'');
+  $('vBody').innerHTML='<div class="hint">讀取內文中…</div>'; $('vAtt').innerHTML='';
+  $('mView').classList.add('on'); S.cur=null;
+  call({action:'get', ann_id:id}, S.pw).then(function(r){
+    if (!r.ok) { $('vBody').innerHTML='<div class="err">'+esc(r.msg)+'</div>'; return; }
+    S.cur=r.data;
+    $('vBody').innerHTML = clean(r.data.html) || '<div class="hint">（沒有內文）</div>';
+    $('vAtt').innerHTML = r.data.att.length ? '<b style="font-size:13px">📎 附檔</b><br>'+r.data.att.map(function(f){ return '<a href="'+esc(f.url)+'" target="_blank" rel="noopener">📄 '+esc(f.name)+' <span class="hint">'+fmtSize(f.size)+'</span></a>'; }).join('') : '';
+  });
+}
+$('vEdit').onclick=function(){ if(!S.cur) return alert('內文還在讀取，請稍等'); $('mView').classList.remove('on'); openEdit(S.cur); };
+$('vDel').onclick=function(){
+  var a=S.cur; if(!a) return;
+  if (!twice('確定要刪除公告「'+a.title+'」？', '刪除後大家就看不到了（資料列與附檔會保留在「_已刪除」，可找回）。')) return;
+  this.disabled=true; var me=this;
+  write({action:'del', ann_id:a.ann_id}).then(function(r){
+    me.disabled=false;
+    if (!r.ok) return alert('刪除失敗：'+r.msg);
+    $('mView').classList.remove('on'); loadAll();
+  });
+};
+
+/* ===== 新增／編輯公告 ===== */
+function openEdit(a){
+  a = a || {};
+  S.editId=a.ann_id||''; S.editBase=a.updated_at||''; S.editAtts=(a.att||[]).slice(); S.newFiles=[];
+  $('eHead').textContent = a.ann_id ? '編輯公告' : '新增公告';
+  $('eTitle').value=a.title||'';
+  fillSel($('eCat'), optList('category',[a.category]), '（不分類）'); $('eCat').value=a.category||'';
+  fillSel($('eType'), optList('type',[a.type])); $('eType').value=a.type||optList('type')[0]||'';
+  $('eStart').value=a.start_date||(a.ann_id?'':today()); $('eEnd').value=a.end_date||''; $('ePin').checked=!!a.pinned; $('eAud').value=a.audience||'';
+  $('eBody').innerHTML=clean(a.html||'');
+  $('eErr').textContent=''; $('eProg').textContent=''; $('eFiles').value=''; renderEditAtts();
+  $('mEdit').classList.add('on'); setTimeout(function(){ $('eTitle').focus(); }, 60);
+}
+function renderEditAtts(){
+  $('eAtts').innerHTML = S.editAtts.map(function(f){ return '<div class="attrow">📄 <a href="'+esc(f.url)+'" target="_blank" rel="noopener">'+esc(f.name)+'</a> <span class="hint">'+fmtSize(f.size)+'</span> <button type="button" class="btn danger" style="padding:2px 8px" data-attdel="'+esc(f.att_id)+'">刪</button></div>'; }).join('')
+    + S.newFiles.map(function(f,i){ return '<div class="attrow">🆕 '+esc(f.name)+' <span class="hint">'+fmtSize(f.size)+'（存檔時上傳）</span> <button type="button" class="btn ghost" style="padding:2px 8px" data-newdel="'+i+'">移除</button></div>'; }).join('');
+}
+$('eAtts').onclick=function(e){
+  var nd=e.target.getAttribute('data-newdel'); if (nd!==null) { S.newFiles.splice(+nd,1); renderEditAtts(); return; }
+  var ad=e.target.getAttribute('data-attdel'); if (!ad) return;
+  var f=S.editAtts.filter(function(x){ return x.att_id===ad; })[0];
+  if (!twice('確定要刪除附檔「'+f.name+'」？', '附檔會搬到「_已刪除」資料夾。')) return;
+  write({action:'attDel', att_id:ad}).then(function(r){
+    if (!r.ok) return alert('刪除失敗：'+r.msg);
+    S.editAtts=S.editAtts.filter(function(x){ return x.att_id!==ad; }); renderEditAtts();
+    get(S.editId).then(function(d){ if (d) S.editBase=d.updated_at; });
+  });
+};
+$('eFiles').onchange=function(){
+  var bad=[];
+  Array.prototype.forEach.call(this.files, function(f){
+    if (f.size>MAX_FILE) bad.push(f.name+'（'+fmtSize(f.size)+'，超過 10MB）');
+    else if (S.editAtts.length+S.newFiles.length>=MAX_ATT) bad.push(f.name+'（每則最多 10 個）');
+    else S.newFiles.push(f);
+  });
+  this.value=''; renderEditAtts(); if (bad.length) alert('這些檔沒有加入：\n'+bad.join('\n'));
+};
+$('eCatAdd').onclick=function(){
+  var v=(prompt('新分類名稱（例：人事、營運、活動）')||'').trim(); if(!v) return;
+  if (!twice('確定新增分類「'+v+'」？', '新增後所有人都會在分類選單看到。')) return;
+  write({action:'optSave', kind:'category', value:v}).then(function(r){
+    if (!r.ok) return alert('新增失敗：'+r.msg);
+    S.opts.category=(S.opts.category||[]).concat(r.data.dup?[]:[v]); fillSel($('eCat'), optList('category'), '（不分類）'); $('eCat').value=v; fillOpts();
+  });
+};
+/* 編輯工具列 */
+$('eTb').onmousedown=function(e){ if (e.target.closest('button')) e.preventDefault(); };
+$('eTb').onclick=function(e){
+  var b=e.target.closest('button'); if(!b) return; var c=b.dataset.c, v=b.dataset.v; $('eBody').focus();
+  if (c==='link') { var u=(prompt('連結網址（https://…）')||'').trim(); if (/^https?:\/\//i.test(u)) document.execCommand('createLink', false, u); else if (u) alert('網址要以 http:// 或 https:// 開頭'); return; }
+  if (c==='table') { var n=parseInt(prompt('幾列？（表格 3 欄，之後可直接打字）','3'),10)||3; var h='<table><tbody>'; for(var i=0;i<Math.min(n,30);i++){ h+='<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>'; } document.execCommand('insertHTML', false, h+'</tbody></table><p><br></p>'); return; }
+  if (c==='img') { var fi=document.createElement('input'); fi.type='file'; fi.accept='image/png,image/jpeg,image/gif,image/webp'; fi.onchange=function(){ var f=fi.files[0]; if(!f) return; if (f.size>MAX_FILE) return alert('圖片超過 10MB'); var rd=new FileReader(); rd.onload=function(){ $('eBody').focus(); document.execCommand('insertHTML', false, '<img src="'+rd.result+'">'); }; rd.readAsDataURL(f); }; fi.click(); return; }
+  document.execCommand(c, false, v||null);
+};
+$('eBody').addEventListener('paste', function(e){
+  var cd=e.clipboardData; if(!cd) return;
+  var html=cd.getData('text/html');
+  if (html) { e.preventDefault(); document.execCommand('insertHTML', false, clean(html.replace(/<!--[\s\S]*?-->/g,''))); return; }
+  var it=Array.prototype.filter.call(cd.items||[], function(x){ return /^image\//.test(x.type); })[0];
+  if (it) { e.preventDefault(); var f=it.getAsFile(), rd=new FileReader(); rd.onload=function(){ document.execCommand('insertHTML', false, '<img src="'+rd.result+'">'); }; rd.readAsDataURL(f); }
+});
+function readB64(file){ return new Promise(function(ok,ng){ var rd=new FileReader(); rd.onload=function(){ ok(String(rd.result).split(',')[1]||''); }; rd.onerror=function(){ ng(rd.error); }; rd.readAsDataURL(file); }); }
+function get(id){ return call({action:'get', ann_id:id}, S.pw || S.pub).then(function(r){ return r.ok ? r.data : null; }); }
+/* 內文裡的 data: 圖片 → 逐張上傳到雲端硬碟，換成縮圖網址 */
+function liftImages(annId, html, prog){
+  var box=document.createElement('div'); box.innerHTML=html;
+  var imgs=Array.prototype.filter.call(box.querySelectorAll('img'), function(i){ return /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(i.getAttribute('src')||''); });
+  var chain=Promise.resolve(), fails=0;
+  imgs.forEach(function(img, k){
+    chain=chain.then(function(){
+      var src=img.getAttribute('src'), m=src.match(/^data:(image\/[a-z]+);base64,(.*)$/i);
+      if (prog) prog('上傳內文圖片 '+(k+1)+'／'+imgs.length+'…');
+      return write({action:'uploadImg', ann_id:annId, mime:m[1].toLowerCase(), b64:m[2]}, 180000).then(function(r){ if (r.ok) img.setAttribute('src', r.data.src); else { fails++; img.remove(); } });
+    });
+  });
+  return chain.then(function(){ return { html: box.innerHTML, n: imgs.length, fails: fails }; });
+}
+function stripData(html){ return String(html).replace(/(<img\b[^>]*?\bsrc=")data:image\/[^"]*"/gi, '$1"'); }
+$('eSave').onclick=function(){
+  var btn=this, err=$('eErr'), prog=function(t){ $('eProg').textContent=t; };
+  var html=clean($('eBody').innerHTML), ann={ ann_id:S.editId, base_updated:S.editBase, title:$('eTitle').value.trim(), category:$('eCat').value, type:$('eType').value,
+    start_date:$('eStart').value, end_date:$('eEnd').value, pinned:$('ePin').checked, audience:$('eAud').value.trim() };
+  err.textContent='';
+  if (!ann.title) { err.textContent='標題必填'; return; }
+  if (ann.start_date && ann.end_date && ann.start_date>ann.end_date) { err.textContent='開始日不能晚於結束日'; return; }
+  var hasImg=/<img\b[^>]*src="data:/i.test(html);
+  if (!twice((S.editId?'確定儲存對公告的修改？':'確定發佈新公告？')+'\n「'+ann.title+'」', (ann.pinned?'📌 置頂、':'')+'期間 '+(ann.start_date||'—')+' ～ '+(ann.end_date||'長期')+(S.newFiles.length?'、新附檔 '+S.newFiles.length+' 個':''))) return;
+  btn.disabled=true; prog('儲存中…');
+  ann.html = hasImg ? stripData(html) : html;
+  var id='', imgFails=0;
+  write({action:'save', ann:ann}).then(function(r){
+    if (!r.ok) throw new Error(r.code==='conflict' ? r.msg+'（你的修改還在畫面上，請先複製內文，重新整理後再改）' : r.msg);
+    id=r.data.ann_id; S.editId=id; S.editBase=r.data.updated_at;
+    if (!hasImg) return;
+    return liftImages(id, html, prog).then(function(x){
+      imgFails=x.fails; ann.ann_id=id; ann.base_updated=S.editBase; ann.html=x.html;
+      prog('更新內文圖片網址…');
+      return write({action:'save', ann:ann}).then(function(r2){ if (!r2.ok) throw new Error('圖片已上傳，但內文更新失敗：'+r2.msg); S.editBase=r2.data.updated_at; });
+    });
+  }).then(function(){
+    var files=S.newFiles.slice(), done=0, fails=[], chain=Promise.resolve();
+    files.forEach(function(f,i){
+      chain=chain.then(function(){ prog('上傳附檔 '+(i+1)+'／'+files.length+'：'+f.name+'…'); return readB64(f); })
+        .then(function(b64){ return write({action:'upload', ann_id:id, name:f.name, mime:f.type||'application/octet-stream', b64:b64}, 240000); })
+        .then(function(r){ if (r.ok) done++; else fails.push(f.name+'：'+r.msg); }, function(e){ fails.push(f.name+'：'+e.message); });
+    });
+    return chain.then(function(){
+      S.newFiles=[]; btn.disabled=false; prog('');
+      var warn=(imgFails?'⚠️ 有 '+imgFails+' 張內文圖片上傳失敗，已從內文移除。\n':'')+(fails.length?'⚠️ 附檔上傳失敗：\n'+fails.join('\n'):'');
+      if (warn) alert('公告已存檔，但：\n'+warn);
+      $('mEdit').classList.remove('on'); loadAll().then(function(){ openAnn(id); });
+    });
+  }).catch(function(e){ btn.disabled=false; prog(''); err.textContent='❌ '+e.message; });
+};
+$('annNew').onclick=function(){ openEdit(null); };
+
+/* ===== 工作清單 ===== */
+function isDone(w){ return w.progress==='已完成' || !!w.done_date; }
+function wkFiltered(stOverride){
+  var st=stOverride||S.wkSt, pg=$('wkProg').value, im=$('wkImp').value, og=$('wkOrigin').value, ts=terms($('wkQ').value);
+  return S.works.filter(function(w){
+    if (st==='open' && isDone(w)) return false;
+    if (st==='done' && !isDone(w)) return false;
+    if (pg && w.progress!==pg) return false;
+    if (im && w.importance!==im) return false;
+    if (og && w.origin!==og) return false;
+    if (ts.length && !hit(w.item+' '+w.owner+' '+w.text+' '+w.creator+' '+(w.discuss||[]).map(function(d){return d.text;}).join(' '), ts)) return false;
+    return true;
+  }).sort(function(a,b){ return (a.due_date||'9999').localeCompare(b.due_date||'9999') || (b.date||'').localeCompare(a.date||''); });
+}
+function renderWork(){
+  ['open','done','all'].forEach(function(k){ var b=document.querySelector('#wkSt [data-v="'+k+'"] .c'); if(b) b.textContent=wkFiltered(k).length; });
+  $('cWork').textContent=S.works.filter(function(w){ return !isDone(w); }).length;
+  var rows=wkFiltered(), ts=terms($('wkQ').value), t=today();
+  $('wkBody').innerHTML = rows.length ? rows.map(function(w){
+    var late = !isDone(w) && w.due_date && w.due_date<t;
+    return '<tr class="r" data-id="'+esc(w.work_id)+'"><td><b>'+hl(w.item,ts)+'</b>'+(w.src==='nueip'?' <span class="pill p-nu">NUEIP</span>':'')+'</td><td>'+hl(w.owner,ts)+'</td><td>'+esc(w.date)+'</td><td class="'+(late?'late':'')+'">'+esc(w.due_date)+(late?' ⚠️逾期':'')+'</td><td>'+esc(w.progress)+'</td><td>'+esc(w.importance)+'</td><td>'+esc(w.origin)+'</td><td>'+((w.discuss||[]).length||'')+'</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="empty">沒有符合條件的工作'+(S.works.length?'':'（目前資料庫是空的）')+'</td></tr>';
+}
+document.querySelectorAll('#wkSt button').forEach(function(b){ b.onclick=function(){ S.wkSt=b.dataset.v; document.querySelectorAll('#wkSt button').forEach(function(x){ x.classList.toggle('on', x===b); }); renderWork(); }; });
+['wkProg','wkImp','wkOrigin'].forEach(function(id){ $(id).onchange=renderWork; });
+var wT; $('wkQ').oninput=function(){ clearTimeout(wT); wT=setTimeout(renderWork, 200); };
+$('wkClr').onclick=function(){ ['wkProg','wkImp','wkOrigin','wkQ'].forEach(function(id){ $(id).value=''; }); renderWork(); };
+$('wkBody').onclick=function(e){ var tr=e.target.closest('tr.r'); if(tr) openWork(tr.dataset.id); };
+function openWork(id){
+  var w=id ? S.works.filter(function(x){ return x.work_id===id; })[0] : null;
+  S.curWork=w; $('wErr').textContent='';
+  if (w) {
+    $('wHead').textContent='✅ '+w.item;
+    $('wView').innerHTML='<div class="meta" style="font-size:12px;color:var(--muted);margin:6px 0 12px;display:flex;flex-wrap:wrap;gap:4px 12px">'
+      +'<span>👤 負責人：'+esc(w.owner||'—')+'</span><span>📅 '+esc(w.date||'—')+'</span><span>⏰ 期限 '+esc(w.due_date||'—')+'</span>'+(w.done_date?'<span>✔ 完成 '+esc(w.done_date)+'</span>':'')
+      +'<span>進度：'+esc(w.progress||'—')+'</span><span>重要性：'+esc(w.importance||'—')+'</span><span>來源：'+esc(w.origin||'—')+'</span><span>✍️ '+esc(w.creator||'')+'</span>'+(w.src==='nueip'?'<span class="pill p-nu">NUEIP 搬來</span>':'')+'</div>'
+      +'<div class="content">'+(w.html?clean(w.html):esc(w.text||'（沒有內容）').replace(/\n/g,'<br>'))+'</div>'
+      +((w.discuss||[]).length?'<div class="disc"><b style="font-size:13px">💬 討論（'+w.discuss.length+'）</b>'+w.discuss.map(function(d){ return '<div class="d"><b>'+esc(d.author)+'</b> <span class="hint">'+esc(d.ts)+'</span>\n'+esc(d.text)+'</div>'; }).join('')+'</div>':'');
+    $('wView').style.display=''; $('wForm').style.display='none'; $('wSave').style.display='none';
+    $('wDel').style.visibility=''; $('wEditBtn').style.visibility='';
+  } else editWork(null);
+  $('mWork').classList.add('on');
+}
+function editWork(w){
+  $('wHead').textContent = w ? '✎ 編輯工作' : '＋ 新增工作';
+  $('wItem').value=w?w.item:''; $('wOwner').value=w?w.owner:''; $('wDate').value=w?w.date:today(); $('wDue').value=w?w.due_date:''; $('wDone').value=w?w.done_date:'';
+  fillSel($('wProg'), optList('progress',[w&&w.progress])); $('wProg').value=w?(w.progress||''):(optList('progress')[0]||'');
+  fillSel($('wImp'), optList('importance',[w&&w.importance]), '（不指定）'); $('wImp').value=w?(w.importance||''):'';
+  $('wOrigin').value=w?(w.origin||''):'';
+  $('wText').value=w?(w.text||''):'';
+  $('wView').style.display='none'; $('wForm').style.display=''; $('wSave').style.display='';
+  $('wDel').style.visibility='hidden'; $('wEditBtn').style.visibility='hidden';
+  setTimeout(function(){ $('wItem').focus(); }, 60);
+}
+$('wEditBtn').onclick=function(){ editWork(S.curWork); };
+$('wkNew').onclick=function(){ S.curWork=null; openWork(null); };
+$('wSave').onclick=function(){
+  var w=S.curWork, item=$('wItem').value.trim(), btn=this;
+  if (!item) { $('wErr').textContent='工作項目必填'; return; }
+  var txt=$('wText').value, keepHtml = w && w.html && txt===(w.text||'');
+  var o={ work_id:w?w.work_id:'', item:item, owner:$('wOwner').value.trim(), date:$('wDate').value, due_date:$('wDue').value, done_date:$('wDone').value,
+    progress:$('wProg').value, importance:$('wImp').value, origin:$('wOrigin').value, text:txt, html: keepHtml ? clean(w.html) : esc(txt).replace(/\n/g,'<br>') };
+  if (o.progress==='已完成' && !o.done_date) o.done_date=today();
+  if (!twice(w?'確定儲存對「'+item+'」的修改？':'確定新增工作「'+item+'」？', '負責人：'+(o.owner||'—')+'，進度：'+(o.progress||'—'))) return;
+  btn.disabled=true;
+  write({action:'workSave', work:o}).then(function(r){
+    btn.disabled=false;
+    if (!r.ok) { $('wErr').textContent='❌ '+r.msg; return; }
+    $('mWork').classList.remove('on'); loadAll();
+  });
+};
+$('wDel').onclick=function(){
+  var w=S.curWork; if(!w) return;
+  if (!twice('確定要刪除工作「'+w.item+'」？', '資料列會標記刪除（可找回）。')) return;
+  write({action:'workDel', work_id:w.work_id}).then(function(r){ if (!r.ok) return alert('刪除失敗：'+r.msg); $('mWork').classList.remove('on'); loadAll(); });
+};
+
+/* ===== 匯入（預覽 → 確認 → 寫入） ===== */
+$('impFile').onchange=function(){
+  var f=this.files[0]; S.imp=null; $('impGo').disabled=true; $('impProg').textContent='';
+  if (!f) { $('impPrev').innerHTML=''; return; }
+  var rd=new FileReader();
+  rd.onload=function(){
+    var j; try { j=JSON.parse(rd.result); } catch(e) { $('impPrev').innerHTML='<div class="err">檔案不是正確的 JSON：'+esc(e.message)+'</div>'; return; }
+    if (!j || ['announce','work'].indexOf(j.kind)<0 || !Array.isArray(j.items)) { $('impPrev').innerHTML='<div class="err">格式不對：要有 kind（announce 或 work）與 items 陣列</div>'; return; }
+    var have={}; (j.kind==='announce'?S.anns:S.works).forEach(function(x){ if (x.nueip_id) have[x.nueip_id]=1; });
+    var news=[], dup=0, bad=[], attN=0, attSize=0, imgN=0;
+    j.items.forEach(function(it, i){
+      var title = j.kind==='announce' ? it.title : it.item;
+      if (!it.nueip_id || !String(title||'').trim()) { bad.push('第 '+(i+1)+' 筆：缺 nueip_id 或'+(j.kind==='announce'?'標題':'工作項目')); return; }
+      if (have[it.nueip_id]) { dup++; return; }
+      news.push(it); (it.att||[]).forEach(function(a){ attN++; attSize+=Math.floor(String(a.b64||'').length*0.75); });
+      imgN += (String(it.html||'').match(/<img\b[^>]*src="data:/gi)||[]).length;
+    });
+    S.imp={ kind:j.kind, source:j.source||f.name, items:news };
+    var label=j.kind==='announce'?'公告':'工作';
+    $('impPrev').innerHTML='<div class="imp-sum"><div><b>'+j.items.length+'</b><span>檔案內'+label+'</span></div><div><b>'+news.length+'</b><span>會新增</span></div><div><b>'+dup+'</b><span>已匯入過（略過）</span></div><div><b>'+bad.length+'</b><span>資料不完整（略過）</span></div>'
+      +(j.kind==='announce'?'<div><b>'+attN+'</b><span>附檔（'+fmtSize(attSize)+'）</span></div><div><b>'+imgN+'</b><span>內文圖片</span></div>':'')+'</div>'
+      +'<div class="hint">來源：'+esc(S.imp.source)+'　｜　目前資料庫已有'+label+' '+(j.kind==='announce'?S.anns.length:S.works.length)+' 筆</div>'
+      +(bad.length?'<div class="err">'+bad.slice(0,10).map(esc).join('<br>')+(bad.length>10?'<br>…還有 '+(bad.length-10)+' 筆':'')+'</div>':'')
+      +'<div class="tblw" style="margin-top:8px;max-height:320px;overflow:auto"><table class="t"><thead><tr><th>NUEIP 編號</th><th>'+(j.kind==='announce'?'標題':'工作項目')+'</th><th>'+(j.kind==='announce'?'期間':'負責人')+'</th><th>建立者</th><th>'+(j.kind==='announce'?'附檔':'討論')+'</th></tr></thead><tbody>'
+      +news.slice(0,300).map(function(it){ return '<tr><td>'+esc(it.nueip_id)+'</td><td>'+esc(j.kind==='announce'?it.title:it.item)+'</td><td>'+esc(j.kind==='announce'?(it.start_date||'')+' ～ '+(it.end_date||''):it.owner)+'</td><td>'+esc(it.creator)+'</td><td>'+((j.kind==='announce'?it.att:it.discuss)||[]).length+'</td></tr>'; }).join('')+'</tbody></table></div>';
+    $('impGo').disabled=!news.length;
+  };
+  rd.readAsText(f,'utf-8');
+};
+$('impGo').onclick=function(){
+  var im=S.imp; if(!im||!im.items.length) return;
+  var label=im.kind==='announce'?'公告':'工作', before=(im.kind==='announce'?S.anns:S.works).length;
+  if (!twice('確定把 '+im.items.length+' 筆'+label+'寫入資料庫？', '來源：'+im.source+'\n目前已有 '+before+' 筆，寫入後應為 '+(before+im.items.length)+' 筆。')) return;
+  var btn=this, prog=function(t){ $('impProg').textContent=t; }; btn.disabled=true; $('impFile').disabled=true;
+  var batches=[], ids={}, done=0, skipped=0, fails=[];
+  for (var i=0;i<im.items.length;i+=BATCH) batches.push(im.items.slice(i,i+BATCH));
+  var chain=Promise.resolve();
+  batches.forEach(function(b, k){
+    chain=chain.then(function(){
+      prog('寫入第 '+(k+1)+'／'+batches.length+' 批…');
+      var light=b.map(function(it){ var o=Object.assign({}, it); delete o.att; if (o.html) o.html=stripData(clean(o.html)); return o; });
+      return write({action:'importBatch', kind:im.kind, batch:'imp-'+Date.now()+'-'+k, items:light}, 300000).then(function(r){
+        if (!r.ok) { fails.push('第 '+(k+1)+' 批：'+r.msg); return; }
+        done+=r.data.imported; skipped+=r.data.skipped; Object.assign(ids, r.data.ids||{});
+      });
+    });
+  });
+  if (im.kind==='announce') chain=chain.then(function(){
+    var todo=im.items.filter(function(it){ return ids[it.nueip_id] && ((it.att||[]).length || /<img\b[^>]*src="data:/i.test(it.html||'')); }), c2=Promise.resolve();
+    todo.forEach(function(it, n){
+      var id=ids[it.nueip_id];
+      c2=c2.then(function(){
+        if (!/<img\b[^>]*src="data:/i.test(it.html||'')) return;
+        return liftImages(id, clean(it.html), function(t){ prog('（'+(n+1)+'／'+todo.length+'）'+it.title+'：'+t); }).then(function(x){
+          return get(id).then(function(d){ if(!d) return; var a=Object.assign({}, d, { base_updated:d.updated_at, html:x.html }); return write({action:'save', ann:a}); });
+        });
+      });
+      (it.att||[]).forEach(function(f, m){
+        c2=c2.then(function(){ prog('（'+(n+1)+'／'+todo.length+'）'+it.title+'：附檔 '+(m+1)+'／'+it.att.length+'…'); return write({action:'upload', ann_id:id, name:f.name, mime:f.mime||'application/octet-stream', b64:f.b64, src_url:f.src_url||''}, 240000); })
+          .then(function(r){ if (!r.ok) fails.push(it.title+' 附檔 '+f.name+'：'+r.msg); });
+      });
+    });
+    return c2;
+  });
+  chain.then(function(){ return loadAll(); }).then(function(){
+    var after=(im.kind==='announce'?S.anns:S.works).length;
+    prog('✅ 完成：新增 '+done+' 筆、略過 '+skipped+' 筆｜寫入前 '+before+' 筆 → 寫入後 '+after+' 筆'+(fails.length?'｜⚠️ 失敗 '+fails.length+' 項：'+fails.join('；'):''));
+    $('impFile').disabled=false; $('impFile').value=''; S.imp=null; btn.disabled=true; $('impPrev').innerHTML='';
+  });
+};
+
+/* ===== 啟動 ===== */
+S.pw=ss(K_VIEW); S.pub=ss(K_PUB);
+if (S.pub) setPub(true);
+var h=(location.hash||'').slice(1); if (h==='work') showTab('work'); else if (h==='imp' && S.pub) showTab('imp');
+if (/__ANNOUNCE_DEPLOYMENT__/.test(API)) { $('gate').style.display='none'; dsb('dsb-err','⚠️ 公告系統後端還沒部署完成（等經營者完成 Google 授權）。'); return; }
+if (S.pw) { $('gate').style.display='none'; loadAll(); } else gate('view');
+})();
+</script>
+</body>
+</html>
