@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#2E7D32">
 <link rel="manifest" href="purchase-manifest.json">
 <title>自己做 · 採購系統</title>
+<!-- 2026-10-01 cu 批（待處理事項 #6，搭配 EventLayer v1.9／申請單 API newItemsPub v4）：①「🥮 檔期備貨」檔期＝曲線 ∪ agg_evneed（campEvs），開賣前計畫（新品申請表預估銷售數、沒有去年曲線）顯示「📋 開賣前計畫」卡、已出貨起算日改用 dim_event 開始日（campStartOf；campHQShipped 同步）②「🆕 檔期新品」每支甜點顯示申請表預估銷售數與首批量來源。只選一檔、有曲線的檔期畫面不變。 -->
 <!-- 2026-10-01 ct 批（待處理事項 #5，經營者裁示先做進行中檔期）：①「🥮 檔期備貨」檔期可複選（viewCampHQ 外層負責選擇與逐檔列出、計算本體改名 viewCampHQOne 原封不動；只選一檔＝畫面不變；多檔各自計算、不相加）②「🆕 檔期新品」加檔期複選鈕（候選＝次類別是檔期、結束日在 35 天內到 120 天內開賣；沒選＝原本即將開賣清單），已結束檔期首批量欄顯示「檔期已結束」。已結束檔期的檔期備貨要改 EventLayer，暫不做。 -->
 <!-- 2026-10-01 cs 批（經營者 20261001 待處理事項 #4）：出貨中心「主檔」「效期」併入總部主檔。①出貨中心身分分頁只留 訂單／庫存／檔期備貨 ②總部主檔加「🏬 出貨中心品項」開關（＝原出貨中心主檔畫面：只列 dcAny、健檢列、整理規則、新增品項廠商預帶出貨中心；可與單價未填／缺圖／停售疊加）③主檔加「效期」欄（精簡文字＋✎，沿用 shSave2 寫入＋回讀）與「🕐 效期未填」篩選 ④「🕐 食材效期」分頁改唯讀（列印／CSV 照舊），維護一律在主檔 ⑤GAS 零改動（兩身分本來就寫同一份 dim_sku）。viewMaster 的出貨中心分支保留（不可達），函式只增不減。 -->
 <!-- 2026-09-24 ci 批：效期併主檔。①dim_sku 新欄「效期」（一格文字，出貨中心維護）→ SKUS.shelf ②盤點卡片品名旁 🕐 小鈕，預設收合、點開才顯示（灰＝主檔未填；D+3 內紅、D+7 內橘）③「🕐 效期」分頁改讀主檔：只列本店在用品項、依盤點分區分組、總部可就地編輯（post type:sku fields.效期 ＋ 回讀 dim_sku 驗證）；dim_shelf／SHELF 快照／shelfApi 不再讀寫（舊函式保留未呼叫）④店長「📝 新品項申請」多「保存期限」欄：藏在用途說明尾巴的〔效期：…〕記號（同 cg7〔標配〕手法，fact_sku_req／skureq-api 零改動），總部審核卡可改，核准時寫進主檔效期。只動 SKUS 對應、viewCount 卡片兩處、viewShelf／dlShelfCsv 整支、sr* 六處、wire 一段；引擎零改動。 -->
@@ -1362,7 +1363,7 @@ function nwLoad(force){if(force){NW={map:null,bom:null,pub:null,err:"",ld:false,
       (bs||[]).forEach(function(r){var a=String(r["甜點名稱"]||"").trim(),b=String(r["食材/器具名稱"]||"").trim();if(!a||!b)return;(g[a]=g[a]||[]).push({m:b,q:num(r["數量"]),u:String(r["單位"]||"").trim(),c:String(r["容器"]||"").trim()});});
       NW.bom=g;if(ST.tab==="新品")render();}).catch(function(e){NW.bom={};NW.bomErr=String(e&&e.message||e);if(ST.tab==="新品")render();});
   }).catch(function(e){NW.err="讀不到產品名稱對照表（"+(e&&e.message||e)+"）";NW.ld=false;if(ST.tab==="新品")render();});
-  nwPubLoad(0).then(function(items){var g={};(items||[]).forEach(function(x){var m=(g[x.dessert]=g[x.dessert]||{});(x.lines||[]).forEach(function(l){if(!m[l.name])m[l.name]=l;});});NW.pub=g;if(ST.tab==="新品")render();},
+  nwPubLoad(0).then(function(items){var g={};NW.pubQty={};(items||[]).forEach(function(x){if(num(x.qty)>0)NW.pubQty[x.dessert]={qty:num(x.qty),brand:x.brand||""};var m=(g[x.dessert]=g[x.dessert]||{});(x.lines||[]).forEach(function(l){if(!m[l.name])m[l.name]=l;});});NW.pub=g;if(ST.tab==="新品")render();},
     function(e){NW.pub={};NW.pubErr=String(e&&e.message||e);if(ST.tab==="新品")render();});}
 function nwEvKey(sub){return String(sub||"").replace(/^\d{4}\s*/,"").trim();}
 function nwWhoHas(who,name){return String(who||"").split("、").some(function(w){return w.trim()===name;});}
@@ -1437,7 +1438,9 @@ function viewNewItems(){nwLoad();var hq=ST.role!=="店長";
   return h;}
 function nwDessertHTML(d,hq){var x=nwDays(d),since=ymd(new Date(d.from.getTime()-NW_ORD*864e5));
   var h='<div class="card nwcard"><div class="nwhd"><b style="font-size:16px">🍰 '+escH(d.bom)+'</b>'+(d.pos&&d.pos!==d.bom?' <span class="muted">POS：'+escH(d.pos)+'</span>':'')
-    +'<div class="nwdates">開賣 <b>'+nwMd(d.from)+'</b>'+(x.sell<0?' <span class="muted">（已開賣 '+(-x.sell)+' 天）</span>':x.sell===0?' <span class="muted">（今天）</span>':' <span class="muted">（還有 '+x.sell+' 天）</span>')+'　～ '+nwMd(d.to)+'　·　下單截止 <b>'+nwMd(x.dl)+'</b>　'+nwBadge(x)+'</div></div>';
+    +'<div class="nwdates">開賣 <b>'+nwMd(d.from)+'</b>'+(x.sell<0?' <span class="muted">（已開賣 '+(-x.sell)+' 天）</span>':x.sell===0?' <span class="muted">（今天）</span>':' <span class="muted">（還有 '+x.sell+' 天）</span>')+'　～ '+nwMd(d.to)+'　·　下單截止 <b>'+nwMd(x.dl)+'</b>　'+nwBadge(x)+'</div>'
+    +((NW.pubQty&&NW.pubQty[d.bom])?'<div class="sub" style="margin-top:4px;color:#1e4e8c">📋 新品申請表預估銷售數 <b>'+fmt(NW.pubQty[d.bom].qty)+'</b> 份（整檔 12 店合計'+(NW.pubQty[d.bom].brand?'，'+escH(NW.pubQty[d.bom].brand):'')+'）→ 開賣前「建議首批量」＝預估×本店份額×首批比例×每份用量；開賣後改用實際銷量推估</div>':'')   /* cu 批 */
+    +'</div>';
   if(!NW.bom)return h+'<div class="loading">讀取 BOM 表…</div></div>';
   var all=nwItems(d),its=ST.nwAll?all:all.filter(function(i){return i.isNew;});
   if(!all.length)return h+'<div class="note" style="margin:6px 0 0">⚠️ BOM 表還沒有「'+escH(d.bom)+'」的配方——新品備料算不出來。（新品申請單核准後會自動寫入；舊檔期要在 BOM 本補）</div></div>';
@@ -1930,9 +1933,14 @@ function loadEvNeed(){
   }).catch(function(){EVND={};EVNDLD=null;return EVND;});
   return EVNDLD;}
 function campLead(s){return campExcl(s.id)?CAMPHQ_LEAD_EXCL:CAMPHQ_LEAD;}
+/* 2026-10-01 cu 批（待處理事項 #6）：檔期備貨的檔期＝有曲線（agg_evcurve）∪ 有需求（agg_evneed）。
+   EventLayer v1.9 起，新品申請表有「預估銷售數」的甜點在開賣前（還沒有去年曲線）也會寫 agg_evneed ⇒ 出貨中心開賣前就看得到總需求。
+   這類檔期沒有曲線週次 → 已出貨起算日改用 dim_event 該檔期的開始日（EVENTS）回推。 */
+function campEvs(){var a=Object.keys(EVCV);Object.keys(EVND||{}).forEach(function(e){if(a.indexOf(e)<0)a.push(e);});return a;}
+function campStartOf(ev){var best=null;(EVENTS||[]).forEach(function(e){var n=String(e.name||"");if(n===ev+"(自動)"||n===ev+"(備料警示)"||n===ev+"節日週(自動)"){if(e.from&&(!best||e.from<best))best=e.from;}});return best;}
 function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台下單量（使用單位）與包數；另回報視窗外還有多少 */
-  var ws=EVCV[ev]||[],lead=campLead(s);
-  var from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-lead*864e5)):"";
+  var ws=EVCV[ev]||[],lead=campLead(s),_st=ws.length?null:campStartOf(ev);   /* cu 批：沒有曲線的檔期用 dim_event 開始日 */
+  var from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-lead*864e5)):(_st?ymd(new Date(_st.getTime()-lead*864e5)):"");
   var g=0,packs=0,names={},preG=0,prePacks=0,preFirst="";
   (rows||[]).forEach(function(r){if(!anPlatMatch(r.name,s))return;
     var u=shipUnitG(String(r.st),{unit:s.useUnit,sku:s},r.name);
@@ -1946,10 +1954,11 @@ var CAMPHQ_TINY=0.5;
    計算本體 viewCampHQOne 原封不動（只加 sub 參數控制「說明只印一次、逐檔標題」），決策快照照抄的算式不受影響。 */
 function viewCampHQ(){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
-  var evs=Object.keys(EVCV);
-  if(!evs.length||!EVND)return viewCampHQOne(null);
-  var sel=(ST.chEvs||[]).filter(function(e){return !!EVCV[e];});
-  if(!sel.length)sel=[ST.chEv&&EVCV[ST.chEv]?ST.chEv:evs[0]];
+  if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}   /* cu 批：先讀 agg_evneed（開賣前計畫的檔期只在這張表） */
+  var evs=campEvs();
+  if(!evs.length)return viewCampHQOne(null);
+  var sel=(ST.chEvs||[]).filter(function(e){return evs.indexOf(e)>=0;});
+  if(!sel.length)sel=[ST.chEv&&evs.indexOf(ST.chEv)>=0?ST.chEv:evs[0]];
   ST.chEvs=sel;
   var pick=evs.length>1?'<div class="card" style="padding:8px 12px"><b style="margin-right:6px">檔期（可複選）</b><span class="seg">'+evs.map(function(e){var on=sel.indexOf(e)>=0;return '<div class="'+(on?"on":"")+'" data-chev="'+escA(e)+'">'+(on?'☑ ':'☐ ')+escA(e)+'</div>';}).join('')+'</span>'+(sel.length>1?'　<span class="muted">已選 '+sel.length+' 檔，下面逐檔列出（各檔分開算，不相加）</span>':'')+'</div>':'';
   if(sel.length===1){ST.chEv=sel[0];return viewCampHQOne({i:0,n:1,pick:pick});}
@@ -1959,15 +1968,15 @@ function viewCampHQOne(sub){
   if(ST.chExp===undefined){ST.chExp={};ST.chNeedOnly=true;ST.chQ="";ST.chEv="";}
   if(ST.chExclOnly===undefined)ST.chExclOnly=false;
   if(!ST.chSt)ST.chSt={};   /* cd 批：點店名展開該店大平台下單紀錄 */
-  var evs=Object.keys(EVCV);
-  if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線（agg_evcurve 為空）。EventLayer v1.6 在檔期開賣滿 3 天、累積佔比達 10% 後才會產出曲線；未開賣的檔期走「首批級距」，請看各店訂貨單。</div>';
+  var evs=campEvs();   /* cu 批：曲線 ∪ 開賣前計畫 */
+  if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期曲線，也沒有開賣前計畫（agg_evcurve、agg_evneed 為空）。EventLayer 在檔期開賣滿 3 天、累積佔比達 10% 後產出曲線；新品申請表有填「預估銷售數」且已核准的甜點，開賣前 14 天起就會出現在這裡。</div>';
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}
   if(!SHIST.ALL){loadShistAll().then(function(){if(ST.tab==="檔期備貨")render();});}
-  var ev=ST.chEv&&EVCV[ST.chEv]?ST.chEv:evs[0];ST.chEv=ev;
-  var ws=EVCV[ev],nd=EVND[ev]||{};
+  var ev=ST.chEv&&evs.indexOf(ST.chEv)>=0?ST.chEv:evs[0];ST.chEv=ev;
+  var ws=EVCV[ev]||[],nd=EVND[ev]||{},isPlan=!ws.length;   /* cu 批：isPlan＝開賣前計畫（沒有曲線） */
   var estTot=0,soldTot=0,_td=ymd(TODAY);ws.forEach(function(w){estTot+=(w.cTo<_td?w.cSold:Math.max(w.cEst,w.cSold));soldTot+=w.cSold;});   /* bv 批：已過的週一律用實際已售 */
   var wn=evWeekNow(ev);
-  var winFrom=(function(){var w0=ws[0];return w0?ymd(new Date(new Date(w0.cFrom+"T00:00:00").getTime()-CAMPHQ_LEAD*864e5)):"";})();
+  var winFrom=(function(){var w0=ws[0];if(w0)return ymd(new Date(new Date(w0.cFrom+"T00:00:00").getTime()-CAMPHQ_LEAD*864e5));var st0=campStartOf(ev);return st0?ymd(new Date(st0.getTime()-CAMPHQ_LEAD*864e5)):"";})();
   var h=(sub&&sub.i>0)?'':(ST.role==="店長"?'<div class="note" style="background:#eaf3ff;border-color:#7FB3DA">👀 這頁是<b>全公司 12 店</b>的檔期狀況（唯讀）。用途：①自己缺料時先看「🔁 調撥」欄，同地區的店有多就直接聯絡對方調貨，不用等叫貨　②比較自己店的「估計在店」與「剩餘推估」，看叫貨量是否偏多。你的店那一列會標「本店」並反白。實際下單仍在「📑 訂貨單」。</div>':'')
     +'<div class="note">🥮 <b>檔期備貨總表</b>　依<b>去年同檔期逐週曲線</b>推估各店整檔期需求，對照大平台已出貨量，<b>先跨店調撥、不夠的才採購</b>（調撥<b>同地區優先</b>：台中 1,2／台北 3,4,7,8,11／桃園 9,10；5、6、12 為獨立店）。每日 07:31 重算。'
     +'　<a href="#" data-chhelp="1" style="color:#1e4e8c;font-weight:700">'+(ST.chHelp?'▴ 收起算式':'ⓘ 這些數字怎麼算')+'</a></div>';
@@ -1988,12 +1997,18 @@ function viewCampHQOne(sub){
     +'<div class="sub muted" style="margin-top:6px">品項列的「尚需」與「建議備」＝各店調撥後合計；「可調撥」＝能靠內部調度解決的量。列表依採購金額高→低排序。</div></div>';
   if(sub){if(sub.i===0)h+=sub.pick;if(sub.n>1)h+='<div class="nwsub" style="margin-top:14px">🥮 第 '+(sub.i+1)+'／'+sub.n+' 檔：'+escA(ev)+'</div>';}   /* ct 批 */
   else if(evs.length>1)h+='<div class="card" style="padding:8px 12px"><span class="seg">'+evs.map(function(e){return '<div class="'+(e===ev?"on":"")+'" data-chev="'+escA(e)+'">'+e+'</div>';}).join('')+'</span></div>';
-  /* 曲線摘要 */
+  /* 曲線摘要（cu 批：沒有曲線＝開賣前計畫卡） */
+  if(isPlan){var _st0=campStartOf(ev),_pt={};Object.keys(nd).forEach(function(id){Object.keys(nd[id]).forEach(function(st){var x=nd[id][st];String(x.who||"").split("、").forEach(function(w){if(!w)return;var k=st+"|"+w;_pt[k]=Math.max(_pt[k]||0,num(x.est));});});});
+    var _tot=0;Object.keys(_pt).forEach(function(k){_tot+=_pt[k];});
+    h+='<div class="card" style="border-color:#bcd7f5;background:#f7fbff"><div style="font-weight:700;font-size:15px">📋 '+escA(ev)+'　開賣前計畫'+(_st0?'（'+(_st0.getMonth()+1)+'/'+_st0.getDate()+' 開賣）':'')+'　推估總份數 <b>'+fmt(Math.round(_tot))+'</b> 份</div>'
+      +'<div class="sub" style="margin-top:4px">還沒有去年同檔期曲線、或尚未開賣：數字來自<b>新品申請表的「預估銷售數」</b>（整檔 12 店合計）× 各店份額（去年同檔期 → 近 28 天甜點份額）× 每份用量。<b>開賣後</b>改用實際銷量推估（各店訂貨單同步）。</div></div>';}
+  else{
   h+='<div class="card"><div style="font-weight:700;font-size:15px">📈 '+ev+'　推估總量 <b>'+fmt(Math.round(estTot))+'</b> 份　已售 <b>'+fmt(Math.round(soldTot))+'</b>　<span style="color:#B3261E">還沒賣 <b>'+fmt(Math.round(Math.max(0,estTot-soldTot)))+'</b>（'+(estTot?Math.round(Math.max(0,estTot-soldTot)/estTot*100):0)+'%）</span>'+(wn?'　<span class="muted">現在是檔期第 '+wn.n+' 週 ×'+relTxt(wn.cur.rel)+'</span>':'')+'</div>'
     +'<div style="overflow-x:auto;margin-top:6px"><table><tr><th>今年週</th><th>去年同位置</th><th class="right">去年份數</th><th class="right">相對開賣週</th><th class="right">今年已售</th><th class="right">今年 實際＋推估</th></tr>';
   ws.forEach(function(w){var now=wn&&wn.cur===w;
     h+='<tr'+(now?' style="background:#fff8e1;font-weight:700"':'')+'><td>'+w.cFrom.slice(5)+'～'+w.cTo.slice(5)+(now?' ◀ 本週':'')+'</td><td class="muted">'+w.pFrom.slice(5)+'～'+w.pTo.slice(5)+'</td><td class="right">'+fmt(w.pQty)+'</td><td class="right">×'+dec(w.rel)+'</td><td class="right">'+(w.cSold?fmt(w.cSold):'<span class="muted">—</span>')+'</td><td class="right">'+(w.cTo<_td?('<b>'+fmt(w.cSold)+'</b><div class="sub muted">實際</div>'):(w.cFrom<=_td?('<b>'+fmt(Math.max(w.cEst,w.cSold))+'</b><div class="sub muted">已售 '+fmt(w.cSold)+' ＋ 推估 '+fmt(Math.max(0,w.cEst-w.cSold))+'</div>'):('<b>'+fmt(w.cEst)+'</b><div class="sub muted">推估</div>')))+'</td></tr>';});
   h+='</table></div><div class="sub muted" style="margin-top:4px">週序以節日當天所在週為 0，負數＝節前。相對開賣週＝去年該週份數 ÷ 去年第一個完整週。<br><b>每天早上用 POS 到昨天的銷售重算</b>：推估總量＝今年已售 ÷ 去年同位置的累積佔比，今年賣得比去年快或慢，總量和後面每一週都會跟著變。已過的週顯示<b>實際</b>，本週＝已售＋剩下幾天的推估，之後各週＝推估（算到產品名稱對照表的結束日）。</div></div>';
+  }   /* cu 批：曲線摘要 else 結束 */
   /* 逐品項 × 店 */
   var q=(ST.chQ||"").toLowerCase();
   var rowsAll=SHIST.ALL||null;
@@ -4844,7 +4859,7 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-chneed]"),function(el){el.onclick=function(){ST.chNeedOnly=el.getAttribute("data-chneed")==="1";render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-chhelp]"),function(el){el.onclick=function(ev){if(ev&&ev.preventDefault)ev.preventDefault();ST.chHelp=!ST.chHelp;render();};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-chev]"),function(el){el.onclick=function(){var e=el.getAttribute("data-chev")||"",a=(ST.chEvs||[]).slice(),k=a.indexOf(e);   /* ct 批：複選切換（至少留一檔） */
-    if(k>=0){if(a.length>1)a.splice(k,1);}else a.push(e);var od=Object.keys(EVCV);a.sort(function(x,y){return od.indexOf(x)-od.indexOf(y);});
+    if(k>=0){if(a.length>1)a.splice(k,1);}else a.push(e);var od=campEvs();a.sort(function(x,y){return od.indexOf(x)-od.indexOf(y);});
     ST.chEvs=a;ST.chEv=a[0]||e;ST.chExp={};ST.chSt={};render();};});
   var chq=$("#chQ");if(chq){chq.oninput=function(){ST.chQ=this.value;clearTimeout(chq._t);chq._t=setTimeout(function(){var v=$("#view").innerHTML;render();var e2=$("#chQ");if(e2){e2.focus();try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(e){}}},250);};}
   /* 2026-09-04 am 批：出貨中心判讀「算式」展開／收合 */

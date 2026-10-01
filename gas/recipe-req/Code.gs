@@ -1154,7 +1154,7 @@ function pushInfo_(rid) {
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v3', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v4', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -1175,7 +1175,8 @@ function newItemsPub_() {
       return (o.vname || o.sticker || o.link || o.vendor_override || o.supply || o.note || o.zone || o.container || o.is_new) ? o : null;
     }).filter(Boolean);
     return { req_id: str_(r.req_id), status: str_(r.status), dessert: str_(h.fname).trim() || str_(h.name).trim() || str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(),
-      campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), lines: lines };
+      campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), lines: lines,
+      qty: Number(r['預估銷售數']) || 0, brand: str_(c['品牌別']) };   /* 2026-10-01 需求 6：預估銷售數（整檔 12 店合計）＋品牌別，採購「檔期新品」顯示首批量的來源 */
   }).filter(function (x) { return x.dessert; });
   var res = { at: now_(), items: out };
   try { var js = JSON.stringify(res); if (js.length < 90000) cache.put(ck, js, 120); } catch (e) { }
