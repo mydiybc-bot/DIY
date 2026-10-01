@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v6';   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v6.1';   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -1415,7 +1415,8 @@ function bomRestore_(name, before) {
   try { var tab = ptRead_('bom'); bomWriteBlock_(tab, bomBlock_(tab, name), before.map(function (r) { return [r[0], r[1], Number(r[2]), r[3], r[4]]; })); return true; }
   catch (e) { return false; }
 }
-function bomBatch_() { return 'B' + stamp_() + '-' + ('000' + Math.floor(Math.random() * 1000)).slice(-3); }
+/* v6.1（2026-10-02 驗收發現）：原本「分鐘＋3 位亂數」同一分鐘內多次寫入會撞號，還原一批時會連別批一起處理 → 改「秒＋6 碼隨機」 */
+function bomBatch_() { return 'B' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 6); }
 function bomLogW_(rec) {
   try {
     var t = load_('fact_bom_log');
