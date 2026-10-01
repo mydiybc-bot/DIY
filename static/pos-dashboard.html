@@ -63,6 +63,12 @@
       ・每月營收趨勢（全店合計）：虛線＝去年同月、點上標年成長率（≤13 個月才標）、tooltip 顯示今年／去年／成長率；
         最後未滿月的去年值同樣只算到同一天。各店比較模式不變。
     驗算：2025/1/1～9/27 淨營收 67,783,158、來客 136,658、客單價 496 與 Python 獨立重算一致；南京店單店一致。
+  【v31】（2026-10-01）與肚肚對帳防呆（純前端，GAS 未動、快取版號不變 V20、口徑零變動）。
+    起因：經營者拿「2026/1～9 今年至今」卡片 67,396,428 對肚肚「9/1～9/29」6,793,474，以為不一致。
+      實查同期間 12 店銷售總額／總折扣／淨營收與肚肚逐店一元不差；另查到 2026-08-20 折扣整天沒匯入（Make 漏跑）。
+      ・淨營收卡副標改寫明日期區間「YYYY/M/D ～ YYYY/M/D（N 個月）」，避免把多個月合計當單月比。
+      ・折扣缺漏偵測 discGaps：日×店明細（daily_by_store）中，某天 ≥6 店有營收、卻沒有任何一店有折扣
+        ＝折扣資料整天沒進來 → 分頁上方紅色警示帶（列日期、店數、該日淨營收），只看目前選的期間。
 -->
 
 <link rel="preconnect" href="https://script.google.com" crossorigin>
@@ -788,6 +794,21 @@ function App(){
     return { ym:cutoff.lyYM, net, desserts, companions, limitedRev, itemRev };
   },[cutoff, dbs, dbsErr, selRegion, selStores]);
 
+  /* v31：折扣缺漏偵測——某天 ≥6 店有營收、卻沒有任何一店有折扣＝折扣資料整天沒匯入（2026-08-20 實案）。
+     只看目前選的期間；不吃分店篩選（缺漏是全公司層級的資料問題）。 */
+  const discGaps = useMemo(()=>{
+    if(!dbs || !dateStart || !dateEnd) return [];
+    const byDate = {};
+    dbs.forEach(r=>{
+      const ym = r.date.slice(0,7);
+      if(ym < dateStart || ym > dateEnd) return;
+      const o = byDate[r.date] || (byDate[r.date] = { date:r.date, sales:0, disc:0, net:0 });
+      if((r.revenue_gross||0) > 0){ o.sales++; o.net += (r.revenue_net||0); }
+      if((r.discount||0) > 0) o.disc++;
+    });
+    return Object.values(byDate).filter(o=>o.sales>=6 && o.disc===0).sort((a,b)=>a.date<b.date?-1:1);
+  },[dbs, dateStart, dateEnd]);
+
   /* tail（v30）：傳入時，該月不讀月資料，改用 tail 的「截到同一天」合計 */
   const computeKpisFor = useCallback((dStart,dEnd,tail)=>{
     if(!rawData) return null;
@@ -1151,7 +1172,7 @@ function App(){
           <div className="kpi-card">
             <div className="kpi-label">淨營收（已扣折扣）</div>
             <div className="kpi-value" style={{color:'var(--accent-light)'}}>{fmt.currency(kpis.totalRevenueNet)}</div>
-            <div className="kpi-sub">{monthlyTotals.length} 個月份</div>
+            <div className="kpi-sub">{dateStart && dateEnd ? fmtDay(dateStart+'-01')+' ～ '+fmtDay((cutoff && dateEnd===cutoff.ym) ? cutoff.date : dateEnd+'-'+daysInYM(dateEnd))+'（'+monthlyTotals.length+' 個月）' : monthlyTotals.length+' 個月份'}</div>
             {renderYoY(kpis.totalRevenueNet, yoy&&yoy.ly&&yoy.ly.totalRevenueNet, 'pct', fmt.currency)}
           </div>
           <div className="kpi-card">
@@ -1193,6 +1214,13 @@ function App(){
           <span style={{color:'#A0786E'}}>品項分析、銷售結構顯示的是<b>銷售額</b>（品項牌價 × 數量），用來比品項貢獻度，<b>不是營業額</b>——折扣打在訂單層，切不到單一品項。季節&活動則為品項實收（折扣後真實金額），見該分頁說明。</span>
         </div>
 
+        {/* v31 折扣缺漏警示：折扣整天沒匯入時，那幾天淨營收會比肚肚高 */}
+        {discGaps.length > 0 && (
+          <div className="unknown-cat-warn" style={{background:'#FDECEA',borderColor:'#F2C4BE',color:'#8B2D1F'}}>
+            ⚠️ 折扣資料缺漏：{discGaps.map(g => fmtDay(g.date) + '（' + g.sales + ' 店有營收、折扣全為 0，當日淨營收 $' + Math.round(g.net).toLocaleString() + '）').join('、')}
+            ｜這幾天的折扣沒有匯入，淨營收會比肚肚高。請通知管理員補折扣資料（bq-sync-pipeline：Make Clone 補跑）。
+          </div>
+        )}
         {/* TABS */}
         {rawData && Array.isArray(rawData.unknownCategories) && rawData.unknownCategories.length > 0 && (
           <div className="unknown-cat-warn">
