@@ -307,6 +307,41 @@ function rpr4_applySheet() {
   }
 }
 
+/* ==================== 6. 收掉補列時多長出來的空白列 ==================== */
+
+/**
+ * rpr4 用 Sheets API 分批 append 時，表尾原有的 10 列雜列被往下推，並多出 9,833 列全空白列
+ * （2026-10-02 快照 sheet_post 證實：資料列 2～333967 連續；333968～333977＝原本的 10 列雜列；
+ *   333978～343810 全空白）。經營者 10/02 核可刪除。
+ * 本函式只刪「A～K 全空白」且位於 333978 之後的列；最後一列、表尾樣子、任何一格有值，對不上就整批中止。
+ */
+function rpr6_trimBlankTail() {
+  var props = PropertiesService.getScriptProperties();
+  var KEY = 'RPR20261002_TRIM';
+  if (props.getProperty(KEY)) { Logger.log('🔴 已執行過：' + props.getProperty(KEY)); return; }
+  var DATA_END = 333967, KEEP_END = 333977, LAST = 343810;
+  var sh = SpreadsheetApp.openById(RPR.SS_ID).getSheetByName(RPR.TAB);
+  var last = sh.getLastRow(), maxRows = sh.getMaxRows();
+  Logger.log('刪前：最後一列 ' + last + '，表格總列數 ' + maxRows);
+  if (last !== LAST) { Logger.log('🔴 最後一列 ' + last + ' ≠ 預期 ' + LAST + '，未動作'); return; }
+  var head = sh.getRange(DATA_END, 1, KEEP_END - DATA_END + 1, 11).getValues();
+  if (!head[0][2] || head[1].join('') !== '' || String(head[2][6]) !== '346' || String(head[3][6]) !== '0' || String(head[4][6]) !== '0') {
+    Logger.log('🔴 表尾樣子與快照不同，未動作：' + JSON.stringify(head.slice(0, 5))); return;
+  }
+  var n = LAST - KEEP_END;
+  var vals = sh.getRange(KEEP_END + 1, 1, n, 11).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (vals[i].join('') !== '') { Logger.log('🔴 第 ' + (KEEP_END + 1 + i) + ' 列有值，未動作：' + JSON.stringify(vals[i])); return; }
+  }
+  Logger.log('✅ 核對通過：第 ' + (KEEP_END + 1) + '～' + LAST + ' 列共 ' + n + ' 列，A～K 全空白');
+  sh.deleteRows(KEEP_END + 1, n);
+  SpreadsheetApp.flush();
+  var sh2 = SpreadsheetApp.openById(RPR.SS_ID).getSheetByName(RPR.TAB);
+  var after = sh2.getLastRow(), maxAfter = sh2.getMaxRows();
+  props.setProperty(KEY, JSON.stringify({ deleted: n, from: KEEP_END + 1, lastBefore: last, lastAfter: after, maxBefore: maxRows, maxAfter: maxAfter, ts: new Date().toISOString() }));
+  Logger.log((after === KEEP_END ? '✅ ' : '🔴 ') + '刪除 ' + n + ' 列；最後一列 ' + last + ' → ' + after + '；表格總列數 ' + maxRows + ' → ' + maxAfter);
+}
+
 /* ==================== 共用小工具 ==================== */
 
 function rprT_(t) { return '`' + RPR.PROJECT + '.' + RPR.DS + '.' + t + '`'; }
