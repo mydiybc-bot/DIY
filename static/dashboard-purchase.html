@@ -499,6 +499,7 @@ table.nwt.nwin{min-width:520px;background:#fff}
     </div>
   </div>
   <div class="dsb dsb-warn" id="gvWarn" style="display:none"></div>
+  <div class="dsb dsb-warn" id="bootStale" style="display:none"></div>
   <main id="view"><div class="loading"><div class="spin"></div><div style="margin-top:12px">讀取資料中…</div></div></main>
 </div>
 <div class="toast" id="toast"></div>
@@ -681,7 +682,8 @@ function gvCore(url,key,tag){
     var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
     var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
     var rows=((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
-    gvcSet(key,rows);return {ok:true,rows:rows};
+    if(j.status!=="error")gvcSet(key,rows);   /* 2026-10-04 效能 1-1：Google 回錯誤（例：重算逾時）時不拿空結果蓋掉上次的好暫存；回傳值照舊 */
+    return {ok:true,rows:rows};
   }).catch(function(e){console.warn('gviz '+tag+' 失敗',e);return {ok:false};});
   var to=new Promise(function(res){setTimeout(function(){res({ok:false,timeout:true});},GV.TIMEOUT);});
   return Promise.race([p,to]).then(function(r){
@@ -743,9 +745,12 @@ function refreshAll(noRebuild){
       toast("已重讀，後端重算中（約 2–3 分鐘），完成會自動載入");return;}
     toast("已重新讀取最新資料");
   });}
-async function bootstrap(keep){ try {
+/* 2026-10-04 效能 1-1：開頁 15 張表的清單搬進 bootFetch——抓最新（gviz／gvizQ）與讀暫存（bootCached 換成讀 IndexedDB 的版本）共用同一份，順序＝下面 res[0..14] */
+function bootFetch(gv,gq){gv=gv||gviz;gq=gq||gvizQ;
+  return Promise.all([gv('dim_sku'),gv('dim_store_par'),gv('agg_purchase'),gv('agg_container'),gv('dim_season'),gv('dim_unitconv'),gv('fact_inventory'),gv('agg_booking'),gv('dim_dessert'),gv('fact_booking'),gv('dim_event'),gv('agg_newitem'),gv('ref_sku_price'),gv('agg_evcurve').catch(function(){return [];}),gq('agg_endcut','select A,B,C,D,F,H,I,J').then(function(rs){return (rs&&rs.length)?rs:gq('agg_endcut','select A,B,C,D,F,H,I');}).catch(function(){return [];})]);}
+async function bootstrap(keep,pre){ try {   /* pre＝已經開始的讀取（1-1：開頁先顯示暫存時傳入）；沒傳＝照舊當場向 Google 讀（🔄 更新走這條） */
   if(!(typeof window!=="undefined"&&window.__TODAY__))TODAY=new Date();   /* bx 批：每次載入／🔄 更新都用今天 */
-  var res=await Promise.all([gviz('dim_sku'),gviz('dim_store_par'),gviz('agg_purchase'),gviz('agg_container'),gviz('dim_season'),gviz('dim_unitconv'),gviz('fact_inventory'),gviz('agg_booking'),gviz('dim_dessert'),gviz('fact_booking'),gviz('dim_event'),gviz('agg_newitem'),gviz('ref_sku_price'),gviz('agg_evcurve').catch(function(){return [];}),gvizQ('agg_endcut','select A,B,C,D,F,H,I,J').then(function(rs){return (rs&&rs.length)?rs:gvizQ('agg_endcut','select A,B,C,D,F,H,I');}).catch(function(){return [];})]);   /* ca 批：先讀含 J「近7天比」（EventLayer v1.8.4）；GAS 未更新沒有 J 欄時查詢回 0 列 ⇒ 退回 7 欄 */   /* by 批（模擬第 4 輪）：只讀 7 欄（不讀近4週週用量、更新日），約 200 KB；GAS 未更新到 v1.8.1（沒有 H、I 欄）時查詢失敗＝不做收尾，不會退回有缺陷的 v1.8 整份扣 */
+  var res=await (pre||bootFetch());   /* ca 批：先讀含 J「近7天比」（EventLayer v1.8.4）；GAS 未更新沒有 J 欄時查詢回 0 列 ⇒ 退回 7 欄 */   /* by 批（模擬第 4 輪）：只讀 7 欄（不讀近4週週用量、更新日），約 200 KB；GAS 未更新到 v1.8.1（沒有 H、I 欄）時查詢失敗＝不做收尾，不會退回有缺陷的 v1.8 整份扣 */
   /* 2026-09-05 ao 批：agg_evcurve（EventLayer v1.6 逐週曲線，約 8 列）。分頁不存在時 gviz 會回到第一個分頁 → 以表頭「週序」把關 */
   EVCV={};(res[13]||[]).forEach(function(r){if(r["週序"]==null||r["事件名"]==null||r["今年週起"]==null)return;var ev=String(r["事件名"]||"").trim();if(!ev)return;
     var f=gvDate(r["今年週起"]),t=gvDate(r["今年週訖"]),pf=gvDate(r["去年週起"]),pt=gvDate(r["去年週訖"]);
@@ -802,6 +807,61 @@ async function bootstrap(keep){ try {
   try{ render(); }catch(e2){ console.warn(e2); $("#view").innerHTML='<div class="card">載入發生問題，請重新整理頁面；若持續，回報我。</div>'; }
   loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
 }
+/* ===== 2026-10-04 效能第 1 批 1-1：開頁先顯示上次的資料（IndexedDB 暫存），背景再讀最新 =====
+   原本：15 張表全部從 Google 讀回來才畫第一個畫面（平常 3～10 秒，Google 忙時最多 20 秒）。
+   現在：這台裝置有上次成功讀到的 15 張表（gvCore 讀成功時存的 dpc_cache）→ 先用它畫出來，頂部顯示「顯示 HH:MM 的資料，更新中…」；
+         同一時間照常向 Google 讀最新（與原本同一組請求），讀到後用最新資料重畫、提示收起。
+   寫入安全（這頁店長晚上盤點、訂貨用，最重要）：
+   ① 顯示舊資料期間（BOOT.stale）：#view 裡的點擊（按鈕、勾選、展開…）一律擋下並提示「資料更新中，請稍候幾秒再存」；
+      所有寫入出口（post／出貨中心 dcoPostRaw／postConv／postShelf／srPostApi）各自再擋一次（雙保險）。
+   ② 輸入欄在這段期間先鎖住（搜尋框、廠商篩選除外），所以不會有「打到一半被重畫洗掉」；最新資料到了重畫就解開。
+   ③ 盤點草稿：舊資料期間沒有人能輸入，DIRTY 只可能來自 mergeDraft（本機草稿）→ 最新資料到了把 DIRTY／DRAFTED 清掉，
+      由 viewCount 對最新資料重新合併，結果等於「正常開頁」。
+   ④ 讀最新失敗／逾時：照舊由 gvCore 改用暫存並亮「資料源忙碌」警示（原行為），本提示收起、恢復可寫。
+   ⑤ 15 張表有任何一張沒有暫存 → 走原本流程（等 Google 讀完才畫）。手動「🔄 更新」（refreshAll→bootstrap(true)）不經過這裡，永遠讀最新。 */
+var BOOT={stale:false,t:0};
+function bootCached(){var t0=Infinity;   /* 讀 15 張表的暫存；缺任何一張回 null */
+  function hit(c){if(!c||!c.d)return null;if(c.t<t0)t0=c.t;return c.d;}
+  function gv(s){return gvcGet("gv:"+readIdOf(s)+":"+s).then(hit);}
+  function gq(s,tq){return gvcGet("gq:"+readIdOf(s)+":"+s+":"+gvHash(tq)).then(hit);}
+  return bootFetch(gv,gq).then(function(res){for(var i=0;i<res.length;i++)if(!res[i])return null;return {res:res,t:t0};}).catch(function(){return null;});}
+var BOOT_CACHE_WAIT=3000;   /* 讀暫存最多等 3 秒（IndexedDB 偶爾開不起來或沒回應時不卡開頁），逾時當沒暫存 */
+function bootStart(){
+  var fresh=bootFetch(),done=false;   /* 先送出讀最新（與原本開頁同一組請求），再去讀暫存 */
+  fresh.then(function(){done=true;},function(){done=true;});
+  var cached=Promise.race([bootCached(),new Promise(function(r){setTimeout(function(){r(null);},BOOT_CACHE_WAIT);}),fresh.then(function(){return null;},function(){return null;})]);   /* 最新先到也不再等暫存 */
+  return cached.then(function(c){
+    if(!c||done)return bootstrap(false,fresh);   /* 沒暫存（或最新已經到了）＝原本流程 */
+    BOOT.stale=true;BOOT.t=c.t;bootStaleBar();
+    return bootstrap(false,Promise.resolve(c.res)).then(function(){
+      if(BOOT.stale){var u=$("#upd");if(u)u.textContent="更新中…";}
+      fresh.then(function(){return bootFresh(fresh,true);},function(){return bootFresh(fresh,false);});});});}
+function bootFresh(fresh,ok){
+  return bootstrap(true,fresh).then(function(){   /* 最新資料先套進全域，再清下面兩組，最後重畫（中間不會有重畫插進來） */
+    ANMAP=null;ANBOM=null;AN_FAILED=false;PLATOWN={};SUPC={};WMED=null;BKIDX=null;   /* 由舊資料推出來的暫存（同 refreshAll）；店別流水／大平台下單／檔期對照表是開頁時直接向 Google 讀的，不用重讀 */
+    DIRTY={};DRAFTED={};   /* ③ */
+    if(!ok){GV.bad["boot"]={cached:BOOT.t,tag:"開頁資料"};gvBanner();}   /* 幾乎不會發生（gvCore 不會拋錯）；萬一整組讀取出錯，畫面仍是暫存 → 亮「資料源忙碌」警示 */
+    BOOT.stale=false;bootStaleBar();
+    try{render();}catch(e){console.warn(e);}
+    if(FLOWST!==String(ST.storeId))loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});});}
+function bootStaleBar(){var el=document.getElementById("bootStale");if(!el)return;
+  if(!BOOT.stale){el.style.display="none";el.innerHTML="";return;}
+  var d=new Date(BOOT.t),hm=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+  if(ymd(d)!==ymd(new Date()))hm=(d.getMonth()+1)+"/"+d.getDate()+" "+hm;
+  el.innerHTML='<b>⏳ 顯示 '+hm+' 的資料，更新中…</b><span>最新資料讀到後會自動換上；這幾秒先不能輸入或存檔。</span>';
+  el.style.display="";}
+function staleSafe(t){return !!(t&&t.closest&&t.closest("#skuQ,#skuQx,#vsel,#qbox"));}   /* 舊資料期間仍可用：搜尋框、清除鈕、廠商篩選（只改畫面篩選，不寫入） */
+function staleToast(){toast("資料更新中，請稍候幾秒再存");}
+function staleBlock(){if(!BOOT.stale)return false;staleToast();return true;}
+function staleLock(){var v=document.getElementById("view");if(!v)return;   /* render() 結尾呼叫：#view 內的輸入欄先鎖住 */
+  Array.prototype.forEach.call(v.querySelectorAll("input,select,textarea"),function(el){if(!staleSafe(el))el.disabled=true;});}
+if(typeof window!=="undefined"){
+  window.addEventListener("click",function(ev){if(!BOOT.stale)return;var t=ev.target;
+    if(!t||!t.closest||!t.closest("#view,.modal-bg")||staleSafe(t))return;   /* 頁首（🔄 更新、身分、門市）、分頁籤、說明列照常 */
+    ev.preventDefault();ev.stopPropagation();staleToast();},true);
+  window.addEventListener("focusin",function(ev){if(!BOOT.stale)return;var t=ev.target;   /* 萬一有沒鎖到的輸入欄（例：就地插入的卡片），游標進去就移開 */
+    if(!t||!t.closest||!/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName||"")||!t.closest("#view,.modal-bg")||staleSafe(t))return;
+    try{t.blur();}catch(e){}staleToast();},true);}
 
 /* ===== 工具 ===== */
 function $(s){return document.querySelector(s);}
@@ -1030,12 +1090,49 @@ function fetchFresh(sheetName){
     var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
     return ((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});});}
 function fetchInvRows(){return fetchFresh('fact_inventory');}
+/* ===== 2026-10-04 效能第 1 批 1-5：存檔後回讀只查「該店（＋該品項）」 =====
+   原本每次回讀都下載整張表（dim_store_par 約 5,900 列；fact_inventory 只增不減），postParam 改幾欄就讀幾次整張表。
+   現在：gviz 加 where 只拿該店（品項 ≤ FQ_MAXIDS 個時再加品項），從整張表變成幾列。
+   判斷寫入成功與否的程式（verifyParam／verifyParamBatch／verifySave 裡的逐列比對）一字不改：where 只先濾掉「比對時一定不會被選中」的列，
+   列的先後順序不變，所以「同店同品項取最後一列／取最新時間戳」的結果與讀整張表相同。
+   欄位字母與型態不寫死：先 select * limit 1 讀表頭（每張表每次開頁讀一次），每次查詢回來再核對一次表頭沒換；
+   任何一步不確定（找不到「店號」「sku_id」欄、型態不是數字／文字、店號或品項寫法特殊、查詢回錯誤、表頭對不上、程式出錯）
+   → 一律退回原本的整張表 fetchFresh。 */
+var FQ_MAXIDS=30,FQS={};
+function fqUrl(sheet,tq){return 'https://docs.google.com/spreadsheets/d/'+readIdOf(sheet)+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheet)+'&tq='+encodeURIComponent(tq)+'&_='+Date.now();}
+function fqJson(t){return JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));}
+function fqCols(j){if(!j||j.status==="error"||!j.table)return null;var m={};   /* 鍵名與 fetchFresh 相同（label||id），同名取最後一欄 */
+  (j.table.cols||[]).forEach(function(c){var l=c.label||c.id;if(l==="店號"||l==="sku_id")m[l]={id:c.id,type:c.type};});
+  return (m["店號"]&&m["sku_id"])?m:null;}
+function fqSchema(sheet){
+  if(!FQS[sheet])FQS[sheet]=fetch(fqUrl(sheet,"select * limit 1")).then(function(r){return r.text();}).then(function(t){return fqCols(fqJson(t));})
+    .catch(function(){return null;}).then(function(m){if(!m)delete FQS[sheet];return m;});
+  return FQS[sheet];}
+function fqLit(col,v){v=String(v==null?"":v);   /* 回 null＝不確定，退回整張表 */
+  if(col.type==="number"){var n=Number(v);return (v!==""&&isFinite(n)&&String(n)===v)?v:null;}
+  if(col.type==="string")return /^[^'"\\]*$/.test(v)?"'"+v+"'":null;
+  return null;}
+function fetchFreshWhere(sheet,store,ids){
+  return fqSchema(sheet).then(function(m){
+    if(!m)return fetchFresh(sheet);
+    var sl=fqLit(m["店號"],store);if(sl==null)return fetchFresh(sheet);
+    var w=m["店號"].id+"="+sl;
+    if(ids&&ids.length&&ids.length<=FQ_MAXIDS){var ors=[];
+      for(var i=0;i<ids.length;i++){var il=fqLit(m["sku_id"],ids[i]);if(il==null){ors=null;break;}ors.push(m["sku_id"].id+"="+il);}
+      if(ors)w+=" and ("+ors.join(" or ")+")";}
+    return fetch(fqUrl(sheet,"select * where "+w)).then(function(r){return r.text();}).then(function(t){
+      var j=fqJson(t),m2=fqCols(j);
+      if(!m2||m2["店號"].id!==m["店號"].id||m2["店號"].type!==m["店號"].type||m2["sku_id"].id!==m["sku_id"].id||m2["sku_id"].type!==m["sku_id"].type){delete FQS[sheet];return fetchFresh(sheet);}
+      var cols=(j.table.cols||[]).map(function(c){return (c.label||c.id);});
+      return (j.table.rows||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
+    }).catch(function(){delete FQS[sheet];return fetchFresh(sheet);});
+  }).catch(function(){return fetchFresh(sheet);});}
 /* 參數寫入回讀：post() 為 no-cors，成功與否無法從回應判斷，必須回讀 dim_store_par 確認。
    失敗時不靜默——推進 ST.writeWarn，由 render() 統一顯示紅色橫幅。 */
 function verifyParam(store,skuId,label,expected,attempt,cb){
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)];
   setTimeout(function(){
-    fetchFresh('dim_store_par').then(function(rows){
+    fetchFreshWhere('dim_store_par',store,[skuId]).then(function(rows){   /* 2026-10-04 效能 1-5：只讀該店該品項（比對邏輯不變） */
       var hit=null;
       rows.forEach(function(r){if(String(r["店號"])===String(store)&&String(r["sku_id"])===String(skuId))hit=r;});
       var ok=false;
@@ -1197,7 +1294,7 @@ function verifyParamBatch(store,list,attempt,total,round){
   round=round||0;
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)];
   setTimeout(function(){
-    fetchFresh("dim_store_par").then(function(rows){
+    fetchFreshWhere("dim_store_par",store,list.map(function(x){return x.id;})).then(function(rows){   /* 2026-10-04 效能 1-5 */
       var by={};rows.forEach(function(r){if(String(r["店號"])===String(store))by[String(r["sku_id"])]=r;});
       var bad=[];
       list.forEach(function(x){
@@ -1260,7 +1357,7 @@ function writeWarnBanner(){
 function verifySave(store,expect,attempt,btn){
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)],n=Object.keys(expect).length;
   setTimeout(function(){
-    fetchInvRows().then(function(rows){
+    fetchFreshWhere('fact_inventory',store,Object.keys(expect)).then(function(rows){   /* 2026-10-04 效能 1-5：只讀該店（比對邏輯不變） */
       var latest={},ts={};
       rows.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"];
         if(st!==String(store)||!(id in expect))return;
@@ -1450,7 +1547,8 @@ function expiredItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&!s
 function exclItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)==="已停售"&&aggOf(st,s).week>0;});}
 function upInfo(st,s){var a=aggOf(st,s);if(!a.launch)return null;var d=new Date(String(a.launch).replace(/\//g,"-"));return {days:Math.max(0,Math.ceil((d-TODAY)/864e5))};}
 function toast(m){var t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove("on");},1500);}
-function post(payload,silent){ if(payload&&payload.store!=null&&!stWriteOK(payload.store))return Promise.resolve();   /* co 批：店長身分寫入別店 → 擋下 */
+function post(payload,silent){ if(staleBlock())return Promise.resolve();   /* 2026-10-04 效能 1-1：顯示舊資料期間不寫 */
+  if(payload&&payload.store!=null&&!stWriteOK(payload.store))return Promise.resolve();   /* co 批：店長身分寫入別店 → 擋下 */
   if(!GAS_URL||GAS_URL.indexOf("__")===0){if(!silent)toast("（試用：未接 GAS，僅本機）");return Promise.resolve();}
   payload.token=API_TOKEN;return fetch(GAS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)}).then(function(){if(!silent)toast("已送出");}).catch(function(){if(!silent)toast("送出失敗");}); }
 
@@ -1700,6 +1798,7 @@ function render(){var __ae=(typeof document!=="undefined")?document.activeElemen
   $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡"||ST.tab==="效期"||ST.tab==="檔期備貨"||ST.tab==="新品"||ST.tab==="訂單"||ST.tab==="庫存"||(ST.tab==="申請"&&ST.role==="總部"))?"none":"block";
   var __sy=(window.pageYOffset||document.documentElement.scrollTop||0);
   $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"效期":viewShelf,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog,"對帳":viewRecon,"大平台":viewShist,"檔期備貨":viewCampHQ,"新品":viewNewItems,"申請":viewSkuReq,"訂單":viewDcOrders,"庫存":viewDcStock}[ST.tab])();wire();if(ST.tab==="申請")srWire();if(ST.tab==="新品")nwWire();
+  if(BOOT.stale)staleLock();   /* 2026-10-04 效能 1-1：顯示舊資料期間輸入欄先鎖住 */
   if(__sy>0)try{window.scrollTo(0,__sy);}catch(e){}}
 function catChips(){return '<div class="chips">'+["全部","食材","耗材","器具","模具"].map(function(c){return '<div class="chip '+(c==ST.cat?"on":"")+'" data-cat="'+c+'">'+c+'</div>';}).join("")+'</div>';}
 /* 期間統計 · 物料類別篩選 chips（2026-08-11 m 批） */
@@ -3839,7 +3938,8 @@ function dcoJsonp(params){return new Promise(function(res,rej){
   var p={};Object.keys(params).forEach(function(k){p[k]=params[k];});p.token=DCO_TOKEN;p.callback=n;
   s.src=DCO_API+"?"+Object.keys(p).map(function(k){return k+"="+encodeURIComponent(p[k]);}).join("&");
   document.head.appendChild(s);});}
-function dcoPostRaw(body){body.token=DCO_TOKEN;
+function dcoPostRaw(body){if(staleBlock())return Promise.resolve({ok:false,error:"資料更新中，請稍候幾秒再存"});   /* 2026-10-04 效能 1-1 */
+  body.token=DCO_TOKEN;
   return fetch(DCO_API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)}).then(function(r){return r.json();});}
 function dcoNetErr(e){return !e||!e.dcoApi;}   /* 後端明確回的錯誤（busy、不能取消…）會帶 dcoApi；其他＝網路／讀不到回應 */
 function dcoApiErr(r){var e=new Error((r&&r.error)||"寫入失敗");e.dcoApi=true;return e;}
@@ -4366,7 +4466,8 @@ var SHELF_VER="2026-08";
 var SHELF=[["冷藏","蛋黃液","依原包裝","","依原包裝","分蛋冷藏D+2"],["常溫","雞蛋","冷藏+1個月/常溫+14","","",""],["冷藏","蛋白液","依原包裝","","依原包裝","分蛋冷藏D+2"],["常溫","低筋麵粉","依原包裝","","",""],["冷藏","乳酪","依原包裝","","D+7",""],["常溫","高筋麵粉","依原包裝","","",""],["冷藏","奶油","依原包裝","切分冷凍D+30","D+10",""],["常溫","砂糖","依原包裝","","",""],["冷藏","牛奶","依原包裝","","依原包裝",""],["常溫","糖粉","依原包裝","","",""],["冷藏","動植鮮","依原包裝","","依原包裝",""],["常溫","防潮糖粉","依原包裝","","",""],["冷藏","裝飾鮮奶油","依食譜","","D+3","半成品"],["常溫","可可粉","依原包裝","","",""],["冷藏","克林姆","依原包裝","","依原包裝",""],["常溫","防潮可可粉","依原包裝","","",""],["冷藏","各類果漿","依原包裝","","依原包裝","開元"],["常溫","沙拉油","依原包裝","","",""],["冷藏","覆盆子果泥","依原包裝","冷凍D+30","D+14",""],["常溫","巧克力(黑/白/黃/粉)","依原包裝","","",""],["冷藏","藍莓果醬","依原包裝","冷凍D+30","D+14",""],["常溫","抹茶粉","依原包裝","","",""],["冷藏","檸檬汁","依原包裝","","D+14",""],["常溫","泡打粉","依原包裝","","",""],["冷藏","寒天ＱＱ","依原包裝","","",""],["常溫","玉米粉","依原包裝","","",""],["冷藏","核桃","依原包裝","","依原包裝",""],["常溫","太白粉","依原包裝","","",""],["冷藏","杏仁片","依原包裝","","依原包裝",""],["常溫","調和蜂蜜","依原包裝","","",""],["冷藏","杏仁粉","依原包裝","","依原包裝",""],["常溫","咖啡粉","依原包裝","","",""],["冷藏","三色脆球","依原包裝","","",""],["常溫","咖啡豆","依原包裝","","","飲料區"],["冷藏","吉利丁凍","依食譜","","D+14","半成品"],["常溫","牛奶球","依原包裝","","","飲料區"],["冷藏","鹽漬櫻花","依原包裝","","依原包裝","出貨中心"],["常溫","焦糖醬","依原包裝","","",""],["冷藏","糖漬橘皮丁","依原包裝","","依原包裝","出貨中心"],["常溫","各類茶包","依原包裝","","","含飲料區"],["冷藏","各類水果","","","",""],["常溫","各類Monin糖漿","依原包裝","","","開元"],["常溫","吉利丁粉","依原包裝","","",""],["常溫","豆漿粉","依原包裝","","",""],["常溫","OREO碎片","依原包裝","","",""],["常溫","OREO粉","依原包裝","","",""],["常溫","大OREO","依原包裝","","",""],["常溫","小OREO","依原包裝","","",""],["常溫","脆笛酥","依原包裝","","",""],["冷凍","蛋糕片","依食譜","","","半成品"],["常溫","蓮花餅乾","依原包裝","","",""],["冷凍","紙杯蛋糕","依食譜","","","半成品"],["常溫","消化餅","依原包裝","","",""],["常溫","鹽","依原包裝","","",""],["常溫","胡椒粉","依原包裝","","",""],["冷凍","地瓜","依原包裝","","依原包裝",""],["常溫","卡士達粉","依原包裝","","",""],["冷凍","檸檬汁","依原包裝","","",""],["常溫","寒天粉","依原包裝","","",""],["冷凍","起司絲","依原包裝","","",""],["常溫","咖啡酒","依原包裝","","",""],["冷凍","帕馬森起司粉","依原包裝","","",""],["常溫","蘭姆酒","依原包裝","","",""],["冷凍","雙色乳酪丁","依原包裝","","",""],["常溫","澄酒","依原包裝","","",""],["冷凍","肉桂奶油","冷凍D+60","冷藏D+30","","半成品"],["冷凍","肉桂捲淋醬","冷凍D+60","冷藏D+30","","吳寶春叫貨"],["常溫","B08塔派粉","依原包裝","","","出貨中心"],["冷凍","荔枝玫瑰果乾","冷凍D+30","","",""],["常溫","翻糖裝飾","依原包裝","","","出貨中心"],["冷凍","酒釀桂圓果乾","冷凍D+30","","",""],["常溫","各類糖珠","依原包裝","","","出貨中心"],["冷凍","布里歐麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各類茶粉","依原包裝","","","出貨中心"],["冷凍","歐式麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各色色膏","依原包裝","","","出貨中心"],["冷凍","穀物麵團","冷凍D+30","","當日解凍後未用報廢",""],["常溫","各色色粉","依原包裝","","","出貨中心"]];
 var SHELFD=null,SHELFLD=null,SHELFERR=false,SHELF_API="",SHELF_TOKEN="dbc-shelf-Kp3vR8";
 var CONV_API="",CONV_TOKEN="dbc-conv-Wm4nQ7";
-function postConv(payload){payload.type="conv";payload.token=CONV_TOKEN;
+function postConv(payload){if(staleBlock())return Promise.resolve();   /* 2026-10-04 效能 1-1 */
+  payload.type="conv";payload.token=CONV_TOKEN;
   return fetch(CONV_API,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)});}
 function convDelete(i){var u=UNITCONV[i];if(!u)return;
   if(!CONV_API){toast("尚未部署 diybc-conv-api，請先照 convApi.gs 說明部署並把網址貼到 dim_unitconv F1");return;}
@@ -4388,7 +4489,8 @@ function loadShelf(force){
     if(rows.length){SHELFD=rows;SHELFERR=false;}else{SHELFERR=true;}
     SHELFLD=null;render();});
   return SHELFLD;}
-function postShelf(payload){payload.type="shelf";payload.token=SHELF_TOKEN;
+function postShelf(payload){if(staleBlock())return Promise.resolve();   /* 2026-10-04 效能 1-1 */
+  payload.type="shelf";payload.token=SHELF_TOKEN;
   return fetch(SHELF_API,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)});}
 function shelfVerify(kind,row,origName){ /* 4 秒後回讀驗證（gviz 為準）*/
   setTimeout(function(){gvizQ("dim_shelf","select A,B,C,D,E,F").then(function(rs){
@@ -4855,6 +4957,16 @@ function bindQ(el,apply){
    ④ 篩選語意不變：ST.q／ST.vq＋matchQ，計數與 viewCount 同一份 invSets
    ⑤ 畫面上的卡片跟目前清單對不上（例：在「本次未盤」盤完幾項）→ 改走整頁重畫，焦點與游標照舊放回搜尋框 */
 var INVQ_WAIT=250,INVQ={t:0,down:false,up:0,at:0};
+/* ===== 2026-10-04 效能第 1 批 1-4：建議／店別參數／主檔 的搜尋框停手 INVQ_WAIT（250ms，同盤點頁）才整頁重畫 =====
+   ST.q 每打一字立刻更新（中途若有背景重畫，搜尋字不會掉）；只有整頁重畫延後，連續打字只畫最後一次。
+   QF 立刻清掉：計時到時由 render() 依「游標現在在哪」決定要不要把焦點放回搜尋框（人已點去別處就不拉回來）。
+   計時到時人已經在別的輸入欄打字（例：店別參數的數字欄）→ 等他離開那一欄再重畫，免得把打到一半的值換掉（地雷 184）。 */
+var QLATER={t:0};
+function qLater(){QF=null;if(QLATER.t)clearTimeout(QLATER.t);QLATER.t=setTimeout(qLaterRun,INVQ_WAIT);}
+function qLaterRun(){QLATER.t=0;var ae=document.activeElement;
+  if(ae&&!ae.__qb&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName||"")&&document.body.contains(ae)){
+    ae.addEventListener("blur",function(){if(!QLATER.t)QLATER.t=setTimeout(qLaterRun,0);},{once:true});return;}
+  render();}
 if(typeof document!=="undefined"){
   document.addEventListener("pointerdown",function(){INVQ.down=true;INVQ.at=Date.now();clearTimeout(INVQ.up);},true);
   ["pointerup","pointercancel"].forEach(function(tp){document.addEventListener(tp,function(){clearTimeout(INVQ.up);INVQ.up=setTimeout(function(){INVQ.down=false;},100);},true);});}   /* 放開後再等 0.1 秒（讓這次點擊先處理完） */
@@ -5126,7 +5238,8 @@ function viewSkuReq(){
   if(ST.role==="總部")return html+(SRD===null?'<div class="card muted">讀取中…</div>':srHQ());
   return html+srStoreView();}
 /* ---- 寫入 ---- */
-function srPostApi(payload){payload.token=SR_TOKEN;
+function srPostApi(payload){if(staleBlock())return Promise.resolve();   /* 2026-10-04 效能 1-1 */
+  payload.token=SR_TOKEN;
   return fetch(SR_API,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)}).catch(function(){});}
 function srSubmit(){var f=srForm(),st=String(ST.storeId||"");
   if(!SR_API){toast("申請功能尚未開通");return;}
@@ -5352,11 +5465,11 @@ function wire(){
   var sal=$("#salesAll");if(sal)sal.onclick=function(){ST.salesAll=true;render();};
   var pk=$("#pickSku");if(pk)pk.onchange=function(){ST.totSku=pk.value;if(pk.value)runTotal(pk.value);else render();};
   Array.prototype.forEach.call(document.querySelectorAll('[data-drill]'),function(el){el.onclick=function(){ST.totSku=el.dataset.drill;runTotal(el.dataset.drill);};});
-  bindQ($("#qbox"),function(v){ST.q=v;render();});
+  bindQ($("#qbox"),function(v){ST.q=v;qLater();});   /* 2026-10-04 效能 1-4：店別參數／主檔 停手 250ms 才重畫 */
   // 2026-07-27 雙搜尋（品項 datalist ＋ 廠商下拉）
   /* 2026-10-02 cv 批：盤點頁改就地篩選（invQBind／invQApply），不重畫整頁；其他頁（建議）照舊 */
   if(ST.tab==="盤點")invQBind($("#skuQ"));
-  else bindQ($("#skuQ"),function(v){ST.q=v;render();});
+  else bindQ($("#skuQ"),function(v){ST.q=v;qLater();});   /* 2026-10-04 效能 1-4：建議 停手 250ms 才重畫 */
   var skx=$("#skuQx");if(skx)skx.onclick=function(){if(ST.tab==="盤點"){invQClear();return;}ST.q="";render();};
   var vv=$("#vsel");if(vv)vv.onchange=function(){ST.vq=vv.value;if(ST.tab==="盤點"){invQApply();return;}render();};
   // 盤點 session
@@ -6132,7 +6245,7 @@ function askStore(force){
       try{render();}catch(e){}
       loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
       toast("本機門市已設為 "+storeLabel(id));};});}
-if(typeof window!=="undefined"&&!window.__TEST__) bootstrap().then(function(){ askStore(false); });
+if(typeof window!=="undefined"&&!window.__TEST__) bootStart().then(function(){ askStore(false); });   /* 2026-10-04 效能 1-1：有暫存先畫（見 bootStart） */
 
 /* ci 批：盤點卡片 🕐 收合鈕（事件委派，rerender 後狀態由 ST.shOpen 保留） */
 document.addEventListener("click",function(ev){var b=ev.target&&ev.target.closest?ev.target.closest("[data-shbtn]"):null;if(!b)return;ev.preventDefault();
