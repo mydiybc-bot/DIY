@@ -386,7 +386,7 @@ tbody tr.fail-row td:first-child { color: #D62828; box-shadow: inset 4px 0 0 #D6
 </div>
 <div class="filter-group">
 <label>關鍵字</label>
-<input type="text" id="f-keyword" placeholder="搜尋評論內容…" oninput="applyFilters()">
+<input type="text" id="f-keyword" placeholder="搜尋評論內容…" oninput="onKeywordInput()">
 <button class="clear-btn" onclick="clearFilter('f-keyword')" title="清除">✕</button>
 </div>
 <button class="reset-all-btn" onclick="resetAllFilters()">↺ 重設全部</button>
@@ -554,8 +554,19 @@ showLoading(true);
 try {
 // 改由 GAS 後端讀 Sheet（伺服器端 getValues，完整不截斷），一次取回全部列。
 // GAS rows 欄位順序：0 門市 1 評論者 2 年月 3 星等 4 品牌 5 區域 6 標記 7 內容
-const data = await gasJsonp(GAS_REVIEWS_URL);
+/* 2026-10-04 效能第 1 批（1-3）冷啟動重試（比照 POS 地雷 18）：GAS 冷啟動常回 5xx（script onerror）或 ok:false，
+   先別報錯，畫面維持轉圈，3 秒後自動再抓，最多重試 2 次；逾時（30 秒沒回）不重試，直接顯示錯誤，避免轉圈太久。 */
+let data = null;
+for (let _try = 0; ; _try++) {
+try {
+data = await gasJsonp(GAS_REVIEWS_URL);
 if (!data || !data.ok) throw new Error((data && data.error) || '端點回應異常');
+break;
+} catch (err) {
+if (_try >= 2 || (err && err.message === '端點逾時')) throw err;
+await new Promise(r => setTimeout(r, 3000));
+}
+}
 _allRows = (data.rows || []).map(c => ({
 store:  c[0] || '',
 author: c[1] || '',
@@ -723,7 +734,15 @@ document.getElementById('f-month-to').value = '';
 applyFilters();
 }
 
+/* 2026-10-04 效能第 1 批（1-4）搜尋防抖：關鍵字原本每打一字就全部重算＋3 張圖重畫；改成停手 300ms 才算一次。
+   其他篩選（門市／期間／星等／清除／重設）照舊直接呼叫 applyFilters，會順便取消還在等的那一次。 */
+let _kwTimer = null;
+function onKeywordInput() {
+clearTimeout(_kwTimer);
+_kwTimer = setTimeout(applyFilters, 300);
+}
 function applyFilters() {
+clearTimeout(_kwTimer); _kwTimer = null;
 const fMonthFrom = document.getElementById('f-month-from').value;
 const fMonthTo = document.getElementById('f-month-to').value;
 const fStar = document.getElementById('f-star').value;
