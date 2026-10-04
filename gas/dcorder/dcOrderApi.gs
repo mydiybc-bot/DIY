@@ -1,6 +1,11 @@
 /**
- * diybc-dcorder-api  v1.0（2026-09-28 cn 批）
+ * diybc-dcorder-api  v1.1（2026-10-04 效能第 2 批 2-6：讀取加 CacheService）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
+ *
+ * v1.1：GET orders／stock 的「整表讀＋組訂單」結果存 CacheService 10 分鐘（>90,000 字元切塊）；
+ *       key 帶版本號（指令碼屬性 DCO_CACHE_VER），每次 doPost 寫入結束就換版本號 → 舊快取一次失效。
+ *       寫入函式一律直接讀試算表（不經快取）；快取任何環節失敗都退回 v1.0 直接讀表的路。回傳內容不變。
+ *       手動清快取：編輯器執行 aaaClearReadCache()（例如在試算表手改資料之後）。
  *
  * 獨立 Apps Script 專案（沿用「每支寫入 API 各自一個專案」慣例，不動 diybc-purchase-agg 主程式）。
  * 資料放在獨立試算表「出貨中心訂單（採購系統）」：第一次執行 setup() 時自動建立，ID 記在指令碼屬性 DCO_SS_ID。
@@ -15,13 +20,70 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.0';
+var DCO_VER = 'v1.1-cache';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
 var H_STOCK = ['sku_id', '品名', '管理方式', '庫存', '更新時間', '備註'];
 var H_LOG = ['時間', '動作', '訂單號', '店號', '內容'];
 var OPEN_ST = { '待處理': 1, '備貨中': 1 };
+
+/* ── 讀取快取（v1.1） ─────────────────────────────────────────── */
+var DCO_CACHE_TTL = 600;            // 10 分鐘
+var DCO_CACHE_CHUNK = 90000;        // 單 key 上限 100KB → 每塊 90,000 字元
+var DCO_CACHE_MAX_CHUNKS = 50;      // 超過約 4.5MB 就不存（只回算好的結果，功能照常）
+var DCO_CACHE_PREFIX = 'DCO_RD_';
+var DCO_CACHE_VER_PROP = 'DCO_CACHE_VER';
+
+function dcoCacheVer_() {
+  try { return PropertiesService.getScriptProperties().getProperty(DCO_CACHE_VER_PROP) || '0'; } catch (e) { return '0'; }
+}
+/* 寫入後呼叫：換版本號 → 所有讀取快取立即失效 */
+function dcoCacheBump_() {
+  try { PropertiesService.getScriptProperties().setProperty(DCO_CACHE_VER_PROP, String(Date.now()) + '-' + Math.floor(Math.random() * 1e9)); } catch (e) { }
+}
+function dcoCacheKey_(name) { return DCO_CACHE_PREFIX + dcoCacheVer_() + '_' + name; }
+/* 讀分塊：<key>_n = 塊數、<key>_0.._n-1 = 內容；任一塊缺就當未命中 */
+function dcoCacheGet_(key) {
+  var cache = CacheService.getScriptCache();
+  var meta = cache.get(key + '_n');
+  if (meta === null || meta === undefined) return null;
+  var n = parseInt(meta, 10);
+  if (!(n >= 1)) return null;
+  var keys = [];
+  for (var i = 0; i < n; i++) keys.push(key + '_' + i);
+  var parts = cache.getAll(keys), out = '';
+  for (var j = 0; j < n; j++) {
+    var part = parts[key + '_' + j];
+    if (part === undefined || part === null) return null;
+    out += part;
+  }
+  return out;
+}
+function dcoCachePut_(key, str) {
+  var n = Math.ceil(str.length / DCO_CACHE_CHUNK);
+  if (n > DCO_CACHE_MAX_CHUNKS) return;
+  var obj = {};
+  for (var i = 0; i < n; i++) obj[key + '_' + i] = str.substring(i * DCO_CACHE_CHUNK, (i + 1) * DCO_CACHE_CHUNK);
+  obj[key + '_n'] = String(n);
+  CacheService.getScriptCache().putAll(obj, DCO_CACHE_TTL);
+}
+/* 讀取共用：命中回 JSON.parse 後的物件；未命中算一次並存。回傳與 computeFn() 同結構（全是字串／數字／null，JSON 來回不失真） */
+function dcoCached_(name, computeFn) {
+  var key = null;
+  try {
+    key = dcoCacheKey_(name);
+    var hit = dcoCacheGet_(key);
+    if (hit !== null) return JSON.parse(hit);
+  } catch (e) { key = null; }
+  var val = computeFn();
+  if (key) { try { dcoCachePut_(key, JSON.stringify(val)); } catch (e2) { } }
+  return val;
+}
+/* 全部訂單（已組成訂單物件、依明細行號排好）：快取的是這一份；篩選仍每次依參數做 */
+function dcoOrdersAll_() { return dcoCached_('orders', function () { return dcoGroup_(dcoRead_(SH_LINE).rows); }); }
+/* 手動清掉所有讀取快取（編輯器直接執行） */
+function aaaClearReadCache() { dcoCacheBump_(); }
 
 /* ── 初始化（第一次手動執行一次；會要求授權） ─────────────────── */
 function setup() {
@@ -125,11 +187,10 @@ function doGet(e) {
 /* 參數：store（店號）、status（逗號分隔）、from/to（下單日 yyyy-MM-dd）、sfrom/sto（出貨日）、id、cid、days（預設 60）
    沒給任何日期條件時只回近 days 天下單的 ＋ 還沒處理完的（待處理、備貨中不論多久都回） */
 function dcoOrders_(p) {
-  var rows = dcoRead_(SH_LINE).rows;
   var sts = p.status ? String(p.status).split(',') : null;
   var hasDate = p.from || p.to || p.sfrom || p.sto;
   var since = new Date(Date.now() - (dcoNum_(p.days) || 60) * 86400000);
-  var list = dcoGroup_(rows).filter(function (o) {
+  var list = dcoOrdersAll_().filter(function (o) {   /* v1.1：整表讀＋組訂單走快取；篩選照舊 */
     if (p.id && o.id !== p.id) return false;
     if (p.cid && o.cid !== p.cid) return false;
     if (p.store && o.store !== String(p.store)) return false;
@@ -147,8 +208,10 @@ function dcoOrders_(p) {
 }
 
 function dcoStock_() {
-  return dcoRead_(SH_STOCK).rows.filter(function (r) { return dcoStr_(r['sku_id']); }).map(function (r) {
-    return { sku_id: dcoStr_(r['sku_id']), name: dcoStr_(r['品名']), mode: dcoStr_(r['管理方式']) || '記數量', qty: dcoNum_(r['庫存']), time: dcoFmt_(r['更新時間']), note: dcoStr_(r['備註']) };
+  return dcoCached_('stock', function () {   /* v1.1：走快取 */
+    return dcoRead_(SH_STOCK).rows.filter(function (r) { return dcoStr_(r['sku_id']); }).map(function (r) {
+      return { sku_id: dcoStr_(r['sku_id']), name: dcoStr_(r['品名']), mode: dcoStr_(r['管理方式']) || '記數量', qty: dcoNum_(r['庫存']), time: dcoFmt_(r['更新時間']), note: dcoStr_(r['備註']) };
+    });
   });
 }
 
@@ -172,6 +235,7 @@ function doPost(e) {
   } catch (err) {
     return dcoOut_({ ok: false, error: String(err && err.message || err) });
   } finally {
+    dcoCacheBump_();   /* v1.1：任何寫入動作結束（不論成功、失敗、中途出錯）都讓讀取快取失效 */
     lock.releaseLock();
   }
 }
