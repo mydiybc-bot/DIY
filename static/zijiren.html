@@ -385,6 +385,7 @@ tbody td { padding: 10px 13px; border-bottom: 1px solid var(--border); white-spa
   <div class="dsb dsb-auto">
     <b>🟢 自動更新・每日</b>
     <span>每日 08:30 自動抓後台資料＋重算聚合（365 天窗口），無需操作；「資料更新至」見右上徽章</span>
+    <span id="zjCacheNote" style="display:none;font-weight:700;color:#B45309"></span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 詳細說明</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
@@ -710,14 +711,27 @@ function gvizBatch(tqls) {
 }
 
 // 查指定 sheet
+// 2026-10-04 效能第 1 批（1-3）：每次查詢 30 秒逾時（原本沒設，Google 卡住就一直轉圈）＋失敗自動重試 1 次。
+//   兩次都逾時約 60 秒 → 丟 'TIMEOUT'，initLoad 既有的「查詢逾時(60 秒)」訊息才真的會出現。
+const GVIZ_TIMEOUT_MS = 30000;
+function _gvizOnce(url) {
+  return new Promise((resolve, reject) => {
+    let ctrl = null;
+    try { ctrl = new AbortController(); } catch (_) {}
+    const timer = setTimeout(() => { try { if (ctrl) ctrl.abort(); } catch (_) {} reject(new Error('TIMEOUT')); }, GVIZ_TIMEOUT_MS);
+    fetch(url, ctrl ? { signal: ctrl.signal } : undefined).then(r => r.text()).then(text => {
+      const json = text.replace(/^\/\*[\s\S]*?\*\/\s*google\.visualization\.Query\.setResponse\(/, '').replace(/\);?\s*$/, '');
+      return JSON.parse(json);
+    }).then(d => { clearTimeout(timer); resolve(d); }, e => { clearTimeout(timer); reject(e); });
+  });
+}
 function gvizSheetQuery(sheetName, tql) {
   const url = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID
     + '/gviz/tq?tqx=out:json&sheet=' + encodeURIComponent(sheetName)
     + '&tq=' + encodeURIComponent(tql);
-  return fetch(url).then(r => r.text()).then(text => {
-    const json = text.replace(/^\/\*[\s\S]*?\*\/\s*google\.visualization\.Query\.setResponse\(/, '').replace(/\);?\s*$/, '');
-    return JSON.parse(json);
-  });
+  // 逾時 → 立刻重試；其他失敗（網路斷、Google 回錯誤頁）→ 等 2 秒再試；第 2 次仍失敗才往上丟
+  return _gvizOnce(url).catch(e =>
+    new Promise(res => setTimeout(res, (e && e.message === 'TIMEOUT') ? 0 : 2000)).then(() => _gvizOnce(url)));
 }
 
 function parseRows(res) { return (res && res.table && res.table.rows) ? res.table.rows : []; }
@@ -738,6 +752,24 @@ function jsonp(url, timeoutMs) {
     document.head.appendChild(s);
   });
 }
+// 2026-10-04 效能第 1 批（1-2）：回頭客 endpoint 依「期間」記住結果（只在本次開頁，成功才記；失敗會清掉，下次再打）。
+//   切回同一期間不重打；開頁時由 initLoad 先發出，與 gviz 同時跑，不必等主畫面畫完。
+const _repeatMemo = {};
+function fetchRepeat(startYM, endYM) {
+  const k = startYM + '|' + endYM;
+  if (!_repeatMemo[k]) {
+    _repeatMemo[k] = jsonp(REPEAT_ENDPOINT + '?start=' + startYM + '&end=' + endYM)
+      .then(r => { if (!r || !r.ok) throw new Error((r && r.error) || 'bad response'); return r; })
+      .catch(e => { delete _repeatMemo[k]; throw e; });
+  }
+  return _repeatMemo[k];
+}
+function prefetchRepeatForSelection() {
+  try {
+    const sel = getSelectedRange();
+    fetchRepeat(sel.fromDate.slice(0, 7), sel.toDate.slice(0, 7)).catch(() => {});   // 結果由 updateRepeatCards 接手顯示
+  } catch (_) {}
+}
 // 依所選期間更新「回頭客比例 / 回頭客消費次數 / 佔比」三張卡（呼叫 GAS endpoint）
 async function updateRepeatCards(startYM, endYM, denom, periodLabel, fallback) {
   const myId = ++_repeatReqId;
@@ -745,7 +777,7 @@ async function updateRepeatCards(startYM, endYM, denom, periodLabel, fallback) {
   _setText('kpiRepeatVisits', '…'); _setText('kpiRepeatVisitsSub', '計算中…');
   _setText('kpiRepeatPct', '…');    _setText('kpiRepeatPctSub', '計算中…');
   try {
-    const r = await jsonp(REPEAT_ENDPOINT + '?start=' + startYM + '&end=' + endYM);
+    const r = await fetchRepeat(startYM, endYM);   // 2026-10-04：同期間已抓過就直接用
     if (myId !== _repeatReqId) return; // 已有更新的請求，丟棄過時結果
     if (!r || !r.ok) throw new Error((r && r.error) || 'bad response');
     // 分母改用「期間活躍會員」(endpoint 依期間回傳，含西門，與分子同期間同母體)；
@@ -775,32 +807,111 @@ async function updateRepeatCards(startYM, endYM, denom, periodLabel, fallback) {
   }
 }
 
+// ─── 2026-10-04 效能第 1 批（1-1）：10 張表的查詢結果存這台裝置的 IndexedDB（資料庫 zijiren_cache）───
+//   開頁有快取 → 先畫上次的資料＋資料狀態列提示「顯示 HH:MM 的資料，更新中…」，背景抓新的，到了再重畫、移除提示。
+//   只有新資料完整（7 張主表都有 table）才覆寫快取；失敗或不完整一律不碰快取。存取出錯一律當沒快取。
+const ZJ_CACHE_KEY = 'raw_v1';
+const ZJ_MAIN_KEYS = ['aggKpi', 'aggFreq', 'aggMonth', 'aggCross', 'qMemberSnapshot', 'qNewMembers2025', 'qNewMembers2026'];
+const ZJ_ITEM_KEYS = ['qItemRepeat', 'qItemTier', 'qItemFirst'];
+function _zjIdbOpen() {
+  return new Promise(res => {
+    try {
+      if (!window.indexedDB) return res(null);
+      const rq = indexedDB.open('zijiren_cache', 1);
+      rq.onupgradeneeded = () => { try { if (!rq.result.objectStoreNames.contains('kv')) rq.result.createObjectStore('kv'); } catch (_) {} };
+      rq.onsuccess = () => { const db = rq.result; if (db.objectStoreNames.contains('kv')) res(db); else { try { db.close(); } catch (_) {} res(null); } };
+      rq.onerror = () => res(null);
+      rq.onblocked = () => res(null);
+    } catch (_) { res(null); }
+  });
+}
+function zjCacheGet() {
+  return _zjIdbOpen().then(db => {
+    if (!db) return null;
+    return new Promise(res => {
+      try {
+        const rq = db.transaction('kv', 'readonly').objectStore('kv').get(ZJ_CACHE_KEY);
+        rq.onsuccess = () => res(rq.result || null);
+        rq.onerror = () => res(null);
+      } catch (_) { res(null); }
+    });
+  }).catch(() => null);
+}
+function zjCachePut(v) {
+  return _zjIdbOpen().then(db => {
+    if (!db) return;
+    try { db.transaction('kv', 'readwrite').objectStore('kv').put(v, ZJ_CACHE_KEY); } catch (_) {}
+  }).catch(() => {});
+}
+function _zjComplete(raw) { return !!raw && ZJ_MAIN_KEYS.every(k => raw[k] && raw[k].table); }
+function _zjTime(t) {   // 今天 → HH:MM；不是今天 → M/D HH:MM
+  const d = new Date(t), now = new Date();
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  return d.toDateString() === now.toDateString() ? hm : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm;
+}
+function _zjNote(txt, color) {
+  const el = document.getElementById('zjCacheNote');
+  if (!el) return;
+  el.textContent = txt || '';
+  el.style.display = txt ? '' : 'none';
+  if (color) el.style.color = color;
+}
+
 // ─── INIT LOAD（改查 3 張預聚合小表 + 保留 2 張輔助表） ───────
 async function initLoad() {
   if (_rawCache) { applyRange(); return; }
-  showLoading(true, '正在載入預聚合資料…');
+  prefetchRepeatForSelection();   // 2026-10-04（1-2）：回頭客 GAS 與 gviz 同時發出
+  const freshP = Promise.all([
+    gvizSheetQuery('agg_store_kpi_365',   'SELECT *'),
+    gvizSheetQuery('agg_store_freq_365',  'SELECT *'),
+    gvizSheetQuery('agg_store_month',     'SELECT *'),
+    gvizSheetQuery('agg_cross_365',       'SELECT *'),
+    gvizSheetQuery('自己人各級別人數統計', 'SELECT *'),
+    gvizSheetQuery('2025 各店新增自己人',  'SELECT *'),
+    gvizSheetQuery('2026 各店新增自己人',  'SELECT *'),
+    // 🍰 甜點分析（2026-07-04 新增）：3 表個別 .catch 容錯，失敗回 null，不拖累既有 7 表／整頁 Promise.all
+    gvizSheetQuery('agg_item_repeat_365', 'SELECT *').catch(() => null),
+    gvizSheetQuery('agg_item_tier_365',   'SELECT *').catch(() => null),
+    gvizSheetQuery('agg_item_firstbuy',   'SELECT *').catch(() => null)
+  ]);
+  freshP.catch(() => {});   // 先掛上接手：讀快取期間就失敗時，瀏覽器不會報「未處理的錯誤」
+
+  // 2026-10-04（1-1）：有快取先畫（網路請求已在背景跑）
+  const cached = await zjCacheGet();
+  let cachedRaw = (cached && cached.t && _zjComplete(cached.data)) ? cached.data : null;
+  if (cachedRaw) {
+    try {
+      _rawCache = cachedRaw;
+      updateElapsedMonths(new Date());
+      showLoading(false);
+      _zjNote('⚡ 顯示 ' + _zjTime(cached.t) + ' 的資料，更新中…', '#B45309');
+      applyRange();
+    } catch (_) { cachedRaw = null; _rawCache = null; _zjNote(''); }   // 快取內容畫不出來 → 當沒快取
+  }
+  if (!cachedRaw) showLoading(true, '正在載入預聚合資料…');
+
   try {
-    const [aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst] = await Promise.all([
-      gvizSheetQuery('agg_store_kpi_365',   'SELECT *'),
-      gvizSheetQuery('agg_store_freq_365',  'SELECT *'),
-      gvizSheetQuery('agg_store_month',     'SELECT *'),
-      gvizSheetQuery('agg_cross_365',       'SELECT *'),
-      gvizSheetQuery('自己人各級別人數統計', 'SELECT *'),
-      gvizSheetQuery('2025 各店新增自己人',  'SELECT *'),
-      gvizSheetQuery('2026 各店新增自己人',  'SELECT *'),
-      // 🍰 甜點分析（2026-07-04 新增）：3 表個別 .catch 容錯，失敗回 null，不拖累既有 7 表／整頁 Promise.all
-      gvizSheetQuery('agg_item_repeat_365', 'SELECT *').catch(() => null),
-      gvizSheetQuery('agg_item_tier_365',   'SELECT *').catch(() => null),
-      gvizSheetQuery('agg_item_firstbuy',   'SELECT *').catch(() => null)
-    ]);
-    _rawCache = { aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst };
+    const [aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst] = await freshP;
+    const fresh = { aggKpi, aggFreq, aggMonth, aggCross, qMemberSnapshot, qNewMembers2025, qNewMembers2026, qItemRepeat, qItemTier, qItemFirst };
+    if (cachedRaw && !_zjComplete(fresh)) throw new Error('INCOMPLETE');   // 已有快取在畫面上：新資料不完整就不換
+    _rawCache = fresh;
 
     // 365 天視窗由 GAS 決定，前端不需重算；以今天為基準動態計算 ELAPSED_MONTHS_2026
     updateElapsedMonths(new Date());
 
     showLoading(false);
+    _zjNote('');
     applyRange();
+
+    // 存快取：主表完整才存；甜點 3 表這次沒拿到就沿用上次存的那份
+    const toSave = Object.assign({}, fresh);
+    if (cachedRaw) ZJ_ITEM_KEYS.forEach(k => { if (!toSave[k] && cachedRaw[k]) toSave[k] = cachedRaw[k]; });
+    if (_zjComplete(toSave)) zjCachePut({ t: Date.now(), data: toSave });
   } catch(e) {
+    if (cachedRaw) {   // 畫面維持上次的資料，不跳錯誤框、不碰快取
+      _zjNote('⚠ 更新失敗，目前顯示 ' + _zjTime(cached.t) + ' 的資料（重新整理頁面可再試）', '#C4412F');
+      return;
+    }
     showLoading(false);
     const code = e.message || 'UNKNOWN';
     let msg = code === 'TIMEOUT'
@@ -841,7 +952,10 @@ function updateDataLastDate() {
 }
 
 function showLoading(show, text='') {
-  document.getElementById('loadingOverlay').classList.toggle('show', show);
+  const ov = document.getElementById('loadingOverlay');
+  // 2026-10-04：showError 會把轉圈內容換成錯誤框，之後按「重新嘗試」這裡找不到 loadingText 而報錯（重試按鈕失效）→ 先還原轉圈內容
+  if (show && !document.getElementById('loadingText')) ov.innerHTML = '<div class="spinner"></div><div class="loading-text" id="loadingText">正在查詢資料…</div>';
+  ov.classList.toggle('show', show);
   if (text) document.getElementById('loadingText').textContent = text;
 }
 
