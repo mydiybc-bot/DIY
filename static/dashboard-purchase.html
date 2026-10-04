@@ -34,6 +34,7 @@
 <!-- 2026-09-06 aw 批：①跨店調撥改「同地區優先」（STORE_REGION／regionOf／sameRegion，同區給不完才跨區，欄位標同區/跨區，合計列顯示同區量）②「🥮 檔期備貨」開放給店長（唯讀全店總表：找同區調貨＋比較自己叫貨量），店長專屬說明列、本店列反白＋「本店」徽章、店名旁顯示地區 -->
 <!-- 2026-09-06 av 批：①EXPIRE_GRACE_DAYS 7→14 ②新增「🧹 清貨尾」狀態（skuTail／tailItems／tailManual）：最後有效日已過但在寬限期內 → liveItems 排除（訂貨單／建議／總覽／檔期備貨不列）、盤點頁另立籤、建議固定 0、卡片可填「仍需補」→ orderEdit → 訂貨單標清貨尾・手動 ③主檔頁清貨尾徽章 ④過季說明文字改用 EXPIRE_GRACE_DAYS。計算引擎零改動。 -->
 <!-- 2026-09-05 at 批：①matchQ 搜尋加「類別」（盤點／建議／店別參數／主檔四頁共用） ②總部分頁隱藏「建議採購」「用量對帳」（viewSuggest／viewRecon 函式保留，TABS_BY_ROLE 加回即恢復） ③三處指向建議頁的說明文字改指訂貨單 -->
+<!-- 2026-10-04 效能 2-9：店長身分開頁只下載自己店的 fact_inventory（gviz where 店號＝本機門市；欄位字母由表頭判定、任何不確定退回整張表；暫存鍵 gv:<檔>:fact_inventory@<店>）。dim_store_par／agg_purchase／agg_endcut／agg_newitem 店長畫面（檔期備貨、新品、訂貨單加其他品項、店別參數權數離群）會用到別店的列，不縮。切成總部／出貨中心時 render 先畫「讀取全公司資料」並重抓整張（scopeReload）。見 bootScope／gvizStore／gvsKey。 -->
 <style>
   :root{--blue:#2E7D32;--blue2:#3a8f3f;--bg:#f4f6f9;--card:#fff;--line:#e3e8ef;--ink:#1f2937;--mut:#6b7280;
         --food:#2e7d32;--cons:#b8860b;--tool:#6a1b9a;--mold:#c62828;--new:#0d6e6e;}
@@ -746,11 +747,13 @@ function refreshAll(noRebuild){
     toast("已重新讀取最新資料");
   });}
 /* 2026-10-04 效能 1-1：開頁 15 張表的清單搬進 bootFetch——抓最新（gviz／gvizQ）與讀暫存（bootCached 換成讀 IndexedDB 的版本）共用同一份，順序＝下面 res[0..14] */
-function bootFetch(gv,gq){gv=gv||gviz;gq=gq||gvizQ;
-  return Promise.all([gv('dim_sku'),gv('dim_store_par'),gv('agg_purchase'),gv('agg_container'),gv('dim_season'),gv('dim_unitconv'),gv('fact_inventory'),gv('agg_booking'),gv('dim_dessert'),gv('fact_booking'),gv('dim_event'),gv('agg_newitem'),gv('ref_sku_price'),gv('agg_evcurve').catch(function(){return [];}),gq('agg_endcut','select A,B,C,D,F,H,I,J').then(function(rs){return (rs&&rs.length)?rs:gq('agg_endcut','select A,B,C,D,F,H,I');}).catch(function(){return [];})]);}
+/* 2026-10-04 效能 2-9：第三個讀取器 gs(表,店)＝「只抓本店」（目前只有 fact_inventory，見 BOOT_SCOPED／gvizStore）；店＝bootScope()（店長身分且已選本機門市才有值），回傳陣列帶 .scope 讓 bootstrap 記下這批資料是哪個範圍 */
+function bootFetch(gv,gq,gs){gv=gv||gviz;gq=gq||gvizQ;gs=gs||gvizStore;var sc=bootScope();
+  return Promise.all([gv('dim_sku'),gv('dim_store_par'),gv('agg_purchase'),gv('agg_container'),gv('dim_season'),gv('dim_unitconv'),gs('fact_inventory',sc),gv('agg_booking'),gv('dim_dessert'),gv('fact_booking'),gv('dim_event'),gv('agg_newitem'),gv('ref_sku_price'),gv('agg_evcurve').catch(function(){return [];}),gq('agg_endcut','select A,B,C,D,F,H,I,J').then(function(rs){return (rs&&rs.length)?rs:gq('agg_endcut','select A,B,C,D,F,H,I');}).catch(function(){return [];})]).then(function(res){res.scope=sc;return res;});}
 async function bootstrap(keep,pre){ try {   /* pre＝已經開始的讀取（1-1：開頁先顯示暫存時傳入）；沒傳＝照舊當場向 Google 讀（🔄 更新走這條） */
   if(!(typeof window!=="undefined"&&window.__TODAY__))TODAY=new Date();   /* bx 批：每次載入／🔄 更新都用今天 */
-  var res=await (pre||bootFetch());   /* ca 批：先讀含 J「近7天比」（EventLayer v1.8.4）；GAS 未更新沒有 J 欄時查詢回 0 列 ⇒ 退回 7 欄 */   /* by 批（模擬第 4 輪）：只讀 7 欄（不讀近4週週用量、更新日），約 200 KB；GAS 未更新到 v1.8.1（沒有 H、I 欄）時查詢失敗＝不做收尾，不會退回有缺陷的 v1.8 整份扣 */
+  var res=await (pre||bootFetch());   /* ca 批：先讀含 J「近7天比」（EventLayer v1.8.4）；GAS 未更新沒有 J 欄時查詢回 0 列 ⇒ 退回 7 欄 */
+  BOOT.scope=(res&&res.scope)||"";   /* 2-9：這批資料的範圍（""＝全公司；"3"＝fact_inventory 只有 3 號店）。總部／出貨中心畫面看到非空值會先重抓整張（render→scopeReload） */   /* by 批（模擬第 4 輪）：只讀 7 欄（不讀近4週週用量、更新日），約 200 KB；GAS 未更新到 v1.8.1（沒有 H、I 欄）時查詢失敗＝不做收尾，不會退回有缺陷的 v1.8 整份扣 */
   /* 2026-09-05 ao 批：agg_evcurve（EventLayer v1.6 逐週曲線，約 8 列）。分頁不存在時 gviz 會回到第一個分頁 → 以表頭「週序」把關 */
   EVCV={};(res[13]||[]).forEach(function(r){if(r["週序"]==null||r["事件名"]==null||r["今年週起"]==null)return;var ev=String(r["事件名"]||"").trim();if(!ev)return;
     var f=gvDate(r["今年週起"]),t=gvDate(r["今年週訖"]),pf=gvDate(r["去年週起"]),pt=gvDate(r["去年週訖"]);
@@ -819,12 +822,54 @@ async function bootstrap(keep,pre){ try {   /* pre＝已經開始的讀取（1-1
       由 viewCount 對最新資料重新合併，結果等於「正常開頁」。
    ④ 讀最新失敗／逾時：照舊由 gvCore 改用暫存並亮「資料源忙碌」警示（原行為），本提示收起、恢復可寫。
    ⑤ 15 張表有任何一張沒有暫存 → 走原本流程（等 Google 讀完才畫）。手動「🔄 更新」（refreshAll→bootstrap(true)）不經過這裡，永遠讀最新。 */
-var BOOT={stale:false,t:0};
+var BOOT={stale:false,t:0,scope:"",scoping:null};
+/* ===== 2026-10-04 效能第 2 批 2-9：店長身分開頁只下載自己店的 fact_inventory =====
+   fact_inventory 只增不減（每次盤點都加列），店長所有畫面（盤點／訂貨單／建議卡片、✓ 足夠、盤點時效）只看 INV[本店]，
+   所以店長身分開頁改成 gviz 加 where「店號＝本機門市」只抓自己店的列（約 1/12）。
+   其他四張全公司大表這次不縮——店長畫面會用到別店的列：dim_store_par（檔期備貨各店 isDC／pqOf／parOf、訂貨單「加其他品項」dcAny、
+   店別參數權數離群 wMedOf、門市清單 STORES）、agg_purchase（檔期備貨 campCalc 各店 aggOf、門市清單）、agg_endcut（檔期備貨各店 endCutOf）、
+   agg_newitem（新品頁 campExcl／nwItems 走遍各店）。要再縮這些，得先把那幾頁改成「進頁時再補讀整張」，另案。
+   作法（比照 1-5 的 fetchFreshWhere）：
+   ① 欄位字母不寫死：fqSchema 先 select * limit 1 讀表頭（與 1-5 共用、每張表每次開頁一次），找不到「店號」「sku_id」、型態不是數字／文字、
+      店號寫法特殊（fqLit 回 null）、表頭查詢 5 秒沒回、查詢出錯 → 一律退回整張表 gviz(表)，畫面與以前完全相同。
+   ② 查回來再核對：0 列（新店沒盤過？還是欄位對不上？分不出來）或任何一列的店號不是本店 → 退回整張表。
+   ③ 暫存鍵 gv:<檔>:<表>@<店>（含「哪一店」；bootCached 用同一個 gvsKey 讀，所以不必知道欄位字母），整張表的暫存鍵照舊 gv:<檔>:<表>；
+      暫存裡的列同樣核對店號、空的當沒有暫存。
+   ④ 範圍只看開頭：bootScope()＝店長身分且本機門市已選（myStore）才有值；總部／出貨中心、還沒選門市、店長第一次選門市（開頁時沒有店）都是整張。
+      切身分成總部／出貨中心時 BOOT.scope 非空 → render() 先畫「讀取全公司資料」並 scopeReload（bootstrap(true) 重抓整張），抓完才畫，中間不會看到只有一店的總覽；
+      換門市（askStore）本來就整頁重新載入 → 新的店號、新的暫存鍵。「🔄 更新」照舊走 bootstrap(true)→bootFetch()（店長＝仍只抓本店最新）。
+   ⑤ 寫入與回讀（verifySave 的 fetchFreshWhere）零改動。 */
+var BOOT_SCOPED={"fact_inventory":1};   /* 開頁可以只抓本店的表（店長所有畫面只用自己店的列）；要加表先逐頁查有沒有跨店用法 */
+var FQ_SCHEMA_WAIT=5000;   /* 表頭查詢最多等 5 秒，沒回就退回整張表（gvCore 自己有 20 秒逾時與暫存備援） */
+function bootScope(){return (ST.role==="店長"&&myStore())||"";}   /* ""＝全公司 */
+function gvsKey(sheet,sc){return "gv:"+readIdOf(sheet)+":"+sheet+"@"+sc;}
+function gvsRowsOK(rows,sc){if(!rows||!rows.length)return false;for(var i=0;i<rows.length;i++){var r=rows[i];if(!r||!("店號" in r)||String(r["店號"])!==sc)return false;}return true;}   /* 每一列都是本店（與 bootstrap 建 INV 用同一種 String(店號) 寫法） */
+function gvizStore(sheet,sc){
+  if(!sc||!BOOT_SCOPED[sheet])return gviz(sheet);
+  var tm=new Promise(function(r){setTimeout(function(){r(null);},FQ_SCHEMA_WAIT);});
+  return Promise.race([fqSchema(sheet),tm]).then(function(m){
+    if(!m)return gviz(sheet);
+    var sl=fqLit(m["店號"],sc);if(sl==null)return gviz(sheet);
+    var tq="select * where "+m["店號"].id+"="+sl;
+    var url='https://docs.google.com/spreadsheets/d/'+readIdOf(sheet)+'/gviz/tq?tqx=out:json&headers=1&sheet='+encodeURIComponent(sheet)+'&tq='+encodeURIComponent(tq);
+    return gvCore(url,gvsKey(sheet,sc),sheet).then(function(rows){
+      if(rows&&(rows.__failed||rows.__cached))return rows;   /* Google 沒回應 → gvCore 已改用本店暫存並亮警示（原行為），不再多等一次整張表 */
+      return gvsRowsOK(rows,sc)?rows:gviz(sheet);});   /* ② */
+  }).catch(function(){return gviz(sheet);});}
+function scopeReload(){   /* 全域資料只有本店（店長開頁），現在身分是總部／出貨中心 → 重抓整張；抓完 BOOT.scope 歸 ""，render 才真的畫 */
+  if(BOOT.scoping)return BOOT.scoping;
+  var u=$("#upd");if(u)u.textContent="讀取全公司資料…";
+  BOOT.scoping=bootstrap(true).then(function(){BOOT.scoping=null;BOOT.scope="";stampUpd();
+    try{render();}catch(e){console.warn(e);}
+    if(FLOWST!==String(ST.storeId))loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});},
+    function(e){BOOT.scoping=null;BOOT.scope="";console.warn("scopeReload",e);try{render();}catch(e2){}});
+  return BOOT.scoping;}
 function bootCached(){var t0=Infinity;   /* 讀 15 張表的暫存；缺任何一張回 null */
   function hit(c){if(!c||!c.d)return null;if(c.t<t0)t0=c.t;return c.d;}
   function gv(s){return gvcGet("gv:"+readIdOf(s)+":"+s).then(hit);}
   function gq(s,tq){return gvcGet("gq:"+readIdOf(s)+":"+s+":"+gvHash(tq)).then(hit);}
-  return bootFetch(gv,gq).then(function(res){for(var i=0;i<res.length;i++)if(!res[i])return null;return {res:res,t:t0};}).catch(function(){return null;});}
+  function gs(s,sc){if(!sc||!BOOT_SCOPED[s])return gv(s);return gvcGet(gvsKey(s,sc)).then(function(c){return (c&&gvsRowsOK(c.d,sc))?hit(c):null;});}   /* 2-9：本店暫存（空的或混到別店＝沒有暫存） */
+  return bootFetch(gv,gq,gs).then(function(res){for(var i=0;i<res.length;i++)if(!res[i])return null;return {res:res,t:t0};}).catch(function(){return null;});}
 var BOOT_CACHE_WAIT=3000;   /* 讀暫存最多等 3 秒（IndexedDB 偶爾開不起來或沒回應時不卡開頁），逾時當沒暫存 */
 function bootStart(){
   var fresh=bootFetch(),done=false;   /* 先送出讀最新（與原本開頁同一組請求），再去讀暫存 */
@@ -1797,6 +1842,7 @@ function render(){var __ae=(typeof document!=="undefined")?document.activeElemen
   paintStoreId();renderTabs();dsbRole();
   $("#storeSel").style.display=(ST.tab==="總覽"||ST.tab==="主檔"||ST.tab==="單位對照"||ST.tab==="季節"||ST.tab==="軌跡"||ST.tab==="效期"||ST.tab==="檔期備貨"||ST.tab==="新品"||ST.tab==="訂單"||ST.tab==="庫存"||(ST.tab==="申請"&&ST.role==="總部"))?"none":"block";
   var __sy=(window.pageYOffset||document.documentElement.scrollTop||0);
+  if(ST.role!=="店長"&&BOOT.scope){scopeReload();$("#view").innerHTML='<div class="card">⏳ 正在讀取全公司資料（開頁時只載入了本店的盤點），請稍候幾秒…</div>';return;}   /* 2026-10-04 效能 2-9：資料只有本店時不畫總部／出貨中心畫面，抓完整張再畫 */
   $("#view").innerHTML=writeWarnBanner()+({"建議":viewSuggest,"盤點":viewCount,"查詢":viewQuery,"訂貨單":viewOrder,"效期":viewShelf,"主檔":viewMaster,"季節":viewSeason,"單位對照":viewUnitConv,"店別參數":viewParams,"預約":viewBooking,"總覽":viewOverview,"軌跡":viewPlog,"對帳":viewRecon,"大平台":viewShist,"檔期備貨":viewCampHQ,"新品":viewNewItems,"申請":viewSkuReq,"訂單":viewDcOrders,"庫存":viewDcStock}[ST.tab])();wire();if(ST.tab==="申請")srWire();if(ST.tab==="新品")nwWire();
   if(BOOT.stale)staleLock();   /* 2026-10-04 效能 1-1：顯示舊資料期間輸入欄先鎖住 */
   if(__sy>0)try{window.scrollTo(0,__sy);}catch(e){}}
