@@ -1,3 +1,7 @@
+<!-- 2026-10-04 v2.10（第 1 批效能）：①主要讀取（月份清單／未來訂位／月資料）加逾時 45 秒＋自動重試，最多 3 發（jsonpRetry），
+     失敗不再當成「空的月份」存起來，改顯示「讀取失敗」＋重試按鈕；逐月回訪遇讀取失敗也不再當 0 筆算、不存暫存。
+     ②已結束的月份存瀏覽器 IndexedDB（resv_month_cache_v1），以月份清單的筆數當戳記、最多 7 天，重開頁直接用；
+     當月與未來月份永遠抓最新，「🔄 重新整理」一律重抓。4 支請求的先後順序不變。 -->
 <!-- 2026-09-22 v2.9：改為分頁式版面。頂部固定一列分頁「👥 團體訂位｜📅 月份分析｜⏱️ 即時與預估｜📈 長期趨勢」，
      團體訂位移到第一個分頁（紅色數字＝需立即處理項目）；月份選單只在「月份分析」出現（只有它受月份影響）；
      團體區三張清單改為可切換檢視（卡位與等付款／待更正／團體總表），待更正清單加「人數」欄，
@@ -526,6 +530,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">🔄 重新整理</button>
       <span id="monthBusy" style="display:none;font-size:13px;font-weight:700;color:var(--purple);">⏳ 載入中…</span>
       <span data-mo style="font-size:12px;color:var(--muted);font-weight:600;">依<b>客人到店日期</b>歸月，不是下訂日期</span>
+      <span data-mo id="monthCacheNote" style="font-size:12px;color:var(--muted);font-weight:600;"></span>
     </div>
   </div>
 
@@ -817,6 +822,51 @@ function jsonp(url) {
   });
 }
 
+// ============ 2026-10-04 v2.10：主要讀取加逾時＋自動重試（第 1 批效能 1-3）============
+// 原本 jsonp() 沒有逾時也不重試：GAS 冷啟動回錯、或回來的不是 JSONP（例如 Google 錯誤頁）時畫面會一直轉圈；
+// 月資料讀取失敗還會被當成「空的月份」存起來，畫面顯示 0 筆，要手動重整才恢復。
+// 規則：每一發等 45 秒，沒回 → 補發下一發（前一發不收掉，誰先回用誰）；回錯 → 2 秒（第二次 4 秒）後補發；
+//      最多 3 發，全部失敗或總共等滿 135 秒 → 回報失敗，由呼叫端顯示「讀取失敗」＋重試，不存任何東西。
+// 團體訂位（gbJsonp）與 POS（posJsonpOnce）各有自己的逾時與重試，仍走原本的路，不經過這裡。
+const JSONP_TIMEOUT_MS = 45000, JSONP_MAX_TRIES = 3;
+function jsonpRetry(url) {
+  return new Promise((resolve, reject) => {
+    let done = false, n = 0, live = 0, why = '';
+    const ends = [], timers = [];
+    function finish(data, err) {
+      if (done) return; done = true;
+      timers.forEach(t => clearTimeout(t));
+      ends.forEach(f => f());
+      err ? reject(err) : resolve(data);
+    }
+    function again(gap) {
+      if (done) return;
+      if (n < JSONP_MAX_TRIES) timers.push(setTimeout(fire, gap));
+      else if (live <= 0) finish(null, new Error((why || '連線失敗') + '（已自動重試 ' + (n - 1) + ' 次）'));
+    }
+    function fire() {
+      if (done || n >= JSONP_MAX_TRIES) return;
+      n++; live++;
+      const cb = 'resv_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      const s = document.createElement('script');
+      let over = false;
+      // 收掉這一發：回呼換成空函式（晚到的回應被吃掉、不報錯），移除 script
+      const end = () => { if (over) return false; over = true; window[cb] = function () {}; if (s.parentNode) s.parentNode.removeChild(s); return true; };
+      ends.push(end);
+      window[cb] = d => { if (end()) { live--; finish(d, null); } };
+      s.onerror = () => { if (end()) { live--; why = '連線失敗'; again(2000 * n); } };
+      // 載入完成卻沒有呼叫回呼＝回來的不是資料（例如 Google 錯誤頁）→ 當作失敗，馬上補發
+      s.onload = () => { if (end()) { live--; why = '回應格式不對'; again(2000 * n); } };
+      timers.push(setTimeout(() => { if (!over) { why = '讀取逾時'; again(0); } }, JSONP_TIMEOUT_MS));
+      s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
+      document.head.appendChild(s);
+    }
+    timers.push(setTimeout(() => finish(null, new Error('讀取逾時（已等 ' + Math.round(JSONP_TIMEOUT_MS * JSONP_MAX_TRIES / 1000) + ' 秒、自動重試 ' + (n - 1) + ' 次）')),
+      JSONP_TIMEOUT_MS * JSONP_MAX_TRIES));
+    fire();
+  });
+}
+
 // ============ 全局狀態 ============
 let MONTHS = [];          // [{ym,rows}]
 let CUR = { cols: [], rows: [], idx: {} };            // 目前選中月份資料
@@ -864,14 +914,116 @@ function cacheGet(ym) {
   return v;
 }
 function cacheClear() { Object.keys(MONTH_CACHE).forEach(k => delete MONTH_CACHE[k]); MONTH_LRU.length = 0; }
-async function getMonth(ym) {
+
+// 2026-10-04 v2.10：已結束的月份存瀏覽器 IndexedDB（第 1 批效能 1-1）
+// 每月約 2MB，原本只存在記憶體，重開頁全部重抓。已結束的月份幾乎不會再變，改存本機，重開頁直接用。
+// 但舊月份「有可能」被後端補資料改到（守門員補洞、fixGapNow 大回補、rebuildOneMonth 重刷快取），所以：
+//   ① 戳記＝月份清單（每次開頁第 1 支請求，一定是最新的）裡該月的筆數（清單若有 cached_at 也一併比）；不一樣 → 重抓
+//   ② 只在「抓回來的筆數＝清單筆數」時才存（兩邊一致才代表後端快取已刷完，不把補到一半的版本存起來）
+//   ③ 最多保存 7 天：筆數沒變但內容被改的情況，最晚 7 天換新
+//   ④ 當月與未來月份一律不存、永遠抓最新；按「🔄 重新整理」也一律重抓並覆寫
+//   ⑤ 所有存取包 try/catch；打不開、被擋、空間不足 → 當作沒有暫存，照原本流程向後端抓
+const MONTH_IDB_NAME = 'resv_month_cache_v1', MONTH_IDB_STORE = 'months';
+const MONTH_IDB_TTL = 7 * 24 * 3600 * 1000;
+const MONTH_FROM_IDB = {};    // ym → 存進本機的時間（月份選單旁提示「本機暫存」用）
+let _monthIdb = null;
+function monthIdb() {
+  if (_monthIdb) return _monthIdb;
+  _monthIdb = new Promise(resolve => {
+    let settled = false;
+    const done = db => {
+      if (settled) { try { if (db) db.close(); } catch (_) {} return; }
+      settled = true; resolve(db);
+    };
+    const tm = setTimeout(() => done(null), 3000);   // 卡住（例如別的分頁擋住）→ 當作沒有暫存
+    try {
+      const rq = indexedDB.open(MONTH_IDB_NAME, 1);
+      rq.onupgradeneeded = () => {
+        try { rq.result.createObjectStore(MONTH_IDB_STORE, { keyPath: 'ym' }).createIndex('t', 't'); } catch (_) {}
+      };
+      rq.onsuccess = () => {
+        clearTimeout(tm);
+        const db = rq.result;
+        db.onversionchange = () => { try { db.close(); } catch (_) {} };
+        done(db);
+      };
+      rq.onerror = () => { clearTimeout(tm); done(null); };
+      rq.onblocked = () => { clearTimeout(tm); done(null); };
+    } catch (_) { clearTimeout(tm); done(null); }
+  });
+  return _monthIdb;
+}
+function monthIdbDo(mode, fn) {   // 成功回傳結果；任何失敗都回 null，不丟例外
+  return monthIdb().then(db => new Promise(resolve => {
+    if (!db) return resolve(null);
+    try {
+      const tx = db.transaction(MONTH_IDB_STORE, mode);
+      let out = null;
+      const rq = fn(tx.objectStore(MONTH_IDB_STORE));
+      if (rq) rq.onsuccess = () => { out = rq.result; };
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    } catch (_) { resolve(null); }
+  })).catch(() => null);
+}
+function monthListEntry(ym) { return MONTHS.find(m => m.ym === ym) || null; }
+function monthStamp(m) { return String(m.rows) + '|' + String(m.cached_at || ''); }
+async function monthIdbGet(ym) {
+  if (!(ym < curYm())) return null;                  // 當月與未來月份不用暫存
+  const m = monthListEntry(ym);
+  if (!m) return null;
+  const e = await monthIdbDo('readonly', st => st.get(ym));
+  if (!e || !Array.isArray(e.cols) || !Array.isArray(e.rows)) return null;
+  const age = Date.now() - (Number(e.t) || 0);
+  if (age < 0 || age > MONTH_IDB_TTL || e.stamp !== monthStamp(m)) return null;   // 過期或後端補過資料 → 重抓（抓回來會覆寫）
+  return e;
+}
+function monthIdbPut(ym, r) {
+  if (!(ym < curYm())) return;
+  const m = monthListEntry(ym);
+  if (!m) return;
+  if (Number(m.rows) !== r.rows.length) {
+    console.info('[訂位儀表板] ' + ym + ' 筆數與月份清單不一致（清單 ' + m.rows + '、實得 ' + r.rows.length + '），後端快取可能正在更新，這次不存本機');
+    return;
+  }
+  monthIdbDo('readwrite', st => st.put({ ym: ym, t: Date.now(), stamp: monthStamp(m), cols: r.cols, rows: r.rows }));
+}
+function monthIdbPrune() {   // 刪掉超過 7 天的暫存（只讀時間索引，不把 2MB 的內容載進來）
+  monthIdbDo('readwrite', st => {
+    const rq = st.index('t').getAllKeys(IDBKeyRange.upperBound(Date.now() - MONTH_IDB_TTL));
+    rq.onsuccess = () => { (rq.result || []).forEach(k => { try { st.delete(k); } catch (_) {} }); };
+    return null;
+  });
+}
+// fresh＝true（按「🔄 重新整理」）：不看本機暫存，一律向後端抓
+async function getMonth(ym, fresh) {
   const hit = cacheGet(ym);
   if (hit) return hit;
+  if (!fresh) {
+    const saved = await monthIdbGet(ym);
+    if (saved) { MONTH_FROM_IDB[ym] = saved.t; cachePut(ym, saved); return saved; }
+  }
   let r;
-  try { r = await jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
-  catch (e) { r = { cols: [], rows: [] }; }
+  try { r = await jsonpRetry(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
+  catch (e) { throw new Error(ym + ' ' + e.message); }   // v2.10：失敗不再存成空月份，交給呼叫端顯示「讀取失敗」
+  if (!r || !Array.isArray(r.cols) || !Array.isArray(r.rows)) throw new Error(ym + ' 回傳格式不對');
+  const m = monthListEntry(ym);
+  if (!r.rows.length && m && Number(m.rows) > 0) throw new Error(ym + ' 回傳 0 筆，但月份清單顯示 ' + m.rows + ' 筆');
+  delete MONTH_FROM_IDB[ym];
   cachePut(ym, r);
+  monthIdbPut(ym, r);
   return r;
+}
+// 月份選單旁的小字：這個月是不是用本機暫存
+function paintMonthCacheNote() {
+  const el = document.getElementById('monthCacheNote');
+  if (!el) return;
+  const t = MONTH_FROM_IDB[selectedYm];
+  if (!t) { el.textContent = ''; el.title = ''; return; }
+  const d = new Date(t), p2 = x => String(x).padStart(2, '0');
+  el.textContent = '💾 ' + selectedYm + ' 用本機暫存（' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ' 存）';
+  el.title = '已結束的月份：筆數與後端一致就直接用存在這台電腦的資料，不必重抓。按「🔄 重新整理」會強制重抓。';
 }
 let FUTURE_RAW = null;      // future 只抓一次（切月份時它不會變）
 let LOADED_ONCE = false;
@@ -1059,7 +1211,7 @@ function dropTest(cols, rows) {
 // ============ 初始載入 ============
 async function init() {
   try {
-    const res = await jsonp(API_BASE);
+    const res = await jsonpRetry(API_BASE);
     MONTHS = (res && res.months) ? res.months.slice().sort((a, b) => b.ym.localeCompare(a.ym)) : [];
     const sel = document.getElementById('monthSel');
     if (MONTHS.length === 0) {
@@ -1069,7 +1221,7 @@ async function init() {
       return;
     }
     // v2.5：先抓一次 future，找出「只存在於未來表」的月份（例：客人已訂 9 月）
-    try { _futurePrefetch = await jsonp(API_BASE + '?fn=future'); } catch (_) { _futurePrefetch = null; }
+    try { _futurePrefetch = await jsonpRetry(API_BASE + '?fn=future'); } catch (_) { _futurePrefetch = null; }
     const _f = dropTest(_futurePrefetch && _futurePrefetch.cols, _futurePrefetch && _futurePrefetch.rows);
     const _today = todayStr();
     const _have = new Set(MONTHS.map(m => m.ym));
@@ -1094,10 +1246,16 @@ async function init() {
     gbInit();
     // 逐月回訪趨勢：主畫面渲染完再背景計算（有 12 小時快取，通常直接秒開）
     setTimeout(function(){ loadRevisitTrend(false); }, 1200);
+    setTimeout(monthIdbPrune, 5000);   // v2.10：清掉超過 7 天的本機暫存
   } catch (e) {
     document.getElementById('loadingBox').style.display = 'none';
-    showError('API 連線失敗：' + e.message);
+    showError('API 連線失敗：' + e.message, '<button class="help-btn" onclick="retryInit()">🔄 重試</button>');
   }
+}
+function retryInit() {
+  document.getElementById('errorBox').innerHTML = '';
+  document.getElementById('loadingBox').style.display = 'block';
+  init();
 }
 
 async function loadAndRender(opt) {
@@ -1114,14 +1272,14 @@ async function loadAndRender(opt) {
     // 只會讓「已經在快取裡的月份」也被塞在隊伍後面。
     // future／當月／上月 這三支跟「選哪個月」無關 → 只抓一次，之後切月份完全不重抓。
     if (!FUTURE_RAW) {
-      FUTURE_RAW = _futurePrefetch || await jsonp(API_BASE + '?fn=future');
+      FUTURE_RAW = _futurePrefetch || await jsonpRetry(API_BASE + '?fn=future').catch(e => { throw new Error('未來訂位 ' + e.message); });
     }
     _futurePrefetch = null;
     const futureRes = FUTURE_RAW;
-    const monthRes = isFutMonth ? { cols: [], rows: [] } : await getMonth(selectedYm);
-    const curMonthRes = (!isFutMonth && selectedYm === curYm()) ? monthRes : await getMonth(curYm());
+    const monthRes = isFutMonth ? { cols: [], rows: [] } : await getMonth(selectedYm, force);
+    const curMonthRes = (!isFutMonth && selectedYm === curYm()) ? monthRes : await getMonth(curYm(), force);
     // 2026-08-01：加載上個月，讓「近 28 天基準」在月初也成立（原本用當月，每月 1~3 號分母=0，標紅全失效）
-    const prevMonthRes = await getMonth(prevYm());
+    const prevMonthRes = await getMonth(prevYm(), force);
 
     FUTURE = dropTest(futureRes.cols, futureRes.rows);
     const _fact = dropTest(monthRes.cols, monthRes.rows);
@@ -1155,6 +1313,8 @@ async function loadAndRender(opt) {
     // 切換月份時，未來訂位壓力／營收預估／資料健康警示都不依賴選定月份 → 不必重畫
     if (partial) renderMonthScope(); else renderAll();
     LOADED_ONCE = true;
+    RENDERED_YM = selectedYm;
+    paintMonthCacheNote();
     setBusy(false, partial);
 
     if (!partial) {
@@ -1165,8 +1325,22 @@ async function loadAndRender(opt) {
     }
   } catch (e) {
     setBusy(false, partial);
-    showError('資料載入失敗：' + e.message);
+    // v2.10：讀取失敗不當成 0 筆、不存起來；顯示「讀取失敗」＋重試（之後再進這個月會重新抓）
+    const failYm = selectedYm;
+    if (partial && RENDERED_YM && RENDERED_YM !== failYm) {
+      // 切月份失敗：畫面上仍是原本那個月 → 選單退回去，免得「選單寫 A、內容是 B」
+      selectedYm = RENDERED_YM;
+      const sel = document.getElementById('monthSel'); if (sel) sel.value = RENDERED_YM;
+    }
+    showError('資料讀取失敗：' + e.message + '。沒有當成 0 筆、也沒有存起來，請再試一次。',
+      '<button class="help-btn" onclick="retryLoad(\'' + failYm + '\',' + (partial ? 'false' : 'true') + ')">🔄 重試</button>');
   }
+}
+let RENDERED_YM = '';   // v2.10：畫面上目前顯示的是哪個月（切月份失敗時把選單退回這個月）
+function retryLoad(ym, full) {
+  const sel = document.getElementById('monthSel');
+  if (ym && sel) { selectedYm = ym; sel.value = ym; }
+  loadAndRender(full ? {} : { partial: true });
 }
 
 function refreshAll() {
@@ -1174,8 +1348,8 @@ function refreshAll() {
   loadAndRender({ force: true });
 }
 
-function showError(msg) {
-  document.getElementById('errorBox').innerHTML = '<div class="err-msg">⚠️ ' + msg + '</div>';
+function showError(msg, extraHtml) {
+  document.getElementById('errorBox').innerHTML = '<div class="err-msg">⚠️ ' + msg + (extraHtml ? ' ' + extraHtml : '') + '</div>';
 }
 
 // 2026-08-27 v2.7：把畫面上所有「期間標籤」填成真實月份／日期。
@@ -2070,6 +2244,7 @@ async function loadRevisitTrend(force) {
 
   const seen = new Set();   // 之前月份出現過的會員
   const out = [];
+  let failMsg = '';
   try {
     for (let i = 0; i < yms.length; i++) {
       const ym = yms[i];
@@ -2078,12 +2253,11 @@ async function loadRevisitTrend(force) {
         + '<div class="rv-bar"><i style="width:' + Math.round((i / yms.length) * 100) + '%"></i></div></div>';
       // v2.6：與月份快取雙向共用——已抓過的直接用，新抓的也放進去。
       // 回訪趨勢本來就會把每個月都讀一遍，跑完之後切換最近幾個月幾乎都是瞬間。
-      let res = cacheGet(ym);
-      if (!res) {
-        try { res = await jsonp(API_BASE + '?fn=month&ym=' + encodeURIComponent(ym)); }
-        catch (e) { res = { cols: [], rows: [] }; }
-        cachePut(ym, res);
-      }
+      // v2.10：改走 getMonth（已結束月份可用本機暫存；逾時重試）。讀取失敗就停——
+      // 原本當成 0 筆繼續算，會讓之後每個月的回頭客都算錯，還被存 12 小時。
+      let res;
+      try { res = await getMonth(ym); }
+      catch (e) { failMsg = e.message; break; }
       const idx = buildIdx(res.cols || []);
       const cnt = {};
       (res.rows || []).forEach(r => {
@@ -2105,9 +2279,19 @@ async function loadRevisitTrend(force) {
         backRate: (i === 0 || !uniq) ? null : (back / uniq * 100)
       });
     }
-    RV_DATA = out;
-    try { localStorage.setItem(RV_CACHE_KEY, JSON.stringify({ t: Date.now(), d: out })); } catch (_) {}
-    renderRevisitTrend(Date.now());
+    if (failMsg) {
+      let old = null;
+      try { old = JSON.parse(localStorage.getItem(RV_CACHE_KEY) || 'null'); } catch (_) {}
+      const hasOld = !!(old && old.d && old.d.length);
+      const note = '<div class="err-msg">⚠️ 逐月回訪計算中斷：' + failMsg + '。結果不完整，所以沒有更新、也沒有暫存'
+        + (hasOld ? '；下面先顯示上次的計算結果' : '') + '。請稍後按「🔄 重新計算」。</div>';
+      if (hasOld) { RV_DATA = old.d; renderRevisitTrend(old.t); box.insertAdjacentHTML('afterbegin', note); }
+      else box.innerHTML = note;
+    } else {
+      RV_DATA = out;
+      try { localStorage.setItem(RV_CACHE_KEY, JSON.stringify({ t: Date.now(), d: out })); } catch (_) {}
+      renderRevisitTrend(Date.now());
+    }
   } finally {
     RV_RUNNING = false;
     if (btn) { btn.disabled = false; btn.textContent = '🔄 重新計算'; }
