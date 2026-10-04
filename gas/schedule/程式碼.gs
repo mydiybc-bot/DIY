@@ -1,7 +1,15 @@
 // ====================================================================
-// 排班分析資料倉 程式碼.gs v5.4
-// 更新日期:2026-07-01
+// 排班分析資料倉 程式碼.gs v5.9
+// 更新日期:2026-10-04
 // 版本變更:
+//   v5.9: 【讀取加 CacheService ＋ BigQuery 通行證暫存】(2026-10-04 效能第 2 批 2-2)
+//         - doGet 只讀 action（getWeekKpiData、getStoreDailyData）回應字串存 CacheService 6 小時，
+//           >90,000 字元切塊；命中直接回同一份字串 → 回傳內容逐字相同（generated_at 為算出當下時間）。
+//         - key 帶版本號（ScriptProperties sched_cache_ver）：parsePendingFiles／syncDailySales／buildWeekKPI／
+//           _uploadSchedule／reset／nuke／cleanup 等寫入結束呼叫 _schedCacheBump_() 換版本號 → 舊快取一次失效。
+//         - 快取任何環節失敗一律 try/catch 吞掉 → 退回 v5.8 直接讀表的路；手動清快取：aaaClearReadCache()。
+//         - BigQuery token 改存 CacheService 50 分鐘（直連 BigQuery v_daily_net.gs 的 _getBqAccessToken_）。
+//         - ping version → schedule-v5.9-cache。
 //   v5.5: 【dailyRebuild 加髒日期偵測】(2026-07-13)
 //         - 先查「近 26 小時被重寫、但 sale_date 在 3 天視窗外」的日期，逐日補 syncDailySales(d,d)。
 //         - 查詢用既有 _getBqAccessToken_()（bq_connector.gs），失敗 try/catch 吞掉照跑 3 天窗。
@@ -58,6 +66,7 @@ function parsePendingFiles(){
 
   var existingFiles = _getExistingFileNames();
   Logger.log('fact_schedule already contains ' + Object.keys(existingFiles).length + ' distinct file_names');
+  var wroteAny = false;   // v5.9：這一輪有沒有真的動到 fact_schedule／fact_note（有才清讀取快取）
 
   var files = folder.getFiles();
   var cnt = 0;
@@ -110,16 +119,19 @@ function parsePendingFiles(){
       var pRows  = _purgeFactScheduleByCanonical(pStore, pYm);
       var pNotes = _purgeFactNoteByCanonical(pStore, pYm);
       Logger.log('RE-UPLOAD ' + ck + ': 先清 fact_schedule ' + pRows + ' 列 / fact_note ' + pNotes + ' 列');
+      wroteAny = true;
       delete existingFiles[fname];
       delete existingFiles['__canonical__' + ck];
     }
 
     _processFile(f, isXls, sp, fname);
+    wroteAny = true;
     // 寫入成功才清 pending 標記;若上一行拋錯,標記留著,下一輪(或排程)會自動重試
     if(pendingKey) sp.deleteProperty(pendingKey);
     existingFiles[fname] = 'just_written';
     if(ck) existingFiles['__canonical__' + ck] = 'just_written';
   }
+  if(wroteAny) _schedCacheBump_('parsePendingFiles');   // v5.9
   Logger.log('=== parsePendingFiles DONE ===');
   } finally {
     lock.releaseLock();
@@ -454,6 +466,7 @@ function _appendLog(fname, fid, rowsWritten, status, note){
 
 function clearProcessed(){
   PropertiesService.getScriptProperties().deleteAllProperties();
+  _schedCacheBump_('clearProcessed');   // v5.9：版本號也被刪了，重立一個新的
   Logger.log('cleared all script properties');
 }
 
@@ -479,6 +492,7 @@ function resetFactSchedule(){
     }
   }
   Logger.log('cleared ' + cleared + ' ScriptProperties keys');
+  _schedCacheBump_('resetFactSchedule');   // v5.9
 }
 
 function nukeFactSchedule(){
@@ -493,6 +507,7 @@ function nukeFactSchedule(){
   SpreadsheetApp.flush();
   Utilities.sleep(2000);
   Logger.log('清空後: ' + sh.getLastRow() + ' 列(應該是 1)');
+  _schedCacheBump_('nukeFactSchedule');   // v5.9
 }
 
 function verifyFactSchedule(){
@@ -755,6 +770,7 @@ function syncDailySales(startDate, endDate){
   _appendLog('syncDailySales', '', updates.length+appends.length, 'OK',
     'v5.0 金額源=v_daily_net updates=' + updates.length + ' appends=' + appends.length +
     ' skipped=' + skipped + ' viewKeys=' + Object.keys(viewMap).length);
+  _schedCacheBump_('syncDailySales');   // v5.9
   Logger.log('=== syncDailySales DONE ===');
 }
 
@@ -950,6 +966,7 @@ function buildWeekKPI(){
   Logger.log('written rows=' + outRows.length);
 
   _appendLog('buildWeekKPI', '', outRows.length, 'OK', 'v5.0 weeks×stores=' + outRows.length);
+  _schedCacheBump_('buildWeekKPI');   // v5.9
   Logger.log('=== buildWeekKPI DONE ===');
 }
 
@@ -1030,32 +1047,118 @@ function _countActiveEmployees(employeeSegs, winStart, winEnd){
 // Phase 4: 儀表板 JSONP API
 // ====================================================================
 
+// ====================================================================
+// v5.9 讀取快取（2026-10-04 效能第 2 批 2-2）
+//   只包「只讀」的 doGet action：getWeekKpiData、getStoreDailyData（含 bonus=1）。
+//   回應字串原樣存進 CacheService（超過 90,000 字元就切塊），命中時直接回同一份字串 → 內容逐字相同。
+//   失效：寫入類函式結束時呼叫 _schedCacheBump_() 把版本號（ScriptProperties）改成新時間戳；
+//         所有 key 都帶版本號，版本一變舊 key 就讀不到（不必逐一刪，舊塊 6 小時內自然過期）。
+//   快取任何環節失敗都 try/catch 吞掉 → 退回原本直接讀表的路。
+//   不快取：processUploads（本身是寫入 pipeline）、getRecentImportLog（上傳後要立刻看到新 log，且只讀最後 N 列很便宜）、ping。
+// ====================================================================
+var SCHED_CACHE_TTL_SEC_  = 6 * 60 * 60;        // 6 小時（CacheService 上限 21600 秒）
+var SCHED_CACHE_CHUNK_    = 90000;              // 單 key 上限 100KB → 每塊 90,000 字元（同 POS 地雷 6）
+var SCHED_CACHE_PREFIX_   = 'SCHED_RD_';
+var SCHED_CACHE_VER_PROP_ = 'sched_cache_ver';  // ScriptProperties key：讀取快取版本號
+
+function _schedCacheVer_(){
+  try { return PropertiesService.getScriptProperties().getProperty(SCHED_CACHE_VER_PROP_) || '0'; }
+  catch(e){ return '0'; }
+}
+
+/** 寫入後呼叫：換版本號 → 所有讀取快取立即失效 */
+function _schedCacheBump_(reason){
+  try {
+    var ver = String(Date.now()) + '-' + Math.floor(Math.random() * 1e9);   // 加亂數尾巴：同一毫秒兩次寫入也保證不同
+    PropertiesService.getScriptProperties().setProperty(SCHED_CACHE_VER_PROP_, ver);
+    Logger.log('read cache invalidated (' + (reason || '') + ') ver=' + ver);
+  } catch(e){ Logger.log('_schedCacheBump_ failed: ' + e); }
+}
+
+function _schedCacheKey_(action, params){
+  var p = String(params || '').replace(/[^\w\-]/g, '_').slice(0, 120);
+  return SCHED_CACHE_PREFIX_ + _schedCacheVer_() + '_' + action + '_' + p;
+}
+
+/** 讀分塊：<key>_n = 塊數、<key>_0.._n-1 = 內容；任一塊缺就當未命中 */
+function _schedCacheGet_(key){
+  var cache = CacheService.getScriptCache();
+  var meta = cache.get(key + '_n');
+  if(meta === null || meta === undefined) return null;
+  var n = parseInt(meta, 10);
+  if(!(n >= 1)) return null;
+  var keys = [];
+  for(var i=0; i<n; i++) keys.push(key + '_' + i);
+  var parts = cache.getAll(keys);
+  var out = '';
+  for(var j=0; j<n; j++){
+    var part = parts[key + '_' + j];
+    if(part === undefined || part === null) return null;
+    out += part;
+  }
+  return out;
+}
+
+function _schedCachePut_(key, str){
+  var cache = CacheService.getScriptCache();
+  var obj = {}, n = 0;
+  for(var i=0; i<str.length; i+=SCHED_CACHE_CHUNK_){
+    obj[key + '_' + n] = str.substring(i, i + SCHED_CACHE_CHUNK_);
+    n++;
+  }
+  obj[key + '_n'] = String(n);
+  cache.putAll(obj, SCHED_CACHE_TTL_SEC_);
+}
+
+/** 只讀 action 共用：命中回快取字串；未命中算一次，ok:true 才存。回傳一律是 JSON 字串。 */
+function _schedCached_(action, params, computeFn){
+  var key = null;
+  try {
+    key = _schedCacheKey_(action, params);
+    var hit = _schedCacheGet_(key);
+    if(hit !== null) return hit;
+  } catch(e){ Logger.log('cache read skipped: ' + e); key = null; }
+  var result = computeFn();
+  var str = JSON.stringify(result);
+  if(key && result && result.ok === true){
+    try { _schedCachePut_(key, str); } catch(e2){ Logger.log('cache write skipped: ' + e2); }
+  }
+  return str;
+}
+
+/** 手動清掉所有讀取快取（編輯器直接執行；例如在試算表手改資料之後） */
+function aaaClearReadCache(){ _schedCacheBump_('manual'); }
+
 function doGet(e){
   var action = (e && e.parameter && e.parameter.action) || '';
   var callback = (e && e.parameter && e.parameter.callback) || 'callback';
-  var result;
+  var result, resultStr = null;   // v5.9：只讀 action 直接拿到 JSON 字串（快取命中時不必重新 stringify）
   try {
     if(action === 'getWeekKpiData'){
-      result = _getWeekKpiData();
+      resultStr = _schedCached_('getWeekKpiData', '', function(){ return _getWeekKpiData(); });
     } else if(action === 'getStoreDailyData'){
       var sid = parseInt(e.parameter.store_id, 10);
       var ym  = e.parameter.month || '';
-      result = _getStoreDailyData(sid, ym, e.parameter.bonus === '1');   // ★ v5.8：bonus=1 才多查甜點券$100（日獎金用）
+      var withBonus = (e.parameter.bonus === '1');   // ★ v5.8：bonus=1 才多查甜點券$100（日獎金用）
+      resultStr = _schedCached_('getStoreDailyData', sid + '_' + ym + '_' + (withBonus ? '1' : '0'),
+        function(){ return _getStoreDailyData(sid, ym, withBonus); });
     } else if(action === 'processUploads'){
       result = _processUploads();
     } else if(action === 'getRecentImportLog'){
       var n = parseInt(e.parameter.n, 10) || 20;
       result = _getRecentImportLog(n);
     } else if(action === 'ping'){
-      result = {ok:true, time:new Date().toISOString(), version:'schedule-v5.8-bonus'};
+      result = {ok:true, time:new Date().toISOString(), version:'schedule-v5.9-cache'};
     } else {
       result = {ok:false, error:'unknown action: ' + action};
     }
   } catch(err){
     result = {ok:false, error: String(err)};
+    resultStr = null;
   }
+  var body = (resultStr !== null) ? resultStr : JSON.stringify(result);
   return ContentService
-    .createTextOutput(callback + '(' + JSON.stringify(result) + ')')
+    .createTextOutput(callback + '(' + body + ')')
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
@@ -1148,6 +1251,7 @@ function _uploadSchedule(payload){
     _appendLog(rawFname, newFile.getId(), 0, 'UPLOADED',
       'canonical=' + fname + ' replaced=' + deletedCount + ' pending=' + ckNew +
       ' autoTrigger=' + (scheduled ? 'new' : 'existing') + ' size=' + bytes.length);
+    _schedCacheBump_('uploadSchedule');   // v5.9
 
     return {
       ok: true,
@@ -2003,6 +2107,7 @@ function cleanupDuplicatesByCanonical(){
   });
   SpreadsheetApp.flush();
   Logger.log('已刪除 ' + rowsToDelete.length + ' 列重複資料');
+  _schedCacheBump_('cleanupDuplicatesByCanonical');   // v5.9
 }
 
 // ====================================================================
