@@ -1,10 +1,10 @@
 # DIY — 自己做烘焙聚樂部 營運系統
 
-Flask 單一服務（`server.py`），部署在 Render，同時提供：員工口語訓練站、10 個營運儀表板（純前端 HTML，讀 Google Apps Script JSONP API）。
+Flask 單一服務（`server.py`），部署在 Render，同時提供：員工口語訓練站、11 個營運儀表板（純前端 HTML，讀 Google Apps Script JSONP API）。
 
 ## 專案結構
 - `server.py` — Flask 入口（路由、靜態檔、訓練站 API）。核心檔，改之前先提醒。
-- `static/hub.html` — 儀表板主入口（10 張卡）。
+- `static/hub.html` — 儀表板主入口（11 張卡）。
 - `static/dashboard-*.html`、`pos-dashboard.html`、`zijiren.html`、`google-reviews.html` — 各儀表板，**每頁自包含**（HTML+CSS+JS 同一檔，React/Recharts 走 CDN）。
 - `static/index.html`、`static/app.js`、`static/styles.css` — 訓練站前端。核心檔，改之前先提醒。
 - `gas/` — Google Apps Script 原始碼備份（生產版在 Google 端；改完 GAS 部署後必須同步這裡）。
