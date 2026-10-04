@@ -1,7 +1,9 @@
 <!-- 2026-10-02 v1：新頁「📢 公告及工作清單」（經營者「20261001 待處理事項」#1：把 NUEIP 公告管理／工作清單搬到 Google 雲端硬碟）。
      資料：雲端硬碟資料夾「自己做 公告及工作清單」裡的試算表「公告及工作清單_資料庫」＋附檔子資料夾；後端＝獨立 GAS 專案「公告及工作清單 API」。
      讀內容要「看公告」密碼（dim_auth：announce），發佈／修改／刪除／匯入要「發佈者」密碼（dim_auth：announce_pub）；兩組密碼都在 GAS 端驗（repo 公開，前端遮罩擋不住）。
-     寫入一律兩層確認；刪除＝標記刪除＋附檔搬「_已刪除」，不永久刪。內文顯示前用 DOMPurify 清掉危險程式碼。 -->
+     寫入一律兩層確認；刪除＝標記刪除＋附檔搬「_已刪除」，不永久刪。內文顯示前用 DOMPurify 清掉危險程式碼。
+     2026-10-04 v1.1 效能第 2 批（只動讀取側）：密碼框一出現就預熱公告 GAS（POST ping）與權限中心（照 AUTH-CORE 規則全站 90 秒一次）；
+     輸完密碼改打一支 bundle（驗密碼＋公告清單＋工作清單＋選單一次回來），不再先 whoami 再分三支讀。畫面與 v1 相同。 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -219,7 +221,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
   </section>
 </div>
 
-<div class="footer">自己做烘焙聚樂部 ｜ 公告及工作清單 v1（2026-10-02）</div>
+<div class="footer">自己做烘焙聚樂部 ｜ 公告及工作清單 v1.1（2026-10-04）</div>
 
 <!-- 讀公告 -->
 <div class="mask" id="mView"><div class="dlg">
@@ -291,6 +293,8 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
 var API_PROD = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';
 var API = API_PROD;
 try { var qa = new URLSearchParams(location.search).get('annapi'); if (qa && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) API = qa; } catch(_){}
+/* 權限中心網址（只拿來預熱；密碼本身由公告 GAS 在伺服器端拿去驗）。與 12 頁 AUTH-CORE v2 的 AUTH_API 同一條：權限中心換網址時這裡也要改（auth-center skill 地雷 5） */
+var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var K_VIEW = 'ann:pw', K_PUB = 'ann:pub', MAX_FILE = 10*1024*1024, MAX_ATT = 10, PAGE = 40, BATCH = 20;
 var S = { pw:'', pub:'', anns:[], works:[], opts:{}, loadedAt:'', annSt:'on', wkSt:'open', annShown:PAGE, cur:null, curWork:null, editId:'', editBase:'', editAtts:[], newFiles:[], imp:null };
 
@@ -318,6 +322,21 @@ function write(body, ms){
     return call(body, S.pub, ms);
   }).then(function(r){ if (!r.ok && r.code==='auth') { S.pub=''; ss(K_PUB,null); setPub(false); } return r; });
 }
+/* 預熱（2026-10-04）：密碼框一出現就各敲一下公告 GAS 與權限中心（兩支 GAS 冷啟動各要 3–8 秒；先叫醒，輸完密碼時就快）。
+   本頁沒有 AUTH-CORE（密碼在 GAS 端驗、沒有 localStorage 閘門），所以照 AUTH-CORE 同一條規則自己敲：全站 90 秒內只敲權限中心一次（localStorage __auth_ping_ts）。
+   回應一律不看、失敗不管。 */
+function warmAuth(){
+  try {
+    var k='__auth_ping_ts', last=Number(localStorage.getItem(k))||0, now=Date.now();
+    if (now-last>=0 && now-last<90000) return;
+    localStorage.setItem(k, String(now));
+    fetch(AUTH_API+'?action=ping&callback=__annwarm', { mode:'no-cors', credentials:'omit', cache:'no-store' }).catch(function(){});
+  } catch(_){}
+}
+function warm(){
+  try { fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({ action:'ping' }), cache:'no-store' }).catch(function(){}); } catch(_){}
+  warmAuth();
+}
 function twice(a, b){ return confirm(a) && confirm('再確認一次：\n' + b); }
 function stOf(a){ var t=today(); if (a.start_date && a.start_date>t) return 'soon'; if (a.end_date && a.end_date<t) return 'off'; return 'on'; }
 var ST_TXT = { on:['進行中','p-on'], soon:['尚未開始','p-soon'], off:['已過期','p-off'] };
@@ -330,15 +349,18 @@ function gate(mode){
   $('gSub').textContent = mode==='pub' ? '請輸入「發佈者」密碼（只發給總部）' : '請輸入「看公告」密碼';
   $('gFoot').innerHTML = mode==='pub' ? '<a href="#" id="gCancel">取消</a>' : '<a href="hub.html">⬅ 回首頁</a>';
   if (mode==='pub') $('gCancel').onclick = function(e){ e.preventDefault(); g.style.display='none'; };
+  warm();
   function go(){
     var v=(inp.value||'').trim(); if(!v) return;
     btn.disabled=true; btn.textContent='驗證中…'; err.textContent='';
-    call({ action:'whoami', role: mode==='pub'?'pub':'' }, v, 40000).then(function(r){
+    /* 看公告：一支 bundle 同時驗密碼＋拿三份清單（2026-10-04，原本 whoami 通過後再分三支讀）；發佈模式仍只驗密碼 */
+    var req = mode==='pub' ? call({ action:'whoami', role:'pub' }, v, 40000) : loadBundle(v, 60000);
+    req.then(function(r){
       btn.disabled=false; btn.textContent='進入';
       if (r.ok) {
         g.style.display='none';
         if (mode==='pub') { S.pub=v; ss(K_PUB,v); setPub(true); }
-        else { S.pw=v; ss(K_VIEW,v); loadAll(); }
+        else { S.pw=v; ss(K_VIEW,v); applyBundle(r.data); }
       } else {
         err.textContent = (r.msg || '驗證失敗') + (r.code==='net' ? '（若是剛啟用，可能後端還沒完成 Google 授權）' : ''); inp.value=''; inp.focus();
       }
@@ -367,20 +389,33 @@ document.querySelectorAll('.mask').forEach(function(m){ m.addEventListener('mous
 
 /* ===== 讀資料 ===== */
 function dsb(cls, html){ var d=$('dsb'); d.className='dsb '+cls; $('dsbTxt').innerHTML=html; }
+/* 2026-10-04：公告清單、工作清單、選單改成一支 bundle 一次回來（後端 announce-api-v2）；三份的欄位與原本 list／workList／options 相同。
+   後端還是 v1（v2 還沒部署）回「不支援的動作」→ 自動退回原本三支讀法，網頁與 GAS 的上線順序不用綁死 */
+function loadLegacy(pw){
+  return Promise.all([ call({action:'list'}, pw), call({action:'workList'}, pw), call({action:'options'}, pw) ]).then(function(rs){
+    var bad = rs.filter(function(r){ return !r.ok; })[0];
+    return bad || { ok:true, data:{ list: rs[0].data, work: rs[1].data, options: rs[2].data } };
+  });
+}
+function loadBundle(pw, ms){
+  return call({action:'bundle'}, pw, ms).then(function(r){ return (!r.ok && /不支援的動作/.test(r.msg||'')) ? loadLegacy(pw) : r; });
+}
 function loadAll(){
   dsb('dsb-auto','讀取中…');
-  return Promise.all([ call({action:'list'}, S.pw), call({action:'workList'}, S.pw), call({action:'options'}, S.pw) ]).then(function(rs){
-    var bad = rs.filter(function(r){ return !r.ok; })[0];
-    if (bad) {
-      if (bad.code==='auth') { S.pw=''; ss(K_VIEW,null); gate('view'); return; }
-      dsb('dsb-err','❌ 讀取失敗：'+esc(bad.msg)+'　<a href="#" onclick="location.reload();return false">重新整理</a>'); return;
+  return loadBundle(S.pw).then(function(r){
+    if (!r.ok) {
+      if (r.code==='auth') { S.pw=''; ss(K_VIEW,null); gate('view'); return; }
+      dsb('dsb-err','❌ 讀取失敗：'+esc(r.msg)+'　<a href="#" onclick="location.reload();return false">重新整理</a>'); return;
     }
-    S.anns = rs[0].data.rows; S.works = rs[1].data.rows; S.opts = rs[2].data || {};
-    S.loadedAt = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
-    var nu = S.anns.filter(function(a){ return a.src==='nueip'; }).length;
-    dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 <b>'+S.works.length+'</b> 件 ｜ 讀取時間 '+S.loadedAt+' ｜ 🔒 內容需密碼');
-    fillOpts(); renderAnn(); renderWork();
+    applyBundle(r.data);
   });
+}
+function applyBundle(d){
+  S.anns = d.list.rows; S.works = d.work.rows; S.opts = d.options || {};
+  S.loadedAt = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
+  var nu = S.anns.filter(function(a){ return a.src==='nueip'; }).length;
+  dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 <b>'+S.works.length+'</b> 件 ｜ 讀取時間 '+S.loadedAt+' ｜ 🔒 內容需密碼');
+  fillOpts(); renderAnn(); renderWork();
 }
 function optList(kind, extra){ var o=(S.opts[kind]||[]).slice(); (extra||[]).forEach(function(v){ if(v && o.indexOf(v)<0) o.push(v); }); return o; }
 function fillSel(sel, vals, first){ var cur=sel.value; sel.innerHTML=(first!==undefined?'<option value="">'+first+'</option>':'')+vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join(''); if (vals.indexOf(cur)>-1||cur==='') sel.value=cur; }
@@ -731,7 +766,7 @@ S.pw=ss(K_VIEW); S.pub=ss(K_PUB);
 if (S.pub) setPub(true);
 var h=(location.hash||'').slice(1); if (h==='work') showTab('work'); else if (h==='imp' && S.pub) showTab('imp');
 if (/__ANNOUNCE_DEPLOYMENT__/.test(API)) { $('gate').style.display='none'; dsb('dsb-err','⚠️ 公告系統後端還沒部署完成（等經營者完成 Google 授權）。'); return; }
-if (S.pw) { $('gate').style.display='none'; loadAll(); } else gate('view');
+if (S.pw) { $('gate').style.display='none'; warmAuth(); loadAll(); } else gate('view');   /* 已存密碼：bundle 直接送，順手叫醒權限中心（公告 GAS 驗密碼要找它） */
 })();
 </script>
 </body>
