@@ -7,10 +7,23 @@
 //   設定 → 指令碼屬性 → 新增：key = SA_KEY_JSON, value = {整包JSON}
 var BQ_PROJECT_ID = 'diybc-make-sync';
 
+// ★ 2026-10-04 效能第 2 批：通行證（access token）存 CacheService 50 分鐘（token 本身 60 分鐘有效），
+//   期間內直接重用、過期才重新簽章換 token；快取任何環節失敗都退回原本「每次重簽」的路。
+var BQ_TOKEN_CACHE_KEY_ = 'BQ_SA_TOKEN_V1_';   // 後面接 SA 的 client_email，換金鑰就自然換 key
+var BQ_TOKEN_CACHE_SEC_ = 50 * 60;
+
 function _getBqAccessToken_() {
   var raw = PropertiesService.getScriptProperties().getProperty('SA_KEY_JSON');
   if (!raw) throw new Error('缺 SA_KEY_JSON 指令碼屬性');
   var sa = JSON.parse(raw);
+
+  var cache = null;
+  var cacheKey = BQ_TOKEN_CACHE_KEY_ + String(sa.client_email || '').replace(/[^\w.@\-]/g, '_').slice(0, 200);
+  try {
+    cache = CacheService.getScriptCache();
+    var cached = cache.get(cacheKey);
+    if (cached) return cached;
+  } catch (eCache) { cache = null; }
 
   var now = Math.floor(Date.now() / 1000);
   var header = Utilities.base64EncodeWebSafe(JSON.stringify({alg:'RS256', typ:'JWT'}));
@@ -35,6 +48,13 @@ function _getBqAccessToken_() {
   });
   var tokenData = JSON.parse(tokenRes.getContentText());
   if (!tokenData.access_token) throw new Error('取 token 失敗: ' + tokenRes.getContentText());
+  try {
+    if (cache) {
+      var life = Number(tokenData.expires_in) || 3600;                       // Google 回的有效秒數（通常 3599）
+      var ttl = Math.min(BQ_TOKEN_CACHE_SEC_, Math.max(60, life - 600));    // 最多 50 分、至少留 10 分安全邊際
+      cache.put(cacheKey, tokenData.access_token, ttl);
+    }
+  } catch (ePut) { }
   return tokenData.access_token;
 }
 
