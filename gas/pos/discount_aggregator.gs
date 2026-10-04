@@ -65,6 +65,17 @@
  *  3. uses / txns / discount 口徑與 v19 完全相同（verifyV20 逐方案比對把關）
  *  4. 快取 V19 → V20；API_VERSION v5.1 → v5.2
  *  5. 新增驗收函式 verifyV20_dbpRevenue()（部署前必跑，全 PASS 才准部署）
+ *
+ * ── v21 新增（2026-10-04）★ 效能第 2 批 2-5：排程暖機＋鎖＋TTL 6 小時 ★ ──
+ *
+ *  1. 新增 rebuildCacheScheduled()：給時間觸發器（每 2 小時）呼叫，重算主快取與日×店快取後
+ *     直接覆寫（不先清 → 使用者讀不到空窗）；拿不到鎖就略過本次，舊快取照用
+ *  2. 快取 TTL 1 小時 → 6 小時（CacheService 上限）；排程每 2 小時刷新，使用者幾乎不會踩到冷啟動
+ *  3. 快取未命中時改走 _computeWithLock_()：先搶 ScriptLock（最多等 20 秒），拿到後再查一次快取
+ *     （別人剛算好就直接用），沒有才自己算；等不到鎖 → 再查一次快取，還是沒有就自己算一次（原行為）
+ *  4. 分塊讀寫抽成 _cacheReadChunks_／_cacheWriteChunks_（key 命名、90,000 字元/塊完全不變）
+ *  5. 快取版號 V20 不變、API_VERSION v5.2 不變、回傳 JSON 逐字不變（Node mock 比對通過）
+ *  6. 補洞／改資料後改跑 rebuildCacheScheduled() 取代 clearCache()（clearCache 仍可用，但下一位使用者會等冷啟動）
  * ───────────────────────────────────────────────────────────────
  */
 
@@ -118,7 +129,8 @@ var STORE_DIM = {
 };
 
 var PRICE_BANDS = ['0-200', '200-400', '400-600', '600-800', '800+'];
-var CACHE_TTL = 3600;
+var CACHE_TTL = 21600;   // v21：1 小時 → 6 小時（CacheService 上限）；由 rebuildCacheScheduled 每 2 小時刷新
+var CACHE_LOCK_WAIT_MS = 20000;   // v21：快取未命中時搶鎖最多等 20 秒
 var CACHE_KEY_PREFIX = 'POS_DASHBOARD_V20_';   // v20：discountByProgram 新增 revGross/revActual，結構變動強制換版（前版 V19）
 var API_VERSION = 'v5.2';
 
@@ -168,32 +180,88 @@ function doGet(e) {
    快取管理
    ============================================================ */
 function getCachedOrCompute() {
+  var hit = _cacheReadChunks_(CACHE_KEY_PREFIX);
+  if (hit !== null) return hit;
+  return _computeWithLock_(CACHE_KEY_PREFIX, CACHE_TTL, computeAggregation);
+}
+
+/* v21：分塊讀。key：{prefix}chunks ＝ 塊數、{prefix}part_N ＝ 內容（命名與 v20 完全相同，地雷 6）。任一塊缺 → null */
+function _cacheReadChunks_(prefix) {
   var cache = CacheService.getScriptCache();
-  var chunkCount = cache.get(CACHE_KEY_PREFIX + 'chunks');
-  if (chunkCount !== null) {
-    var n = parseInt(chunkCount, 10);
-    var keys = [];
-    for (var i = 0; i < n; i++) keys.push(CACHE_KEY_PREFIX + 'part_' + i);
-    var parts = cache.getAll(keys);
-    var allPresent = true;
-    for (var i = 0; i < n; i++) {
-      if (!parts[CACHE_KEY_PREFIX + 'part_' + i]) { allPresent = false; break; }
-    }
-    if (allPresent) {
-      var assembled = '';
-      for (var i = 0; i < n; i++) assembled += parts[CACHE_KEY_PREFIX + 'part_' + i];
-      return assembled;
-    }
+  var chunkCount = cache.get(prefix + 'chunks');
+  if (chunkCount === null || chunkCount === undefined) return null;
+  var n = parseInt(chunkCount, 10);
+  if (!(n >= 1)) return null;
+  var keys = [];
+  for (var i = 0; i < n; i++) keys.push(prefix + 'part_' + i);
+  var parts = cache.getAll(keys);
+  var assembled = '';
+  for (var j = 0; j < n; j++) {
+    var part = parts[prefix + 'part_' + j];
+    if (!part) return null;
+    assembled += part;
   }
-  var jsonStr = computeAggregation();
+  return assembled;
+}
+
+/* v21：分塊寫（90,000 字元/塊）。直接覆寫、不先清 → 讀的人不會碰到「清了還沒寫」的空窗 */
+function _cacheWriteChunks_(prefix, jsonStr, ttl) {
   var chunkSize = 90000;
-  var chunks = [];
-  for (var i = 0; i < jsonStr.length; i += chunkSize) chunks.push(jsonStr.substring(i, i + chunkSize));
-  var cacheObj = {};
-  for (var i = 0; i < chunks.length; i++) cacheObj[CACHE_KEY_PREFIX + 'part_' + i] = chunks[i];
-  cacheObj[CACHE_KEY_PREFIX + 'chunks'] = String(chunks.length);
-  cache.putAll(cacheObj, CACHE_TTL);
-  return jsonStr;
+  var cacheObj = {}, n = 0;
+  for (var i = 0; i < jsonStr.length; i += chunkSize) { cacheObj[prefix + 'part_' + n] = jsonStr.substring(i, i + chunkSize); n++; }
+  cacheObj[prefix + 'chunks'] = String(n);
+  CacheService.getScriptCache().putAll(cacheObj, ttl);
+  return n;
+}
+
+/* v21：快取未命中時的重算（多人同時過期只讓一個人算）
+   1) 搶 ScriptLock 最多等 CACHE_LOCK_WAIT_MS（20 秒）
+   2) 不論有沒有拿到鎖，先再查一次快取：等鎖期間別人（或排程）可能已經算好 → 直接回
+   3) 還是沒有 → 自己算一次並寫快取（拿不到鎖也算：等同 v20 原行為，不會卡住使用者）
+   回傳的字串與 computeFn() 的結果逐字相同 */
+function _computeWithLock_(prefix, ttl, computeFn) {
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(CACHE_LOCK_WAIT_MS); } catch (eLock) { got = false; }
+  try {
+    var hit = _cacheReadChunks_(prefix);
+    if (hit !== null) return hit;
+    var jsonStr = computeFn();
+    try { _cacheWriteChunks_(prefix, jsonStr, ttl); } catch (ePut) { Logger.log('cache write skipped: ' + ePut); }
+    return jsonStr;
+  } finally {
+    if (got) { try { lock.releaseLock(); } catch (eRel) { } }
+  }
+}
+
+/* ============================================================
+   v21 排程暖機：綁時間觸發器「每 2 小時」呼叫
+   重算主快取（computeAggregation）＋日×店快取（computeDailyByStore），算完直接覆寫、TTL 6 小時。
+   拿不到鎖（有人正在冷啟動重算）就略過本次，舊快取照用，下次觸發再來。
+   任一段失敗只記 log，不丟錯（舊快取保留；觸發器不會因此停用）。
+   ============================================================ */
+function rebuildCacheScheduled() {
+  var t0 = Date.now();
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(60000); } catch (eLock) { got = false; }
+  if (!got) { Logger.log('rebuildCacheScheduled: 拿不到鎖（有人正在重算），略過本次'); return; }
+  try {
+    try {
+      var main = computeAggregation();
+      var n1 = _cacheWriteChunks_(CACHE_KEY_PREFIX, main, CACHE_TTL);
+      Logger.log('rebuildCacheScheduled: 主快取已重建 ' + n1 + ' 塊（' + main.length + ' 字元，' + Math.round((Date.now() - t0) / 1000) + 's）');
+    } catch (e1) { Logger.log('rebuildCacheScheduled: 主快取重建失敗（舊快取保留）: ' + e1); }
+    try {
+      var t1 = Date.now();
+      var dbs = JSON.stringify(computeDailyByStore().rows);
+      var n2 = _cacheWriteChunks_(DAILY_BY_STORE_CACHE_PREFIX, dbs, DAILY_BY_STORE_CACHE_TTL);
+      Logger.log('rebuildCacheScheduled: 日×店快取已重建 ' + n2 + ' 塊（' + dbs.length + ' 字元，' + Math.round((Date.now() - t1) / 1000) + 's）');
+    } catch (e2) { Logger.log('rebuildCacheScheduled: 日×店快取重建失敗（舊快取保留）: ' + e2); }
+  } finally {
+    try { lock.releaseLock(); } catch (eRel) { }
+  }
+  Logger.log('rebuildCacheScheduled DONE ' + Math.round((Date.now() - t0) / 1000) + 's');
 }
 
 /* ============================================================
@@ -1276,34 +1344,14 @@ function whatDoesDoGetReturn() {
    daily_by_store 獨立 endpoint（日×店明細，2026-06-25 新增）
    ============================================================ */
 var DAILY_BY_STORE_CACHE_PREFIX = 'POS_DAILY_BY_STORE_V2_';   // v18：白名單改動，同步換版
-var DAILY_BY_STORE_CACHE_TTL = 3600;
+var DAILY_BY_STORE_CACHE_TTL = 21600;   // v21：1 小時 → 6 小時，由 rebuildCacheScheduled 每 2 小時刷新
 
 function getDailyByStoreCached() {
-  var cache = CacheService.getScriptCache();
-  var chunkCount = cache.get(DAILY_BY_STORE_CACHE_PREFIX + 'chunks');
-  if (chunkCount) {
-    var n = Number(chunkCount);
-    var keys = [];
-    for (var i = 0; i < n; i++) keys.push(DAILY_BY_STORE_CACHE_PREFIX + 'part_' + i);
-    var parts = cache.getAll(keys);
-    var allPresent = true;
-    for (var a = 0; a < n; a++) { if (!parts[DAILY_BY_STORE_CACHE_PREFIX + 'part_' + a]) { allPresent = false; break; } }
-    if (allPresent) {
-      var assembled = '';
-      for (var b = 0; b < n; b++) assembled += parts[DAILY_BY_STORE_CACHE_PREFIX + 'part_' + b];
-      return assembled;
-    }
-  }
-  var rows = computeDailyByStore().rows;
-  var jsonStr = JSON.stringify(rows);
-  var chunkSize = 90000;
-  var chunks = [];
-  for (var j = 0; j < jsonStr.length; j += chunkSize) chunks.push(jsonStr.substring(j, j + chunkSize));
-  var cacheObj = {};
-  for (var k = 0; k < chunks.length; k++) cacheObj[DAILY_BY_STORE_CACHE_PREFIX + 'part_' + k] = chunks[k];
-  cacheObj[DAILY_BY_STORE_CACHE_PREFIX + 'chunks'] = String(chunks.length);
-  cache.putAll(cacheObj, DAILY_BY_STORE_CACHE_TTL);
-  return jsonStr;
+  var hit = _cacheReadChunks_(DAILY_BY_STORE_CACHE_PREFIX);
+  if (hit !== null) return hit;
+  return _computeWithLock_(DAILY_BY_STORE_CACHE_PREFIX, DAILY_BY_STORE_CACHE_TTL, function () {
+    return JSON.stringify(computeDailyByStore().rows);
+  });
 }
 
 function clearDailyByStoreCache() {
