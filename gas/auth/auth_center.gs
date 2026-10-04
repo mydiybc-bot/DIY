@@ -1,5 +1,8 @@
 /** ═══════════════════════════════════════════════════════════════════
- * 儀表板權限中心 auth_center.gs v1.1（2026-07-30）
+ * 儀表板權限中心 auth_center.gs v1.2（2026-10-04 效能第 2 批，保守版）
+ * v1.2：①dim_auth 讀取結果放 CacheService 2 分鐘（verify／checkAdmin 用；admin_set／admin_unlock 成功後清掉 → 後台改密碼、停用立刻生效；
+ *         直接在 Sheet 手改最多 2 分鐘後生效）②登入紀錄照寫、不拿掉，但改成「回應組好之後最後一步」寫，且 try/catch 包住（寫失敗不影響登入）
+ *       ③試算表只開一次（ss_ 共用）④回傳格式一字不變（含 ttl_hours）；ping 回 v1.2
  * v1.1：①seed 納入 pnl／monthly（財務頁 TTL 4h，取代 hub 寫死的 PWD_B）
  *       ②新增 admin_unlock（後台一鍵解除防暴力鎖定）③admin_list 回傳當前錯誤數
  *       ※ 若已用 v1 執行過 seedAuthSheet：不必重灌，手動在 dim_auth 加
@@ -38,6 +41,8 @@ var FAIL_LIMIT = 15;        // 10 分鐘內同一儀表板密碼錯誤上限
 var FAIL_WINDOW_SEC = 600;
 
 var COL = { id:1, name:2, password:3, ttl:4, enabled:5, updated:6, note:7 };
+var AUTH_CACHE_SEC = 120;            /* v1.2：dim_auth 讀取結果快取秒數（admin_set／admin_unlock 後清掉） */
+var AUTH_CACHE_KEY = 'dim_auth:v1';
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -49,18 +54,33 @@ function doGet(e) {
       case 'admin_list': out = adminList_(p); break;
       case 'admin_set':  out = adminSet_(p);  break;
       case 'admin_unlock': out = adminUnlock_(p); break;
-      case 'ping':       out = { ok: true, ver: 'v1.1' }; break;
+      case 'ping':       out = { ok: true, ver: 'v1.2' }; break;
       default:           out = { ok: false, error: 'unknown action' };
     }
   } catch (err) {
     out = { ok: false, error: String(err) };
   }
-  return ContentService.createTextOutput(cb + '(' + JSON.stringify(out) + ')')
+  var body = cb + '(' + JSON.stringify(out) + ')';
+  flushLog_();   /* v1.2：登入紀錄放最後一步寫（回應已經組好；寫失敗只是少一列紀錄，不影響登入結果） */
+  return ContentService.createTextOutput(body)
     .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
 /* ── 內部工具 ─────────────────────────────────────────────────── */
-function ss_() { return SpreadsheetApp.openById(SHEET_ID); }
+var _ss = null;
+function ss_() { if (!_ss) _ss = SpreadsheetApp.openById(SHEET_ID); return _ss; }   /* v1.2：同一次請求只開一次 */
+
+/* v1.2：dim_auth 快取（2 分鐘）。verify／checkAdmin 走這裡；adminList／adminSet 仍每次讀最新（後台要看到、要寫到的列號必須是現況）。
+   注意：Date 經 JSON 來回會變成字串，所以快取回來的 updated_at 只給 new Date(…) 用（adminList 不走快取，不受影響） */
+function rowsCached_() {
+  var cache = CacheService.getScriptCache(), hit = null;
+  try { hit = cache.get(AUTH_CACHE_KEY); } catch (_) {}
+  if (hit) { try { return JSON.parse(hit); } catch (_) {} }
+  var arr = rows_();
+  try { cache.put(AUTH_CACHE_KEY, JSON.stringify(arr), AUTH_CACHE_SEC); } catch (_) {}
+  return arr;
+}
+function authCacheClear_() { try { CacheService.getScriptCache().remove(AUTH_CACHE_KEY); } catch (_) {} }
 
 function rows_() {
   var sh = ss_().getSheetByName(TAB_AUTH);
@@ -86,18 +106,26 @@ function rows_() {
   return arr;
 }
 
-function findDash_(id) {
-  var arr = rows_();
+function findDash_(id, fresh) {   /* fresh＝略過快取直接讀 Sheet（要寫入前用，列號才是現況） */
+  var arr = fresh ? rows_() : rowsCached_();
   for (var i = 0; i < arr.length; i++) {
     if (arr[i].dashboard_id === id) return arr[i];
   }
   return null;
 }
 
+/* v1.2：log_ 先排隊，doGet 組好回應後 flushLog_ 一次寫（照寫、不拿掉——稽核密碼外流要靠它） */
+var _logQ = [];
 function log_(action, dash, result) {
+  _logQ.push([new Date(), action, dash, result]);
+}
+function flushLog_() {
+  if (!_logQ.length) return;
+  var q = _logQ; _logQ = [];
   try {
     var sh = ss_().getSheetByName(TAB_LOG);
-    if (sh) sh.appendRow([new Date(), action, dash, result]);
+    if (!sh) return;
+    for (var i = 0; i < q.length; i++) sh.appendRow(q[i]);
   } catch (_) {}
 }
 
@@ -162,7 +190,7 @@ function adminList_(p) {
 function adminSet_(p) {
   if (!checkAdmin_(p)) { log_('admin_set', String(p.dashboard || '-'), 'deny'); return { ok: false, error: '管理密碼錯誤' }; }
   var id = String(p.dashboard || '').trim();
-  var d = findDash_(id);
+  var d = findDash_(id, true);   /* 要寫入：直接讀 Sheet 拿現況列號，不用快取 */
   if (!d) return { ok: false, error: '查無 ' + id };
 
   var sh = ss_().getSheetByName(TAB_AUTH);
@@ -176,6 +204,7 @@ function adminSet_(p) {
     sh.getRange(d.rowIndex, COL.enabled).setValue(String(p.enabled).toUpperCase() === 'Y' ? 'Y' : 'N');
   }
   sh.getRange(d.rowIndex, COL.updated).setValue(new Date());
+  authCacheClear_();   /* 改密碼、TTL、停用 → 立刻生效（下一次 verify 重讀 Sheet） */
   log_('admin_set', id, 'ok');
   return { ok: true };
 }
@@ -185,6 +214,7 @@ function adminUnlock_(p) {
   var id = String(p.dashboard || '').trim();
   if (!id) return { ok: false, error: '缺少參數' };
   CacheService.getScriptCache().remove('fail_' + id);
+  authCacheClear_();   /* 順手清 dim_auth 快取（直接在 Sheet 手改密碼後，按一次「解鎖」也能立刻生效） */
   log_('admin_unlock', id, 'ok');
   return { ok: true };
 }
@@ -224,3 +254,4 @@ function seedAuthSheet() {
   Logger.log('seedAuthSheet 完成：dim_auth 10 列＋auth_log 已建立。請回 Sheet 改 C 欄正式密碼。');
 }
 /* v1.1：pnl／monthly 已納入本系統（第二批 v3.1 交辦書同步移除 hub 的 PWD_B）。 */
+/* v1.2（2026-10-04）：dim_auth 快取 2 分鐘＋登入紀錄最後一步寫＋試算表只開一次；回傳格式不變。回滾＝管理部署作業 → 編輯 → 版本選回上一版。 */
