@@ -11,8 +11,12 @@
  * 安全：寫入包 LockService；刪除＝標記刪除＋附檔搬到「_已刪除」，不永久刪；所有 Drive 動作只限根資料夾底下（防 drive 範圍誤動其他檔）。
  * 部署：網頁應用程式／執行身分＝我／存取＝所有人。第一次：編輯器選 setup → 執行 → 授權（建資料庫試算表與子資料夾）。
  *       之後更新一律「管理部署作業 → 編輯 → 新版本」（網址不變）。
+ * v2（2026-10-04 效能第 2 批，只動讀取側）：①POST ping（不用密碼，前端密碼框一出現就預熱）②bundle＝驗密碼＋一次回 list／workList／options
+ *       ③密碼驗證結果快取 10 分鐘 → 2 小時（key 含密碼雜湊；改密碼或停用後最多 2 小時才對本頁生效）④公告清單快取 5 分鐘（任何寫入後失效）
+ *       ⑤單則 get 只讀那一列的內文，不再整張（含全部內文）讀。回傳 JSON 欄位不變。
  */
-var VERSION = 'announce-api-v1.1';
+var VERSION = 'announce-api-v2';   // 2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）；GAS 線上目前是 v1.1（部署 @2），v2 尚未部署
+var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
@@ -81,15 +85,16 @@ function inRoot_(file) {
 function doGet(e) {
   var p = (e && e.parameter) || {}, a = String(p.action || 'ping'), res;
   try {
-    if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') } };
+    if (a === 'ping') res = { ok: true, data: pingData_() };
     else if (a === 'stat') res = { ok: true, data: stat_() };
     else res = { ok: false, msg: '讀公告內容要用 POST 並帶密碼' };
   } catch (err) { res = { ok: false, msg: errMsg_(err) }; }
   res.act = a;
   return out_(res, p.callback);
 }
+function pingData_() { return { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') }; }
 var ACTIONS = { whoami: whoami_, list: list_, get: get_, save: save_, del: del_, upload: upload_, uploadImg: uploadImg_, attDel: attDel_,
-  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_ };
+  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_ };
 var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1 };
 var PUB_ONLY = WRITES;
 var RQ_SEC = 21600;
@@ -97,6 +102,7 @@ function doPost(e) {
   var p;
   try { p = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (err) { return out_({ ok: false, msg: '送來的資料不是 JSON' }); }
   var act = String(p.action || ''), fn = ACTIONS[act], res;
+  if (act === 'ping') { res = { ok: true, data: pingData_() }; res.act = 'ping'; return out_(res); }   /* v2：預熱用（不用密碼、不碰試算表），回法同 GET ping */
   if (!fn) return out_({ ok: false, act: act, msg: '不支援的動作：' + act });
   var who;
   try { who = auth_(p.password, (PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub')) ? DASH_PUB : DASH_VIEW); }
@@ -116,7 +122,7 @@ function doPost(e) {
   } catch (err) {
     res = { ok: false, act: act, msg: errMsg_(err) }; if (err && err.code) res.code = err.code;
     log_(who, act, '', false, res.msg);
-  } finally { if (WRITES[act]) lock.releaseLock(); }
+  } finally { if (WRITES[act]) { lock.releaseLock(); listCacheClear_(); } }   /* v2：任何寫入做完（成功或失敗）公告清單暫存就失效 */
   return out_(res);
 }
 function out_(res, cb) {
@@ -124,7 +130,8 @@ function out_(res, cb) {
   if (cb && /^[A-Za-z_$][0-9A-Za-z_$]{0,63}$/.test(String(cb))) return ContentService.createTextOutput(cb + '(' + s + ');').setMimeType(ContentService.MimeType.JAVASCRIPT);
   return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.JSON);
 }
-/* 密碼：問「儀表板權限中心」verify（dim_auth 的 announce／announce_pub）；成功結果快取 10 分鐘（key＝雜湊，不存明文） */
+/* 密碼：問「儀表板權限中心」verify（dim_auth 的 announce／announce_pub）；成功結果快取 AUTH_SEC（v2：2 小時；key＝雜湊，不存明文）。
+   代價：在權限中心改密碼或 enabled=N 後，拿舊密碼的人最多再用 2 小時（只影響本頁；其他儀表板不經本 API） */
 function auth_(pw, dash) {
   pw = String(pw || '').trim();
   if (!pw) throw fail_('請輸入密碼', 'auth');
@@ -135,10 +142,12 @@ function auth_(pw, dash) {
   var m = t.match(/^\s*[A-Za-z_$][\w$]*\(([\s\S]*)\);?\s*$/), j = {};
   try { j = JSON.parse(m ? m[1] : t); } catch (e) { throw fail_('權限中心回應看不懂，請稍後再試', 'auth'); }
   if (!j || !j.ok) throw fail_(dash === DASH_PUB ? '發佈者密碼不對（' + (j && j.error || '') + '）' : '密碼不對（' + (j && j.error || '') + '）', 'auth');
-  cache.put(key, '1', 600);
+  cache.put(key, '1', AUTH_SEC);
   return dash === DASH_PUB ? '發佈者' : '讀者';
 }
 function whoami_(p, who) { return { data: { who: who } }; }
+/* v2：開頁一次拿齊（驗密碼＋公告清單＋工作清單＋選單），三份各自的欄位與原本 list／workList／options 相同 */
+function bundle_(p, who) { return { data: { list: list_(p, who).data, work: workList_(p, who).data, options: options_(p, who).data } }; }
 
 /* ================= 公告 ================= */
 function stat_() {
@@ -157,12 +166,46 @@ function annView_(r, withHtml) {
   if (withHtml) o.html = [r.content_html_1, r.content_html_2, r.content_html_3, r.content_html_4].map(str_).join('');
   return o;
 }
+/* v2 公告清單暫存：清單（不含內文）＋「ann_id → 列號」放 CacheService 5 分鐘，鍵尾帶版本號 ann:ver；任何寫入做完就換版本號＝舊暫存失效
+   （比直接刪鍵保險：讀的人剛好拿到舊表、寫的人同時寫完清掉、讀的人再放回去——放回去的是舊鍵，沒人會再讀到）。
+   有人直接改試算表（不經本 API）→ 清單最多 5 分鐘後才看到；get 用列號讀回要是同一個 ann_id 才算，不然掃一次最新清單 */
+function listRows_() {
+  var cache = CacheService.getScriptCache(), key = 'ann:list:' + (cache.get('ann:ver') || '0');
+  var hit = cacheGetBig_(cache, key);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壞掉就重讀 */ } }
+  var t = load_('fact_announce', true), rows = [], idx = {};
+  t.rows.forEach(function (r) { if (r.deleted !== 'Y' && r.ann_id) { rows.push(annView_(r, false)); idx[r.ann_id] = r._row; } });
+  var v = { rows: rows, idx: idx };
+  try { cachePutBig_(cache, key, JSON.stringify(v), LIST_TTL); } catch (e) { /* 放不進去就每次讀 */ }
+  return v;
+}
+function listCacheClear_() {
+  try { var c = CacheService.getScriptCache(); c.put('ann:ver', String((parseInt(c.get('ann:ver') || '0', 10) || 0) + 1), 21600); } catch (e) { /* 清不掉就等 5 分鐘自然過期 */ }
+}
 function list_(p, who) {
-  var t = load_('fact_announce', true);
-  return { data: { rows: t.rows.filter(function (r) { return r.deleted !== 'Y' && r.ann_id; }).map(function (r) { return annView_(r, false); }), today: today_(), who: who } };
+  return { data: { rows: listRows_().rows, today: today_(), who: who } };
+}
+/* 讀一列成物件（同 load_ 的欄位規則） */
+function rowObj_(sh, H, rn) {
+  var v = sh.getRange(rn, 1, 1, H.length).getValues()[0], o = { _row: rn };
+  H.forEach(function (h, j) { o[h] = NUM_COLS[h] ? v[j] : str_(v[j]); });
+  return o;
+}
+/* v2：找一則公告（含內文）。先用清單暫存的列號直接讀那一列（讀回 ann_id 要相同）；對不上→掃一次清單（不含內文）定位，再只讀那一列的 content_html_1～4 */
+function annRow_(id) {
+  if (!id) return null;
+  var sh = ss_().getSheetByName('fact_announce'); if (!sh) throw fail_('找不到分頁 fact_announce', 'setup');
+  var H = TABS.fact_announce, rn = 0;
+  try { rn = listRows_().idx[id] || 0; } catch (e) { rn = 0; }
+  if (rn >= 2 && rn <= sh.getLastRow()) { var r = rowObj_(sh, H, rn); if (r.ann_id === id) return r.deleted === 'Y' ? null : r; }
+  var t = load_('fact_announce', true), hit = t.rows.filter(function (x) { return x.ann_id === id && x.deleted !== 'Y'; })[0];
+  if (!hit) return null;
+  var segs = SEG_COLS.fact_announce, v = sh.getRange(hit._row, H.indexOf(segs[0]) + 1, 1, segs.length).getValues()[0];
+  segs.forEach(function (h, j) { hit[h] = str_(v[j]); });
+  return hit;
 }
 function get_(p, who) {
-  var id = str_(p.ann_id), t = load_('fact_announce'), r = t.rows.filter(function (x) { return x.ann_id === id && x.deleted !== 'Y'; })[0];
+  var id = str_(p.ann_id), r = annRow_(id);
   if (!r) throw fail_('找不到公告 ' + id, 'notfound');
   var att = load_('fact_announce_att').rows.filter(function (a) { return a.ann_id === id && a.deleted !== 'Y'; })
     .map(function (a) { return { att_id: a.att_id, name: a.file_name, mime: a.mime, size: Number(a.size) || 0, url: a.url }; });
@@ -391,6 +434,31 @@ function log_(who, act, id, ok, msg) {
   } catch (e) { }
 }
 function hash_(s) { return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s)).slice(0, 32); }
+/* CacheService 一個鍵最多 100KB：超過就切塊（每塊 ≤30,000 個字＝UTF-8 最多 90KB；不切在 emoji 代理對中間），主鍵只放「#塊數」；太大（>40 塊）就不暫存 */
+var CACHE_CHUNK = 30000, CACHE_MAX_CHUNKS = 40;
+function cachePutBig_(cache, key, s, ttl) {
+  s = String(s);
+  if (s.length <= CACHE_CHUNK) { cache.put(key, s, ttl); return; }
+  var parts = {}, n = 0, i = 0;
+  while (i < s.length) {
+    var end = Math.min(i + CACHE_CHUNK, s.length), hi = s.charCodeAt(end - 1);
+    if (end < s.length && hi >= 0xD800 && hi <= 0xDBFF) end--;
+    parts[key + ':' + n] = s.slice(i, end); n++; i = end;
+    if (n > CACHE_MAX_CHUNKS) return;
+  }
+  cache.putAll(parts, ttl);
+  cache.put(key, '#' + n, ttl);
+}
+function cacheGetBig_(cache, key) {
+  var head = cache.get(key);
+  if (head === null || head === undefined) return null;
+  if (head.charAt(0) !== '#') return head;
+  var n = parseInt(head.slice(1), 10), keys = [];
+  for (var i = 0; i < n; i++) keys.push(key + ':' + i);
+  var all = cache.getAll(keys), s = '';
+  for (i = 0; i < n; i++) { var c = all[key + ':' + i]; if (c === null || c === undefined) return null; s += c; }
+  return s;
+}
 function now_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
 function today_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'); }
 function stamp_() { return Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmm'); }
