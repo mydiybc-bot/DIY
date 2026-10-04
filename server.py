@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from email.parser import BytesParser
 from email.policy import default as email_policy
+import gzip
+import hashlib
 import json
 import os
 import secrets
@@ -11,6 +13,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import socket
+import threading
 from urllib.parse import parse_qs, urlparse
 
 from auth_store import AuthStore
@@ -27,6 +30,28 @@ from recipe_auth import recipe_auth, call_anthropic
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
+
+# 2026-10-04 效能第 2 批：靜態檔（儀表板 HTML）改「gzip 壓縮＋ETag 版本比對」。
+# 以 mtime＋size 當鍵把壓縮結果與 ETag 留在記憶體，Render 換版（檔案換新）自動重算；只服務 static/，API JSON 不經過這裡。
+_STATIC_CACHE: dict[str, tuple[float, int, bytes, bytes | None, str]] = {}
+_STATIC_CACHE_LOCK = threading.Lock()
+
+
+def _static_entry(path: Path) -> tuple[bytes, bytes | None, str]:
+    """回傳 (原始內容, gzip 內容或 None, ETag)。gzip 沒有比較小（例如圖片）就回 None。"""
+    st = path.stat()
+    key = str(path)
+    with _STATIC_CACHE_LOCK:
+        hit = _STATIC_CACHE.get(key)
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+        return hit[2], hit[3], hit[4]
+    data = path.read_bytes()
+    etag = 'W/"' + hashlib.sha1(data).hexdigest()[:24] + '"'
+    gz = gzip.compress(data, compresslevel=6, mtime=0)
+    gz_or_none = gz if len(gz) < len(data) else None
+    with _STATIC_CACHE_LOCK:
+        _STATIC_CACHE[key] = (st.st_mtime, st.st_size, data, gz_or_none, etag)
+    return data, gz_or_none, etag
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", "8765"))
 SESSIONS: dict[str, dict] = {}
@@ -37,6 +62,11 @@ PROGRESS_STORE = ProgressStore()
 
 
 class TrainingHandler(BaseHTTPRequestHandler):
+    # 2026-10-04 效能第 2 批：改用 HTTP/1.1。Chrome 對 HTTP/1.0 的回應不做 ETag 版本比對（實測不帶 If-None-Match、每次整檔重抓）；
+    # HTTP/1.1 連線會重用，所有回應都已帶 Content-Length（send_error 自帶）；閒置連線 60 秒自動關閉，避免佔住執行緒。
+    protocol_version = "HTTP/1.1"
+    timeout = 60
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
@@ -369,18 +399,38 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def serve_file(self, filename: str, content_type: str) -> None:
+        """2026-10-04 效能第 2 批（原本：每次整檔重送、Cache-Control no-store）。
+        - Cache-Control: no-cache ＝ 瀏覽器每次仍會來問，但帶 If-None-Match；檔案沒變就回 304、不重新下載，換版後一樣立即生效。
+        - 客戶端接受 gzip 就回壓縮版（儀表板 HTML 約少 6～7 成）。"""
         path = STATIC_DIR / filename
         if not path.exists():
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
-        data = path.read_bytes()
+        try:
+            data, gz, etag = _static_entry(path)
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        inm = self.headers.get("If-None-Match") or ""
+        if any(t.strip().replace("W/", "", 1) == etag.replace("W/", "", 1) for t in inm.split(",") if t.strip()):
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            return
+        use_gz = gz is not None and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        body = gz if use_gz else data
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store, max-age=0")
-        self.send_header("Pragma", "no-cache")
+        if use_gz:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", etag)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        self.wfile.write(data)
+        self.wfile.write(body)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
