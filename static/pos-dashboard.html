@@ -69,11 +69,52 @@
       ・淨營收卡副標改寫明日期區間「YYYY/M/D ～ YYYY/M/D（N 個月）」，避免把多個月合計當單月比。
       ・折扣缺漏偵測 discGaps：日×店明細（daily_by_store）中，某天 ≥6 店有營收、卻沒有任何一店有折扣
         ＝折扣資料整天沒進來 → 分頁上方紅色警示帶（列日期、店數、該日淨營收），只看目前選的期間。
+  【v32】（2026-10-04）效能第 1 批（純前端，GAS 未動、快取版號不變 V20、畫面與口徑零變動）。
+      ・1-6 Babel 只轉 JSX：text/babel 那段加 data-presets="react"。原本預設 react＋env（全部轉成舊語法，
+        編譯約 3 倍久）；全站其他頁本來就直接用 ?. 等新語法，瀏覽器支援範圍不變。
+      ・1-2 抓資料不等編譯：主資料與日×店兩支 JSONP 改在頁首一般 script 一開頁就發出（window.__posPre），
+        React 啟動後接手結果；冷啟動重試（地雷 18）在頁首照做，逾時／IndexedDB 先出圖／錯誤訊息仍在 React 內，行為不變。
+        ⚠️ 頁首 POS_PRE 的網址必須與 React 內 API_URL 相同（不同時 React 會自己重抓，不會用錯資料）——改網址兩處一起改。
 -->
 
 <link rel="preconnect" href="https://script.google.com" crossorigin>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="dns-prefetch" href="https://script.google.com">
+<script>
+/* 【v32】2026-10-04 效能 1-2：抓資料不等編譯。
+   原本主資料、日×店兩支請求要等函式庫下載完＋Babel 編譯完＋React 掛上才發出；改成一開頁就先發出，
+   結果暫放 window.__posPre，由 React 內的「FETCH DATA」與 fetchDailyByStore() 接手（各只接手一次）。
+   冷啟動重試照舊：第一次 onerror → 3 秒後重掛一次（地雷 18）；逾時、IndexedDB 先出圖、錯誤訊息仍由 React 處理。
+   ⚠️ 網址必須與 React 內 API_URL 完全相同；不同時 React 會自己重抓（不會用錯資料，只是變回舊速度）。 */
+(function(){
+  var POS_PRE = 'https://script.google.com/macros/s/AKfycbxvD8dQdWJdaK9Ih9ZZc3PRT8rICcqbCrk5cKQY3s6zF1MmZgWL2g803zrJTBsuE3p4pQ/exec';
+  function pre(qs, tag){
+    var st = { done: false, ok: false, data: null, subs: [] }, cb = '_posPre_' + tag + '_' + Date.now(), retried = false;
+    function settle(ok, d){
+      if (st.done) return;
+      st.done = true; st.ok = ok; st.data = d;
+      try { delete window[cb]; } catch(_){ window[cb] = undefined; }
+      var subs = st.subs; st.subs = [];
+      for (var i = 0; i < subs.length; i++) subs[i](ok, d);
+    }
+    window[cb] = function(d){ settle(true, d); };
+    function mount(){
+      var s = document.createElement('script');
+      s.src = POS_PRE + '?' + qs + 'callback=' + cb;
+      s.onerror = function(){
+        if (s.parentNode) s.parentNode.removeChild(s);
+        if (!retried) { retried = true; setTimeout(mount, 3000); return; }   /* 冷啟動：靜默重試一次 */
+        settle(false, null);
+      };
+      (document.head || document.documentElement).appendChild(s);
+    }
+    mount();
+    st.take = function(fn){ if (st.done) fn(st.ok, st.data); else st.subs.push(fn); };   /* 已回來就馬上交，還沒回來就等 */
+    return st;
+  }
+  try { window.__posPre = { api: POS_PRE, main: pre('', 'main'), dbs: pre('action=daily_by_store&', 'dbs') }; } catch(_){}
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -449,7 +490,7 @@ a{color:var(--accent-light);text-decoration:none}
   </div>
 </div>
 <div id="root"></div>
-<script type="text/babel">
+<script type="text/babel" data-presets="react">
 /* ================================================================
    自己做烘焙聚樂部 — POS 銷售動態儀表板
    ================================================================ */
@@ -548,6 +589,9 @@ function dbsIdbPut(v){
 let DBS_PROMISE = null;
 function fetchDailyByStore(){
   if(DBS_PROMISE) return DBS_PROMISE;
+  /* 【v32】頁首已先發出（window.__posPre.dbs）→ 第一次呼叫接手；之後（失敗後重抓）照原路自己發 */
+  const pre = (window.__posPre && window.__posPre.api === API_URL) ? window.__posPre.dbs : null;
+  if(pre) window.__posPre.dbs = null;
   DBS_PROMISE = new Promise((resolve, reject)=>{
     const cb = '_dbsCb_' + Date.now();
     let done = false;
@@ -562,6 +606,11 @@ function fetchDailyByStore(){
       if(!Array.isArray(d) || !d.length) reject(new Error('日明細回傳為空'));
       else resolve(d);
     };
+    const fail = ()=>{
+      if(done) return; done = true;
+      clearTimeout(timeout); delete window[cb];
+      reject(new Error('日明細載入失敗'));
+    };
     let retried = false;
     const mount = ()=>{
       const s = document.createElement('script');
@@ -569,13 +618,12 @@ function fetchDailyByStore(){
       s.onerror = ()=>{
         if(s.parentNode) s.parentNode.removeChild(s);
         if(!retried){ retried = true; setTimeout(mount, 3000); return; }  /* 冷啟動：靜默重試一次（地雷 18） */
-        if(done) return; done = true;
-        clearTimeout(timeout); delete window[cb];
-        reject(new Error('日明細載入失敗'));
+        fail();
       };
       document.body.appendChild(s);
     };
-    mount();
+    if(pre) pre.take((ok, d)=>{ if(!ok) fail(); else if(window[cb]) window[cb](d); });   /* 頁首那發已含冷啟動重試 */
+    else mount();
   });
   DBS_PROMISE.catch(()=>{ DBS_PROMISE = null; });
   return DBS_PROMISE;
@@ -704,9 +752,10 @@ function App(){
     try{ legacy = JSON.parse(localStorage.getItem(CK) || 'null'); }catch(_){}
     try{ localStorage.removeItem(CK); }catch(_){}
     if(legacy){ useCache(legacy); if(hasCache) idbPut(legacy); }
+    let cacheRead = Promise.resolve();   /* 【v32】頁首那發若很快就失敗，等暫存讀完再決定「報錯」或「顯示暫存」（見下方 pre.take） */
     if(!hasCache){
       setLoading(true); setBadge('連線中…（首次較慢）', '#B45309');
-      idbGet().then(useCache);
+      cacheRead = idbGet().then(useCache);
     }
 
     const cbName = '_gasCb_' + Date.now();
@@ -732,6 +781,16 @@ function App(){
     /* 2026-07-30 冷啟動韌性：GAS 冷啟動期間會回 5xx 觸發 onerror（非逾時），
        首次失敗不報錯，3 秒後自動重掛 script 一次；沿用同一個 120s timeout，不重設。 */
     let retried = false;
+    const failFinal = ()=>{
+      clearTimeout(timeout);
+      delete window[cbName];
+      if(!hasCache){
+        setError('API 載入失敗（已自動重試一次），請按重試或稍後再試');
+        setLoading(false);
+      } else {
+        setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F');
+      }
+    };
     const mountScript = ()=>{
       const script = document.createElement('script');
       script.src = API_URL + (API_URL.includes('?')?'&':'?') + 'callback=' + cbName;
@@ -742,18 +801,22 @@ function App(){
           setTimeout(mountScript, 3000);   /* 畫面維持 loading，不閃錯誤 */
           return;
         }
-        clearTimeout(timeout);
-        delete window[cbName];
-        if(!hasCache){
-          setError('API 載入失敗（已自動重試一次），請按重試或稍後再試');
-          setLoading(false);
-        } else {
-          setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F');
-        }
+        failFinal();
       };
       document.body.appendChild(script);
     };
-    mountScript();
+    /* 【v32】頁首已先發出（window.__posPre.main，含冷啟動重試）→ 接手結果；沒有或網址不同才自己發。
+       好資料馬上用；失敗或空資料 → 等暫存讀完再處理（有暫存就顯示暫存＋黃字，與原本相同）。
+       逾時後 window[cbName] 已刪 → 晚到的資料不採用（與原本相同） */
+    const pre = (window.__posPre && window.__posPre.api === API_URL) ? window.__posPre.main : null;
+    if(pre){
+      window.__posPre.main = null;
+      const deliver = (ok, d)=>{ if(!ok) failFinal(); else if(window[cbName]) window[cbName](d); };
+      pre.take((ok, d)=>{
+        if(ok && d && Array.isArray(d.monthly) && d.monthly.length) deliver(ok, d);
+        else cacheRead.then(()=>deliver(ok, d), ()=>deliver(ok, d));
+      });
+    } else mountScript();
   },[]);
 
   /* ---------- v30 日×店明細：先用裝置暫存，背景向 GAS 取新的 ---------- */
