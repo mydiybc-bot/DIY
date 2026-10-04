@@ -1,7 +1,9 @@
 <!-- 2026-10-04 v2.10（第 1 批效能）：①主要讀取（月份清單／未來訂位／月資料）加逾時 45 秒＋自動重試，最多 3 發（jsonpRetry），
      失敗不再當成「空的月份」存起來，改顯示「讀取失敗」＋重試按鈕；逐月回訪遇讀取失敗也不再當 0 筆算、不存暫存。
      ②已結束的月份存瀏覽器 IndexedDB（resv_month_cache_v1），以月份清單的筆數當戳記、最多 7 天，重開頁直接用；
-     當月與未來月份永遠抓最新，「🔄 重新整理」一律重抓。4 支請求的先後順序不變。 -->
+     當月與未來月份永遠抓最新，「🔄 重新整理」一律重抓。4 支請求的先後順序不變。
+     2026-10-04 經營者裁定補強：本機暫存跟本頁密碼效期綁在一起（存檔時記下效期，過期即失效並清除；還沒輸入密碼前抓到的先暫放，密碼通過後才存），
+     月份選單旁提示改白話「📁 這個月的資料已存在這台電腦，不必重抓」。 -->
 <!-- 2026-09-22 v2.9：改為分頁式版面。頂部固定一列分頁「👥 團體訂位｜📅 月份分析｜⏱️ 即時與預估｜📈 長期趨勢」，
      團體訂位移到第一個分頁（紅色數字＝需立即處理項目）；月份選單只在「月份分析」出現（只有它受月份影響）；
      團體區三張清單改為可切換檢視（卡位與等付款／待更正／團體總表），待更正清單加「人數」欄，
@@ -511,6 +513,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
         <li><b>自動體檢</b>：每日 11:00 檢查資料是否落後、快取是否過期、未來訂位是否停擺，異常自動寄信（<code>healthWatchdog</code>）</li>
         <li>歷史或未來訂位若停止更新，頁面頂端會自動跳紅色警告並顯示停擺天數</li>
         <li>統計類區塊不含姓名／電話／Email／備註；LINE 會員識別碼僅用於「回訪會員」內部去重計算，不對外顯示</li>
+        <li><b>本機暫存</b>：已結束的月份不會再變，資料會存在這台電腦，密碼效期內切換舊月份不必重抓（月份選單旁會提示）；密碼過期自動清除，按「🔄 重新整理」則強制重抓</li>
         <li><b>團體訂位追蹤</b>：由另一支程式每天 08:00、14:00 各從訂位後台抓一次今天起 60 天的團體訂位；這一區有客人姓名電話，需要通關碼；卡位逾期每天早上寄信到 mydiybc@gmail.com</li>
         <li>資料異常請通知 Cowork 檢查管線執行紀錄</li>
       </ol>
@@ -530,7 +533,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">🔄 重新整理</button>
       <span id="monthBusy" style="display:none;font-size:13px;font-weight:700;color:var(--purple);">⏳ 載入中…</span>
       <span data-mo style="font-size:12px;color:var(--muted);font-weight:600;">依<b>客人到店日期</b>歸月，不是下訂日期</span>
-      <span data-mo id="monthCacheNote" style="font-size:12px;color:var(--muted);font-weight:600;"></span>
+      <span data-mo id="monthCacheNote" style="font-size:12px;color:var(--muted);font-weight:400;"></span>
     </div>
   </div>
 
@@ -926,6 +929,21 @@ function cacheClear() { Object.keys(MONTH_CACHE).forEach(k => delete MONTH_CACHE
 const MONTH_IDB_NAME = 'resv_month_cache_v1', MONTH_IDB_STORE = 'months';
 const MONTH_IDB_TTL = 7 * 24 * 3600 * 1000;
 const MONTH_FROM_IDB = {};    // ym → 存進本機的時間（月份選單旁提示「本機暫存」用）
+// 2026-10-04 經營者裁定：本機暫存跟本頁密碼效期綁在一起（資料只在有效登入期間留在這台電腦）
+//   ・每筆暫存記下存檔當時的密碼效期 authExp；讀取時效期已過、或現在沒有效期內的密碼 → 不用並刪掉
+//   ・開頁時密碼已過期（閘門會要求重輸）→ 先清空全部暫存
+//   ・密碼還沒輸入前抓到的已結束月份（資料在遮罩後先載入）→ 先暫放 MONTH_IDB_PENDING，閘門通過（pass() 呼叫 __reservationStartApp）後才存
+const MONTH_IDB_PENDING = {};
+function authExpNow() {   // 目前密碼效期（毫秒時間戳）；沒有或已過期回 0。閘門存的是 dash_auth_reservation = {exp}
+  try { const o = JSON.parse(window.__dashAuth.get('dash_auth_reservation') || 'null'); return (o && o.exp && Date.now() < o.exp) ? Number(o.exp) : 0; } catch (_) { return 0; }
+}
+function monthIdbClearAll() { return monthIdbDo('readwrite', st => { st.clear(); return null; }); }
+function monthIdbFlushPending() {
+  const ks = Object.keys(MONTH_IDB_PENDING); if (!ks.length) return;
+  const ax = authExpNow(); if (!ax) return;
+  ks.forEach(ym => { const p = MONTH_IDB_PENDING[ym]; delete MONTH_IDB_PENDING[ym];
+    if (monthListEntry(ym) === p.m) monthIdbDo('readwrite', st => st.put({ ym: ym, t: Date.now(), stamp: monthStamp(p.m), cols: p.r.cols, rows: p.r.rows, authExp: ax })); });
+}
 let _monthIdb = null;
 function monthIdb() {
   if (_monthIdb) return _monthIdb;
@@ -977,6 +995,7 @@ async function monthIdbGet(ym) {
   if (!e || !Array.isArray(e.cols) || !Array.isArray(e.rows)) return null;
   const age = Date.now() - (Number(e.t) || 0);
   if (age < 0 || age > MONTH_IDB_TTL || e.stamp !== monthStamp(m)) return null;   // 過期或後端補過資料 → 重抓（抓回來會覆寫）
+  if (!authExpNow() || !(Number(e.authExp) > Date.now())) { monthIdbDo('readwrite', st => { st.delete(ym); return null; }); return null; }   // 2026-10-04：密碼效期已過 → 不用並刪掉
   return e;
 }
 function monthIdbPut(ym, r) {
@@ -987,7 +1006,9 @@ function monthIdbPut(ym, r) {
     console.info('[訂位儀表板] ' + ym + ' 筆數與月份清單不一致（清單 ' + m.rows + '、實得 ' + r.rows.length + '），後端快取可能正在更新，這次不存本機');
     return;
   }
-  monthIdbDo('readwrite', st => st.put({ ym: ym, t: Date.now(), stamp: monthStamp(m), cols: r.cols, rows: r.rows }));
+  const ax = authExpNow();
+  if (!ax) { MONTH_IDB_PENDING[ym] = { m: m, r: r }; return; }   // 2026-10-04：還沒輸入密碼 → 先暫放，閘門通過後再存
+  monthIdbDo('readwrite', st => st.put({ ym: ym, t: Date.now(), stamp: monthStamp(m), cols: r.cols, rows: r.rows, authExp: ax }));
 }
 function monthIdbPrune() {   // 刪掉超過 7 天的暫存（只讀時間索引，不把 2MB 的內容載進來）
   monthIdbDo('readwrite', st => {
@@ -995,6 +1016,11 @@ function monthIdbPrune() {   // 刪掉超過 7 天的暫存（只讀時間索引
     rq.onsuccess = () => { (rq.result || []).forEach(k => { try { st.delete(k); } catch (_) {} }); };
     return null;
   });
+}
+if (!authExpNow()) {   // （放在 _monthIdb 等宣告之後才能呼叫）開頁時密碼過期：清掉暫存；閘門通過後補存遮罩期間抓到的月份
+  monthIdbClearAll();
+  const _prevStart = window.__reservationStartApp;
+  window.__reservationStartApp = function () { try { if (typeof _prevStart === 'function') _prevStart(); } catch (_) {} monthIdbFlushPending(); };
 }
 // fresh＝true（按「🔄 重新整理」）：不看本機暫存，一律向後端抓
 async function getMonth(ym, fresh) {
@@ -1022,8 +1048,8 @@ function paintMonthCacheNote() {
   const t = MONTH_FROM_IDB[selectedYm];
   if (!t) { el.textContent = ''; el.title = ''; return; }
   const d = new Date(t), p2 = x => String(x).padStart(2, '0');
-  el.textContent = '💾 ' + selectedYm + ' 用本機暫存（' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ' 存）';
-  el.title = '已結束的月份：筆數與後端一致就直接用存在這台電腦的資料，不必重抓。按「🔄 重新整理」會強制重抓。';
+  el.textContent = '📁 這個月的資料已存在這台電腦，不必重抓';   /* 2026-10-04 經營者裁定：改白話、淡化 */
+  el.title = '已結束的月份不會再變，所以存在這台電腦（' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ' 存）。密碼效期一過會自動清除；按「🔄 重新整理」會強制重抓。';
 }
 let FUTURE_RAW = null;      // future 只抓一次（切月份時它不會變）
 let LOADED_ONCE = false;
