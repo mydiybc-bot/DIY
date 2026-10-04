@@ -10,7 +10,7 @@
  *       newItemsPub（D 階段：採購系統「🆕 檔期新品」用，只回已核准新品的品項名、貼紙名稱、購買連結、供應商覆寫、提供方式，不含價格與用量）
  *   - doPost（JSON 字串，Content-Type text/plain，前端直接讀回 {ok, data|msg}）：
  *       每筆帶 role＋password（或 signer＋pin）；伺服器依 dim_role.fields 過濾可寫欄位；
- *       全部包 LockService 10 秒；成功、失敗都寫 log 分頁。
+ *       寫入動作（WRITES）包 LockService 10 秒、成功失敗都寫 log 分頁；只讀動作（v7 起）不排鎖、成功不寫 log（adminList 例外）。
  *   - 申請單內容（.json v3 字串）存 payload_1～4，每格 ≤ 45,000 字（試算表單格上限 50,000 字）
  *   - 本專案開兩個試算表：「食譜系統_申請單」（讀寫）；BOM 本（只在核准時新增列、管理者還原時刪自己寫的列）。不碰儀表板專用檔、P&L、排班。
  *
@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v6.1';   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v7';   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -176,6 +176,11 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
   patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
+/* v7（2026-10-04 效能第 2 批）：不在 WRITES 裡的動作＝只讀（whoami／getCampaign／getReq／listSigners／signView／pushPreview／bomMeta／bomGet／mapGet／bomLog／bomMetaMap／adminList），
+   不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
+var AUDIT_READS = { adminList: 1 };
+/* 會動到 BOM 本「BOM表／產品名稱對照表」的動作：做完（成功或失敗都算，失敗可能已寫一半又寫回）就讓 bomMeta／mapGet 的暫存失效 */
+var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };
 
 function doPost(e) {
   var p;
@@ -191,6 +196,19 @@ function doPost(e) {
     Utilities.sleep(1000);
     res = { ok: false, act: act, code: (err && err.code) || 'auth', msg: errMsg_(err) };
     log_(who, act, guessId_(p), false, res.msg);
+    return out_(res);
+  }
+  if (!WRITES[act]) {   /* v7：只讀動作 → 不排鎖、不用回條、成功不寫 log（回覆格式與寫入動作相同） */
+    try {
+      var rr = fn(p, auth) || {};
+      res = { ok: true, act: act, data: rr.data };
+      if (AUDIT_READS[act]) log_(who, act, rr.id || '', true, rr.msg || '');
+    } catch (err2) {
+      res = { ok: false, act: act, msg: errMsg_(err2) };
+      if (err2 && err2.code) res.code = err2.code;
+      if (err2 && err2.extra) res.data = err2.extra;
+      log_(who, act, guessId_(p), false, res.msg);
+    }
     return out_(res);
   }
   var lock = LockService.getScriptLock();
@@ -213,7 +231,7 @@ function doPost(e) {
     if (err && err.code) res.code = err.code;
     if (err && err.extra) res.data = err.extra;
     log_(who, act, guessId_(p), false, res.msg);
-  } finally { lock.releaseLock(); }
+  } finally { lock.releaseLock(); if (BOM_TOUCH[act]) bomCacheClear_(); }
   return out_(res);
 }
 
@@ -1428,12 +1446,51 @@ function mapRowVals_(r) { return [ptName_(r[0]), ptName_(r[1]), normDate_(r[4]),
 function mapRowDigest_(v) { return bomDigest_([v]).split('·')[0]; }
 function mapDesserts_(tab) { var o = {}; for (var i = 0; i < tab.lastA - 1; i++) { var b = ptName_(tab.vals[i][1]); if (b) (o[b] = o[b] || []).push(ptName_(tab.vals[i][0])); } return o; }
 
+/* v7 讀表暫存（2026-10-04 效能第 2 批）：bomMeta／mapGet 每次都把 BOM表（6,000+ 列）＋對照表整張讀一遍 → 算好的結果放 CacheService 5 分鐘。
+   鍵尾帶版本號 bm:ver；任何會動到這兩張表的動作（BOM_TOUCH）做完就換版本號＝舊暫存立刻失效（比直接刪鍵保險：
+   有人正在讀舊表、寫入者同時寫完清掉、讀的人再把舊資料放回去——換版本號後那筆放回去的是舊鍵，沒人會再讀到）。
+   有人直接在 Google 試算表手改 BOM 本（不經本 API）→ 最多 5 分鐘後才看到；寫入時指紋比對擋得住（conflict 一樣會換版本號，重新讀取就是最新）。
+   請求帶 fresh:true 可略過暫存（前端「重新讀取」日後可用）。bomGet 不暫存（每次讀最新，存檔前的指紋以它為準）。 */
+var BM_TTL = 300;
+function bmVer_(cache) { return cache.get('bm:ver') || '0'; }
+function bomCacheClear_() {
+  try { var c = CacheService.getScriptCache(); c.put('bm:ver', String((parseInt(c.get('bm:ver') || '0', 10) || 0) + 1), 21600); } catch (e) { /* 清不掉就等 5 分鐘自然過期 */ }
+}
+function bmCached_(name, fresh, build) {
+  var cache = CacheService.getScriptCache(), key = 'bm:' + name + ':' + bmVer_(cache);
+  if (!fresh) { var hit = cacheGetBig_(cache, key); if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壞掉就重算 */ } } }
+  var v = build();
+  try { cachePutBig_(cache, key, JSON.stringify(v), BM_TTL); } catch (e) { /* 放不進去就每次算 */ }
+  return v;
+}
+/* bomMeta 裡只跟表格內容有關的部分（權限、身分另外加） */
+function bomMetaCore_(fresh) {
+  return bmCached_('meta', fresh, function () {
+    var tab = ptRead_('bom'), map = ptRead_('map'), U = bomUnits_(tab), C = bomContainers_(tab), mains = {}, subs = {};
+    for (var i = 0; i < map.lastA - 1; i++) { var g = ptName_(map.vals[i][6]), h = ptName_(map.vals[i][7]); if (g) mains[g] = 1; if (h) subs[h] = 1; }
+    return { desserts: bomDesserts_(tab), units: Object.keys(U), containers: Object.keys(C), mains: Object.keys(mains), subs: Object.keys(subs), mapB: mapDesserts_(map) };
+  });
+}
+function mapGetCore_(fresh) {
+  return bmCached_('map', fresh, function () {
+    var map = ptRead_('map'), rows = [];
+    for (var i = 0; i < map.lastA - 1; i++) {
+      var v = mapRowVals_(map.vals[i]); if (!v[0] && !v[1]) continue;
+      rows.push({ row: i + 2, a: v[0], b: v[1], e: v[2], f: v[3], g: v[4], h: v[5], digest: mapRowDigest_(v) });
+    }
+    var desserts = bomDesserts_(ptRead_('bom')).map(function (d) { return d.name; });
+    return { rows: rows, desserts: desserts };
+  });
+}
 function bomMeta_(p, auth) {
-  var tab = ptRead_('bom'), map = ptRead_('map'), U = bomUnits_(tab), C = bomContainers_(tab), mains = {}, subs = {};
-  for (var i = 0; i < map.lastA - 1; i++) { var g = ptName_(map.vals[i][6]), h = ptName_(map.vals[i][7]); if (g) mains[g] = 1; if (h) subs[h] = 1; }
+  var c = bomMetaCore_(!!p.fresh);
   var perms = {}; Object.keys(BOM_PERM_LABEL).forEach(function (k) { perms[k] = bomPerm_(auth, k); });
-  return { id: '', data: { desserts: bomDesserts_(tab), units: Object.keys(U), containers: Object.keys(C), mains: Object.keys(mains), subs: Object.keys(subs),
-    dessertMains: Object.keys(BOM_DESSERT_MAINS), mapB: mapDesserts_(map), perms: perms, role: auth.role, quiet: ['06:00', '07:45'], maxRows: BOM_MAX_ROWS } };
+  return { id: '', data: { desserts: c.desserts, units: c.units, containers: c.containers, mains: c.mains, subs: c.subs,
+    dessertMains: Object.keys(BOM_DESSERT_MAINS), mapB: c.mapB, perms: perms, role: auth.role, quiet: ['06:00', '07:45'], maxRows: BOM_MAX_ROWS } };
+}
+/* v7 合併查詢：一次回 bomMeta＋mapGet（前端開 BOM 管理分頁兩支可併成一支；這批前端未改，先提供） */
+function bomMetaMap_(p, auth) {
+  return { id: '', data: { meta: bomMeta_(p, auth).data, map: mapGet_(p, auth).data } };
 }
 function bomGet_(p, auth) {
   var name = ptName_(p.dessert); if (!name) throw fail_('缺甜點名稱');
@@ -1511,13 +1568,8 @@ function bomRename_(p, auth) {
 }
 
 function mapGet_(p, auth) {
-  var map = ptRead_('map'), rows = [];
-  for (var i = 0; i < map.lastA - 1; i++) {
-    var v = mapRowVals_(map.vals[i]); if (!v[0] && !v[1]) continue;
-    rows.push({ row: i + 2, a: v[0], b: v[1], e: v[2], f: v[3], g: v[4], h: v[5], digest: mapRowDigest_(v) });
-  }
-  var desserts = bomDesserts_(ptRead_('bom')).map(function (d) { return d.name; });
-  return { id: '', data: { rows: rows, desserts: desserts } };
+  var c = mapGetCore_(!!p.fresh);
+  return { id: '', data: { rows: c.rows, desserts: c.desserts } };
 }
 function mapCheck_(m, tab, bomNames, auth, isNew, curG) {
   var err = [], a = ptName_(m.a), b = ptName_(m.b), e = normDate_(m.e), f = normDate_(m.f), g = ptName_(m.g), h = ptName_(m.h) || '無';
@@ -1629,9 +1681,35 @@ function bomUndo_(p, auth) {
 }
 ACTIONS.bomMeta = bomMeta_; ACTIONS.bomGet = bomGet_; ACTIONS.bomSave = bomSave_; ACTIONS.bomDelete = bomDelete_; ACTIONS.bomRename = bomRename_;
 ACTIONS.mapGet = mapGet_; ACTIONS.mapSave = mapSave_; ACTIONS.mapDelete = mapDelete_; ACTIONS.bomLog = bomLog_; ACTIONS.bomUndo = bomUndo_;
+ACTIONS.bomMetaMap = bomMetaMap_;   /* v7 */
 WRITES.bomSave = 1; WRITES.bomDelete = 1; WRITES.bomRename = 1; WRITES.mapSave = 1; WRITES.mapDelete = 1; WRITES.bomUndo = 1;
 
 /* ================= 小工具 ================= */
+/* CacheService 一個鍵最多 100KB：超過就切塊（每塊 ≤30,000 個字＝UTF-8 最多 90KB；不切在 emoji 代理對中間），主鍵只放「#塊數」 */
+var CACHE_CHUNK = 30000, CACHE_MAX_CHUNKS = 40;
+function cachePutBig_(cache, key, s, ttl) {
+  s = String(s);
+  if (s.length <= CACHE_CHUNK) { cache.put(key, s, ttl); return; }
+  var parts = {}, n = 0, i = 0;
+  while (i < s.length) {
+    var end = Math.min(i + CACHE_CHUNK, s.length), hi = s.charCodeAt(end - 1);
+    if (end < s.length && hi >= 0xD800 && hi <= 0xDBFF) end--;
+    parts[key + ':' + n] = s.slice(i, end); n++; i = end;
+    if (n > CACHE_MAX_CHUNKS) return;   /* 太大（>1.2MB）就不暫存 */
+  }
+  cache.putAll(parts, ttl);
+  cache.put(key, '#' + n, ttl);
+}
+function cacheGetBig_(cache, key) {
+  var head = cache.get(key);
+  if (head === null || head === undefined) return null;
+  if (head.charAt(0) !== '#') return head;
+  var n = parseInt(head.slice(1), 10), keys = [];
+  for (var i = 0; i < n; i++) keys.push(key + ':' + i);
+  var all = cache.getAll(keys), s = '';
+  for (i = 0; i < n; i++) { var c = all[key + ':' + i]; if (c === null || c === undefined) return null; s += c; }
+  return s;
+}
 function now_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
 function stamp_() { return Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmm'); }
 function pad2_(n) { return n < 10 ? '0' + n : String(n); }
