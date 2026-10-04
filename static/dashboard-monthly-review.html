@@ -705,10 +705,33 @@ function zoneIncluded(zn){ return ZONE_SEL.size===0 || ZONE_SEL.has(zn); }
 const ALL_IDS = STORES.map(s=>s.id).join(',');
 
 /* ═════════ 資料載入 ═════════ */
+/* 2026-10-04 第 1 批效能 1-2：月會分頁先到先畫。
+   原本 4 段串行：月份 → 6 個來源（等最慢的 POS，實測可到 61 秒）→ 2 個 P&L → 新增會員 Sheet，全部到齊才畫。
+   現在：月份查詢先發；6 個「只載一次」的來源不需要月份，緊接著同時發；月份一到就同時發 P&L 兩發＋新增會員（三者互不依賴）。
+   每個來源一到就重算重畫（mrPaint）：該來源的欄位先填數字，還沒到的欄位顯示「載入中」；
+   燈號顏色、紅黃綠燈數、會議討論清單等全部到齊才算（MR_PEND 空了才上色、才彙整）。
+   compute() 與燈號／格式函式一行未改；全部到齊時的最後一次重畫＝原本唯一的那一次，數字與畫面一致。 */
+let MR_PEND = new Set();   /* 還沒回來的來源 key（同 SRC_LABEL：pnl／budget／pos／sched／zjKpi／zjNew／reviews／accounts） */
+let _mGen = 0;             /* 月份世代：換月後，舊月份晚到的 P&L／新增會員結果作廢；0＝月份還沒決定，先不畫 */
 async function initApp(){
   showLoad(true);
+  const pMeta = jsonp(PNL_API,{action:'get_yms',token:'hub-session'});   /* 先發：P&L 與新增會員要等它決定月份 */
+  /* 只載一次的來源（POS 全期 / 排班全週 / 自己人 / 評論全列）：不需要月份，不必等月份查完 */
+  const jobs = {
+    accounts: jsonp(PNL_API,{action:'get_accounts',token:'hub-session'}).then(r=>{ (r.accounts||[]).forEach(a=>SIGN_MAP[a['account_code']]=a['正負號']); }),
+    budget: jsonp(BUDGET_API,{action:'get_store_monthly_budget'},45000).then(r=>{ if(r&&r.error)throw new Error(r.error); RAW.budget=r; }),
+    pos:    jsonp(POS_API,{},120000).then(r=>{ RAW.pos=r; }),
+    sched:  jsonp(SCHED_API,{action:'getWeekKpiData'},60000).then(r=>{ RAW.sched=r; }),
+    zjKpi:  gvizJsonp(ZJ_SHEET,'agg_store_kpi_365').then(r=>{ RAW.zjKpi=r; }),
+    reviews:gvizJsonp(REV_SHEET,'工作表1',30000,'SELECT A, G, H WHERE A IS NOT NULL').then(r=>{ RAW.reviews=r; })
+  };
+  Object.keys(jobs).forEach(k=>{
+    MR_PEND.add(k);
+    jobs[k].then(()=>{ SRC[k]='ok'; }, e=>{ SRC[k]='fail'; console.warn(k,e); })
+           .then(()=>{ MR_PEND.delete(k); mrPaint(); });
+  });
   try{
-    const meta = await jsonp(PNL_API,{action:'get_yms',token:'hub-session'});
+    const meta = await pMeta;
     AVAILABLE_YMS = meta.yms||[];
     SEL_YM = meta.latest_ym || AVAILABLE_YMS[AVAILABLE_YMS.length-1];
     if(!SEL_YM) throw new Error('P&L 無可用月份');
@@ -719,22 +742,11 @@ async function initApp(){
     SEL_YM=(d.getFullYear()-1911)*100+(d.getMonth()+1);
     AVAILABLE_YMS=[SEL_YM]; buildMonthSel();
   }
-  /* 只載一次的來源（POS 全期 / 排班全週 / 自己人 / 評論全列） */
-  const jobs = {
-    accounts: jsonp(PNL_API,{action:'get_accounts',token:'hub-session'}).then(r=>{ (r.accounts||[]).forEach(a=>SIGN_MAP[a['account_code']]=a['正負號']); }),
-    budget: jsonp(BUDGET_API,{action:'get_store_monthly_budget'},45000).then(r=>{ if(r&&r.error)throw new Error(r.error); RAW.budget=r; }),
-    pos:    jsonp(POS_API,{},120000).then(r=>{ RAW.pos=r; }),
-    sched:  jsonp(SCHED_API,{action:'getWeekKpiData'},60000).then(r=>{ RAW.sched=r; }),
-    zjKpi:  gvizJsonp(ZJ_SHEET,'agg_store_kpi_365').then(r=>{ RAW.zjKpi=r; }),
-    reviews:gvizJsonp(REV_SHEET,'工作表1',30000,'SELECT A, G, H WHERE A IS NOT NULL').then(r=>{ RAW.reviews=r; })
-  };
-  const keys=Object.keys(jobs);
-  const rs=await Promise.allSettled(keys.map(k=>jobs[k]));
-  keys.forEach((k,i)=>{ SRC[k]= rs[i].status==='fulfilled'?'ok':'fail'; if(rs[i].status==='rejected')console.warn(k,rs[i].reason); });
   await loadMonth();
 }
 
 async function loadMonth(){
+  const g=++_mGen;
   showLoad(true);
   document.getElementById('errbar').classList.remove('show');
   const wYm = rocToWest(SEL_YM);                 /* '2026-06' */
@@ -743,20 +755,49 @@ async function loadMonth(){
   const lyYm = rocAdd(SEL_YM,-12);
   /* P&L：本年 1 月～選定月（含 YTD）＋去年同月 */
   SRC.pnl='fail'; RAW.factCur=[]; RAW.factLY=[];
-  try{
-    const [cur,ly]=await Promise.all([
-      jsonp(PNL_API,{action:'get_fact_data',store_ids:ALL_IDS,ym_min:rocJan,ym_max:SEL_YM,token:'hub-session'},45000),
-      jsonp(PNL_API,{action:'get_fact_data',store_ids:ALL_IDS,ym_min:lyYm,ym_max:lyYm,token:'hub-session'},45000)
-    ]);
+  SRC.zjNew='fail';
+  MR_PEND.add('pnl'); MR_PEND.add('zjNew');
+  mrPaint();                                     /* 已到的來源先畫，P&L／新增會員欄顯示「載入中」 */
+  const pPnl=Promise.all([
+    jsonp(PNL_API,{action:'get_fact_data',store_ids:ALL_IDS,ym_min:rocJan,ym_max:SEL_YM,token:'hub-session'},45000),
+    jsonp(PNL_API,{action:'get_fact_data',store_ids:ALL_IDS,ym_min:lyYm,ym_max:lyYm,token:'hub-session'},45000)
+  ]).then(([cur,ly])=>{
+    if(g!==_mGen) return;
     RAW.factCur=cur.rows||cur.data||[]; RAW.factLY=ly.rows||ly.data||[];
     SRC.pnl = RAW.factCur.length?'ok':'empty';
-  }catch(e){ console.warn('pnl fact',e); }
-  /* 自己人新增會員：依年份載對應分頁 */
-  SRC.zjNew='fail';
-  try{ RAW.zjNew = await gvizJsonp(ZJ_SHEET, year+' 各店新增自己人'); SRC.zjNew='ok'; }catch(e){ console.warn('zjNew',e); }
+  }).catch(e=>{ console.warn('pnl fact',e); })
+    .then(()=>{ if(g!==_mGen) return; MR_PEND.delete('pnl'); mrPaint(); });
+  /* 自己人新增會員：依年份載對應分頁（與 P&L 同時發，互不依賴） */
+  const pZj=gvizJsonp(ZJ_SHEET, year+' 各店新增自己人').then(r=>{
+    if(g!==_mGen) return;
+    RAW.zjNew=r; SRC.zjNew='ok';
+  }).catch(e=>{ console.warn('zjNew',e); })
+    .then(()=>{ if(g!==_mGen) return; MR_PEND.delete('zjNew'); mrPaint(); });
+  await Promise.all([pPnl,pZj]);
+}
+
+/* 2026-10-04 1-2：用目前已到的資料重算重畫；全部到齊時這一次就是原本的 compute＋render */
+function mrPaint(){
+  if(!_mGen) return;                             /* 月份還沒決定（矩陣表頭連結要用月份）→ 先不畫 */
+  const wYm=rocToWest(SEL_YM), year=Number(wYm.split('-')[0]), lyYm=rocAdd(SEL_YM,-12);
   compute(wYm, year, lyYm);
   render();
-  showLoad(false);
+  if(MR_PEND.size){
+    showLoad(true);
+    document.getElementById('loading').textContent='資料載入中…（還在等：'
+      +Object.keys(SRC_LABEL).filter(k=>MR_PEND.has(k)).map(k=>SRC_LABEL[k]).join('、')
+      +'｜燈號與會議討論清單等全部到齊後顯示）';
+  }else showLoad(false);
+}
+/* 2026-10-04 1-2：每個 KPI 欄靠哪些來源（任一個還沒到 → 該欄顯示「載入中」） */
+const KPI_DEPS={ach:['pnl','budget'], yoy:['pnl'], net:['pnl','accounts'], gm:['pnl'], hr:['pnl'],
+  cyoy:['pos'], ticket:['pos'], rph:['sched'], nm:['zjNew'], rep:['zjKpi'], neg:['reviews']};
+function mxCell(k,cell){
+  if((KPI_DEPS[k.key]||[]).some(s=>MR_PEND.has(s))) return '<td class="na">載入中</td>';
+  const lt=light(k,cell);
+  let cls=lt==='info'?'':(lt==='na'?'na':lt);
+  if(MR_PEND.size && cls!=='na') cls='';        /* 還有來源沒到：先填數字、不上燈號顏色 */
+  return '<td class="'+cls+'" title="'+esc((cell&&cell.tip)||'')+'">'+fmtKpi(k,cell)+'</td>';
 }
 
 /* ═════════ KPI 計算 ═════════ */
@@ -926,11 +967,7 @@ function aggKpis(ids){
 }
 function avgRowHtml(o,label,extra){
   let h='<tr class="avgrow'+(extra?' '+extra:'')+'"><td class="store">'+label+'</td>';
-  KPIS.forEach(k=>{
-    const cell=o[k.key], lt=light(k,cell);
-    const cls=lt==='info'?'':(lt==='na'?'na':lt);
-    h+='<td class="'+cls+'" title="'+esc((cell&&cell.tip)||'')+'">'+fmtKpi(k,cell)+'</td>';
-  });
+  KPIS.forEach(k=>{ h+=mxCell(k,o[k.key]); });   /* 2026-10-04 1-2：格子組法移到 mxCell（全部到齊時輸出與原本逐字相同） */
   return h+'</tr>';
 }
 
@@ -971,6 +1008,7 @@ const SRC_LABEL={pnl:'P&L',budget:'預算',pos:'POS',sched:'排班',zjKpi:'自�
 function renderChips(){
   const el=document.getElementById('srcChips');
   el.innerHTML=Object.keys(SRC_LABEL).map(k=>{
+    if(MR_PEND.has(k)) return '<span class="chip">'+SRC_LABEL[k]+' 載入中…</span>';   /* 2026-10-04 1-2 */
     const st=SRC[k]||'fail';
     const cls=st==='ok'?'ok':'fail';
     const txt=st==='ok'?'✓':(st==='empty'?'未匯入':'✕');
@@ -993,11 +1031,7 @@ function renderMatrix(){
     ids.forEach(sid=>{
       const st=STORES.find(s=>s.id===sid), o=RESULT.stores[sid]||{};
       html+='<tr><td class="store">'+sid+' '+st.name+'</td>';
-      KPIS.forEach(k=>{
-        const cell=o[k.key], lt=light(k,cell);
-        const cls=lt==='info'?'':(lt==='na'?'na':lt);
-        html+='<td class="'+cls+'" title="'+esc((cell&&cell.tip)||'')+'">'+fmtKpi(k,cell)+'</td>';
-      });
+      KPIS.forEach(k=>{ html+=mxCell(k,o[k.key]); });   /* 2026-10-04 1-2：見 mxCell */
       html+='</tr>';
     });
     html+=avgRowHtml(aggKpis(ids),'▸ '+zn+'平均');
@@ -1007,6 +1041,15 @@ function renderMatrix(){
   body.innerHTML=html;
 }
 function renderSummaryAgenda(){
+  /* 2026-10-04 1-2：還有來源沒到 → 紅黃綠燈數與討論清單先不算（顯示「…」）；達成率／損益合計自己的來源到了就先填 */
+  if(MR_PEND.size){
+    const c=RESULT.company, wait=ks=>ks.some(s=>MR_PEND.has(s));
+    ['cRed','cYel','cGrn'].forEach(id=>{ document.getElementById(id).textContent='…'; });
+    document.getElementById('cAch').textContent=wait(['pnl','budget'])?'…':((c.budM>0&&c.anyPnl)?(c.rev/c.budM*100).toFixed(1)+'%':'—');
+    document.getElementById('cNet').textContent=wait(['pnl','accounts'])?'…':(c.anyPnl?wan(c.net):'—');
+    document.getElementById('agenda').innerHTML='<div style="color:var(--muted);font-size:13px;font-weight:700;padding:8px 2px">⏳ 資料載入中，全部到齊後自動彙整紅黃燈…</div>';
+    return;
+  }
   let nr=0,ny=0,ng=0; const items=[];
   ZONES.forEach(([zn,ids])=>{
     if(!zoneIncluded(zn)) return;
