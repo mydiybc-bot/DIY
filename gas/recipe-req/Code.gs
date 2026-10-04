@@ -176,8 +176,11 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
   patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
-/* v7（2026-10-04 效能第 2 批）：不在 WRITES 裡的動作＝只讀（whoami／getCampaign／getReq／listSigners／signView／pushPreview／bomMeta／bomGet／mapGet／bomLog／bomMetaMap／adminList），
-   不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
+/* v7（2026-10-04 效能第 2 批）：只讀動作**明確列在 READS**（都已逐一確認沒有任何寫入）→ 不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。
+   沒列在 READS 的動作一律走下面原本的加鎖路徑。與「不在 WRITES 就當只讀」的寫法行為等價（WRITES 在 BOM 段落尾端補了 bomSave 等 6 個，
+   30 個動作＝12 讀＋18 寫），改白名單是為了日後新增動作忘了登記 WRITES 時預設仍加鎖（審查時改的）。
+   adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
+var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1 };
 var AUDIT_READS = { adminList: 1 };
 /* 會動到 BOM 本「BOM表／產品名稱對照表」的動作：做完（成功或失敗都算，失敗可能已寫一半又寫回）就讓 bomMeta／mapGet 的暫存失效 */
 var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };
@@ -198,7 +201,7 @@ function doPost(e) {
     log_(who, act, guessId_(p), false, res.msg);
     return out_(res);
   }
-  if (!WRITES[act]) {   /* v7：只讀動作 → 不排鎖、不用回條、成功不寫 log（回覆格式與寫入動作相同） */
+  if (READS[act]) {   /* v7：只讀動作（READS 白名單）→ 不排鎖、不用回條、成功不寫 log（回覆格式與寫入動作相同）；其餘動作走下面的鎖 */
     try {
       var rr = fn(p, auth) || {};
       res = { ok: true, act: act, data: rr.data };
