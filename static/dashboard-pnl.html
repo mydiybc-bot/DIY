@@ -935,6 +935,7 @@ const API = 'https://script.google.com/macros/s/AKfycbxmQYsYKJ6-7I_szysDiq122cJt
 let TOKEN='', STORES=[], ACCOUNTS=[], DATA=[], CX={};
 /* 0514：比較期資料。COMP_LASTMONTH = 區間整體往前推「區間長度」個月（同長度，相鄰）；COMP_LASTYEAR = 往前推 12 個月 */
 let COMP_LASTMONTH = [], COMP_LASTYEAR = [];
+let COMP_PENDING = false;   /* 2026-10-04 1-2：true＝本期已先畫、上期／去年同期還在載入（表格顯示「載入中」而不是「無資料」） */
 let SELECTED_AREAS = new Set();
 let TREND_STORE_ON = new Set();
 const L1_ORDER = ['營業收入','直接成本','人事成本','場地成本','營運費用','行銷費用','管理費用','營業外'];
@@ -1039,39 +1040,114 @@ const _RETRY_SAFE = [
  * 紅線:寫入類 action 一律不進快取;admin_commit / admin_rollback 成功後
  *   立即清 fact/yms 快取,避免匯入後看到舊資料。錯誤回應不快取。
  * 逃生口:網址加 ?nocache=1 開頁即清空全部快取(排查用)。 */
+/* 2026-10-04 第 1 批效能 1-1：暫存從 localStorage 搬到 IndexedDB（資料庫 pnl_cache／表 kv）。
+ * 原因：明細每發約 0.83MB，本網域 localStorage 早被其他儀表板用滿（decision-snapshot 地雷 21），
+ *       寫不進去就整批清空（連店別、科目一起清），暫存幾乎沒作用。
+ * 不變：key（pnlc1:action:參數）、效期（店別／科目／月份 6 小時、明細 10 分鐘）、錯誤不快取、
+ *       匯入／還原成功後清 fact/yms（_cacheClearFact，管理員面板呼叫點一行未動）、?nocache=1。
+ * 明細效期維持 10 分鐘：覆蓋舊月份的匯入（修正版）不會改變「最新月份」，無法用最新月份判斷資料變了沒。
+ * 所有存取包 try/catch＋3 秒逾時，失敗一律當沒暫存（照常打 GAS）；失敗回應（error／ok:false）不寫入，不會蓋掉舊的。
+ * 舊的 localStorage pnlc1: 暫存：開頁讀一次，還在效期內的搬進 IndexedDB，然後從 localStorage 刪掉
+ *       （只刪 pnlc1: 開頭的 key，不碰密碼閘門與其他頁）。
+ * 空間控管：開頁 5 秒後刪掉已過期的項目（只走時間索引，不讀內容）。 */
 const _CACHE_TTL = { get_stores: 6*3600e3, get_accounts: 6*3600e3, get_yms: 6*3600e3, get_fact_data: 10*60e3 };
 const _CACHE_PREFIX = 'pnlc1:';
+const _IDB_NAME = 'pnl_cache', _IDB_STORE = 'kv';
 function _cacheKey(action, params){ return _CACHE_PREFIX + action + ':' + JSON.stringify(params||{}); }
-function _cacheGet(action, params){
-  const ttl = _CACHE_TTL[action]; if(!ttl) return null;
-  try{
-    const raw = localStorage.getItem(_cacheKey(action, params)); if(!raw) return null;
-    const o = JSON.parse(raw);
-    if(!o || typeof o.t !== 'number' || (Date.now() - o.t) > ttl){ localStorage.removeItem(_cacheKey(action, params)); return null; }
+function _cacheTtlOf(k){ return _CACHE_TTL[String(k).slice(_CACHE_PREFIX.length).split(':')[0]] || 0; }
+let _idbP = null;
+function _idb(){   /* 開資料庫；打不開／3 秒沒回應 → null（＝沒有暫存） */
+  if (!_idbP) _idbP = new Promise(function(res){
+    const t = setTimeout(function(){ res(null); }, 3000);
+    const ok = function(db){ clearTimeout(t); res(db); };
+    try {
+      if (!window.indexedDB) return ok(null);
+      const rq = indexedDB.open(_IDB_NAME, 1);
+      rq.onupgradeneeded = function(){ try { rq.result.createObjectStore(_IDB_STORE).createIndex('t', 't'); } catch(e){} };
+      rq.onsuccess = function(){ ok(rq.result); };
+      rq.onerror = rq.onblocked = function(){ ok(null); };
+    } catch(e){ ok(null); }
+  });
+  return _idbP;
+}
+function _idbRun(mode, fn){   /* fn(store) 可回傳 IDBRequest；完成回傳其結果，任何失敗／3 秒逾時回傳 null */
+  return _idb().then(function(db){
+    if (!db) return null;
+    return new Promise(function(res){
+      let rq = null;
+      const t = setTimeout(function(){ res(null); }, 3000);
+      const fin = function(v){ clearTimeout(t); res(v); };
+      try {
+        const tx = db.transaction(_IDB_STORE, mode);
+        tx.oncomplete = function(){ fin(rq ? rq.result : true); };
+        tx.onerror = tx.onabort = function(){ fin(null); };
+        rq = fn(tx.objectStore(_IDB_STORE)) || null;
+      } catch(e){ fin(null); }
+    });
+  }).catch(function(){ return null; });
+}
+function _cacheGet(action, params){   /* 回傳 Promise：效期內的資料或 null */
+  const ttl = _CACHE_TTL[action]; if(!ttl) return Promise.resolve(null);
+  const k = _cacheKey(action, params);
+  return _idbRun('readonly', function(s){ return s.get(k); }).then(function(o){
+    if(!o || typeof o.t !== 'number') return null;
+    if((Date.now() - o.t) > ttl){ _idbRun('readwrite', function(s){ s.delete(k); }); return null; }
     return o.d;
-  }catch(e){ return null; }
+  }, function(){ return null; });
 }
 function _cacheSet(action, params, data){
   if(!_CACHE_TTL[action]) return;
-  if(!data || data.error) return;               /* 錯誤回應不快取 */
-  try{ localStorage.setItem(_cacheKey(action, params), JSON.stringify({t: Date.now(), d: data})); }
-  catch(e){ _cacheClearAll(); }                 /* localStorage 滿:全清後放棄本次寫入 */
+  if(!data || data.error || data.ok === false) return;   /* 錯誤／失敗回應不快取，也不會蓋掉舊的 */
+  const k = _cacheKey(action, params);
+  _idbRun('readwrite', function(s){ return s.put({t: Date.now(), d: data}, k); });
 }
 function _cacheDel(pred){
-  try{
-    const del = [];
-    for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i);
-      if(k && k.indexOf(_CACHE_PREFIX)===0 && pred(k)) del.push(k); }
-    del.forEach(k=>localStorage.removeItem(k));
-  }catch(e){}
+  _idbRun('readwrite', function(s){
+    const rq = s.openKeyCursor ? s.openKeyCursor() : s.openCursor();
+    rq.onsuccess = function(){ try {
+      const c = rq.result; if(!c) return;
+      const k = String(c.key);
+      if(k.indexOf(_CACHE_PREFIX)===0 && pred(k)) s.delete(c.key);
+      c.continue();
+    } catch(e){} };
+  });
 }
 function _cacheClearFact(){ _cacheDel(k => k.indexOf('get_fact_data')>0 || k.indexOf('get_yms')>0); }
 function _cacheClearAll(){ _cacheDel(function(){ return true; }); }
+function _cachePrune(){   /* 刪掉已過期的項目（只讀時間索引的 key，不讀 0.8MB 的內容） */
+  const now = Date.now(), minTtl = Math.min.apply(null, Object.keys(_CACHE_TTL).map(function(a){ return _CACHE_TTL[a]; }));
+  _idbRun('readwrite', function(s){
+    const rq = s.index('t').openKeyCursor(IDBKeyRange.upperBound(now - minTtl));
+    rq.onsuccess = function(){ try {
+      const c = rq.result; if(!c) return;
+      if((now - c.key) > _cacheTtlOf(c.primaryKey)) s.delete(c.primaryKey);
+      c.continue();
+    } catch(e){} };
+  });
+}
+(function _cacheMoveFromLocalStorage(){   /* 舊 localStorage 暫存：讀一次、效期內的搬進 IndexedDB、全部刪掉 */
+  let l = null; try { l = window.localStorage; } catch(e){}
+  if (!l) return;
+  const ks = [];
+  try { for (let i=0;i<l.length;i++){ const k = l.key(i); if (k && k.indexOf(_CACHE_PREFIX)===0) ks.push(k); } } catch(e){ return; }
+  ks.forEach(function(k){
+    let o = null;
+    try { o = JSON.parse(l.getItem(k)); } catch(e){}
+    try { l.removeItem(k); } catch(e){}
+    const ttl = _cacheTtlOf(k);
+    if (o && typeof o.t === 'number' && o.d && !o.d.error && o.d.ok !== false && ttl && (Date.now() - o.t) <= ttl)
+      _idbRun('readwrite', function(s){ return s.put({t: o.t, d: o.d}, k); });   /* 保留原時間戳，效期照算 */
+  });
+})();
 try{ if (new URLSearchParams(location.search).get('nocache')==='1') _cacheClearAll(); }catch(e){}
+setTimeout(_cachePrune, 5000);
 
 function callApi(action, params={}, opt={}) {
-  const _hit = (opt && opt.noCache) ? null : _cacheGet(action, params);
-  if (_hit) return Promise.resolve(_hit);
+  /* 2026-10-04 1-1：暫存改 IndexedDB（非同步讀）。不在 _CACHE_TTL 的 action（含全部寫入類）不經過這段，行為與原本相同 */
+  if (_CACHE_TTL[action] && !(opt && opt.noCache)) {
+    const _opt2 = Object.assign({}, opt, { noCache: true });
+    return _cacheGet(action, params).then(function(_hit){ return _hit ? _hit : callApi(action, params, _opt2); });
+  }
   const maxRetry = (_RETRY_SAFE.indexOf(action) >= 0) ? (opt.retry !== undefined ? opt.retry : 1) : 0;
   const timeoutMs = opt.timeout || 45000;
   let attempt = 0;
@@ -1151,7 +1227,12 @@ function ymAddMonths(ym, delta) {
 }
 function sName(id) { const s=STORES.find(s=>s['店號']===id); return s?s['店別簡稱']:'店'+id; }
 function dx(k) { if(CX[k]){CX[k].destroy();delete CX[k];} }
-function showLoad(b) { document.getElementById('loading').classList.toggle('show',b); }
+function showLoad(b, txt) {
+  const el = document.getElementById('loading');
+  el.classList.toggle('show',b);
+  /* 2026-10-04 1-2：可換提示文字（例：上期／去年同期載入中）；不給就是原本的「載入中...」 */
+  if (el.lastChild && el.lastChild.nodeType === 3) el.lastChild.nodeValue = ' ' + (txt || '載入中...');
+}
 
 /* 將 year_month 依粒度分組 */
 function groupKey(ym, granularity) {
@@ -1437,6 +1518,13 @@ async function loadData() {
     const rangeLen = (Math.floor(ymEn/100)*12 + ymEn%100) - (Math.floor(ymSn/100)*12 + ymSn%100) + 1;
     const lmS = ymAddMonths(ymSn, -rangeLen), lmE = ymAddMonths(ymEn, -rangeLen);
     const lyS = ymAddMonths(ymSn, -12),       lyE = ymAddMonths(ymEn, -12);
+    /* 2026-10-04 第 1 批效能 1-2：本期先畫、比較期後補。
+       原本要等上期／去年同期（再 1～2 趟 GAS）都回來才 renderAll，主畫面一直空白；
+       現在本期一到就先畫（比較欄位先不出現、店別比較表顯示「去年同期載入中…」），
+       比較期回來後只重畫有用到 COMP_* 的三塊（_renderCompParts），最終畫面與原本一致。 */
+    COMP_LASTMONTH = []; COMP_LASTYEAR = []; COMP_PENDING = true;
+    renderAll();
+    showLoad(true, '上期／去年同期載入中…');
     try {
       /* 2026-08-12b:兩發併發改序列。同一個 GAS 專案併發不會比較快(Apps Script 同帳號排隊),
          只會讓兩發互相排隊並拉高逾時機率——比照 initApp 今日稍早的同樣修正。 */
@@ -1456,9 +1544,23 @@ async function loadData() {
       COMP_LASTMONTH = []; COMP_LASTYEAR = [];  /* 比較期失敗不阻斷主畫面 */
     }
     if (_gen !== _loadGen) return;
-    renderAll();
-  } catch(e) { if (_gen === _loadGen) alert('載入失敗: '+e.message); }
+    COMP_PENDING = false;
+    _renderCompParts();
+  } catch(e) {
+    if (_gen === _loadGen) {
+      /* 2026-10-04 1-2：上一輪本期已先畫、比較期還沒到就被這一輪取代且這一輪失敗 → 收掉「載入中」字樣 */
+      if (COMP_PENDING) { COMP_PENDING = false; try { _renderCompParts(); } catch(_){} }
+      alert('載入失敗: '+e.message);
+    }
+  }
   if (_gen === _loadGen) showLoad(false);
+}
+/* 2026-10-04 1-2：只有這三塊用到比較期（COMP_LASTMONTH／COMP_LASTYEAR），比較期回來後只重畫它們；
+   其餘（KPI、費用結構、各店營收排名、趨勢）只看本期 DATA，第一次畫的就是最終畫面，不重畫以免圖表閃一下。 */
+function _renderCompParts() {
+  renderMonthRevChart();
+  renderStoreComp();
+  renderPnL();
 }
 
 /* ===== RENDER ALL ===== */
@@ -1676,7 +1778,7 @@ function renderStoreComp() {
         + `<td class="num">${fmtF(l.net)}<span class="cell-pct">${pct(l.net,l.rev)}</span></td>`
         + `<td class="num">${l.rev?(l.net/l.rev*100).toFixed(1):'—'}%</td>`;
     } else {
-      h += `<td class="num" colspan="5" style="color:var(--text2);">無去年同期資料</td>`;
+      h += `<td class="num" colspan="5" style="color:var(--text2);">${COMP_PENDING ? '去年同期載入中…' : '無去年同期資料'}</td>`;
     }
     h += `</tr>`;
   });
@@ -1698,7 +1800,7 @@ function renderStoreComp() {
       + `<td class="num">${fmtF(totLy.net)}<span class="cell-pct">${pct(totLy.net,totLy.rev)}</span></td>`
       + `<td class="num">${totLy.rev?(tnRly*100).toFixed(1):'—'}%</td>`;
   } else {
-    h += `<td class="num" colspan="5" style="color:var(--text2);">無去年同期資料</td>`;
+    h += `<td class="num" colspan="5" style="color:var(--text2);">${COMP_PENDING ? '去年同期載入中…' : '無去年同期資料'}</td>`;
   }
   h += `</tr>`;
   h += '</tbody></table>';
@@ -1822,6 +1924,7 @@ function renderPnL() {
   h += subtotalRow('★ 本期淨利',
     calcNet(DATA), calcNet(COMP_LASTMONTH), calcNet(COMP_LASTYEAR), 'grandtotal', true);
   h += '</tbody></table>';
+  if (COMP_PENDING) h = '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">⏳ 上期／去年同期載入中…（回來後自動補上比較欄位）</div>' + h;   /* 2026-10-04 1-2 */
   document.getElementById('pnl-wrap').innerHTML = h;
   /* Phase 3: 綁定科目點擊 → 展開 fact_ledger 明細 */
   document.querySelectorAll('#pnl-wrap .ledger-clickable').forEach(el => {
