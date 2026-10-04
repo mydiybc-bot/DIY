@@ -546,13 +546,44 @@ document.getElementById('pageSubtitle').textContent = '點擊任一儀表板進�
 loadStats();
 }
 
+// ── 2026-10-04 效能第 1 批（1-1）：各卡統計數字暫存 10 分鐘（這個分頁的 sessionStorage，hub_stat_v1）──
+// 10 分鐘內回 hub 直接顯示上次的數字、不發請求；過期才重抓。只存有拿到數字的結果，失敗不存（下次照抓）。讀寫出錯一律當沒暫存。
+const HUB_STAT_KEY = 'hub_stat_v1';
+const HUB_STAT_TTL = 10 * 60 * 1000;
+const HUB_REQ_TIMEOUT = 15000;   // 原本沒設逾時的請求：15 秒沒回就顯示原本的失敗樣式
+function _hubStatAll() {
+try { const o = JSON.parse(sessionStorage.getItem(HUB_STAT_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; } catch (e) { return {}; }
+}
+function hubStatUse(card, ids) {   // 有 10 分鐘內的暫存 → 填回卡片，回傳 true（呼叫端就不發請求）
+try {
+const c = _hubStatAll()[card];
+const age = c ? Date.now() - c.t : -1;
+if (!c || !Array.isArray(c.x) || c.x.length !== ids.length || !(age >= 0 && age < HUB_STAT_TTL)) return false;
+ids.forEach((id, i) => { const el = document.getElementById(id); if (el) el.textContent = c.x[i]; });
+return true;
+} catch (e) { return false; }
+}
+function hubStatSave(card, ids) {   // 成功時把卡片上顯示的字存起來
+try {
+const all = _hubStatAll();
+all[card] = { t: Date.now(), x: ids.map(id => { const el = document.getElementById(id); return el ? el.textContent : ''; }) };
+sessionStorage.setItem(HUB_STAT_KEY, JSON.stringify(all));
+} catch (e) {}
+}
+
 // ── gviz 查詢 ───────────────────────────────────────────
+// 2026-10-04：加 15 秒逾時（原本沒設，卡住就一直「載入中」）；逾時走各卡原本的 .catch 失敗樣式
 function gvizQuery(sheetId, tql, sheetName) {
 const base = 'https://docs.google.com/spreadsheets/d/' + sheetId + '/gviz/tq?tqx=out:json';
 const url = base + (sheetName ? '&sheet=' + encodeURIComponent(sheetName) : '') + '&tq=' + encodeURIComponent(tql);
-return fetch(url).then(r => r.text()).then(text => {
+return new Promise((resolve, reject) => {
+let ctrl = null;
+try { ctrl = new AbortController(); } catch (e) {}
+const to = setTimeout(() => { try { if (ctrl) ctrl.abort(); } catch (e) {} reject(new Error('timeout')); }, HUB_REQ_TIMEOUT);
+fetch(url, ctrl ? { signal: ctrl.signal } : undefined).then(r => r.text()).then(text => {
 const json = text.replace(/^\/\*[\s\S]*?\*\/\s*google\.visualization\.Query\.setResponse\(/, '').replace(/\);?\s*$/, '');
 return JSON.parse(json);
+}).then(d => { clearTimeout(to); resolve(d); }, e => { clearTimeout(to); reject(e); });
 });
 }
 
@@ -564,8 +595,9 @@ const d = new Date();
 return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
 })();
 
-// ── Google 評論：本月平均星等 ──
-gvizQuery(REVIEWS_SHEET,
+// ── Google 評論：本月平均星等＋負評數（2026-10-04：兩個都成功且有平均星等才暫存；10 分鐘內有暫存就不查）──
+if (!hubStatUse('reviews', ['statReviews', 'statReviewsLabel'])) {
+const _revAvg = gvizQuery(REVIEWS_SHEET,
 `SELECT AVG(H) WHERE G = '${curYM}' LABEL AVG(H) 'avg'`,
 '工作表1'
 ).then(res => {
@@ -574,6 +606,7 @@ if (rows.length && rows[0].c && rows[0].c[0] && rows[0].c[0].v !== null) {
 const avg = rows[0].c[0].v;
 document.getElementById('statReviews').textContent = avg.toFixed(2) + ' ★';
 document.getElementById('statReviewsLabel').textContent = curYM + ' 平均星等';
+return true;
 } else {
 document.getElementById('statReviews').textContent = '— ★';
 document.getElementById('statReviewsLabel').textContent = curYM + ' 暫無資料';
@@ -584,7 +617,7 @@ document.getElementById('statReviewsLabel').textContent = '無法取得';
 });
 
 // ── Google 評論：本月負評數 ──
-gvizQuery(REVIEWS_SHEET,
+const _revNeg = gvizQuery(REVIEWS_SHEET,
 `SELECT COUNT(A) WHERE G = '${curYM}' AND K = '負評' LABEL COUNT(A) 'cnt'`,
 '工作表1'
 ).then(res => {
@@ -593,9 +626,13 @@ const cnt = (rows.length && rows[0].c && rows[0].c[0]) ? (rows[0].c[0].v || 0) :
 document.getElementById('statReviewsLabel').textContent =
 (document.getElementById('statReviewsLabel').textContent.includes('平均') ? document.getElementById('statReviewsLabel').textContent : curYM + ' 平均星等') +
 ` 負評 ${cnt} 則`;
+return true;
 }).catch(() => {});
+Promise.all([_revAvg, _revNeg]).then(([a, b]) => { if (a && b) hubStatSave('reviews', ['statReviews', 'statReviewsLabel']); });
+}
 
 // ── 自己人：本月新增會員 ──
+if (!hubStatUse('member', ['statMember', 'statMemberLabel'])) {
 gvizQuery(MEMBER_SHEET,
 `SELECT COUNT(C) WHERE D = '加入群友' AND year(A) = ${new Date().getFullYear()} AND month(A) = ${new Date().getMonth()} LABEL COUNT(C) 'cnt'`,
 '自己人原始資料'
@@ -604,10 +641,12 @@ const rows = parseRows(res);
 const cnt = (rows.length && rows[0].c && rows[0].c[0]) ? (rows[0].c[0].v || 0) : 0;
 document.getElementById('statMember').textContent = cnt + ' 人';
 document.getElementById('statMemberLabel').textContent = curYM + ' 新增會員';
+hubStatSave('member', ['statMember', 'statMemberLabel']);
 }).catch(() => {
 document.getElementById('statMember').textContent = '— 人';
 document.getElementById('statMemberLabel').textContent = '無法取得';
 });
+}
 
 // POS：暫無直接 gviz 來源，顯示佔位
 // TODO: 接 POS Sheet 後更新
@@ -631,8 +670,14 @@ loadAnnounceStat();
 }
 
 function loadScheduleStat() {
+if (hubStatUse('schedule', ['statSchedule', 'statScheduleLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求 */
 const cbName = 'sched_cb_' + Date.now();
+/* 2026-10-04：加 15 秒逾時（原本沒設）；逾時顯示原本的「無法取得」，晚到的回應丟掉 */
+const to = setTimeout(() => { if (window[cbName]) { window[cbName] = function(){}; try { document.head.removeChild(scriptEl); } catch(e) {}
+document.getElementById('statSchedule').textContent = '—';
+document.getElementById('statScheduleLabel').textContent = '無法取得'; } }, HUB_REQ_TIMEOUT);
 window[cbName] = function(res) {
+clearTimeout(to);
 delete window[cbName];
 try { document.head.removeChild(scriptEl); } catch(e) {}
 if (!res || !res.ok || !res.week_kpi || res.week_kpi.length === 0) {
@@ -663,10 +708,12 @@ document.getElementById('statScheduleLabel').textContent = yw + ' ・ vs 上週 
 const yw = sorted.find(r => r.week_start === latestWk).year_week;
 document.getElementById('statScheduleLabel').textContent = yw + ' 總工時';
 }
+hubStatSave('schedule', ['statSchedule', 'statScheduleLabel']);
 };
 const scriptEl = document.createElement('script');
 scriptEl.src = SCHEDULE_API + '?action=getWeekKpiData&callback=' + cbName;
 scriptEl.onerror = () => {
+clearTimeout(to);
 document.getElementById('statSchedule').textContent = '—';
 document.getElementById('statScheduleLabel').textContent = '無法取得';
 };
@@ -676,8 +723,14 @@ document.head.appendChild(scriptEl);
 function loadReservationStat() {
 const d = new Date();
 const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+if (hubStatUse('reservation', ['statReservation', 'statReservationLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求 */
 const cbName = 'resv_cb_' + Date.now();
+/* 2026-10-04：加 15 秒逾時（原本沒設）；逾時顯示原本的「無法取得」，晚到的回應丟掉 */
+const to = setTimeout(() => { if (window[cbName]) { window[cbName] = function(){}; try { document.head.removeChild(scriptEl); } catch(e) {}
+document.getElementById('statReservation').textContent = '—';
+document.getElementById('statReservationLabel').textContent = '無法取得'; } }, HUB_REQ_TIMEOUT);
 window[cbName] = function(res) {
+clearTimeout(to);
 delete window[cbName];
 try { document.head.removeChild(scriptEl); } catch(e) {}
 if (!res || !res.cols || !res.rows) {
@@ -689,10 +742,12 @@ const statusIdx = res.cols.indexOf('status');
 const valid = res.rows.filter(r => r[statusIdx] !== '已取消');
 document.getElementById('statReservation').textContent = valid.length.toLocaleString() + ' 筆';
 document.getElementById('statReservationLabel').textContent = ym + ' 有效訂位';
+hubStatSave('reservation', ['statReservation', 'statReservationLabel']);
 };
 const scriptEl = document.createElement('script');
 scriptEl.src = RESERVATION_API + '?fn=month&ym=' + ym + '&callback=' + cbName;
 scriptEl.onerror = () => {
+clearTimeout(to);
 document.getElementById('statReservation').textContent = '—';
 document.getElementById('statReservationLabel').textContent = '無法取得';
 };
@@ -701,6 +756,7 @@ document.head.appendChild(scriptEl);
 
 // ── 公告及工作清單卡（2026-10-02 新增）：JSONP 打 ANNOUNCE_API?action=stat，只回數字（內容要密碼，走頁內 POST） ──
 function loadAnnounceStat() {
+if (hubStatUse('announce', ['statAnnounce', 'statAnnounceLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求（本卡原本已有 30 秒逾時，不動） */
 const cbName = 'ann_cb_' + Date.now();
 const fail = (t) => {
 document.getElementById('statAnnounce').textContent = '—';
@@ -715,6 +771,7 @@ const d = res && res.ok ? res.data : null;
 if (!d || !d.ready) return fail(d && d.ready === false ? '尚未啟用' : '無法取得');
 document.getElementById('statAnnounce').textContent = d.active + ' 則';
 document.getElementById('statAnnounceLabel').textContent = '進行中公告・未完成工作 ' + d.workOpen + ' 件';
+hubStatSave('announce', ['statAnnounce', 'statAnnounceLabel']);
 };
 const scriptEl = document.createElement('script');
 scriptEl.src = ANNOUNCE_API + '?action=stat&callback=' + cbName + '&_cb=' + Date.now();
@@ -725,8 +782,14 @@ document.head.appendChild(scriptEl);
 // ── 食譜系統卡（2026-07-31 新增於食譜成本卡；2026-09-02 移到合併卡；2026-09-05 移到食譜系統卡，查詢不變）：直讀 BOM 本「BOM表」，算不重複甜點支數 ──
 // 用 gviz JSONP（不是上面的 fetch 版）：BOM 本走 JSONP 與採購系統一致，不受 CORS 影響
 function loadRecipeStat() {
+if (hubStatUse('recipe', ['statRecipe', 'statRecipeLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求 */
 const cbName = 'recipe_cb_' + Date.now();
+/* 2026-10-04：加 15 秒逾時（原本沒設）；逾時顯示原本的「無法取得」，晚到的回應丟掉 */
+const to = setTimeout(() => { if (window[cbName]) { window[cbName] = function(){}; try { document.head.removeChild(scriptEl); } catch(e) {}
+document.getElementById('statRecipe').textContent = '—';
+document.getElementById('statRecipeLabel').textContent = '無法取得'; } }, HUB_REQ_TIMEOUT);
 window[cbName] = function(json) {
+clearTimeout(to);
 delete window[cbName];
 try { document.head.removeChild(scriptEl); } catch(e) {}
 try {
@@ -734,6 +797,7 @@ const rows = (json && json.table && json.table.rows) ? json.table.rows : [];
 const n = rows.filter(r => r.c && r.c[0] && r.c[0].v).length;
 document.getElementById('statRecipe').textContent = n + ' 支';
 document.getElementById('statRecipeLabel').textContent = 'BOM 本甜點';
+hubStatSave('recipe', ['statRecipe', 'statRecipeLabel']);
 } catch (e) {
 document.getElementById('statRecipe').textContent = '—';
 document.getElementById('statRecipeLabel').textContent = '無法取得';
@@ -746,6 +810,7 @@ scriptEl.src = 'https://docs.google.com/spreadsheets/d/' + BOM_SHEET + '/gviz/tq
 + '&tq=' + encodeURIComponent('SELECT A, COUNT(B) GROUP BY A')   /* 2026-09-02：原 'SELECT A GROUP BY A' 會被 gviz 拒絕（CANNOT_GROUP_WITHOUT_AGG），永遠顯示 0 支 */
 + '&_cb=' + Date.now();
 scriptEl.onerror = () => {
+clearTimeout(to);
 document.getElementById('statRecipe').textContent = '—';
 document.getElementById('statRecipeLabel').textContent = '無法取得';
 };
@@ -754,8 +819,14 @@ document.head.appendChild(scriptEl);
 
 // ── 原物料成本卡（2026-09-05 新增）：直讀廠商單價 Sheet「fact_vendor_price」，取 A 欄季別最大值＋該季筆數，顯示「2026Q3 · N 筆單價」 ──
 function loadVendorStat() {
+if (hubStatUse('vendor', ['statMaterials', 'statMaterialsLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求 */
 const cbName = 'vendor_cb_' + Date.now();
+/* 2026-10-04：加 15 秒逾時（原本沒設）；逾時顯示原本的「無法取得」，晚到的回應丟掉 */
+const to = setTimeout(() => { if (window[cbName]) { window[cbName] = function(){}; try { document.head.removeChild(scriptEl); } catch(e) {}
+document.getElementById('statMaterials').textContent = '—';
+document.getElementById('statMaterialsLabel').textContent = '無法取得'; } }, HUB_REQ_TIMEOUT);
 window[cbName] = function(json) {
+clearTimeout(to);
 delete window[cbName];
 try { document.head.removeChild(scriptEl); } catch(e) {}
 try {
@@ -766,6 +837,7 @@ const n = (r && r[1] && r[1].v != null) ? Number(r[1].v) : 0;
 if (q) {
 document.getElementById('statMaterials').textContent = q + ' · ' + n + ' 筆單價';
 document.getElementById('statMaterialsLabel').textContent = '最新季單價筆數';
+hubStatSave('vendor', ['statMaterials', 'statMaterialsLabel']);
 } else {
 document.getElementById('statMaterials').textContent = '—';
 document.getElementById('statMaterialsLabel').textContent = '暫無單價資料';
@@ -782,6 +854,7 @@ scriptEl.src = 'https://docs.google.com/spreadsheets/d/' + VENDOR_SHEET + '/gviz
 + '&tq=' + encodeURIComponent('select A,count(B) group by A order by A desc limit 1')
 + '&_cb=' + Date.now();
 scriptEl.onerror = () => {
+clearTimeout(to);
 document.getElementById('statMaterials').textContent = '—';
 document.getElementById('statMaterialsLabel').textContent = '無法取得';
 };
