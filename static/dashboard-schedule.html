@@ -1195,6 +1195,16 @@ function bindSliders() {
     ['sDayWd',   'vDayWd',   'dayWd'],
     ['sDayWe',   'vDayWe',   'dayWe']
   ];
+  /* 2026-10-04 效能 1-4：滑桿停手才算。原本每動一格就 renderAll() 整頁重畫（含日曆、月趨勢逐店掃全部資料）。
+     現在拖曳中（input）只更新滑桿旁的數字；停手（放開＝change，或 150ms 沒再動）才重畫一次，
+     而且只重畫用到這個閾值的區塊（renderAfterSlider）。停手後畫面與原本一致。 */
+  let timer = null, changed = new Set();
+  const flush = () => {
+    clearTimeout(timer); timer = null;
+    if (!changed.size) return;
+    const keys = changed; changed = new Set();
+    renderAfterSlider(keys);
+  };
   map.forEach(([sid, vid, key]) => {
     const s = document.getElementById(sid);
     s.addEventListener('input', () => {
@@ -1202,8 +1212,10 @@ function bindSliders() {
       document.getElementById(vid).textContent = key === 'rev'
         ? thresholds[key].toLocaleString()
         : thresholds[key];
-      renderAll();
+      changed.add(key);
+      clearTimeout(timer); timer = setTimeout(flush, 150);
     });
+    s.addEventListener('change', flush);   /* 放開滑鼠／手指、鍵盤方向鍵 → 立刻重畫 */
   });
 }
 
@@ -2230,6 +2242,19 @@ renderAll = function() {
   if (dailyData) renderDailyTab();
   if (document.getElementById('trendResult')) renderMonthlyTrend();
 };
+
+/* 2026-10-04 效能 1-4：滑桿停手後只重畫「用到該閾值」的區塊（篩選、模式切換仍走 renderAll 全部重畫）。
+   對照（全檔 thresholds 只在這幾處被讀）：
+   ・wdHours／weHours／rph／rev → computeFlags → KPI、熱力矩陣、分區、紅旗清單（_origRenderAll）
+   ・dayWd／dayWe＋wdHours／weHours → dailyPerfTier、dailyFlags、日曆圖例 → 日曆／日明細（renderDailyTab）
+   ・月趨勢：資料與滑桿無關，只有 X 軸燈號用 rph（_trendChartSVG 的 thr）→ 只有 rph 變了才重畫
+   ⚠️ 之後若有區塊新讀 thresholds.xxx，要同步加進下面的判斷。 */
+function renderAfterSlider(keys) {
+  const has = k => keys.has(k);
+  if (has('wdHours') || has('weHours') || has('rph') || has('rev')) _origRenderAll();
+  if (dailyData && (has('dayWd') || has('dayWe') || has('wdHours') || has('weHours'))) renderDailyTab();
+  if (has('rph') && document.getElementById('trendResult')) renderMonthlyTrend();
+}
 
 // ============ 上傳班表功能 ============
 const UPLOAD_FILENAME_RE = /^(\d{1,2})\s*店\s*班表\s*(\d{6})/;
