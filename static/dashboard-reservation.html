@@ -151,6 +151,9 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .purpose-val b { color:var(--purple-dark); }
 
 /* 壓力矩陣 */
+.fc-card.ref .ref-row { display:flex; align-items:baseline; gap:8px; font-size:12px; margin-top:6px; white-space:nowrap; }
+.fc-card.ref .ref-row b { font-size:14px; color:var(--purple-dark); font-weight:800; }
+.fc-card.ref .ref-row .rd { color:var(--muted); }
 .pressure-summary { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
 .pressure-sum-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:8px 14px; font-size:12px; min-width:100px; }
 .zone-pick { display:flex; flex-wrap:wrap; align-items:center; gap:6px; background:#fff; border:1px dashed var(--border); border-radius:10px; padding:6px 10px; }
@@ -735,6 +738,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
           <li><b>① 該月已發生營收 ＝ POS 系統的真實入帳金額</b>（淨營收，已扣折扣）。直接跟 POS 銷售儀表板同一個數字、同一個來源，<b>不是推估</b>。</li>
           <li><b>② 剩餘天數預估</b>：從<b>今天</b>到月底，訂位還沒收滿，所以先用「進榜曲線」還原成預估的最終訂位量，再用該店的營收公式換算。越接近月底的日子估得越不準。</li>
           <li><b>③ 預估該月總營收 ＝ ① ＋ ②</b>。兩段口徑一致——營收模型本來就是拿 POS 淨營收回歸出來的，所以相加成立。</li>
+          <li><b>對照：POS 全月實際</b>：旁邊列出<b>去年同月</b>與<b>上月</b>的 POS 全月淨營收（同口徑、同 12 家店），並標出預估比它高或低幾 %。月初的預估誤差可達 ±10% 以上，<b>預估若跟這兩個數字差很多，先懷疑預估</b>。</li>
         </ul>
         <div class="eg"><b>POS 同步有時差怎麼辦？</b>POS 資料每天清晨才同步前一天。如果 POS 只到 08-25、但今天是 08-27，中間 08-26 這一天會用訂位模型暫時補上，畫面會明白標示補了幾天；隔天 POS 同步後就自動換成真實金額。<br>
         <b>讀不到 POS 時</b>：整個①段會退回訂位模型推估，畫面頂端會跳紅字告訴你，不會默默給你假數字。</div>
@@ -1150,7 +1154,7 @@ function posNameToResv(posName) {
   return RESV_STORE_SEQ[id - 1];
 }
 
-const POS_CACHE_KEY = 'resv_pos_net_v1';
+const POS_CACHE_KEY = 'resv_pos_net_v2';   // v2（2026-10-05）：多存去年同月／上月全月實際（ref），舊 v1 快取沒有這欄故換鍵
 const POS_CACHE_TTL = 3 * 3600 * 1000;      // 自有快取 3 小時
 const POS_SHARED_KEY = 'pos_cache_v2';      // POS 儀表板的快取（同網域可共用）
 const POS_SHARED_TTL = 6 * 3600 * 1000;
@@ -1176,7 +1180,13 @@ function extractPosMonth(data, ym) {
     const dt = d && d.date;
     if (dt && String(dt).slice(0, 7) === ym && dt > through) through = dt;
   });
-  return { byStore: byStore, total: total, through: through || '', lastUpdated: (data && data.lastUpdated) || '' };
+  // 2026-10-05：對照用——去年同月與上月的 POS 全月淨營收（同樣只計有對應的 12 家店）
+  const monthTotalOf = m2 => { let t = 0; mbs.forEach(m => { if (m && m.yearMonth === m2 && posNameToResv(m.store)) t += Number(m.revenue_net) || 0; }); return t; };
+  const y = Number(ym.slice(0, 4)), mo = Number(ym.slice(5, 7));
+  const lyYm = (y - 1) + '-' + ym.slice(5, 7);
+  const pmYm = mo === 1 ? (y - 1) + '-12' : y + '-' + String(mo - 1).padStart(2, '0');
+  const ref = { lyYm: lyYm, ly: monthTotalOf(lyYm), pmYm: pmYm, pm: monthTotalOf(pmYm) };
+  return { byStore: byStore, total: total, through: through || '', lastUpdated: (data && data.lastUpdated) || '', ref: ref };
 }
 
 function posJsonpOnce(timeoutMs) {
@@ -2214,6 +2224,19 @@ function renderMonthForecast(g, stores, leadOf, allFutureDates) {
       + '處理：先開一次 <a href="pos-dashboard.html" style="color:#B23A2C;font-weight:700">POS 銷售儀表板</a> 確認它自己讀得到，'
       + '再回本頁按「🔄 重新整理」。</div>' : '';
 
+  // 2026-10-05 經營者要求：預估旁邊放「去年同月／上月」POS 全月實際當對照，一眼看出預估合不合理
+  const ref = (posOk && POS_NET.ref) ? POS_NET.ref : null;
+  const refLine = (label, refYm, v) => {
+    if (!(v > 0)) return '<div class="ref-row"><span>' + label + ' ' + refYm + '</span><b>—</b><span class="rd">無資料</span></div>';
+    const df = (monthTotal / v - 1) * 100;
+    return '<div class="ref-row"><span>' + label + ' ' + refYm + '</span><b>' + fcNT(v) + '</b>'
+      + '<span class="rd">預估比它' + (df >= 0 ? '高 ' : '低 ') + Math.abs(df).toFixed(1) + '%</span></div>';
+  };
+  const refCard = ref
+    ? '<div class="fc-card ref"><div class="nm">對照：POS 全月實際</div>'
+      + refLine('去年同月', ref.lyYm, ref.ly) + refLine('上月', ref.pmYm, ref.pm) + '</div>'
+    : '';
+
   const allStores = Object.keys(FC_COEF).filter(st => (perStore[st] || 0) > 0 || (doneByStore[st] || 0) > 0);
   const rows = allStores.map(st => {
       const done = doneByStore[st] || 0, fore = perStore[st] || 0;
@@ -2230,6 +2253,7 @@ function renderMonthForecast(g, stores, leadOf, allFutureDates) {
     // ② 預估該月總營收
     + '<div class="fc-card hi"><div class="nm">預估該月總營收</div><div class="vv">'
     + fcNT(monthTotal) + '</div><div class="sub">已完成 ＋ 剩餘天數</div></div>'
+    + refCard
     // ③ 剩餘天數預估（原有）
     + '<div class="fc-card"><div class="nm">' + ym + ' 剩餘天數預估</div><div class="vv">'
     + fcNT(sumFore) + '</div><div class="sub">' + nFore + ' 天（' + today.slice(5) + ' 起）</div></div>'
