@@ -2353,7 +2353,8 @@ function refreshCampSnap(){var h=AP.head;if(!h.campaign_id)return;var c=campById
   var b=[h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship].join('|');setCampSnap(c);
   if([h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship].join('|')!==b)saveDraft()}
 function campSelectHTML(){var h=AP.head,cur=h.campaign_id||'',has=false;
-  var ph=(CAMP.loading&&!CAMP.loaded)?'讀取檔期清單中…':((CAMP.err&&!CAMP.loaded)?'— 讀不到檔期清單 —':'— 請選檔期 —');
+  var live=CAMP.list.filter(function(c){return c.status!=='封存'||c.campaign_id===cur}).length;   /* 2026-10-05：清單是空的要講明白，不要只留一個點不開的「請選檔期」 */
+  var ph=(CAMP.loading&&!CAMP.loaded)?'讀取檔期清單中…':((CAMP.err&&!CAMP.loaded)?'— 讀不到檔期清單 —':((CAMP.loaded&&!live&&!cur)?'— 目前沒有檔期，請按「＋ 新增檔期」—':'— 請選檔期 —'));
   var s='<div class="ap-camp" id="apCampBox"><select id="apCampSel" title="這支新品要上的檔期"><option value="">'+esc(ph)+'</option>';
   CAMP.list.slice().sort(function(a,b){return String(b['起']||'').localeCompare(String(a['起']||''))}).forEach(function(c){
     if(c.status==='封存'&&c.campaign_id!==cur)return;if(c.campaign_id===cur)has=true;
@@ -2364,7 +2365,7 @@ function campSelectHTML(){var h=AP.head,cur=h.campaign_id||'',has=false;
   return s}
 function campInfoHTML(){var h=AP.head;
   if(!h.campaign_id){var old=String(h.period||'').trim();
-    return '<span class="ap-muted">'+(old?'舊草稿寫的檔期名稱：「'+esc(old)+'」，請改從上方選檔期（沒有就按「＋ 新增檔期」）':'選了檔期，這裡會顯示起訖日與第一批配貨日')
+    return '<span class="ap-muted">'+(old?'舊草稿寫的檔期名稱：「'+esc(old)+'」，請改從上方選檔期（沒有就按「＋ 新增檔期」）':((CAMP.loaded&&!CAMP.list.some(function(c){return c.status!=='封存'}))?'目前還沒有任何檔期，請先按右上「＋ 新增檔期」建立（填檔期名稱和期間，要主廚密碼）':'選了檔期，這裡會顯示起訖日與第一批配貨日'))
       +((CAMP.err&&!CAMP.loaded)?'　⚠ 檔期清單讀不到（'+esc(CAMP.err)+'），其他功能照常可以用':'')+'</span>'}
   var c=campById(h.campaign_id)||{},p=['<b>'+esc(h.campaign_name||h.campaign_id)+'</b>'],r=campRange(h.campaign_start,h.campaign_end);
   if(r)p.push('檔期 '+esc(r));
@@ -2450,8 +2451,8 @@ function askCred(role,msg,cb){
 function newCampDialog(){withCred('主廚','新增檔期要主廚密碼。',function(cr){openCampForm(cr)})}
 function openCampForm(cr){
   var m=modal('<div class="ap-h">＋ 新增檔期</div><div class="ap-muted">同一檔期的新品都掛在這裡；建立後所有人都選得到。</div>'
-    +'<label>檔期名稱</label><input type="text" data-cf="檔期名稱" placeholder="例：2026 萬聖節">'
-    +'<div class="ap-2col"><div><label>起</label><input type="date" data-cf="起"></div><div><label>迄</label><input type="date" data-cf="迄"></div></div>'
+    +'<label>檔期名稱（必填）</label><input type="text" data-cf="檔期名稱" placeholder="例：2026 萬聖節">'
+    +'<div class="ap-2col"><div><label>期間：開始日（必填）</label><input type="date" data-cf="起"></div><div><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
     +'<div class="ap-2col"><div><label>第一批配貨日</label><input type="date" data-cf="第一批配貨日"></div><div><label>品牌別</label><select data-cf="品牌別">'+opts(BRANDS,BRAND_DEFAULT,'— 不指定 —')+'</select></div></div>'
     +'<label>自己人搶先體驗</label><input type="text" data-cf="自己人搶先體驗" placeholder="例：9/25–9/30 自己人先開放；沒有就留空">'
     +'<label>配合活動</label><input type="text" data-cf="配合活動" placeholder="沒有就留空">'
@@ -2463,7 +2464,8 @@ function openCampForm(cr){
   setTimeout(function(){var f=m.querySelector('[data-cf="檔期名稱"]');if(f)f.focus()},30);
   ok.onclick=function(){var o={};m.querySelectorAll('[data-cf]').forEach(function(el){o[el.dataset.cf]=String(el.value||'').trim()});
     if(!o['檔期名稱']){box.textContent='請填檔期名稱';return}
-    if(o['起']&&o['迄']&&o['迄']<o['起']){box.textContent='「迄」早於「起」，請確認日期';return}
+    if(!o['起']||!o['迄']){box.textContent='請填檔期期間（開始日和結束日都要填）';return}
+    if(o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
     var r=campRange(o['起'],o['迄']);
     if(!confirm('新增檔期「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+'？\n建立後所有人都選得到。'))return;
     ok.disabled=true;box.textContent='建立中…';createCamp(o,cr,box,ok)}}
