@@ -1782,7 +1782,7 @@ function gvDate(v){if(v==null||v==='')return null;if(v instanceof Date)return is
 /* 2026-09-28 A 階段：launch（預計上市日）／firstShip（店裡第一批配貨時間）拿掉，改由檔期帶出（舊草稿／舊 .json 的這兩欄載入時自動丟棄）；
    campaign_*＝選到的檔期快照（.json head 一起帶走）；req_id＝送件後系統配的申請單號（同一張再送＝更新同一張） */
 function blankHead(){return {brand:BRAND_DEFAULT,date:today(),period:'',name:'',diet:'',keep:'',fname:'',price:'',spec:'',pack:'',time:'',qty:'',cat:'',catOther:'',note:'',
-  campaign_id:'',campaign_name:'',campaign_start:'',campaign_end:'',campaign_ship:'',req_id:''}}
+  campaign_id:'',campaign_name:'',campaign_start:'',campaign_end:'',campaign_ship:'',campaign_early:'',req_id:''}}
 function newLine(){var o={m:'',q:'',u:'',zone:'',cat:'',id:'',pin:false};NI_KEYS.forEach(function(k){o[k]=''});return o}   /* pin：主檔有、但填寫人按「加到新增表」手動加進表二（2026-09-18 經營者直接指示） */
 function inTable2(l){return isNewItem(l)||!!l.pin}
 /* 表二／摘要／複製新增食材表 的列＝🆕（自動）＋ pin（手動）；dim_sku 新品項列仍只有 🆕 */
@@ -2001,7 +2001,7 @@ function summaryText(c){var h=AP.head,rid=reqNo(),p=num(h.price),rate=rateOf(c),
     L.push((i+1)+'. '+l.m+' '+l.q+' '+(l.u||'')
       +(tool?'　不計價':(row?('　'+(row.cost===null?(nw?'估？':'缺價'):fm(row.cost)+' 元'+(row.t==='C'?'(估)':''))):''))+(nw?'　🆕需建主檔':'')+(staleOf(l)?'　⚠'+staleOf(l):''))});
   if(c.tools.length)L.push('','器具／模具：'+c.tools.map(function(t){return t.m+(t.q===1?'':' ×'+t.q)}).join('、'));
-  L.push('','其他備註說明：'+dash(h.note),'第一批配貨日（檔期）：'+dash(h.campaign_ship));
+  L.push('','其他備註說明：'+dash(h.note),'第一批配貨日（檔期）：'+dash(h.campaign_ship)+(h.campaign_early?'　自己人搶先開賣日：'+h.campaign_early:''));
   return L.join('\n')}
 function bomText(){var h=AP.head;
   return R.bomTsv(String(h.name||'').trim()||'新品',AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0}).map(function(l){return {m:String(l.m).trim(),q:num(l.q),u:String(l.u||'').trim()||'g'}}))}
@@ -2348,11 +2348,11 @@ function campRange(a,b){return (a||b)?(a||'?')+'～'+(b||'?'):''}
 function campLabel(c){var r=campRange(mmdd(c['起']),mmdd(c['迄']));return String(c['檔期名稱']||c.campaign_id)+(r?'（'+r+'）':'')+(c.status==='封存'?'［封存］':'')}
 function campText(){var h=AP.head;if(h.campaign_id){var r=campRange(h.campaign_start,h.campaign_end);return (h.campaign_name||h.campaign_id)+(r?' '+r:'')}return String(h.period||'').trim()}
 function setCampSnap(c){var h=AP.head;
-  if(!c){h.campaign_id='';h.campaign_name='';h.campaign_start='';h.campaign_end='';h.campaign_ship='';return}
-  h.campaign_id=String(c.campaign_id||'');h.campaign_name=String(c['檔期名稱']||'');h.campaign_start=String(c['起']||'');h.campaign_end=String(c['迄']||'');h.campaign_ship=String(c['第一批配貨日']||'');h.period=h.campaign_name}
+  if(!c){h.campaign_id='';h.campaign_name='';h.campaign_start='';h.campaign_end='';h.campaign_ship='';h.campaign_early='';return}
+  h.campaign_id=String(c.campaign_id||'');h.campaign_name=String(c['檔期名稱']||'');h.campaign_start=String(c['起']||'');h.campaign_end=String(c['迄']||'');h.campaign_ship=String(c['第一批配貨日']||'');h.campaign_early=String(c['自己人搶先開賣日']||'');h.period=h.campaign_name}
 function refreshCampSnap(){var h=AP.head;if(!h.campaign_id)return;var c=campById(h.campaign_id);if(!c)return;
-  var b=[h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship].join('|');setCampSnap(c);
-  if([h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship].join('|')!==b)saveDraft()}
+  var b=[h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||''].join('|');setCampSnap(c);
+  if([h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||''].join('|')!==b)saveDraft()}
 function campSelectHTML(){var h=AP.head,cur=h.campaign_id||'',has=false;
   var live=CAMP.list.filter(function(c){return c.status!=='封存'||c.campaign_id===cur}).length;   /* 2026-10-05：清單是空的要講明白，不要只留一個點不開的「請選檔期」 */
   var ph=(CAMP.loading&&!CAMP.loaded)?'讀取檔期清單中…':((CAMP.err&&!CAMP.loaded)?'— 讀不到檔期清單 —':((CAMP.loaded&&!live&&!cur)?'— 目前沒有檔期，請按「＋ 新增檔期」—':'— 請選檔期 —'));
@@ -2370,6 +2370,7 @@ function campInfoHTML(){var h=AP.head;
       +((CAMP.err&&!CAMP.loaded)?'　⚠ 檔期清單讀不到（'+esc(CAMP.err)+'），其他功能照常可以用':'')+'</span>'}
   var c=campById(h.campaign_id)||{},p=['<b>'+esc(h.campaign_name||h.campaign_id)+'</b>'],r=campRange(h.campaign_start,h.campaign_end);
   if(r)p.push('檔期 '+esc(r));
+  if(h.campaign_early)p.push('<b style="color:#B26A00">自己人搶先開賣 '+esc(h.campaign_early)+'</b>（採購系統以這天當開賣日，提前 14 天提醒各店叫貨）');
   p.push('第一批配貨日 '+esc(h.campaign_ship||'（未填）'));
   if(c['品牌別'])p.push('品牌別 '+esc(c['品牌別']));
   if(c['自己人搶先體驗'])p.push('自己人搶先體驗 '+esc(c['自己人搶先體驗']));
@@ -2455,7 +2456,8 @@ function openCampForm(cr){
     +'<label>檔期名稱（必填）</label><input type="text" data-cf="檔期名稱" placeholder="例：2026 萬聖節">'
     +'<div class="ap-2col"><div><label>期間：開始日（必填）</label><input type="date" data-cf="起"></div><div><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
     +'<div class="ap-2col"><div><label>第一批配貨日</label><input type="date" data-cf="第一批配貨日"></div><div><label>品牌別</label><select data-cf="品牌別">'+opts(BRANDS,BRAND_DEFAULT,'— 不指定 —')+'</select></div></div>'
-    +'<label>自己人搶先體驗</label><input type="text" data-cf="自己人搶先體驗" placeholder="例：9/25–9/30 自己人先開放；沒有就留空">'
+    +'<label>自己人搶先開賣日（沒有就留空）</label><input type="date" data-cf="自己人搶先開賣日"><div class="ap-muted" style="margin-top:2px">自己人會員比正式開賣早買得到的第一天。有填的話，採購系統會以這天當開賣日，提前 14 天提醒各店叫貨。</div>'
+    +'<label>自己人搶先體驗（說明文字）</label><input type="text" data-cf="自己人搶先體驗" placeholder="例：9/25–9/30 自己人先開放；沒有就留空">'
     +'<label>配合活動</label><input type="text" data-cf="配合活動" placeholder="沒有就留空">'
     +'<label>檔期備註</label><textarea data-cf="檔期備註"></textarea>'
     +'<div id="apCampMsg" class="ap-bad" style="min-height:18px;margin-top:6px"></div>'
@@ -2467,8 +2469,9 @@ function openCampForm(cr){
     if(!o['檔期名稱']){box.textContent='請填檔期名稱';return}
     if(!o['起']||!o['迄']){box.textContent='請填檔期期間（開始日和結束日都要填）';return}
     if(o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
+    if(o['自己人搶先開賣日']&&o['自己人搶先開賣日']>o['起']){box.textContent='自己人搶先開賣日不能晚於開始日，請確認日期';return}
     var r=campRange(o['起'],o['迄']);
-    if(!confirm('新增檔期「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+'？\n建立後所有人都選得到。'))return;
+    if(!confirm('新增檔期「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+'？\n建立後所有人都選得到。'))return;
     ok.disabled=true;box.textContent='建立中…';createCamp(o,cr,box,ok)}}
 function createCamp(o,cr,box,btn){
   apiPost({action:'saveCampaign',role:cr.role,password:cr.pw,campaign:o,rq:rqToken()},function(k){box.textContent='連線不穩，自動重試中（第 '+k+' 次）…'}).then(function(r){btn.disabled=false;

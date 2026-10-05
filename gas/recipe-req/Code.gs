@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v7';   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v8';   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -27,7 +27,7 @@ var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
 var TABS = {
   fact_campaign: ['campaign_id', '檔期名稱', '起', '迄', '第一批配貨日', '品牌別', '自己人搶先體驗', '配合活動',
     '作業_第一批出貨_時間', '作業_第一批出貨_備註', '作業_貼紙_時間', '作業_貼紙_備註', '作業_POS_時間', '作業_POS_備註',
-    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by'],
+    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by', '自己人搶先開賣日'],   /* 最後一欄 2026-10-05 新增（加在最後，舊欄位位置不動；migrate_ 自動補表頭） */
   fact_recipe_req: ['req_id', 'campaign_id', 'seq', '商品暫定名稱', '商品正式名稱', '定價', '成本', '利潤率', '規格', '葷素',
     '保存方式', '包裝方式', '製作時間', '預估銷售數', 'status', 'signers', 'payload_1', 'payload_2', 'payload_3', 'payload_4',
     'created_at', 'updated_at', 'updated_by'],
@@ -125,7 +125,7 @@ function randPw_(len) {
 function migrate_() {
   var P = PropertiesService.getScriptProperties();
   if (!P.getProperty('SHEET_ID')) return;
-  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1') return;
+  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1' && P.getProperty('MIG_EARLY') === '1') return;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
   try {
@@ -150,6 +150,15 @@ function migrate_() {
         if (add[nm] && f.indexOf(add[nm]) < 0) putCols_(tr, r._row, { fields: f + (f.trim() ? ', ' : '') + add[nm] }, function (h) { return h === 'fields'; });
       });
       P.setProperty('MIG_BOM', '1');
+    }
+    if (P.getProperty('MIG_EARLY') !== '1') {   /* ⑤ 2026-10-05：fact_campaign 最後補一欄「自己人搶先開賣日」（只加表頭，既有資料一格不動） */
+      var cs = ss_().getSheetByName('fact_campaign'), CH = TABS.fact_campaign, cn = CH.length;
+      if (cs.getMaxColumns() < cn) cs.insertColumnsAfter(cs.getMaxColumns(), cn - cs.getMaxColumns());
+      var hc = cs.getRange(1, cn);
+      if (String(hc.getValue()).trim() === '') hc.setValue(CH[cn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
+      if (String(hc.getValue()).trim() !== CH[cn - 1]) throw new Error('fact_campaign 第 ' + cn + ' 欄表頭不對');
+      cs.getRange(2, cn, Math.max(1, cs.getMaxRows() - 1), 1).setNumberFormat('@');
+      P.setProperty('MIG_EARLY', '1');
     }
   } catch (e) { /* 下次再試 */ } finally { lock.releaseLock(); }
 }
@@ -378,7 +387,9 @@ function saveCampaign_(p, auth) {
     if (!can_(auth, 'C:' + h)) { if (str_(c[h]) !== str_(obj[h])) skipped.push(h); return; }
     obj[h] = c[h];
   });
-  ['起', '迄', '第一批配貨日'].forEach(function (h) { obj[h] = normDate_(obj[h]); });
+  ['起', '迄', '第一批配貨日', '自己人搶先開賣日'].forEach(function (h) { obj[h] = normDate_(obj[h]); });
+  if (obj['自己人搶先開賣日'] && !/^\d{4}-\d{2}-\d{2}$/.test(obj['自己人搶先開賣日'])) throw fail_('「自己人搶先開賣日」日期格式不對');
+  if (obj['自己人搶先開賣日'] && /^\d{4}-\d{2}-\d{2}$/.test(obj['起']) && obj['自己人搶先開賣日'] > obj['起']) throw fail_('「自己人搶先開賣日」不能晚於檔期開始日');
   if (obj['起'] && obj['迄'] && /^\d{4}-\d{2}-\d{2}$/.test(obj['起']) && /^\d{4}-\d{2}-\d{2}$/.test(obj['迄']) && obj['迄'] < obj['起']) throw fail_('檔期「迄」早於「起」，請確認日期');
   obj.updated_at = now; obj.updated_by = auth.role;
   put_(t, row ? row._row : nextRow_(t), obj);
@@ -939,6 +950,8 @@ function planPush_(rid) {
   }
   main = main || DEFAULT_MAIN;
   var d1 = camp ? normDate_(camp['起']) : '', d2 = camp ? normDate_(camp['迄']) : '';
+  var dE = camp ? normDate_(camp['自己人搶先開賣日']) : '';   /* 2026-10-05：有搶先開賣日就用它當對照表起始有效日（POS 那天起就會賣、採購系統以它提前 14 天備料） */
+  if (dE && /^\d{4}-\d{2}-\d{2}$/.test(dE) && (!d1 || dE < d1)) { warn.push('這個檔期有「自己人搶先開賣日」' + dE + '：對照表的起始日用它（正式開賣 ' + (d1 || '未填') + '），採購系統會以 ' + dE + ' 當開賣日提前備料'); d1 = dE; }
   if (!d1 || !d2) warn.push('檔期沒有填起訖日：對照表的有效日期留空，採購系統的新品備料不會啟動（到對照表補日期即可）');
   var mapHave = P.map.vals.filter(function (r) { return ptName_(r[0]) === name; })[0];
   var map = { row: [name, name, '', '', ymd_(d1), ymd_(d2), main, sub], show: [name, name, d1, d2, main, sub],
@@ -1175,7 +1188,7 @@ function pushInfo_(rid) {
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v4', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v5', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -1196,7 +1209,7 @@ function newItemsPub_() {
       return (o.vname || o.sticker || o.link || o.vendor_override || o.supply || o.note || o.zone || o.container || o.is_new) ? o : null;
     }).filter(Boolean);
     return { req_id: str_(r.req_id), status: str_(r.status), dessert: str_(h.fname).trim() || str_(h.name).trim() || str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(),
-      campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), lines: lines,
+      campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), early: normDate_(c['自己人搶先開賣日']), lines: lines,
       qty: Number(r['預估銷售數']) || 0, brand: str_(c['品牌別']) };   /* 2026-10-01 需求 6：預估銷售數（整檔 12 店合計）＋品牌別，採購「檔期新品」顯示首批量的來源 */
   }).filter(function (x) { return x.dessert; });
   var res = { at: now_(), items: out };
