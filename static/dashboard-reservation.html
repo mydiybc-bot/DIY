@@ -153,6 +153,11 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 /* 壓力矩陣 */
 .pressure-summary { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
 .pressure-sum-card { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:8px 14px; font-size:12px; min-width:100px; }
+.zone-pick { display:flex; flex-wrap:wrap; align-items:center; gap:6px; background:#fff; border:1px dashed var(--border); border-radius:10px; padding:6px 10px; }
+.zone-pick .zl { color:var(--muted); font-size:12px; font-weight:700; line-height:1.3; margin-right:2px; }
+.zone-chip { font:inherit; font-size:13px; font-weight:700; padding:6px 12px; border-radius:16px; border:1px solid var(--border); background:var(--bg); color:var(--muted); cursor:pointer; }
+.zone-chip:hover { border-color:var(--purple-dark); color:var(--purple-dark); }
+.zone-chip.on { background:var(--purple-dark); border-color:var(--purple-dark); color:#fff; }
 .pressure-sum-card .nm { color:var(--muted); font-weight:700; white-space:nowrap; }
 .pressure-sum-card .vv { color:var(--purple-dark); font-weight:800; font-size:15px; margin-top:2px; }
 
@@ -700,7 +705,8 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <div class="help-box" id="h-press">
         格子裡的數字＝<b>該店該日「目前已經收到」的有效訂位筆數</b>。<br>
         標紅 🔴 的條件：這一格 &gt; 該店<b>近 28 天每日平均</b>訂位量的 1.5 倍 → 代表那天會比平常忙很多，要提前排人。<br>
-        <span class="warnline">重要：這是「到現在為止」的訂位量，不是最終量。</span>越遠的日子還會繼續增加，所以右下角的數字天生比左上角小，<b>不要拿今天跟兩週後直接比多寡</b>，要看的是有沒有標紅。
+        <span class="warnline">重要：這是「到現在為止」的訂位量，不是最終量。</span>越遠的日子還會繼續增加，所以右下角的數字天生比左上角小，<b>不要拿今天跟兩週後直接比多寡</b>，要看的是有沒有標紅。<br>
+        <b>分區（可複選）</b>：點「北一區／北二區／北三區／中南區」只看該區門市，可同時選多區；點「全部」恢復 12 家店。左邊的「未來3天」合計會跟著只算所選門市。
       </div>
       <div class="pressure-summary" id="pressureSummary"></div>
       <div class="heat-wrap"><table class="heat-table" id="pressureTable"></table></div>
@@ -792,6 +798,18 @@ const RESV_STORE_SEQ = [
   '台北遠百信義A13店',  // 11
   '高雄SKM Park店'      // 12
 ];
+// 區域分組（與排班儀表板 STORE_ZONE_MAP 相同，2026-05-17 確定；那邊改這裡要跟著改）
+const RESV_ZONE_MAP = { 1:'中南區', 2:'中南區', 3:'北一區', 4:'北一區', 5:'中南區', 6:'中南區', 7:'北二區', 8:'北一區', 9:'北三區', 10:'北三區', 11:'北二區', 12:'中南區' };
+const RESV_ZONE_ORDER = ['北一區', '北二區', '北三區', '中南區'];
+function zoneOfStore(name) { const i = RESV_STORE_SEQ.indexOf(name); return i < 0 ? '' : (RESV_ZONE_MAP[i + 1] || ''); }
+// 訂位壓力的分區篩選（可複選；都沒選＝全部門市）
+const PRESS_ZONES = new Set();
+function togglePressZone(z) {
+  if (z === '') PRESS_ZONES.clear();
+  else if (PRESS_ZONES.has(z)) PRESS_ZONES.delete(z);
+  else PRESS_ZONES.add(z);
+  renderPressure();
+}
 function storeNumOf(name) {
   const i = RESV_STORE_SEQ.indexOf(name);
   if (i < 0) { console.warn('[訂位儀表板] 門市名稱未對應店號，原樣顯示：' + name); return null; }
@@ -1728,7 +1746,8 @@ function renderPressure() {
 
   const futureValid = FUTURE.rows.filter(r => isValid(r, fIdx));
   const dates = next15Dates(); // 固定今天～+14天，即使某天無資料也顯示空列
-  const stores = [...new Set(futureValid.map(r => r[fIdx.store]))].sort(storeSeqCmp);
+  const allStores = [...new Set(futureValid.map(r => r[fIdx.store]))].sort(storeSeqCmp);
+  const stores = PRESS_ZONES.size ? allStores.filter(st => PRESS_ZONES.has(zoneOfStore(st))) : allStores;
 
   const grid = {};
   dates.forEach(d => grid[d] = {});
@@ -1741,12 +1760,18 @@ function renderPressure() {
   // 上方摘要：未來3天各店合計
   const next3 = dates.slice(0, 3);
   const summaryBox = document.getElementById('pressureSummary');
-  if (stores.length === 0) {
+  if (allStores.length === 0) {
     summaryBox.innerHTML = '<div class="empty-note">未來14天無有效訂位資料</div>';
   } else {
-    const grand3 = next3.reduce((s, d) => s + Object.values(grid[d] || {}).reduce((a, b) => a + b, 0), 0);
-    summaryBox.innerHTML = '<div class="pressure-sum-card"><div class="nm">未來3天（' + next3[0] + '~' + next3[next3.length - 1] + '）</div>'
+    const grand3 = next3.reduce((s, d) => s + stores.reduce((a, st) => a + ((grid[d] || {})[st] || 0), 0), 0);
+    const zoneBox = '<div class="zone-pick" role="group" aria-label="分區篩選（可複選）"><span class="zl">分區<br>可複選</span>'
+      + '<button type="button" class="zone-chip' + (PRESS_ZONES.size ? '' : ' on') + '" aria-pressed="' + (PRESS_ZONES.size ? 'false' : 'true') + '" onclick="togglePressZone(\'\')">全部</button>'
+      + RESV_ZONE_ORDER.map(z => '<button type="button" class="zone-chip' + (PRESS_ZONES.has(z) ? ' on' : '') + '" aria-pressed="' + (PRESS_ZONES.has(z) ? 'true' : 'false') + '" onclick="togglePressZone(\'' + z + '\')">' + z + '</button>').join('')
+      + '</div>';
+    summaryBox.innerHTML = '<div class="pressure-sum-card"><div class="nm">未來3天（' + next3[0] + '~' + next3[next3.length - 1] + '）'
+      + (PRESS_ZONES.size ? '・' + RESV_ZONE_ORDER.filter(z => PRESS_ZONES.has(z)).join('＋') : '') + '</div>'
       + '<div class="vv">' + grand3.toLocaleString() + ' 筆</div></div>'
+      + zoneBox
       + stores.map(st => {
           const num = storeNumOf(st);
           const sum3 = next3.reduce((s, d) => s + (grid[d][st] || 0), 0);
@@ -1755,7 +1780,7 @@ function renderPressure() {
   }
 
   const table = document.getElementById('pressureTable');
-  if (stores.length === 0) { table.innerHTML = '<tr><td class="empty-note">未來14天無有效訂位資料</td></tr>'; return; }
+  if (stores.length === 0) { table.innerHTML = '<tr><td class="empty-note">' + (allStores.length ? '所選分區在未來14天無有效訂位' : '未來14天無有效訂位資料') + '</td></tr>'; return; }
   let h = '<thead><tr><th class="row-head">日期＼門市</th>' + stores.map(st => {
     const num = storeNumOf(st);
     return '<th>' + (num ? num + ' ' : '') + st + '</th>';
@@ -1880,11 +1905,10 @@ function renderFreshness() {
   const today = todayStr();
   const stale = Math.round((new Date(today) - new Date(lo)) / 86400000);
   let html = '';
-  // 2026-10-05：未來訂位每日 10:15 才重建，11:00 前最早日期還是昨天屬正常（與看門狗 WD_FUT_READY_HOUR 同一條容忍），不報紅字
+  // 2026-10-05：未來訂位每日 10:15 才重建，11:00 前最早日期還是昨天屬正常（與看門狗 WD_FUT_READY_HOUR 同一條容忍），不報紅字、也不顯示任何提示
   const beforeRebuild = new Date().getHours() < FUT_READY_HOUR;
   if (stale === 1 && beforeRebuild) {
-    html += '<div class="fut-note">ℹ️ <b>未來訂位每天 10:15 更新</b>　目前是昨天（' + lo
-      + '）更新的版本，屬正常；' + FUT_READY_HOUR + ':00 後重新整理即為今天 ' + today + ' 的版本。</div>';
+    // 2026-10-05 經營者裁定：這段屬正常狀態，不必顯示給使用者看
   } else if (stale > 0) {
     html += '<div class="fresh-warn"><b>⚠️ 未來訂位資料已停止更新 ' + stale + ' 天</b>（表內最早日期 ' + lo
       + '，應為今天 ' + today + '）。<br>代表 <code>rebuildFuture_</code> 已連續 ' + stale
@@ -1918,11 +1942,8 @@ function renderFutureNote() {
         + '② <b>取消率會偏低</b>：大部分取消發生在接近到店日的時候，現在還沒發生。<br>'
         + '③ <b>未勾出席率無法計算</b>：客人都還沒來。<br>'
         + '④ 未來訂位表只涵蓋今天起約 35 天，所以更遠的月份會只有前半段或看不到。</div>';
-    } else if (CUR_SRC.futureFrom) {
-      fb.innerHTML = '<div class="fut-note"><b>ℹ️ ' + selectedYm + ' 的 ' + CUR_SRC.futureFrom.slice(5) + ' 起訂位尚未到店</b>　'
-        + '已經收到的部分都算進下面的數字了，但那幾天還會再增加，<b>取消率也還會往上走</b>。'
-        + '要做月對月比較，請等整個月結束後再看。</div>';
     } else {
+      // 2026-10-05 經營者裁定：當月「MM-DD 起訂位尚未到店」提示條不顯示（有效訂位卡仍有「⏳ 未結束」標示）
       fb.innerHTML = '';
     }
   }
