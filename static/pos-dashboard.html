@@ -75,6 +75,9 @@
       ・1-2 抓資料不等編譯：主資料與日×店兩支 JSONP 改在頁首一般 script 一開頁就發出（window.__posPre），
         React 啟動後接手結果；冷啟動重試（地雷 18）在頁首照做，逾時／IndexedDB 先出圖／錯誤訊息仍在 React 內，行為不變。
         ⚠️ 頁首 POS_PRE 的網址必須與 React 內 API_URL 相同（不同時 React 會自己重抓，不會用錯資料）——改網址兩處一起改。
+  【v33】（2026-10-05）頂部狀態列加「肚肚對帳」燈號（純前端，GAS 未動、快取版號不變、口徑零變動）。
+      ・讀 BOM 本「肚肚對帳」分頁第 2 列（一鍵追加新品 dudooCheck_daily 每天 07:30 寫入：近 7 天逐店日＋本月／上月逐店
+        vs 肚肚業績概況，對不上已自動修正）。讀不到就不顯示，不影響其他畫面。
 -->
 
 <link rel="preconnect" href="https://script.google.com" crossorigin>
@@ -479,16 +482,43 @@ a{color:var(--accent-light);text-decoration:none}
     <b>🟢 自動更新・每日</b>
     <span>肚肚 POS → BigQuery（每日自癒對帳）→ GAS 預聚合快取</span>
     <span id="cacheBadge" style="font-size:12px;font-weight:700;color:#6F4E45"></span>
+    <span id="dudooBadge" style="font-size:12px;font-weight:700;color:#6F4E45"></span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 更新方式</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
         <li>先看頁首「資料有效期間 / 最後更新」是否為昨日</li>
         <li>異常 → 查 Apps Script 專案「POS_折扣聚合」的 executions</li>
         <li>仍異常 → 查 bq-sync 每日對帳信（BigQuery 與 Sheet 差異）</li>
+        <li>「肚肚對帳」燈號：每天 07:30 自動比對近 7 天逐日、本月與上月逐店的營業額／銷售總額／折扣，對不上會自動修正並再比一次。跟肚肚核對時，日期結束日請選昨天（儀表板只到昨天）</li>
       </ol>
     </div>
   </div>
 </div>
+<script>
+/* 【v33】肚肚對帳燈號：讀 BOM 本「肚肚對帳」分頁第 2 列（檢查時間、範圍、狀態…），失敗就不顯示 */
+(function(){
+  try {
+    var SID = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
+    var url = 'https://docs.google.com/spreadsheets/d/' + SID + '/gviz/tq?tqx=out:json&headers=1&sheet=' +
+              encodeURIComponent('肚肚對帳') + '&tq=' + encodeURIComponent('select A,B,C,G limit 1');
+    var ctrl = null; try { ctrl = new AbortController(); } catch (_) {}
+    var to = setTimeout(function(){ try { if (ctrl) ctrl.abort(); } catch (_) {} }, 15000);
+    fetch(url, ctrl ? { signal: ctrl.signal } : undefined).then(function(r){ return r.text(); }).then(function(t){
+      clearTimeout(to);
+      var j = JSON.parse(t.replace(/^[\s\S]*?setResponse\(/, '').replace(/\);?\s*$/, ''));
+      var c = (j.table && j.table.rows && j.table.rows[0] && j.table.rows[0].c) || [];
+      var cell = function(i){ return c[i] ? String(c[i].f != null ? c[i].f : (c[i].v != null ? c[i].v : '')) : ''; };
+      var when = cell(0), range = cell(1), status = cell(2), note = cell(3);
+      if (!status) return;
+      var el = document.getElementById('dudooBadge'); if (!el) return;
+      var m = when.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2})/);
+      el.textContent = '肚肚對帳 ' + status + (m ? '（' + (+m[2]) + '/' + (+m[3]) + ' ' + m[4] + ' 檢查）' : '');
+      el.style.color = /⚠️|❌/.test(status) ? '#B23B2E' : (/🔧/.test(status) ? '#8A5A00' : '#2F5D33');
+      el.title = range + (note ? '\n' + note : '');
+    }).catch(function(){ clearTimeout(to); });
+  } catch (_) {}
+})();
+</script>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 /* ================================================================

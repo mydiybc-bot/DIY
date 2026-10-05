@@ -12,3 +12,5 @@
 
 `dudooGuard_apply_` 在 `gas/bom/dudooGuard.gs`；它出錯不會擋匯入（照原資料寫入並寄信）。
 回滾：刪掉這一行即可（dudooGuard.gs 留著不影響任何東西）；每日 07:30 對帳觸發器 `dudooCheck_daily` 在「觸發條件」頁刪除。
+
+2026-10-05 v2：每日對帳會自動修正（折扣重抓、整天重抓、調整列「肚肚對帳調整」），結果寫 BOM 本「肚肚對帳」分頁，POS 儀表板頂部燈號讀它。自動修正前備份到 BigQuery `pos_transactions_autobak`／`pos_discounts_autobak`。

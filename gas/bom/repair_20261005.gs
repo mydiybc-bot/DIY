@@ -95,3 +95,27 @@ function fix20261005_apply() {
   Logger.log('✅ BigQuery 3 個店日已重寫');
   return true;
 }
+
+/**
+ * ④（經營者 2026-10-05 核可計畫 F）4 店「單身同好夜訂金」退款 −500：肚肚算在退款日 2026-09-29，
+ *    舊匯入記回原交易日 2026-09-19 → 照②同一規則改記 9/29。完全對上 1 列才改，並重寫 BigQuery 這 2 個店日。
+ */
+function fix20261005b_apply() {
+  var sh = SpreadsheetApp.openById(RECON_POS_SS_ID).getSheetByName(RECON_POS_TAB);
+  var last = sh.getLastRow();
+  var vals = sh.getRange(2, 1, last - 1, 10).getValues();
+  var hit = [];
+  for (var i = 0; i < vals.length; i++) {
+    var r = vals[i];
+    if (parseInt(r[0], 10) !== 4 || String(r[3]) !== '單身同好夜訂金' || Number(r[7]) !== -1 || Number(r[6]) !== 500) continue;
+    var ds = r[2] instanceof Date ? Utilities.formatDate(r[2], 'Asia/Taipei', 'yyyy-MM-dd') : dguardNormDate_(r[2]);
+    if (ds === '2026-09-19') hit.push({ row: i + 2, vals: r });
+  }
+  if (hit.length !== 1) { Logger.log('❌ 停止，沒有改任何東西：預期 1 列，實際 ' + hit.length + ' 列'); return false; }
+  Logger.log('— 備份（改之前）：' + fix1005Line_(hit[0]));
+  sh.getRange(hit[0].row, 3).setValue(hit[0].vals[2] instanceof Date ? new Date(2026, 8, 29) : '2026-09-29');
+  SpreadsheetApp.flush();
+  syncSheetToBigQuery_batch_v2([{ date: '2026-09-19', store: 4 }, { date: '2026-09-29', store: 4 }]);
+  Logger.log('✅ 第 ' + hit[0].row + ' 列已改記 2026-09-29，BigQuery 2 個店日已重寫');
+  return true;
+}
