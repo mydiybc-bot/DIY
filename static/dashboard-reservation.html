@@ -179,6 +179,15 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .slot-alert-table tr.clk:hover { background:#FDECE8; }
 .slot-pct { color:var(--flag-red); font-weight:800; }
 .heat-cell.slot-hot { box-shadow:inset 0 0 0 2px var(--flag-red); }
+.eq-wrap { overflow-x:auto; }
+.eq-table { border-collapse:collapse; width:100%; min-width:620px; font-size:13px; }
+.eq-table th { text-align:left; color:var(--muted); font-size:12px; font-weight:700; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+.eq-table td { padding:7px 8px; border-bottom:1px solid #F1ECF7; vertical-align:top; }
+.eq-table td.need { color:var(--flag-red); font-weight:800; white-space:nowrap; }
+.eq-table td:nth-child(1), .eq-table td:nth-child(3), .eq-table td:nth-child(4), .eq-table td:nth-child(6) { white-space:nowrap; }
+.eq-table .from { color:var(--muted); font-size:12px; }
+.eq-ok { border:1px solid #CFE3D4; background:#F4FAF5; color:#2E6B3E; font-weight:700; border-radius:10px; padding:10px 14px; font-size:13px; }
+.eq-note { color:var(--muted); font-size:12px; margin-top:8px; line-height:1.6; }
 .heat-cell .sl { display:block; font-size:12px; font-weight:800; color:var(--flag-red); white-space:nowrap; margin-top:3px; line-height:1.35; }
 .heat-cell .gbm { display:inline-block; font-size:12px; font-weight:800; color:#2A4370; background:#E3ECFA; border:1px solid #B9CCEB; border-radius:8px; padding:0 6px; white-space:nowrap; margin-top:3px; line-height:1.5; }   /* v2.16.1 團體訂位 */
 .heat-cell.clk { cursor:pointer; }
@@ -765,7 +774,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <span>⏱️ 即時營運與預估</span>
       <span class="sb-note" id="scopeNowNote"></span>
     </div>
-    <div class="jump"><span class="lbl">跳到</span><button type="button" onclick="jumpTo('sec-press')">未來 14 天訂位壓力</button><button type="button" onclick="jumpTo('sec-fc')">未來 14 天營收預估</button><button type="button" onclick="jumpTo('sec-fcm')">全月營收</button></div>
+    <div class="jump"><span class="lbl">跳到</span><button type="button" onclick="jumpTo('sec-press')">未來 14 天訂位壓力</button><button type="button" onclick="jumpTo('sec-equip')">器具／模具紅燈</button><button type="button" onclick="jumpTo('sec-fc')">未來 14 天營收預估</button><button type="button" onclick="jumpTo('sec-fcm')">全月營收</button></div>
 
     <!-- 6. 未來14天訂位壓力 -->
     <div class="section fixed-scope" id="sec-press">
@@ -786,6 +795,20 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
       <div class="pressure-summary" id="pressureSummary"></div>
       <div id="slotAlert"></div>
       <div class="heat-wrap" id="pressureWrap"><table class="heat-table" id="pressureTable"></table></div>
+    </div>
+
+    <!-- 6.2 器具／模具紅燈（v2.19，各儀表板調整 1006 #2） -->
+    <div class="section fixed-scope" id="sec-equip">
+      <div class="section-title">🧁 器具／模具紅燈 <span class="badge">未來 14 天・同一時段</span> <span class="badge">同款模具 ≥6 個・電磁爐／平底鍋 ≥3 台・手持攪拌機／塔皮機 ≥5 台</span>
+        <button class="help-btn" onclick="tg('h-equip')">ⓘ 說明</button></div>
+      <div class="help-box" id="h-equip">
+        把<b>同一家店、同一天、同一個時段</b>（訂位的開始時間）裡，散客和團體在訂位時選的甜點份數加總，乘上每一份甜點在 BOM 裡的用量，算出這個時段<b>同時要用</b>幾個模具、幾台機器：<br>
+        ・<b>同款模具</b>（採購系統主檔品類別＝模具；<b>不含烤盤、各種擠花嘴</b>）要用 <b>6 個以上</b> → 紅燈<br>
+        ・<b>電磁爐、平底鍋</b> <b>3 台以上</b> → 紅燈　・<b>手持攪拌機、塔皮機</b> <b>5 台以上</b> → 紅燈<br>
+        甜點資料來自訂位後台列表的「食譜」欄（每天 10:15 整份、白天約每 3 小時更新近 14 天）；已取消的訂位不算。
+        甜點名稱對不到 BOM 的（例如 BOM 還沒建的甜點）不算進去，會列在下方提醒。店長頁（決策中心）的「未來 7 天」也會顯示同樣的紅燈。
+      </div>
+      <div id="equipBox"><div class="empty-note">讀取中…</div></div>
     </div>
 
     <!-- 6.5 營收預估 -->
@@ -1413,6 +1436,7 @@ async function init() {
     // 實測 GAS 可以同時處理，4 支同時發約 7 秒 → 月份清單與 future 同時發，月份清單一回來當月、上月也馬上發
     const _pFut = jsonpRetry(API_BASE + '?fn=future');
     _pFut.catch(() => {});
+    loadEquip();   // v2.19：器具／模具紅燈（決策中心後台算，跟主資料無關）
     const res = await jsonpRetry(API_BASE);
     MONTHS = (res && res.months) ? res.months.slice().sort((a, b) => b.ym.localeCompare(a.ym)) : [];
     const sel = document.getElementById('monthSel');
@@ -1590,6 +1614,47 @@ function renderMonthScope() {
   renderRevisit();
   renderFutureNote();
 }
+// ============ v2.19 器具／模具紅燈（經營者 1006 #2）============
+// 決策中心後台 action=equip：12 店未來 14 天、同一時段的模具／機器需求（甜點份數 × BOM 用量），只回紅燈的項目
+const DECISION_API = 'https://script.google.com/macros/s/AKfycbw55lxutTkj13v1E5pa3fVClI08K1ObXqj3V_VNOG3PV8rUaIe8l2ublZuEjMophVKFMw/exec';
+let EQ_DATA = null;
+function loadEquip() {
+  const box = document.getElementById('equipBox'); if (!box) return;
+  let over = false, fired = 0, fails = 0; const timers = [];
+  const done = (d, err) => { if (over) return; over = true; timers.forEach(clearTimeout); if (d) { EQ_DATA = d; renderEquip(); } else box.innerHTML = '<div class="err-msg">⚠️ 器具紅燈讀取失敗' + (err ? '（' + pressEsc(err) + '）' : '') + '　<button class="help-btn" onclick="loadEquip()">🔄 重試</button></div>'; };
+  const fire = () => {   // Google 偶爾很慢或回錯誤頁：8 秒沒回並行補一發、20 秒再補一發，誰先回用誰
+    if (over || fired >= 3) return; fired++;
+    const cb = '__eq' + Date.now() + '_' + fired, sc = document.createElement('script');
+    const clean = () => { try { delete window[cb]; } catch (_) { window[cb] = undefined; } if (sc.parentNode) sc.parentNode.removeChild(sc); };
+    window[cb] = d => { clean(); if (over) return; if (d && d.ok) done(d); else if (++fails >= 3) done(null, d && d.error); else fire(); };
+    sc.onerror = () => { clean(); if (over) return; if (++fails >= 3) done(null, '連不上'); else setTimeout(fire, 700); };
+    sc.src = DECISION_API + '?action=equip&callback=' + cb; document.head.appendChild(sc);
+  };
+  box.innerHTML = '<div class="empty-note">讀取中…</div>';
+  fire(); timers.push(setTimeout(fire, 8000), setTimeout(fire, 20000), setTimeout(() => done(null, '逾時'), 75000));
+}
+function renderEquip() {
+  const box = document.getElementById('equipBox'), d = EQ_DATA; if (!box || !d) return;
+  if (!d.eq || !d.eq.ok) { box.innerHTML = '<div class="err-msg">⚠️ ' + pressEsc((d.eq && d.eq.error) || '器具紅燈還沒算出來') + '</div>'; return; }
+  const list = [];
+  Object.keys(d.stores || {}).forEach(sid => (d.stores[sid] || []).forEach(x => list.push(Object.assign({ sid: sid }, x))));
+  list.sort((a, b) => (a.d + a.t).localeCompare(b.d + b.t) || Number(a.sid) - Number(b.sid));
+  const at = String(d.eq.at || ''), atTxt = at ? at.slice(5, 10).replace('-', '/') + ' ' + at.slice(11, 16) : '—';
+  let h = '';
+  if (!list.length) h += '<div class="eq-ok">✅ 未來 14 天沒有任何時段的模具／機器超過上限</div>';
+  else {
+    h += '<div class="eq-wrap"><table class="eq-table"><thead><tr><th>日期</th><th>門市</th><th>時段</th><th>品項</th><th>要用</th><th>亮燈線</th><th>用到的甜點（份）</th></tr></thead><tbody>'
+      + list.map(x => '<tr><td>' + pressEsc(x.d.slice(5).replace('-', '/')) + '（' + '日一二三四五六'.charAt(new Date(x.d + 'T00:00:00').getDay()) + '）</td><td>' + pressEsc(x.sid + ' ' + (RESV_STORE_SEQ[Number(x.sid) - 1] || '')) + '</td><td>' + pressEsc(x.t) + '</td>'
+        + '<td><b>' + pressEsc(x.item) + '</b></td><td class="need">🔴 ' + x.need + ' ' + pressEsc(x.unit) + '</td><td>≥' + x.limit + ' ' + pressEsc(x.unit) + '</td>'
+        + '<td class="from">' + (x.from || []).map(f => pressEsc(f[0]) + '×' + f[1]).join('、') + '</td></tr>').join('')
+      + '</tbody></table></div>';
+  }
+  const un = d.eq.unmatched || [];
+  h += '<div class="eq-note">甜點資料 ' + atTxt + '・共 ' + (d.eq.rows || 0) + ' 筆有選甜點的訂位'
+    + (un.length ? '<br>⚠️ 這些甜點在 BOM 找不到，沒有算進去（請到食譜系統補 BOM 或對照表）：' + un.map(u => pressEsc(u[0]) + ' ' + u[1] + ' 份').join('、') : '') + '</div>';
+  box.innerHTML = h;
+}
+
 // v2.18（經營者 1006 #7：每個儀表板都要明確顯示最後更新時間）：資料狀態列寫出三種資料各自的時間
 function rsvMd(d) { return String(d || '').slice(5, 10).replace('-', '/'); }
 function renderDataTimes() {

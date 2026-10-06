@@ -122,6 +122,7 @@ function guardianWorker_() {
   try {
     var p = PropertiesService.getScriptProperties();
     fnEnsureTrigger_(p);                            // 2026-10-06：第一次跑到這裡時補建「未來訂位每 3 小時更新」觸發器（只做一次）
+    fmEnsureInit_(p);                               // 2026-10-06：甜點明細分頁第一次上線，預約一次近 14 天更新（只做一次）
     if (p.getProperty('BF_NEXT')) return;          // 大回補進行中，讓路
     var h = Number(Utilities.formatDate(new Date(), CFG.TZ, 'H'));
     if (h >= 4 && h < 7) return;                   // 夜間慢速窗，跳過

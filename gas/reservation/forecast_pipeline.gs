@@ -138,6 +138,7 @@ function refreshFutureNear() {
     var rows = fresh.concat(keep);
     if (last > 1) sh.getRange(2, 1, last - 1, CFG.HEADERS.length).clearContent();   // 全部抓完才動表，中斷不留半套
     if (rows.length) sh.getRange(2, 1, rows.length, CFG.HEADERS.length).setValues(rows);
+    try { futureMenuWrite_(fresh, days); } catch (e) { Logger.log('甜點明細寫入失敗（不影響 future）：' + e.message); }   // 1006 #2
     futureCacheRefresh_();
     Logger.log('近 ' + FN_DAYS + ' 天重抓 ' + fresh.length + ' 筆＋沿用 ' + keep.length + ' 筆，耗時 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } finally { lock.releaseLock(); }
@@ -153,6 +154,14 @@ function fnEnsureTrigger_(p) {
     p.setProperty('FN_TRIGGER_AT', Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm'));
     Logger.log('已自動建立 refreshFutureNear 每 3 小時觸發器＋1 分鐘後驗證一次');
   } catch (e) { Logger.log('自動建立 refreshFutureNear 觸發器失敗：' + e.message); }
+}
+/** 2026-10-06 1006 #2：甜點明細分頁第一次上線，守門員跑到時預約 1 分鐘後跑一次近 14 天更新，先把 fact_future_menu 寫出來（只做一次，FM_INIT_AT） */
+function fmEnsureInit_(p) {
+  try {
+    if (p.getProperty('FM_INIT_AT')) return;
+    if (!ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'refreshFutureNearOnce'; })) ScriptApp.newTrigger('refreshFutureNearOnce').timeBased().after(60 * 1000).create();
+    p.setProperty('FM_INIT_AT', Utilities.formatDate(new Date(), CFG.TZ, 'yyyy-MM-dd HH:mm'));
+  } catch (e) { Logger.log('甜點明細首次更新預約失敗：' + e.message); }
 }
 /** 一次性：跑一次 refreshFutureNear，先把自己的觸發器刪掉（跑完不留） */
 function refreshFutureNearOnce() {

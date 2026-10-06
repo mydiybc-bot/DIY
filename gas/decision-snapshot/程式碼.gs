@@ -2286,9 +2286,9 @@ function calcE_(res, rule, map) {
 //   紅線：只讀；不寫 _trace／meta、不取 LockService；不回傳客人個資與通關碼。
 //   例外（_bundle 交辦書 2026-09-26）：bundle 即時計算後可寫回隱藏分頁 _bundle（只寫這一頁；runAll 進行中不寫）。
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
-//   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）
+//   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-06.8';   // .8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
+var WEB_VER = 'e6-2026-10-06.11';   // .11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊
 var BUNDLE_TTL = 21600;               // CacheService 最長 6 小時；runAll 寫完快照時另外主動清除
 
@@ -2304,6 +2304,8 @@ function doGet(e) {
     else if (act === 'track_list') out = webTrackList_();
     else if (act === 'track_set') out = webTrackSet_(p);
     else if (act === 'live') out = webLive_(p.store);
+    else if (act === 'fresh') out = webFresh_();
+    else if (act === 'equip') out = webEquip_();
     else out = { ok: false, error: '不支援的 action' };
   } catch (err) { out = { ok: false, error: '讀取失敗：' + shortErr_(err && err.message || err) }; }
   var json = JSON.stringify(out);
@@ -2416,7 +2418,7 @@ var LIVE_TTL_PART = 60;      // 有一邊讀取失敗時的暫存秒數
 var LIVE_DAYS = 14;          // 今天起幾天（店長頁：7 天行事曆＋8～14 天團體）
 var LIVE_SLOT_RED = 140;     // 同時段人數 ≥ 每時段上限 × 140% → 紅燈（經營者 1006 指定）
 var LIVE_SLOT_CAP = { '1': 14, '2': 20, '3': 24, '4': 13, '5': 16, '6': 19, '7': 12, '8': 16, '9': 12, '10': 18, '11': 14, '12': 12 };
-var LIVE_KEY = 'live|v1';
+var LIVE_KEY = 'live|v3';   // v3：eq.at 改成 yyyy-MM-dd HH:mm:ss；v2：多了 equip
 
 function webLive_(store) {
   var sid = String(store == null ? '' : store).trim();
@@ -2426,9 +2428,9 @@ function webLive_(store) {
     all = liveBuild_(); src = 'build';
     if (all.fut.ok || all.gb.ok) liveCachePut_(c, all, (all.fut.ok && all.gb.ok) ? LIVE_TTL : LIVE_TTL_PART);
   }
-  return { ok: true, version: WEB_VER, builtAt: all.builtAt, today: all.today, fut: all.fut, gb: all.gb,
+  return { ok: true, version: WEB_VER, builtAt: all.builtAt, today: all.today, fut: all.fut, gb: all.gb, eq: all.eq || { ok: false, error: '尚未計算' },
     cap: LIVE_SLOT_CAP[sid] || null, redPct: LIVE_SLOT_RED,
-    store: (all.stores || {})[sid] || { days: {}, groups: [], urgent: [], gsum: null },
+    store: (all.stores || {})[sid] || { days: {}, groups: [], urgent: [], gsum: null, equip: [] },
     cache: { src: src, sec: Math.round((Date.now() - t0) / 100) / 10 } };
 }
 function liveCacheGet_(c) {
@@ -2458,7 +2460,13 @@ function liveBuild_() {
   var now = new Date(), today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd'), last = addDays_(today, LIVE_DAYS - 1);
   var map = readStoreMap_(snapSS_()), byName = map.byCol['訂位'] || {};
   var out = { builtAt: Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm'), today: today, fut: { ok: false }, gb: { ok: false }, stores: {} };
-  map.list.forEach(function (id) { out.stores[id] = { days: {}, groups: [], urgent: [], gsum: null }; });
+  map.list.forEach(function (id) { out.stores[id] = { days: {}, groups: [], urgent: [], gsum: null, equip: [] }; });
+  // ③ 器具／模具紅燈（1006 #2）：讀訂位資料的甜點明細＋BOM＋採購主檔，跟①②分開，失敗只影響這一塊
+  try {
+    var E = eqBuild_(today, last, byName);
+    out.eq = { ok: true, at: E.at, rows: E.rows, unmatched: E.unmatched, rules: EQ_RULES.map(function (r) { return { id: r.id, label: r.label, limit: r.limit, unit: r.unit }; }) };
+    map.list.forEach(function (id) { out.stores[id].equip = E.stores[id] || []; });
+  } catch (eE) { out.eq = { ok: false, error: '器具紅燈計算失敗：' + shortErr_(eE && eE.message || eE) }; }
   var key = PropertiesService.getScriptProperties().getProperty(PROP_GB_PASS) || '';
   var reqs = [{ url: SRC.RSV_API + '?fn=future', muteHttpExceptions: true, followRedirects: true }];
   if (key) reqs.push({ url: SRC.GB_API + '?fn=group&key=' + encodeURIComponent(key), muteHttpExceptions: true, followRedirects: true });
@@ -2526,6 +2534,121 @@ function liveBuild_() {
   } catch (e2) { out.gb = { ok: false, error: '團體讀取失敗：' + liveClean_(e2, key) }; }
   return out;
 }
+// ============================================================
+// i. 器具／模具紅燈（2026-10-06 經營者「各儀表板調整 1006」#2）
+//   同店、同日、同一時段（開始時間）：把散客＋團體選的甜點份數 × 每份 BOM 用量加總，算出每一種器具／模具同時要用幾個：
+//     ① 同款模具（採購主檔品類別＝模具；不含烤盤、各種擠花嘴／花嘴）≥ 6 個 → 紅燈
+//     ② 電磁爐、平底鍋 ≥ 3 台 → 紅燈
+//     ③ 手持攪拌機、塔皮機 ≥ 5 台 → 紅燈
+//   甜點明細：訂位資料 fact_future_menu（訂位 GAS 抓後台列表時順便記「食譜」欄的甜點與份數；散客團體都有；已取消不算；不含姓名電話）
+//   甜點 → BOM：BOM 本「BOM表」（甜點名稱、食材/器具名稱、數量＝每份用量）。名稱比對：產品名稱對照表 → 原名 → 去掉結尾括號註記（限當日壽星、葷…）→ 雙語名取「｜」後面；
+//              都對不到的列在 unmatched（不算進紅燈，畫面提醒去補 BOM）
+//   器具 → 品類別：採購專用檔 dim_sku（品名，或 BOM別名，全形分號分隔）；主檔沒建、名稱有「模」的也當模具
+//   結果放在 live（每家店 store.equip）與 action=equip（12 店一起，訂位儀表板用），跟 live 同一份暫存。
+// ============================================================
+var EQ_RULES = [
+  { id: 'mold', label: '同款模具', limit: 6, unit: '個' },
+  { id: 'heat', label: '電磁爐／平底鍋', names: ['電磁爐', '平底鍋'], limit: 3, unit: '台' },
+  { id: 'mix', label: '手持攪拌機／塔皮機', names: ['手持攪拌機', '塔皮機'], limit: 5, unit: '台' }
+];
+var EQ_EXCL = /烤盤|擠花嘴|花嘴/;
+var EQ_MENU_TAB = 'fact_future_menu';
+function eqRuleOf_(item, cat) {
+  for (var i = 1; i < EQ_RULES.length; i++) if (EQ_RULES[i].names.indexOf(item) >= 0) return EQ_RULES[i];
+  if (cat === '模具' && !EQ_EXCL.test(item)) return EQ_RULES[0];
+  return null;
+}
+function eqNorm_(s) { return String(s || '').replace(/[\s《》「」『』]/g, ''); }
+function eqDecode_(s) {
+  return String(s || '').replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(Number(d)); }).replace(/&amp;/g, '&');
+}
+function eqMatch_(name, bom, bomN, nmap) {
+  var n = eqDecode_(eqDecode_(name)).trim(), base = n, prev;
+  do { prev = base; base = base.replace(/\s*[（(][^（）()]*[）)]\s*$/, ''); } while (base !== prev);
+  var cs = [n, base];
+  if (base.indexOf('｜') >= 0) cs.push(base.split('｜').pop().trim());
+  for (var i = 0; i < cs.length; i++) {
+    var c = cs[i], t = nmap[c];
+    if (t) { if (bom[t]) return t; if (bomN[eqNorm_(t)]) return bomN[eqNorm_(t)]; }
+    if (bom[c]) return c;
+    if (bomN[eqNorm_(c)]) return bomN[eqNorm_(c)];
+  }
+  return null;
+}
+function eqBuild_(today, last, byName) {
+  // 1) dim_sku：品名／BOM別名 → 品類別；產品名稱對照表：POS 名 → BOM 名（都在採購專用檔）
+  var pss = SpreadsheetApp.openById(SRC.PUR_DASH), ds = pss.getSheetByName('dim_sku').getDataRange().getValues(), h = ds[0].map(function (x) { return String(x).trim(); });
+  var iN = h.indexOf('品名'), iC = h.indexOf('品類別'), iA = h.indexOf('BOM別名'), catOf = {};
+  if (iN < 0 || iC < 0) throw new Error('dim_sku 欄位對不上');
+  for (var r = 1; r < ds.length; r++) {
+    var nm = String(ds[r][iN] || '').trim(), ct = String(ds[r][iC] || '').trim();
+    if (!nm) continue;
+    catOf[nm] = ct;
+    if (iA >= 0) String(ds[r][iA] || '').split(/[；;]/).forEach(function (a) { a = a.trim(); if (a && !catOf[a]) catOf[a] = ct; });
+  }
+  var nmap = {}, nsh = pss.getSheetByName('產品名稱對照表');
+  if (nsh) nsh.getDataRange().getValues().slice(1).forEach(function (x) { var a = String(x[0] || '').trim(), b = String(x[1] || '').trim(); if (a && b) nmap[a] = b; });
+  // 2) BOM表：甜點 → [[器具, 每份數量, 規則 id]]（只留三條規則用得到的）
+  var bsh = SpreadsheetApp.openById(FRESH_SS.BOM).getSheetByName('BOM表');
+  if (!bsh) throw new Error('找不到 BOM表');
+  var bv = bsh.getRange(1, 1, bsh.getLastRow(), 3).getValues(), bom = {}, bomN = {};
+  for (var i = 1; i < bv.length; i++) {
+    var d = String(bv[i][0] || '').trim(), it = String(bv[i][1] || '').trim(), q = Number(bv[i][2]) || 0;
+    if (!d) continue;
+    if (!bom[d]) { bom[d] = []; bomN[eqNorm_(d)] = d; }
+    var rule = it ? eqRuleOf_(it, catOf[it] || (/模/.test(it) ? '模具' : '')) : null;   // 主檔沒建的（例：小矽膠模、大矽膠模），名稱有「模」也算模具
+    if (rule && q > 0) bom[d].push([it, q, rule.id]);
+  }
+  // 3) 甜點明細：今天～last，已取消不算；同店同日同時段加總
+  var msh = SpreadsheetApp.openById(FRESH_SS.RSV).getSheetByName(EQ_MENU_TAB);
+  var res = { at: '', rows: 0, stores: {}, unmatched: [] };
+  if (!msh || msh.getLastRow() < 2) return res;
+  var mv = msh.getRange(2, 1, msh.getLastRow() - 1, 8).getValues(), slots = {}, un = {}, ruleById = {};
+  EQ_RULES.forEach(function (x) { ruleById[x.id] = x; });
+  mv.forEach(function (row) {
+    var d = dstr_(row[0]); if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d < today || d > last) return;
+    if (String(row[5]).trim() === '已取消') return;
+    var sid = byName[String(row[1] || '').trim()]; if (!sid) return;
+    var fa = (row[7] instanceof Date) ? Utilities.formatDate(row[7], TZ, 'yyyy-MM-dd HH:mm:ss') : String(row[7] || '').trim();   // v14：試算表會把 fetched_at 自動轉成日期，原本 String() 變成英文字串、比大小也錯
+    if (fa > res.at) res.at = fa;
+    var t = (row[2] instanceof Date) ? Utilities.formatDate(row[2], TZ, 'HH:mm') : String(row[2] || '').trim();
+    var menu = []; try { menu = JSON.parse(String(row[6] || '[]')) || []; } catch (e) { menu = []; }
+    res.rows++;
+    var k = sid + '|' + d + '|' + t, S = slots[k] || (slots[k] = { sid: sid, d: d, t: t, need: {}, from: {}, rule: {} });
+    menu.forEach(function (m) {
+      var qty = Number(m && m[1]) || 0; if (!qty) return;
+      var bn = eqMatch_(String(m[0] || ''), bom, bomN, nmap);
+      if (!bn) { var u = webScrub_(String(m[0] || '')).slice(0, 40); un[u] = (un[u] || 0) + qty; return; }
+      bom[bn].forEach(function (b) {
+        S.need[b[0]] = (S.need[b[0]] || 0) + qty * b[1];
+        S.rule[b[0]] = b[2];
+        S.from[b[0]] = S.from[b[0]] || {}; S.from[b[0]][bn] = (S.from[b[0]][bn] || 0) + qty;
+      });
+    });
+  });
+  Object.keys(slots).forEach(function (k) {
+    var S = slots[k];
+    Object.keys(S.need).forEach(function (it) {
+      var rule = ruleById[S.rule[it]]; if (!rule) return;
+      var need = Math.round(S.need[it] * 10) / 10;
+      if (need < rule.limit) return;
+      (res.stores[S.sid] = res.stores[S.sid] || []).push({ d: S.d, t: S.t, item: it, need: need, limit: rule.limit, unit: rule.unit, rule: rule.id, label: rule.label,
+        from: Object.keys(S.from[it]).map(function (bn) { return [bn, S.from[it][bn]]; }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 6) });
+    });
+  });
+  Object.keys(res.stores).forEach(function (sid) { res.stores[sid].sort(function (a, b) { var x = a.d + ' ' + a.t, y = b.d + ' ' + b.t; return x < y ? -1 : (x > y ? 1 : (b.need - a.need)); }); });
+  res.unmatched = Object.keys(un).map(function (n) { return [n, un[n]]; }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 15);
+  return res;
+}
+/** action=equip：12 店的器具／模具紅燈（訂位儀表板用；與 live 同一份暫存） */
+function webEquip_() {
+  var c = CacheService.getScriptCache(), t0 = Date.now(), all = liveCacheGet_(c), src = 'cache';
+  if (!all) { all = liveBuild_(); src = 'build'; if (all.fut.ok || all.gb.ok) liveCachePut_(c, all, (all.fut.ok && all.gb.ok) ? LIVE_TTL : LIVE_TTL_PART); }
+  var st = {}; Object.keys(all.stores || {}).forEach(function (id) { st[id] = (all.stores[id] || {}).equip || []; });
+  return { ok: true, version: WEB_VER, builtAt: all.builtAt, today: all.today, eq: all.eq || { ok: false, error: '尚未計算' }, stores: st, cache: { src: src, sec: Math.round((Date.now() - t0) / 100) / 10 } };
+}
+
 /** 驗收用（只讀）：在編輯器直接呼叫 action=live，印出回應大小、秒數、各店天數與團體數＋個資檢查 */
 function zzLiveTest() {
   CacheService.getScriptCache().remove(LIVE_KEY + '|n');
@@ -2534,6 +2657,109 @@ function zzLiveTest() {
   Logger.log('live 第 1 次（即時組）' + (t1 - t0) / 1000 + ' 秒｜' + o.length + ' 字元；第 2 次（暫存）' + (t3 - t2) / 1000 + ' 秒｜' + o2.length + ' 字元');
   Logger.log(o.slice(0, 600));
   Logger.log('個資檢查：Email ' + (o.match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g) || []).length + ' 處｜手機 ' + (o.match(/(?:\+?886[- ]?|0)9\d{2}[- ]?\d{3}[- ]?\d{3}/g) || []).length + ' 處｜LINE UID ' + (o.match(/U[0-9a-f]{32}/g) || []).length + ' 處');
+}
+
+// ============================================================
+// h. 各儀表板「最後更新」（2026-10-06 經營者「各儀表板調整 1006」#7：每個儀表板都要明確顯示最後更新時間）：action=fresh
+//   一次回 11 個系統各自的資料時間（只讀各系統試算表的表尾一欄，或指令碼屬性），存 CacheService 10 分鐘。
+//   首頁 hub 每張卡片、各儀表板頂部資料狀態列都讀這一支（key：reviews／pos／member／pnl／schedule／vendor／recipe／purchase／monthly／reservation／announce）。
+//   每項回 {txt（顯示用一句話）, at（最後更新時間 yyyy-MM-dd HH:mm，沒有就空白）, to（資料到哪一天）, warn（是否比正常慢）}；讀不到該項回 {err}。
+//   只讀；不回傳任何內容資料（只有日期時間）。
+// ============================================================
+var FRESH_TTL = 1800, FRESH_KEY = 'fresh|v2';   // 30 分鐘（第一次組要開 9 個試算表，約 20～60 秒）
+var FRESH_SS = {
+  BOM: '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao',      // BOM 本（POS資料）
+  PNL: '1khrFp_AYp3mEsL02cTRrYu1LNiRTP68aowM5_ClsE_c',      // P&L 資料倉儲（fact_pnl）
+  SCH: '19X3cqX70aWNTc6KFTP5jushG5S06xNicYV1ulDXl-hM',      // 排班分析資料倉（fact_daily_sales、import_log）
+  VENDOR: '1Pp0C7zLWWwhO7miAxDQmxfYmX0bbh6crOK7dk0a_Zyw',   // 廠商單價（fact_vendor_price）
+  RSV: '13NI3vGV4MSsngeO_DecVYKrOzky-fXCsN9ActscJorQ',      // DIYBC 訂位資料（fact_reservations_future）
+  ANN: '1GXyGp9Y79HDhvqe4ZJbuQQBmyWnmnLOmXVVTD-x8uYs'       // 公告及工作清單_資料庫（fact_announce）
+};
+function webFresh_() {
+  var c = CacheService.getScriptCache(), hit = c.get(FRESH_KEY);
+  if (hit) { try { var o = JSON.parse(hit); o.cache = 'cache'; return o; } catch (e) {} }
+  var out = freshBuild_();
+  try { c.put(FRESH_KEY, JSON.stringify(out), FRESH_TTL); } catch (e) {}
+  out.cache = 'build';
+  return out;
+}
+/** 日期／時間值 → {d:'yyyy-MM-dd', t:'HH:mm' 或 ''} */
+function freshVal_(v) {
+  if (v instanceof Date) { if (isNaN(v)) return null; return { d: Utilities.formatDate(v, TZ, 'yyyy-MM-dd'), t: Utilities.formatDate(v, TZ, 'HH:mm') }; }
+  var s = String(v == null ? '' : v).trim(), m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  return { d: m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2), t: m[4] ? ('0' + m[4]).slice(-2) + ':' + m[5] : '' };
+}
+/** 讀某分頁某欄的表尾 n 列，回最大的日期時間 {d,t}（字串比大小：d＋t） */
+function freshTailMax_(ss, tab, col, n) {
+  var sh = ss.getSheetByName(tab); if (!sh) throw new Error('找不到分頁 ' + tab);
+  var last = sh.getLastRow(); if (last < 2) return null;
+  var k = Math.min(n, last - 1), v = sh.getRange(last - k + 1, col, k, 1).getValues(), best = null;
+  for (var i = 0; i < v.length; i++) { var x = freshVal_(v[i][0]); if (x && (!best || x.d + ' ' + x.t > best.d + ' ' + best.t)) best = x; }
+  return best;
+}
+function freshMd_(d) { return d ? d.slice(5, 7) + '/' + d.slice(8, 10) : '—'; }
+function freshBuild_() {
+  var now = new Date(), today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, TZ, 'HH:mm'), yest = addDays_(today, -1);
+  var items = {}, run = function (key, fn) { try { items[key] = fn(); } catch (e) { items[key] = { err: shortErr_(e && e.message || e) }; } };
+  var ssCache = {}, open = function (id) { return ssCache[id] || (ssCache[id] = SpreadsheetApp.openById(id)); };
+  run('pos', function () {   // POS：BOM 本 POS資料 C 欄「建立日期」；每天約 05:00 匯入前一天
+    var x = freshTailMax_(open(FRESH_SS.BOM), 'POS資料', 3, 3000);
+    return { to: x && x.d, warn: !!(x && x.d < yest && hm >= '07:00'), txt: '資料到 ' + freshMd_(x && x.d) + '（每天約 05:00 自動匯入前一天）' };
+  });
+  run('reviews', function () {   // Google 評論：評論 Sheet C 欄「評論時間」最後 500 列
+    var x = freshTailMax_(open(SRC.REV_SS), '工作表1', 3, 500);
+    return { to: x && x.d, at: x ? x.d + ' ' + x.t : '', warn: !!(x && x.d < addDays_(today, -2)), txt: '最新評論 ' + freshMd_(x && x.d) + (x && x.t ? ' ' + x.t : '') + '（每天自動抓）' };
+  });
+  run('member', function () {   // 自己人：agg_store_kpi_365 F 欄「更新時間」（自己人儀表板「資料更新至」同一格；「自己人原始資料」分頁 5 月底後就沒再更新，不能用）
+    var sh = open(SRC.MEM_SS).getSheetByName('agg_store_kpi_365'); if (!sh) throw new Error('找不到分頁 agg_store_kpi_365');
+    var x = sh.getLastRow() >= 2 ? freshVal_(sh.getRange(2, 6).getValue()) : null;
+    return { to: x && x.d, warn: !!(x && x.d < addDays_(today, -1) && hm >= '10:00'), txt: '會員資料更新到 ' + freshMd_(x && x.d) + '（每天 08:30 自動）' };
+  });
+  run('pnl', function () {   // P&L：fact_pnl A 欄 year_month（民國年月）、L 欄 load_date
+    var sh = open(FRESH_SS.PNL).getSheetByName('fact_pnl'); if (!sh) throw new Error('找不到分頁 fact_pnl');
+    var last = sh.getLastRow(); if (last < 2) return { txt: '還沒有損益資料' };
+    var v = sh.getRange(2, 1, last - 1, 12).getValues(), ym = 0, ld = '';
+    v.forEach(function (r) { var y = Number(r[0]) || 0; if (y > ym) ym = y; var x = freshVal_(r[11]); if (x && x.d > ld) ld = x.d; });
+    var ad = ym ? (Math.floor(ym / 100) + 1911) + '-' + ('0' + (ym % 100)).slice(-2) : '';
+    return { to: ad, at: ld, txt: '損益資料到 ' + (ad || '—') + '・最後匯入 ' + freshMd_(ld) + '（每月手動）' };
+  });
+  run('schedule', function () {   // 排班：fact_daily_sales A 欄日期（營收，每天自動）＋ import_log 最後一列（班表上傳時間）
+    var ss = open(FRESH_SS.SCH), x = freshTailMax_(ss, 'fact_daily_sales', 1, 3000), u = null;
+    try { u = freshTailMax_(ss, 'import_log', 1, 50); } catch (e) {}
+    return { to: x && x.d, at: u ? u.d + ' ' + u.t : '', warn: !!(x && x.d < addDays_(today, -2)), txt: '營收到 ' + freshMd_(x && x.d) + '・班表最後上傳 ' + (u ? freshMd_(u.d) + ' ' + u.t : '—') };
+  });
+  run('vendor', function () {   // 原物料：fact_vendor_price A 欄季別、K 欄日期（表尾 3000 列）
+    var sh = open(FRESH_SS.VENDOR).getSheetByName('fact_vendor_price'); if (!sh) throw new Error('找不到分頁 fact_vendor_price');
+    var last = sh.getLastRow(); if (last < 2) return { txt: '還沒有單價資料' };
+    var k = Math.min(3000, last - 1), v = sh.getRange(last - k + 1, 1, k, 11).getValues(), q = '', d = '';
+    v.forEach(function (r) { var qq = String(r[0] || '').trim(); if (/^\d{4}Q[1-4]$/.test(qq) && qq > q) q = qq; var x = freshVal_(r[10]); if (x && x.d > d) d = x.d; });
+    return { to: d, txt: '單價最新 ' + (q || '—') + '・最後一筆 ' + freshMd_(d) + '（每季手動）' };
+  });
+  run('recipe', function () { return { txt: '即時（開頁直接讀 BOM 本與採購主檔）' }; });
+  run('purchase', function () {   // 採購：agg_purchase G 欄「重算時間」＋ agg_usage_day C 欄「日」
+    var ss = open(SRC.PUR_DASH), sh = ss.getSheetByName('agg_purchase'), rb = null;
+    if (sh && sh.getLastRow() >= 2) rb = freshVal_(sh.getRange(2, 7).getValue());
+    var x = null; try { x = freshTailMax_(ss, 'agg_usage_day', 3, 3000); } catch (e) {}
+    return { to: x && x.d, at: rb ? rb.d + (rb.t ? ' ' + rb.t : '') : '', warn: !!(rb && rb.d < today && hm >= '08:00'),
+      txt: '建議量重算 ' + (rb ? freshMd_(rb.d) + (rb.t && rb.t !== '00:00' ? ' ' + rb.t : '') : '—') + '・用量資料到 ' + freshMd_(x && x.d) + '（每天 07:05 自動）' };
+  });
+  run('monthly', function () {   // 決策中心：本專案最後一次寫完快照
+    var dn = jsonProp_(PROP_DONE), at = String(dn.at || ''), x = freshVal_(at);
+    return { at: x ? x.d + ' ' + x.t : '', warn: !!(x && x.d < today && hm >= '11:30'), txt: '營運快照 ' + (x ? freshMd_(x.d) + ' ' + x.t : '—') + '（每天 11:00 自動）' };
+  });
+  run('reservation', function () {   // 訂位：future 表 U 欄 fetched_at（每筆抓取時間）
+    var sh = open(FRESH_SS.RSV).getSheetByName('fact_reservations_future'); if (!sh) throw new Error('找不到分頁 fact_reservations_future');
+    var last = sh.getLastRow(); if (last < 2) return { txt: '未來訂位表是空的', warn: true };
+    var v = sh.getRange(2, 21, last - 1, 1).getValues(), best = null;
+    v.forEach(function (r) { var x = freshVal_(r[0]); if (x && (!best || x.d + ' ' + x.t > best.d + ' ' + best.t)) best = x; });
+    return { at: best ? best.d + ' ' + best.t : '', warn: !!(best && best.d < today && hm >= '11:00'), txt: '未來訂位 ' + (best ? freshMd_(best.d) + ' ' + best.t : '—') + ' 更新（白天約每 3 小時）' };
+  });
+  run('announce', function () {   // 公告：fact_announce M 欄 updated_at（最後一次發佈／修改）
+    var x = freshTailMax_(open(FRESH_SS.ANN), 'fact_announce', 13, 2000);
+    return { at: x ? x.d + ' ' + x.t : '', txt: '即時・最後一次發佈／修改 ' + (x ? freshMd_(x.d) + ' ' + x.t : '—') };
+  });
+  return { ok: true, version: WEB_VER, builtAt: Utilities.formatDate(now, TZ, 'yyyy-MM-dd HH:mm'), items: items };
 }
 
 /** dim_rule 唯讀版（readRules_ 會補列，讀取窗口不可寫入） */

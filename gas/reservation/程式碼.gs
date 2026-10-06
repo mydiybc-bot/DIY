@@ -117,6 +117,33 @@ function rebuildFuture_(t0) {
   const last = sh.getLastRow(); // 全部抓完才動 Sheet，中斷不會留半套
   if (last > 1) sh.getRange(2, 1, last - 1, CFG.HEADERS.length).clearContent();
   if (all.length) sh.getRange(2, 1, all.length, CFG.HEADERS.length).setValues(all);
+  try { futureMenuWrite_(all, null); } catch (e) { Logger.log('甜點明細寫入失敗（不影響 future）：' + e.message); }   // 2026-10-06 1006 #2
+}
+
+/* ---- 2026-10-06 各儀表板調整 1006 #2：未來訂位的甜點明細（給決策中心算「同時段器具／模具夠不夠」）----
+   分頁 fact_future_menu：date｜store｜slot｜category｜party_size｜status｜menu（JSON：[[甜點名, 份數], …]）｜fetched_at，只存有選甜點的訂位；
+   不含姓名電話。daysSet＝null 整份換掉（每天 10:15 整份重建）；有 daysSet＝只換那幾天、其他今天以後的照舊（白天每 3 小時近 14 天）。 */
+const FM_SHEET = 'fact_future_menu';
+const FM_HEAD = ['date', 'store', 'slot', 'category', 'party_size', 'status', 'menu', 'fetched_at'];
+function futureMenuWrite_(rows, daysSet) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(FM_SHEET);
+  if (!sh) { sh = ss.insertSheet(FM_SHEET); sh.getRange(1, 1, 1, FM_HEAD.length).setValues([FM_HEAD]); sh.setFrozenRows(1); }
+  const H = CFG.HEADERS, iD = H.indexOf('date'), iS = H.indexOf('store'), iT = H.indexOf('slot'), iC = H.indexOf('category'),
+        iP = H.indexOf('party_size'), iSt = H.indexOf('status'), iF = H.indexOf('fetched_at');
+  const fresh = rows.filter(r => r.menu && r.menu.length)
+    .map(r => [wdDateStr_(r[iD]), String(r[iS] || ''), normSlot_(r[iT]), String(r[iC] || ''), Number(r[iP]) || 0, String(r[iSt] || ''), JSON.stringify(r.menu), String(r[iF] || '')]);
+  const last = sh.getLastRow(), keep = [], today = fmtDate_(new Date());
+  if (daysSet && last > 1) {
+    sh.getRange(2, 1, last - 1, FM_HEAD.length).getValues().forEach(r => { const d = wdDateStr_(r[0]); if (d && d >= today && !daysSet[d]) keep.push(r); });
+  }
+  const all = fresh.concat(keep);
+  if (last > 1) sh.getRange(2, 1, last - 1, FM_HEAD.length).clearContent();
+  if (all.length) {
+    sh.getRange(2, 1, all.length, 4).setNumberFormat('@');   // 日期、店、時段、類別保持文字（避免被自動轉成日期／時間）
+    sh.getRange(2, 1, all.length, FM_HEAD.length).setValues(all);
+  }
+  return fresh.length;
 }
 
 /* ============ 歷史大回補（多日合併抓取＋自適應窗口＋游標自癒） ============ */
@@ -486,8 +513,12 @@ function parseTable_(html, dateStr) {
       return decodeEnt_(stripTags_(tds[i]));
     };
     const attended = (/class="attend"/.test(tds[14]) && /\bchecked\b/.test(tds[14])) ? '出席' : '';
+    // 2026-10-06 各儀表板調整 1006 #2：「食譜」欄 popover 有客人選的甜點（「名稱 X 份數」，散客、團體都有）→ 掛在這一列的 menu 屬性；
+    // 不進 CFG.HEADERS（歷史表、未來表的欄位都不變），只由 futureMenuWrite_ 另外寫進 fact_future_menu
+    const menuM = tds[9].match(/data-content="([^"]*)"/);
+    const menu = menuM ? menuParse_(decodeEnt_(menuM[1])) : [];
 
-    out.push([
+    const row = [
       resId,
       dDate ? dDate.slice(0, 4) + '-' + dDate.slice(4, 6) + '-' + dDate.slice(6, 8) : dateStr,
       val(1),
@@ -498,7 +529,20 @@ function parseTable_(html, dateStr) {
       val(13), attended,
       val(15), val(16), val(17),
       groupId, now
-    ]);
+    ];
+    if (menu.length) row.menu = menu;
+    out.push(row);
+  });
+  return out;
+}
+
+/** 「<span>小黑炭Oreo布朗尼 (可做全素) X 1</span><br />…」→ [['小黑炭Oreo布朗尼 (可做全素)', 1], …] */
+function menuParse_(html) {
+  const out = [];
+  String(html || '').split(/<br\s*\/?>/i).forEach(function (seg) {
+    const t = stripTags_(seg).replace(/\s+/g, ' ').trim();
+    const m = t.match(/^(.+?)\s*[xX×＊*]\s*(\d+)\s*$/);
+    if (m && m[1]) out.push([m[1].trim(), Number(m[2]) || 0]);
   });
   return out;
 }
