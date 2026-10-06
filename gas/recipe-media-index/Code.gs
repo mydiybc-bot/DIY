@@ -4,7 +4,7 @@
  * 門市食譜後台（diybc.azurewebsites.net）掃出來的「哪支食譜哪一步用哪個圖片影片」寫進本試算表。
  * 只讀寫自己這一張試算表（權限 spreadsheets.currentonly）；通行碼存在指令碼屬性 TOKEN，不寫在程式裡。
  */
-var VERSION = 'recipe-media-index-v4';
+var VERSION = 'recipe-media-index-v5';
 
 function ss_() { return SpreadsheetApp.getActiveSpreadsheet(); }
 
@@ -97,7 +97,7 @@ function rows_(b) {
   return { ok: true, sheet: b.sheet, start: b.start, n: n };
 }
 
-/** 收尾排版。b={sheets:[{name, widths[], wrap, filter, checkbox[欄號]}], hide[], order[], remove[]} */
+/** 收尾排版。b={sheets:[{name, widths[], wrap, filter, checkbox[欄號], tall:{h, rows[列號]}}], hide[], order[], remove[]}（tall＝放預覽圖的列加高） */
 function finish_(b) {
   var ss = ss_(), notes = [];
   (b.sheets || []).forEach(function (d) {
@@ -112,6 +112,14 @@ function finish_(b) {
       .setWrapStrategy(d.wrap ? SpreadsheetApp.WrapStrategy.WRAP : SpreadsheetApp.WrapStrategy.CLIP)
       .setVerticalAlignment('top');
     (d.checkbox || []).forEach(function (c) { if (lr > 1) sh.getRange(2, c, lr - 1, 1).insertCheckboxes(); });
+    if (d.tall && d.tall.h && d.tall.rows && d.tall.rows.length) {
+      var rs = d.tall.rows.slice().sort(function (a, b) { return a - b; }), st = rs[0], pv = rs[0];
+      for (var i = 1; i <= rs.length; i++) {
+        if (i < rs.length && rs[i] === pv + 1) { pv = rs[i]; continue; }
+        sh.setRowHeights(st, pv - st + 1, d.tall.h);
+        if (i < rs.length) { st = rs[i]; pv = rs[i]; }
+      }
+    }
     if (d.filter && lr > 1) {
       if (sh.getFilter()) sh.getFilter().remove();
       sh.getRange(1, 1, lr, lc).createFilter();
