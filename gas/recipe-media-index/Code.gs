@@ -4,7 +4,7 @@
  * 門市食譜後台（diybc.azurewebsites.net）掃出來的「哪支食譜哪一步用哪個圖片影片」寫進本試算表。
  * 只讀寫自己這一張試算表（權限 spreadsheets.currentonly）；通行碼存在指令碼屬性 TOKEN，不寫在程式裡。
  */
-var VERSION = 'recipe-media-index-v3';
+var VERSION = 'recipe-media-index-v4';
 
 function ss_() { return SpreadsheetApp.getActiveSpreadsheet(); }
 
@@ -148,7 +148,7 @@ function count_() {
 function sample_(name, row, n) {
   var sh = ss_().getSheetByName(name);
   if (!sh) return { ok: false, msg: 'no sheet' };
-  n = Math.max(1, Math.min(n, 20));
+  n = Math.max(1, Math.min(n, 5000));
   return { ok: true, values: sh.getRange(row, 1, n, sh.getLastColumn()).getDisplayValues() };
 }
 
