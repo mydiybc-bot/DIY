@@ -2581,6 +2581,19 @@ function eqLimitOf_(lim, sid, it, rule) {
   if (lim.all[it] != null) return lim.all[it];
   return rule.limit;
 }
+/** 一次性（2026-10-06 22:43 經營者在 xlsx 填的上限）：寫進 dim_equip_limit（品項找不到就新增列），並清掉 live 暫存讓它立刻生效。執行完可留著當範例。 */
+function zzEqLimitApply20261006() {
+  var vals = { '小矽膠模': 24, '大矽膠模': 18, '愛心矽膠模': 12, '麵包撒粉模': 18, '海生館散策壓模': 12, '方模': 6, '貓咪餅乾模': 12 };
+  var sh = snapSS_().getSheetByName(EQ_LIMIT_TAB); if (!sh) throw new Error('沒有分頁 ' + EQ_LIMIT_TAB + '，先執行 zzEqLimitSetup');
+  var last = sh.getLastRow(), rows = last >= 2 ? sh.getRange(2, 1, last - 1, 5).getValues() : [], idx = {}, log = [];
+  rows.forEach(function (r, i) { var k = String(r[0] || '').trim(); if (k && idx[k] == null) idx[k] = i; });
+  Object.keys(vals).forEach(function (it) {
+    if (idx[it] != null) { sh.getRange(idx[it] + 2, 2, 1, 1).setValue(vals[it]); sh.getRange(idx[it] + 2, 5, 1, 1).setValue('2026-10-06 經營者填（xlsx）'); log.push(it + '：列 ' + (idx[it] + 2) + ' → ' + vals[it]); }
+    else { sh.appendRow([it, vals[it], '', '個', '2026-10-06 經營者填（xlsx）']); log.push(it + '：新增 → ' + vals[it]); }
+  });
+  CacheService.getScriptCache().remove(LIVE_KEY + '|n');
+  Logger.log('已寫入 ' + log.length + ' 項\n' + log.join('\n'));
+}
 /** 一次性：建 dim_equip_limit 分頁（已有就不動）。在編輯器執行。 */
 function zzEqLimitSetup() {
   var ss = snapSS_(), sh = ss.getSheetByName(EQ_LIMIT_TAB);
