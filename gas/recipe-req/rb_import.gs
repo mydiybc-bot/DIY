@@ -375,3 +375,10 @@ function rbRun_(rid, job, auth, t0) {
   if (done) rbLog_(rid, job.imp_id, 'done', bid, String(N), 'Y', '匯入完成：' + N + ' 步', auth);
   return { imp_id: job.imp_id, backend_id: bid, link: rbLink_(bid), done: done, next: k2, total: N };
 }
+
+/* 授權用（在 Apps Script 編輯器執行一次，跳出 Google 授權：連線到外部服務）；只讀後台公開的登入頁，回 HTTP 狀態碼，順便確認 Google 連得到後台 */
+function rbAuthorize() {
+  var r = UrlFetchApp.fetch(RB_BASE + '/Identity/Account/Login', { muteHttpExceptions: true, followRedirects: false });
+  Logger.log('食譜後台登入頁 HTTP ' + r.getResponseCode());
+  return r.getResponseCode();
+}
