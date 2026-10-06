@@ -325,6 +325,7 @@ function computeAggregation() {
 
     if (!storeCode && !product) continue;
     if (product.indexOf('$500券') >= 0) continue;
+    if (product === '肚肚對帳調整') continue;   // 2026-10-06：一鍵追加新品 dudooGuard 補的金額調整列，營收照算（BQ），不算品項／件數／人數
     var dateObj = (dateRaw instanceof Date) ? dateRaw : new Date(String(dateRaw));
     if (isNaN(dateObj.getTime())) continue;
 
@@ -659,6 +660,7 @@ function _fillDailyHeadcount(data, dailyMap, dessertSet) {
     var dateRaw = row[2];
     var product = String(row[3] || '');
     if (product.indexOf('$500券') >= 0) continue;
+    if (product === '肚肚對帳調整') continue;   // 2026-10-06：一鍵追加新品 dudooGuard 補的金額調整列，營收照算（BQ），不算品項／件數／人數
     var mainCat = String(row[4] || '');
     var qty = Number(row[7]) || 0;
     var dateObj = (dateRaw instanceof Date) ? dateRaw : new Date(String(dateRaw));
@@ -1395,6 +1397,7 @@ function computeDailyByStore() {
     var revenue = unitPrice * qty;
     if (!product) continue;
     if (product.indexOf('$500券') >= 0) continue;
+    if (product === '肚肚對帳調整') continue;   // 2026-10-06：一鍵追加新品 dudooGuard 補的金額調整列，營收照算（BQ），不算品項／件數／人數
     var dateObj = (dateRaw instanceof Date) ? dateRaw : new Date(String(dateRaw));
     if (isNaN(dateObj.getTime())) continue;
     var y = dateObj.getFullYear(), mo = dateObj.getMonth() + 1, d = dateObj.getDate();
@@ -1599,7 +1602,7 @@ function verifyV20_dbpRevenue() {
         ⚠️ 不是營業額。折扣是訂單層事件，切不到品項層。
    ============================================================ */
 
-var PRODUCT_MONTHLY_CACHE_PREFIX = 'POS_PRODUCT_MONTHLY_V1_';
+var PRODUCT_MONTHLY_CACHE_PREFIX = 'POS_PRODUCT_MONTHLY_V2_';   // 2026-10-06：排除「肚肚對帳調整」換版
 var PRODUCT_MONTHLY_CACHE_TTL = 3600;
 
 function getProductMonthlyCached() {
@@ -1671,6 +1674,7 @@ function computeProductMonthly() {
     // ↓ 三條過濾與主迴圈完全一致，順序也一致
     if (!storeCode && !product) { skipped.noKey++; continue; }
     if (product.indexOf('$500券') >= 0) { skipped.voucher500++; continue; }
+    if (product === '肚肚對帳調整') continue;   // 2026-10-06：一鍵追加新品 dudooGuard 補的金額調整列，營收照算（BQ），不算品項／件數／人數
     var dateObj = (dateRaw instanceof Date) ? dateRaw : new Date(String(dateRaw));
     if (isNaN(dateObj.getTime())) { skipped.badDate++; continue; }
 
