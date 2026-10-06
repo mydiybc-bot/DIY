@@ -5,17 +5,21 @@
  * 資料：試算表「公告及工作清單_資料庫」（setup 建立，ID 存指令碼屬性 DB_ID；只有擁有者能開，不開連結分享）
  *   fact_announce（一則公告一列；內文 HTML 切 content_html_1～4，每格 ≤45,000 字；content_text＝純文字給全文搜尋）
  *   fact_announce_att（附檔索引：Drive 檔案 ID）、fact_work（工作清單）、fact_work_discuss（討論）、dim_option（分類選單）、log、meta_import
- * 權限：讀內容要「看公告」密碼（dim_auth：announce）；發佈／修改／刪除／上傳／匯入要「發佈者」密碼（dim_auth：announce_pub）。
- *       密碼由「儀表板權限中心」集中管理（UrlFetch verify），驗過結果快取 10 分鐘（只存雜湊）。repo 是公開的，所以內容一律要密碼才讀得到。
- *   doGet（JSONP，公開）只回 ping 與 stat（數字，不含內容）。
+ * 權限（2026-10-06 起，見 v3）：公告免密碼；工作清單要「看公告」密碼（dim_auth：announce）；發佈／修改／刪除／上傳／匯入要「發佈者」密碼（dim_auth：announce_pub）。
+ *       密碼由「儀表板權限中心」集中管理（UrlFetch verify），驗過結果快取（只存雜湊）。
+ *   doGet（JSONP，公開）回 ping、stat（數字）、active（有效期內公告）。
  * 安全：寫入包 LockService；刪除＝標記刪除＋附檔搬到「_已刪除」，不永久刪；所有 Drive 動作只限根資料夾底下（防 drive 範圍誤動其他檔）。
  * 部署：網頁應用程式／執行身分＝我／存取＝所有人。第一次：編輯器選 setup → 執行 → 授權（建資料庫試算表與子資料夾）。
  *       之後更新一律「管理部署作業 → 編輯 → 新版本」（網址不變）。
  * v2（2026-10-04 效能第 2 批，只動讀取側）：①POST ping（不用密碼，前端密碼框一出現就預熱）②bundle＝驗密碼＋一次回 list／workList／options
  *       ③密碼驗證結果快取 10 分鐘 → 2 小時（key 含密碼雜湊；改密碼或停用後最多 2 小時才對本頁生效）④公告清單快取 5 分鐘（任何寫入後失效）
  *       ⑤單則 get 只讀那一列的內文，不再整張（含全部內文）讀。回傳 JSON 欄位不變。
+ * v3（2026-10-06 經營者裁定「看公告不需要密碼」，各儀表板調整 1006）：公告的讀取 list／get／options／active 免密碼；
+ *       工作清單 workList 仍要「看公告」密碼（announce）；發佈／修改／刪除／上傳／匯入仍要管理者密碼（announce_pub）。
+ *       bundle 沒帶密碼＝只回公告與選單（work:null、workLocked:true）；帶對的看公告密碼＝跟原本一樣三份都回。
+ *       新增 active＝今天在有效期內的公告（含純文字內文與附檔清單；給決策中心店長頁）；GET（JSONP）也可讀 active。
  */
-var VERSION = 'announce-api-v2';   // 2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）；GAS 線上目前是 v1.1（部署 @2），v2 尚未部署
+var VERSION = 'announce-api-v3';   // 2026-10-06 v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
@@ -87,14 +91,16 @@ function doGet(e) {
   try {
     if (a === 'ping') res = { ok: true, data: pingData_() };
     else if (a === 'stat') res = { ok: true, data: stat_() };
-    else res = { ok: false, msg: '讀公告內容要用 POST 並帶密碼' };
+    else if (a === 'active') res = { ok: true, data: active_({}, '訪客').data };
+    else res = { ok: false, msg: '讀公告內容請用 POST' };
   } catch (err) { res = { ok: false, msg: errMsg_(err) }; }
   res.act = a;
   return out_(res, p.callback);
 }
 function pingData_() { return { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') }; }
 var ACTIONS = { whoami: whoami_, list: list_, get: get_, save: save_, del: del_, upload: upload_, uploadImg: uploadImg_, attDel: attDel_,
-  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_ };
+  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_, active: active_ };
+var OPEN = { list: 1, get: 1, options: 1, active: 1 };   /* v3（2026-10-06）：公告免密碼；工作清單、寫入照舊要密碼 */
 var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1 };
 var PUB_ONLY = WRITES;
 var RQ_SEC = 21600;
@@ -105,8 +111,11 @@ function doPost(e) {
   if (act === 'ping') { res = { ok: true, data: pingData_() }; res.act = 'ping'; return out_(res); }   /* v2：預熱用（不用密碼、不碰試算表），回法同 GET ping */
   if (!fn) return out_({ ok: false, act: act, msg: '不支援的動作：' + act });
   var who;
-  try { who = auth_(p.password, (PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub')) ? DASH_PUB : DASH_VIEW); }
-  catch (err) { Utilities.sleep(800); res = { ok: false, act: act, code: 'auth', msg: errMsg_(err) }; log_('', act, '', false, res.msg); return out_(res); }
+  if (OPEN[act] || (act === 'bundle' && !String(p.password || '').trim())) who = '訪客';   /* v3：公告免密碼；bundle 沒帶密碼只回公告＋選單 */
+  else {
+    try { who = auth_(p.password, (PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub')) ? DASH_PUB : DASH_VIEW); }
+    catch (err) { Utilities.sleep(800); res = { ok: false, act: act, code: 'auth', msg: errMsg_(err) }; log_('', act, '', false, res.msg); return out_(res); }
+  }
   var lock = LockService.getScriptLock();
   if (WRITES[act] && !lock.tryLock(15000)) return out_({ ok: false, act: act, code: 'busy', msg: '系統忙碌中，請稍後再按一次' });
   var rqKey = (WRITES[act] && p.rq) ? 'rq:' + Utilities.base64EncodeWebSafe(Utilities.newBlob(act + '|' + String(p.rq).slice(0, 120)).getBytes()) : '';
@@ -147,7 +156,23 @@ function auth_(pw, dash) {
 }
 function whoami_(p, who) { return { data: { who: who } }; }
 /* v2：開頁一次拿齊（驗密碼＋公告清單＋工作清單＋選單），三份各自的欄位與原本 list／workList／options 相同 */
-function bundle_(p, who) { return { data: { list: list_(p, who).data, work: workList_(p, who).data, options: options_(p, who).data } }; }
+function bundle_(p, who) {
+  if (who === '訪客') return { data: { list: list_(p, who).data, work: null, workLocked: true, options: options_(p, who).data } };   /* v3：沒帶密碼＝工作清單不給 */
+  return { data: { list: list_(p, who).data, work: workList_(p, who).data, options: options_(p, who).data } };
+}
+/* v3（2026-10-06）：今天在有效期內的公告（免密碼；決策中心店長頁用）。置頂優先，再依開始日新到舊；附檔清單一起回（只讀有附檔時才讀附檔表） */
+function active_(p, who) {
+  var t = today_(), rows = listRows_().rows.filter(function (r) { return (!r.start_date || r.start_date <= t) && (!r.end_date || r.end_date >= t); });
+  rows.sort(function (a, b) { return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || String(b.start_date || '').localeCompare(String(a.start_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  var att = {};
+  rows.forEach(function (r) { att[r.ann_id] = []; });
+  if (rows.some(function (r) { return r.att_count > 0; })) {
+    load_('fact_announce_att').rows.forEach(function (x) { if (att[x.ann_id] && x.deleted !== 'Y') att[x.ann_id].push({ name: x.file_name, url: x.url }); });
+  }
+  return { data: { today: t, at: now_(), rows: rows.map(function (r) {
+    return { ann_id: r.ann_id, title: r.title, category: r.category, type: r.type, start_date: r.start_date, end_date: r.end_date, pinned: r.pinned, att_count: r.att_count, text: r.text, att: att[r.ann_id] || [] };
+  }) } };
+}
 
 /* ================= 公告 ================= */
 function stat_() {

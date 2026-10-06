@@ -3,7 +3,9 @@
      讀內容要「看公告」密碼（dim_auth：announce），發佈／修改／刪除／匯入要「發佈者」密碼（dim_auth：announce_pub）；兩組密碼都在 GAS 端驗（repo 公開，前端遮罩擋不住）。
      寫入一律兩層確認；刪除＝標記刪除＋附檔搬「_已刪除」，不永久刪。內文顯示前用 DOMPurify 清掉危險程式碼。
      2026-10-04 v1.1 效能第 2 批（只動讀取側）：密碼框一出現就預熱公告 GAS（POST ping）與權限中心（照 AUTH-CORE 規則全站 90 秒一次）；
-     輸完密碼改打一支 bundle（驗密碼＋公告清單＋工作清單＋選單一次回來），不再先 whoami 再分三支讀。畫面與 v1 相同。 -->
+     輸完密碼改打一支 bundle（驗密碼＋公告清單＋工作清單＋選單一次回來），不再先 whoami 再分三支讀。畫面與 v1 相同。
+     2026-10-06 v1.3（經營者「看公告不需要密碼」，各儀表板調整 1006；後端 announce-api-v3）：一進來就讀公告，不跳密碼框；
+     工作清單仍要「看公告」密碼（點工作清單分頁才問）；管理者模式（announce_pub）不變。網址 #a=公告編號 直接打開那則公告（決策中心店長頁連過來用）。 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -127,7 +129,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
 </head>
 <body>
 
-<div id="gate">
+<div id="gate" style="display:none">
   <div class="box">
     <h3 id="gTitle">🔐 公告及工作清單</h3>
     <div style="font-size:12px;color:#5B6B69;margin-bottom:14px" id="gSub">請輸入「看公告」密碼</div>
@@ -158,7 +160,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
       <li><b>怎麼改：</b>一律在本頁按「✏️ 管理者模式」輸入管理者密碼後新增、修改、刪除。<b>請不要直接改試算表</b>（本頁會檢查格式、記錄是誰改的）。</li>
       <li><b>刪除：</b>只是標記刪除，資料列還在、附檔搬到「_已刪除」資料夾，可以找回。</li>
       <li><b>公告狀態：</b>用公告的開始日／結束日跟今天比：今天在期間內＝進行中；結束日已過＝已過期；開始日還沒到＝尚未開始；沒填結束日＝長期有效。</li>
-      <li><b>密碼：</b>看內容要「看公告」密碼，新增、修改、刪除要「管理者」密碼；兩組都在「儀表板權限中心」管理。關掉分頁就要重新輸入。</li>
+      <li><b>密碼（2026-10-06 起）：</b>看公告不用密碼；看工作清單要「看公告」密碼；新增、修改、刪除要「管理者」密碼。兩組都在「儀表板權限中心」管理，關掉分頁就要重新輸入。</li>
       <li><b>從 NUEIP 搬過來的公告</b>標「NUEIP」字樣，保留原建立者與建立時間。</li>
     </ol></div>
   </div>
@@ -221,7 +223,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
   </section>
 </div>
 
-<div class="footer">自己做烘焙聚樂部 ｜ 公告及工作清單 v1.2（2026-10-05）</div>
+<div class="footer">自己做烘焙聚樂部 ｜ 公告及工作清單 v1.3（2026-10-06）</div>
 
 <!-- 讀公告 -->
 <div class="mask" id="mView"><div class="dlg">
@@ -345,10 +347,10 @@ var ST_TXT = { on:['進行中','p-on'], soon:['尚未開始','p-soon'], off:['�
 function gate(mode){
   var g=$('gate'), inp=$('gPwd'), btn=$('gBtn'), err=$('gErr');
   g.style.display='flex'; err.textContent=''; inp.value=''; setTimeout(function(){ inp.value=''; inp.focus(); }, 120);
-  $('gTitle').textContent = mode==='pub' ? '✏️ 管理者模式' : '🔐 公告及工作清單';
-  $('gSub').textContent = mode==='pub' ? '請輸入「管理者」密碼（只發給管理者）' : '請輸入「看公告」密碼';
-  $('gFoot').innerHTML = mode==='pub' ? '<a href="#" id="gCancel">取消</a>' : '<a href="hub.html">⬅ 回首頁</a>';
-  if (mode==='pub') $('gCancel').onclick = function(e){ e.preventDefault(); g.style.display='none'; };
+  $('gTitle').textContent = mode==='pub' ? '✏️ 管理者模式' : '🔐 工作清單';
+  $('gSub').textContent = mode==='pub' ? '請輸入「管理者」密碼（只發給管理者）' : '看工作清單要輸入「看公告」密碼（看公告不用密碼）';
+  $('gFoot').innerHTML = '<a href="#" id="gCancel">' + (mode==='pub' ? '取消' : '取消，回去看公告') + '</a>';
+  $('gCancel').onclick = function(e){ e.preventDefault(); g.style.display='none'; if (mode!=='pub' && S.workLocked) showTab('ann'); };
   warm();
   function go(){
     var v=(inp.value||'').trim(); if(!v) return;
@@ -383,7 +385,7 @@ function showTab(t){
   document.querySelectorAll('.panel').forEach(function(p){ p.classList.toggle('on', p.id==='p-'+t); });
   try{ history.replaceState(null,'','#'+t); }catch(_){}
 }
-document.querySelectorAll('.tab').forEach(function(b){ b.onclick=function(){ showTab(b.dataset.tab); }; });
+document.querySelectorAll('.tab').forEach(function(b){ b.onclick=function(){ showTab(b.dataset.tab); if (b.dataset.tab==='work' && S.workLocked) gate('view'); }; });
 document.querySelectorAll('[data-close]').forEach(function(b){ b.onclick=function(){ b.closest('.mask').classList.remove('on'); }; });
 document.querySelectorAll('.mask').forEach(function(m){ m.addEventListener('mousedown', function(e){ if (e.target===m && m.id!=='mEdit') m.classList.remove('on'); }); });
 
@@ -404,18 +406,20 @@ function loadAll(){
   dsb('dsb-auto','讀取中…');
   return loadBundle(S.pw).then(function(r){
     if (!r.ok) {
-      if (r.code==='auth') { S.pw=''; ss(K_VIEW,null); gate('view'); return; }
+      if (r.code==='auth') { S.pw=''; ss(K_VIEW,null); return loadAll(); }   /* 存著的密碼失效 → 改用免密碼讀（公告照看，工作清單鎖起來） */
       dsb('dsb-err','❌ 讀取失敗：'+esc(r.msg)+'　<a href="#" onclick="location.reload();return false">重新整理</a>'); return;
     }
     applyBundle(r.data);
   });
 }
 function applyBundle(d){
-  S.anns = d.list.rows; S.works = d.work.rows; S.opts = d.options || {};
+  S.anns = d.list.rows; S.workLocked = !d.work; S.works = d.work ? d.work.rows : []; S.opts = d.options || {};
   S.loadedAt = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
   var nu = S.anns.filter(function(a){ return a.src==='nueip'; }).length;
-  dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 <b>'+S.works.length+'</b> 件 ｜ 讀取時間 '+S.loadedAt+' ｜ 🔒 內容需密碼');
+  dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 '+(S.workLocked?'🔒（要密碼）':'<b>'+S.works.length+'</b> 件')+' ｜ 讀取時間 '+S.loadedAt+' ｜ 看公告免密碼'+(S.workLocked?'；工作清單要輸入「看公告」密碼':''));
   fillOpts(); renderAnn(); renderWork();
+  var dm=(location.hash||'').match(/^#a=([\w-]+)/);   /* 決策中心店長頁連過來：#a=公告編號 直接打開那則 */
+  if (dm && !S.deepDone) { S.deepDone=1; openAnn(decodeURIComponent(dm[1])); }
 }
 function optList(kind, extra){ var o=(S.opts[kind]||[]).slice(); (extra||[]).forEach(function(v){ if(v && o.indexOf(v)<0) o.push(v); }); return o; }
 function fillSel(sel, vals, first){ var cur=sel.value; sel.innerHTML=(first!==undefined?'<option value="">'+first+'</option>':'')+vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join(''); if (vals.indexOf(cur)>-1||cur==='') sel.value=cur; }
@@ -628,6 +632,12 @@ function wkFiltered(stOverride){
   }).sort(function(a,b){ return (a.due_date||'9999').localeCompare(b.due_date||'9999') || (b.date||'').localeCompare(a.date||''); });
 }
 function renderWork(){
+  if (S.workLocked) {
+    $('cWork').textContent='🔒';
+    $('wkBody').innerHTML='<tr><td colspan="8" class="empty">🔒 工作清單要輸入「看公告」密碼才看得到（看公告不用密碼）　<button class="btn" type="button" id="wkUnlock">輸入密碼</button></td></tr>';
+    $('wkUnlock').onclick=function(){ gate('view'); };
+    return;
+  }
   ['open','done','all'].forEach(function(k){ var b=document.querySelector('#wkSt [data-v="'+k+'"] .c'); if(b) b.textContent=wkFiltered(k).length; });
   $('cWork').textContent=S.works.filter(function(w){ return !isDone(w); }).length;
   var rows=wkFiltered(), ts=terms($('wkQ').value), t=today();
@@ -765,8 +775,10 @@ $('impGo').onclick=function(){
 S.pw=ss(K_VIEW); S.pub=ss(K_PUB);
 if (S.pub) setPub(true);
 var h=(location.hash||'').slice(1); if (h==='work') showTab('work'); else if (h==='imp' && S.pub) showTab('imp');
+S.workLocked = !S.pw;
 if (/__ANNOUNCE_DEPLOYMENT__/.test(API)) { $('gate').style.display='none'; dsb('dsb-err','⚠️ 公告系統後端還沒部署完成（等經營者完成 Google 授權）。'); return; }
-if (S.pw) { $('gate').style.display='none'; warmAuth(); loadAll(); } else gate('view');   /* 已存密碼：bundle 直接送，順手叫醒權限中心（公告 GAS 驗密碼要找它） */
+if (S.pw) warmAuth();   /* 已存「看公告」密碼：bundle 帶著送（連工作清單一起拿），順手叫醒權限中心 */
+loadAll().then(function(){ if (h==='work' && S.workLocked) gate('view'); });   /* 2026-10-06：公告免密碼，一進來就讀；直接開 #work 而且沒密碼才問 */
 })();
 </script>
 </body>
