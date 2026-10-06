@@ -2288,7 +2288,7 @@ function calcE_(res, rule, map) {
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
 //   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-06.11';   // .11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
+var WEB_VER = 'e6-2026-10-06.12';   // .12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊
 var BUNDLE_TTL = 21600;               // CacheService 最長 6 小時；runAll 寫完快照時另外主動清除
 
@@ -2418,7 +2418,7 @@ var LIVE_TTL_PART = 60;      // 有一邊讀取失敗時的暫存秒數
 var LIVE_DAYS = 14;          // 今天起幾天（店長頁：7 天行事曆＋8～14 天團體）
 var LIVE_SLOT_RED = 140;     // 同時段人數 ≥ 每時段上限 × 140% → 紅燈（經營者 1006 指定）
 var LIVE_SLOT_CAP = { '1': 14, '2': 20, '3': 24, '4': 13, '5': 16, '6': 19, '7': 12, '8': 16, '9': 12, '10': 18, '11': 14, '12': 12 };
-var LIVE_KEY = 'live|v3';   // v3：eq.at 改成 yyyy-MM-dd HH:mm:ss；v2：多了 equip
+var LIVE_KEY = 'live|v4';   // v4：eq 多 limits、名稱比對修正；v3：eq.at 改成 yyyy-MM-dd HH:mm:ss；v2：多了 equip
 
 function webLive_(store) {
   var sid = String(store == null ? '' : store).trim();
@@ -2464,7 +2464,7 @@ function liveBuild_() {
   // ③ 器具／模具紅燈（1006 #2）：讀訂位資料的甜點明細＋BOM＋採購主檔，跟①②分開，失敗只影響這一塊
   try {
     var E = eqBuild_(today, last, byName);
-    out.eq = { ok: true, at: E.at, rows: E.rows, unmatched: E.unmatched, rules: EQ_RULES.map(function (r) { return { id: r.id, label: r.label, limit: r.limit, unit: r.unit }; }) };
+    out.eq = { ok: true, at: E.at, rows: E.rows, unmatched: E.unmatched, limits: E.limits || [], rules: EQ_RULES.map(function (r) { return { id: r.id, label: r.label, limit: r.limit, unit: r.unit }; }) };
     map.list.forEach(function (id) { out.stores[id].equip = E.stores[id] || []; });
   } catch (eE) { out.eq = { ok: false, error: '器具紅燈計算失敗：' + shortErr_(eE && eE.message || eE) }; }
   var key = PropertiesService.getScriptProperties().getProperty(PROP_GB_PASS) || '';
@@ -2552,6 +2552,49 @@ var EQ_RULES = [
   { id: 'mix', label: '手持攪拌機／塔皮機', names: ['手持攪拌機', '塔皮機'], limit: 5, unit: '台' }
 ];
 var EQ_EXCL = /烤盤|擠花嘴|花嘴/;
+/** v15（2026-10-06 晚，經營者回覆 1006 #1「我要調整這些品項的上限」）：個別品項上限，存快照 Sheet 分頁 dim_equip_limit（品項｜上限｜門市｜單位｜說明）。
+ *  上限填數字＝取代預設（模具 6／電磁爐平底鍋 3／攪拌機塔皮機 5）；填「不算」＝這個品項不亮燈；空白＝沿用預設。
+ *  門市空白＝全部門市；填店號（1～12，可帶店名）或訂位系統的店名＝只對那家店（同品項「那家店」優先於「全部」）。
+ *  沒有這個分頁＝全部用預設。zzEqLimitSetup() 在編輯器執行一次建分頁（先列出目前會亮燈的品項，上限留空）。*/
+var EQ_LIMIT_TAB = 'dim_equip_limit', EQ_LIMIT_HEAD = ['品項', '上限', '門市', '單位', '說明'];
+function eqLimits_(byName) {
+  var out = { all: {}, store: {}, rows: [] }, sh = null;
+  try { sh = snapSS_().getSheetByName(EQ_LIMIT_TAB); } catch (e) { sh = null; }
+  if (!sh || sh.getLastRow() < 2) return out;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(function (r) {
+    var it = String(r[0] || '').trim(), raw = r[1], st = String(r[2] || '').trim(), L;
+    if (!it) return;
+    if (typeof raw === 'number') { if (!(raw > 0)) return; L = raw; }
+    else if (/不算|停用|略過|不亮/.test(String(raw || ''))) L = 0;
+    else if (String(raw || '').trim() && Number(raw) > 0) L = Number(raw);
+    else return;   // 上限空白＝沿用預設
+    var sid = '';
+    if (st) { var m = st.match(/^\s*(\d{1,2})\b/); sid = m ? String(Number(m[1])) : String(byName[st] || ''); if (!sid) return; }
+    if (sid) (out.store[sid] = out.store[sid] || {})[it] = L; else out.all[it] = L;
+    out.rows.push({ item: it, limit: L, store: sid, unit: String(r[3] || '').trim() });
+  });
+  return out;
+}
+function eqLimitOf_(lim, sid, it, rule) {
+  var s = lim.store[String(sid)];
+  if (s && s[it] != null) return s[it];
+  if (lim.all[it] != null) return lim.all[it];
+  return rule.limit;
+}
+/** 一次性：建 dim_equip_limit 分頁（已有就不動）。在編輯器執行。 */
+function zzEqLimitSetup() {
+  var ss = snapSS_(), sh = ss.getSheetByName(EQ_LIMIT_TAB);
+  if (sh) { Logger.log('已有分頁 ' + EQ_LIMIT_TAB + '（' + (sh.getLastRow() - 1) + ' 列），不動'); return; }
+  sh = ss.insertSheet(EQ_LIMIT_TAB);
+  var rows = [EQ_LIMIT_HEAD];
+  [['小矽膠模', '個'], ['大矽膠模', '個'], ['方模', '個'], ['愛心矽膠模', '個'], ['麵包撒粉模', '個'], ['貓咪餅乾模', '個'], ['電磁爐', '台'], ['平底鍋', '個'], ['手持攪拌機', '台'], ['塔皮機', '台']]
+    .forEach(function (x) { rows.push([x[0], '', '', x[1], '']); });
+  rows[1][4] = '上限：填數字就取代預設（模具 6、電磁爐／平底鍋 3、手持攪拌機／塔皮機 5）；填「不算」＝這個品項不亮燈；空白＝沿用預設。門市：空白＝全部門市，填店號（例 11）或店名＝只對那家店。存檔後最多 5 分鐘生效。';
+  sh.getRange(1, 1, rows.length, 5).setValues(rows);
+  sh.getRange(1, 1, 1, 5).setFontWeight('bold'); sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 160); sh.setColumnWidth(3, 120); sh.setColumnWidth(5, 520);
+  Logger.log('已建分頁 ' + EQ_LIMIT_TAB + '，' + (rows.length - 1) + ' 個品項（上限留空＝預設）');
+}
 var EQ_MENU_TAB = 'fact_future_menu';
 function eqRuleOf_(item, cat) {
   for (var i = 1; i < EQ_RULES.length; i++) if (EQ_RULES[i].names.indexOf(item) >= 0) return EQ_RULES[i];
@@ -2564,10 +2607,10 @@ function eqDecode_(s) {
     .replace(/&#(\d+);/g, function (m, d) { return String.fromCharCode(Number(d)); }).replace(/&amp;/g, '&');
 }
 function eqMatch_(name, bom, bomN, nmap) {
-  var n = eqDecode_(eqDecode_(name)).trim(), base = n, prev;
-  do { prev = base; base = base.replace(/\s*[（(][^（）()]*[）)]\s*$/, ''); } while (base !== prev);
-  var cs = [n, base];
-  if (base.indexOf('｜') >= 0) cs.push(base.split('｜').pop().trim());
+  var n = eqDecode_(eqDecode_(name)).trim(), cs = [], seen = {}, base = n, prev;
+  var add = function (c) { c = String(c || '').trim(); if (c && !seen[c]) { seen[c] = 1; cs.push(c); } };
+  // v15：每剝掉一層結尾括號就當一個候選（原本只試「原名」和「全剝光」，中間那層「瑋瑋的焦糖伯爵奶凍蛋糕 (葷)」沒試到 → 一直對不到 BOM）；雙語名每一層都另試「｜」後面
+  do { add(base); if (base.indexOf('｜') >= 0) add(base.split('｜').pop()); prev = base; base = base.replace(/\s*[（(][^（）()]*[）)]\s*$/, ''); } while (base !== prev);
   for (var i = 0; i < cs.length; i++) {
     var c = cs[i], t = nmap[c];
     if (t) { if (bom[t]) return t; if (bomN[eqNorm_(t)]) return bomN[eqNorm_(t)]; }
@@ -2602,7 +2645,8 @@ function eqBuild_(today, last, byName) {
   }
   // 3) 甜點明細：今天～last，已取消不算；同店同日同時段加總
   var msh = SpreadsheetApp.openById(FRESH_SS.RSV).getSheetByName(EQ_MENU_TAB);
-  var res = { at: '', rows: 0, stores: {}, unmatched: [] };
+  var res = { at: '', rows: 0, stores: {}, unmatched: [], limits: [] }, lim = eqLimits_(byName);
+  res.limits = lim.rows;
   if (!msh || msh.getLastRow() < 2) return res;
   var mv = msh.getRange(2, 1, msh.getLastRow() - 1, 8).getValues(), slots = {}, un = {}, ruleById = {};
   EQ_RULES.forEach(function (x) { ruleById[x.id] = x; });
@@ -2631,9 +2675,9 @@ function eqBuild_(today, last, byName) {
     var S = slots[k];
     Object.keys(S.need).forEach(function (it) {
       var rule = ruleById[S.rule[it]]; if (!rule) return;
-      var need = Math.round(S.need[it] * 10) / 10;
-      if (need < rule.limit) return;
-      (res.stores[S.sid] = res.stores[S.sid] || []).push({ d: S.d, t: S.t, item: it, need: need, limit: rule.limit, unit: rule.unit, rule: rule.id, label: rule.label,
+      var need = Math.round(S.need[it] * 10) / 10, L = eqLimitOf_(lim, S.sid, it, rule);   // v15：個別品項上限（0＝不算）
+      if (!L || need < L) return;
+      (res.stores[S.sid] = res.stores[S.sid] || []).push({ d: S.d, t: S.t, item: it, need: need, limit: L, unit: rule.unit, rule: rule.id, label: rule.label,
         from: Object.keys(S.from[it]).map(function (bn) { return [bn, S.from[it][bn]]; }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 6) });
     });
   });

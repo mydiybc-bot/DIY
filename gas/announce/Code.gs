@@ -18,8 +18,10 @@
  *       工作清單 workList 仍要「看公告」密碼（announce）；發佈／修改／刪除／上傳／匯入仍要管理者密碼（announce_pub）。
  *       bundle 沒帶密碼＝只回公告與選單（work:null、workLocked:true）；帶對的看公告密碼＝跟原本一樣三份都回。
  *       新增 active＝今天在有效期內的公告（含純文字內文與附檔清單；給決策中心店長頁）；GET（JSONP）也可讀 active。
+ * v4（2026-10-06 晚，經營者「工作清單也不需要密碼就可以看」）：workList 免密碼；bundle 不帶密碼也回公告＋工作清單＋選單（work 不再 null）。
+ *       寫入（發佈／修改／刪除／上傳／匯入／工作新增修改）照舊要管理者密碼（announce_pub）。「看公告」密碼（dim_auth：announce）從此沒有地方用到。
  */
-var VERSION = 'announce-api-v3';   // 2026-10-06 v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
+var VERSION = 'announce-api-v4';   // 2026-10-06 晚 v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
@@ -100,7 +102,7 @@ function doGet(e) {
 function pingData_() { return { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') }; }
 var ACTIONS = { whoami: whoami_, list: list_, get: get_, save: save_, del: del_, upload: upload_, uploadImg: uploadImg_, attDel: attDel_,
   workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_, active: active_ };
-var OPEN = { list: 1, get: 1, options: 1, active: 1 };   /* v3（2026-10-06）：公告免密碼；工作清單、寫入照舊要密碼 */
+var OPEN = { list: 1, get: 1, options: 1, active: 1, workList: 1 };   /* v4（2026-10-06 晚）：工作清單也免密碼；v3：公告免密碼。寫入照舊要管理者密碼 */
 var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1 };
 var PUB_ONLY = WRITES;
 var RQ_SEC = 21600;
@@ -157,7 +159,7 @@ function auth_(pw, dash) {
 function whoami_(p, who) { return { data: { who: who } }; }
 /* v2：開頁一次拿齊（驗密碼＋公告清單＋工作清單＋選單），三份各自的欄位與原本 list／workList／options 相同 */
 function bundle_(p, who) {
-  if (who === '訪客') return { data: { list: list_(p, who).data, work: null, workLocked: true, options: options_(p, who).data } };   /* v3：沒帶密碼＝工作清單不給 */
+  /* v4（2026-10-06 晚）：不帶密碼也回三份（工作清單免密碼）；v3 時沒帶密碼只回公告與選單 */
   return { data: { list: list_(p, who).data, work: workList_(p, who).data, options: options_(p, who).data } };
 }
 /* v3（2026-10-06）：今天在有效期內的公告（免密碼；決策中心店長頁用）。置頂優先，再依開始日新到舊；附檔清單一起回（只讀有附檔時才讀附檔表） */

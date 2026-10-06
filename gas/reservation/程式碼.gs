@@ -504,7 +504,7 @@ function parseTable_(html, dateStr) {
     const dDate = attr_(open, 'data-date');
     const dTime = attr_(open, 'data-time');
     const groupId = attr_(open, 'data-rtdid');
-    const editM = tr.match(/\/Reservations\/Edit\/([0-9a-fA-F-]{36})/);
+    const editM = tr.match(/\/Reservations\/(?:Edit|EditHourlyAdmin)\/([0-9a-fA-F-]{36})/);   // 2026-10-06：後台 10/1 改版後列表連結改成 EditHourlyAdmin，原本只認 Edit → res_id 全空白
     const resId = editM ? editM[1] : '';
 
     const val = i => {
