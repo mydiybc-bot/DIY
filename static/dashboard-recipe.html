@@ -2432,8 +2432,12 @@ function campLoad(){CAMP.loading=true;CAMP.err='';updCampUI();var n=0;
    連線類失敗自動重試最多 3 次（每次最多等 60 秒：Google 慢的時候回應要 30 秒以上，太早放棄反而白重送）；寫入帶回條編號 rq，伺服器對同一個回條只寫一次（重試不會多寫一張） */
 var RETRY_CODES={net:1,bad:1,busy:1,timeout:1};
 function rqToken(){return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)}
-function apiPost(body,onRetry){var want=body.action,n=0;
-  function once(){var ctl=window.AbortController?new AbortController():null,to=ctl?setTimeout(function(){ctl.abort()},60000):null;
+/* 2026-10-06 登入加速：只讀的登入動作（whoami 驗密碼、adminList 密碼管理清單、rbStatus 後台帳號狀態）。Google 常把單一請求卡 10～60 秒，
+   同時另送一份通常 2～9 秒就回（10/06 晚實測成對送出 8 組）→ 5 秒沒回再送一份、15 秒再一份，先拿到答案的算、其餘取消。這三個動作不寫資料，多送無害 */
+var HEDGE_ACTS={whoami:1,adminList:1,rbStatus:1},HEDGE_AT=[5000,15000];
+function apiPost(body,onRetry){var want=body.action,n=0,hedge=!!HEDGE_ACTS[want];
+  function newCtl(){return window.AbortController?new AbortController():null}
+  function once(ctl){var to=ctl?setTimeout(function(){ctl.abort()},60000):null;
     return fetch(REQ_API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:ctl?ctl.signal:undefined})
       .then(function(r){return r.text()})
       .then(function(t){var j;try{j=JSON.parse(t)}catch(e){return {ok:false,code:'bad',msg:'申請單系統回應看不懂（Google 連線不穩或系統更新中）'}}
@@ -2441,7 +2445,15 @@ function apiPost(body,onRetry){var want=body.action,n=0;
           return j},
         function(e){var ab=e&&e.name==='AbortError';return {ok:false,code:ab?'timeout':'net',msg:ab?'申請單系統 60 秒沒有回應':'連不上申請單系統（網路中斷或系統更新中）'}})
       .then(function(r){if(to)clearTimeout(to);return r})}
-  function go(){n++;return once().then(function(r){
+  /* 同一個請求最多同時 3 份：先回「確定答案」（成功、或密碼不對這類不用重試的錯）就用它；連線類失敗先等其他份，全部失敗才交給下面的重試 */
+  function race(){return new Promise(function(res){var done=false,live=0,fired=0,last=null,ctls=[],tms=[];
+    function end(r){if(done)return;done=true;tms.forEach(function(t){clearTimeout(t)});ctls.forEach(function(c){if(c)try{c.abort()}catch(e){}});res(r)}
+    function fire(){if(done||fired>HEDGE_AT.length)return;fired++;live++;var c=newCtl();ctls.push(c);
+      once(c).then(function(r){live--;if(done)return;
+        if(r.ok||!RETRY_CODES[r.code]){end(r);return}
+        last=r;if(live===0){if(fired<=HEDGE_AT.length)fire();else end(last)}})}
+    HEDGE_AT.forEach(function(ms){tms.push(setTimeout(fire,ms))});fire()})}
+  function go(){n++;return (hedge?race():once(newCtl())).then(function(r){
     if(!r.ok&&RETRY_CODES[r.code]&&n<3){if(onRetry)onRetry(n+1);return wait(1500*n).then(go)}
     if(!r.ok&&RETRY_CODES[r.code])r.msg=(r.msg||'')+'；已自動重試 3 次仍失敗。畫面上的內容還在本機草稿，稍後再按一次（同一張不會重複送出）';
     return r})}
@@ -2458,7 +2470,7 @@ function withCred(role,msg,cb){var c=getCred(role);if(c){cb(c);return}askCred(ro
 function modal(html){closeModal();var tab=document.getElementById('tab-apply'),m=document.createElement('div');m.className='ap-modal';m.id='apModal';
   m.innerHTML='<div class="ap-modal-box" role="dialog" aria-modal="true">'+html+'</div>';tab.appendChild(m);return m}
 function closeModal(){var m=document.getElementById('apModal');if(m&&m.parentNode)m.parentNode.removeChild(m)}
-function askCred(role,msg,cb){
+function askCred(role,msg,cb,verify){
   var m=modal('<div class="ap-h">🔑 輸入身分密碼</div><div class="ap-muted">'+esc(msg||'')+' 密碼只記在這個分頁，關掉分頁就要重新輸入。</div>'
     +'<label>身分</label><select id="apCredRole">'+((role&&ROLES.indexOf(role)<0)?ROLES.concat([role]):ROLES).map(function(r){return '<option'+(r===(role||'主廚')?' selected':'')+'>'+esc(r)+'</option>'}).join('')+'</select>'
     +'<label>密碼</label><input type="password" id="apCredPw" name="rcp-role-pw" autocomplete="new-password">'
@@ -2468,10 +2480,13 @@ function askCred(role,msg,cb){
   if(role)rs.disabled=true;
   setTimeout(function(){pw.focus()},30);
   function go(){var r=rs.value,p=pw.value;if(!p){box.textContent='請輸入密碼';return}
-    ok.disabled=true;box.textContent='確認中…';
-    apiPost({action:'whoami',role:r,password:p},function(k){box.textContent='連線不穩，自動重試中（第 '+k+' 次）…'}).then(function(res){ok.disabled=false;
+    ok.disabled=true;box.textContent='確認中…';var t0=Date.now(),note='',
+      tick=setInterval(function(){box.textContent='確認中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note},1000),   /* 10/06：Google 慢的時候要等，顯示秒數讓人知道還在跑 */
+      onR=function(k){note='（連線不穩，自動重試第 '+k+' 次）'};
+    /* verify：要這個密碼才能開的頁面，直接用它的第一個讀取驗密碼（密碼對＝資料回來），開頁不用再讀一次（10/06） */
+    (verify?verify({role:r,pw:p},onR):apiPost({action:'whoami',role:r,password:p},onR)).then(function(res){clearInterval(tick);ok.disabled=false;
       if(!res.ok){box.textContent=res.msg||'密碼不對';return}
-      var c={role:r,pw:p};setCred(c);closeModal();cb(c)})}
+      var c={role:r,pw:p};setCred(c);closeModal();cb(c,res)})}
   ok.onclick=go;pw.onkeydown=function(e){if(e.key==='Enter')go()};m.querySelector('#apCredNo').onclick=closeModal}
 /* 新增檔期：先確認主廚密碼 → 填表 → 兩層確認 → saveCampaign */
 function newCampDialog(){withCred('主廚','新增檔期要主廚密碼。',function(cr){openCampForm(cr)})}
@@ -2612,8 +2627,10 @@ function loadReq(cr,rid,btn){
 function rnd(n){var a=new Uint32Array(n);try{crypto.getRandomValues(a)}catch(e){for(var i=0;i<n;i++)a[i]=Math.floor(Math.random()*4294967295)}return a}
 function randDigits(n){var a=rnd(n),s='';for(var i=0;i<n;i++)s+=String(a[i]%10);return s}
 function randPw(n){var cs='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=rnd(n),s='';for(var i=0;i<n;i++)s+=cs.charAt(a[i]%cs.length);return s}
-function adminDialog(){withCred('管理者','密碼管理要「管理者」密碼。',function(cr){openAdmin(cr)})}
-function openAdmin(cr){
+function adminDialog(){var c=getCred('管理者');if(c){openAdmin(c);return}var rbPre=null;
+  askCred('管理者','密碼管理要「管理者」密碼。',function(cr,res){openAdmin(cr,res,rbPre)},
+    function(c,onR){rbPre=apiPost({action:'rbStatus',role:c.role,password:c.pw});return apiPost({action:'adminList',role:c.role,password:c.pw},onR)})}   /* 10/06：輸入密碼那一次就同時讀清單和後台帳號狀態，開頁直接畫 */
+function openAdmin(cr,pre,rbPre){
   var m=modal('<div class="ap-h">🔑 密碼管理</div><div class="ap-muted">只有「管理者」看得到這一頁。改完立即生效；密碼和 PIN 請私下交給本人。</div>'
     +'<div id="apAdmMsg"></div><div id="apAdmBody" class="ap-adm" style="margin-top:6px"><span class="ap-muted">讀取中…</span></div>'
     +'<div class="ap-adm-sec">🍰 自己做食譜系統登入帳號（門市食譜後台，「📥 匯入自己做食譜系統」用）</div><div id="apRbCred"><span class="ap-muted">讀取中…</span></div>'
@@ -2628,8 +2645,8 @@ function openAdmin(cr){
     var mm=String(r.msg||'失敗').replace(/；已自動重試 3 次仍失敗.*$/,'；已自動重試 3 次仍失敗，請稍後再按一次（重按不會重複寫入）');   /* 送件用的「本機草稿」說法這裡不適用 */
     flash((pre||'')+'✕ '+esc(mm)+(au?'（請關掉這個視窗，重新按「🔑 密碼管理」輸入管理者密碼）':''),true)}
   /* 重新讀取後重畫整張表：別列「打了還沒存」的內容、游標、捲動位置都保留；滑鼠按住或中文選字中先不畫，放開再畫（不會點不到） */
-  function load(opt){opt=opt||{};
-    apiPost({action:'adminList',role:cr.role,password:cr.pw},function(k){flash((opt.done?opt.done+'<br>':'')+'連線不穩，自動重試中（第 '+k+' 次）…')}).then(function(r){
+  function load(opt){opt=opt||{};var p0=pre;pre=null;   /* 第一次開頁：用輸入密碼時已讀到的清單 */
+    (p0&&p0.ok?Promise.resolve(p0):apiPost({action:'adminList',role:cr.role,password:cr.pw},function(k){flash((opt.done?opt.done+'<br>':'')+'連線不穩，自動重試中（第 '+k+' 次）…')})).then(function(r){
       if(!r.ok){busy=false;if(!D)body.innerHTML='';fail(r,opt.done?opt.done+'<br>畫面沒有更新，請按「🔄 重新讀取」：':'');return}
       var fin=function(){var d=snapDirty(),sc=m.scrollTop;D=r.data||{roles:[],signers:[]};
         var run=function(){paint();applyDirty(d,opt)};
@@ -2709,7 +2726,7 @@ function openAdmin(cr){
     body.querySelectorAll('[data-rlrand]').forEach(function(b){b.onclick=function(){var r=D.roles[+b.getAttribute('data-rlrand')];setPw(r,randPw(r.role==='管理者'?10:8),b)}});
     body.querySelectorAll('[data-rlok]').forEach(function(b){b.onclick=function(){var i=+b.getAttribute('data-rlok'),r=D.roles[i],v=String((body.querySelector('[data-rlnew="'+i+'"]')||{}).value||'').trim();
       if(v.length<6){flash('✕ 密碼至少 6 碼',true);return}if(/\s/.test(v)){flash('✕ 密碼不能有空白',true);return}setPw(r,v,b)}})}
-  load();rbCredInit(m,cr)}
+  load();rbCredInit(m,function(){return cr},rbPre)}   /* 傳「取目前的管理者密碼」：在這頁換了管理者自己的密碼後，後台帳號區也用新密碼（10/06 修：原本傳開頁時的舊密碼 → 儲存並試登入回「密碼不對」） */
 /* ===== 2026-09-29 B 階段：各單位填寫（依 dim_role.fields）＋送簽 =====
    ‧ 從檔期載入時伺服器回傳載入者的身分與可填欄位（me.fields）；主廚（P:*）照舊改整張，其他單位只開放自己的欄位（黃色框），
      存檔只送「改過的欄位」（patchReq／saveUnit／saveCampaign），伺服器再逐欄檢查一次
@@ -3075,20 +3092,29 @@ function rbLoop(body,n){
 /* 匯入結束（成功或停下）→ 讀回這張單，下方「🍰」卡片跟著更新（對話框留著） */
 function rbAfter(){fetchReq(RB.cr,RB.rid).then(function(g){if(g&&g.ok&&AP.head.req_id===RB.rid)applyLoaded(g.data)})}
 /* 🔑 密碼管理：自己做食譜系統登入帳號（伺服器先用這組帳密試登入，成功才存；任何回覆都不含密碼） */
-function rbCredInit(m,cr){var box=m.querySelector('#apRbCred');if(!box)return;var D2=null;
+function rbCredInit(m,getCr,pre2){var box=m.querySelector('#apRbCred');if(!box)return;var D2=null,lastEm='';
+  /* 管理者密碼被拒（被換掉）：講清楚是哪個密碼，免得以為後台密碼錯 */
+  function authFail(r){if(r.code!=='auth'&&r.code!=='perm')return false;setCred(null,'管理者');
+    show('✕ 「🔑 密碼管理」的管理者密碼不對或剛換過（不是後台密碼的問題）。請按下方「關閉」，再按一次「🔑 密碼管理」輸入目前的管理者密碼後再設定。',true);return true}
   function show(msg,bad){var d=D2;
     box.innerHTML=(msg?'<div class="ap-flash'+(bad?' bad':'')+'">'+msg+'</div>':'')
       +'<div style="margin:4px 0;font-size:13px">'+(d?(d.set?(d.bad?'<span class="ap-bad">✕ 已設定 '+esc(d.email)+'，但上次登入被拒絕（密碼可能改了、或帳號被鎖），請重新設定</span>':'<span class="ap-okline">✓ 已設定：'+esc(d.email)+(d.okAt?'（最近登入成功 '+esc(d.okAt)+'）':'')+'</span>'):'<span class="ap-bad">尚未設定</span>'):'')+'</div>'
       +'<div class="ap-muted">「📥 匯入自己做食譜系統」用這組帳號登入門市食譜後台建食譜（建議用專用帳號）。按「儲存並試登入」會先試登入，成功才存；密碼只存在 Google 指令碼屬性，畫面與紀錄都看不到。</div>'
       +'<div class="ap-2col"><div><label>後台登入 Email</label><input type="text" id="apRbEm" autocomplete="off" placeholder="例：recipe@mydiybc.com"></div><div><label>後台密碼</label><input type="password" id="apRbPw" autocomplete="new-password"></div></div>'
       +'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn" id="apRbCredSave" type="button">儲存並試登入</button></div>';
+    var ei=box.querySelector('#apRbEm');if(ei&&lastEm)ei.value=lastEm;   /* 失敗重畫時 Email 留著，只要重打密碼 */
     var b=box.querySelector('#apRbCredSave');b.onclick=function(){var em=box.querySelector('#apRbEm').value.trim(),pw=box.querySelector('#apRbPw').value;
       if(!/^[^\s@]+@[^\s@]+$/.test(em)){show('✕ 請填後台登入用的 Email',true);return}if(!pw){show('✕ 請填後台密碼',true);return}
       if(!confirm('用 '+em+' 試登入門市食譜後台，成功就存起來給「匯入自己做食譜系統」用？'))return;
-      b.disabled=true;b.textContent='試登入中…（約 5～20 秒）';
-      apiPost({action:'rbSetCred',role:cr.role,password:cr.pw,rb_email:em,rb_password:pw,rq:rqToken()}).then(function(r){
-        if(!r.ok){show('✕ '+esc(r.msg||'失敗'),true);return}load2('✓ '+esc(r.msg||'已更新'))})}}
-  function load2(msg){apiPost({action:'rbStatus',role:cr.role,password:cr.pw}).then(function(r){if(!r.ok){D2=null;show('✕ '+esc(r.msg||'讀取失敗'),true);return}D2=r.data||null;show(msg||'')})}
+      lastEm=em;var cr=getCr(),t0=Date.now(),note='',tick=function(){b.textContent='試登入中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note};
+      b.disabled=true;tick();var iv=setInterval(tick,1000);   /* 10/06：顯示已等幾秒（Google 慢的時候要 20～60 秒） */
+      apiPost({action:'rbSetCred',role:cr.role,password:cr.pw,rb_email:em,rb_password:pw,rq:rqToken()},function(k){note='（連線不穩，自動重試第 '+k+' 次）'}).then(function(r){clearInterval(iv);
+        if(!r.ok){if(!authFail(r))show('✕ '+esc(r.msg||'失敗'),true);return}
+        /* 10/06：存好的回覆就有遮罩帳號，直接畫，不再多讀一次狀態（Google 慢的時候省 20 秒） */
+        var d=new Date(),p2=function(x){return (x<10?'0':'')+x};
+        D2={set:true,email:(r.data&&r.data.email)||'',bad:false,okAt:d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())+' '+p2(d.getHours())+':'+p2(d.getMinutes())};
+        show('✓ '+esc(r.msg||'已更新'))})}}
+  function load2(msg){var cr=getCr(),p0=pre2;pre2=null;(p0||apiPost({action:'rbStatus',role:cr.role,password:cr.pw})).then(function(r){if(!r.ok){D2=null;if(!authFail(r))show('✕ '+esc(r.msg||'讀取失敗'),true);return}D2=r.data||null;show(msg||'')})}
   load2('')}
 /* ---- 動作 ---- */
 function loadSigners(cr){SIGNERS.loading=true;SIGNERS.err='';renderSoon();
