@@ -10,6 +10,7 @@
      #4 檔期新品的料被同檔多支甜點共用時，在數量下方標「本檔 N 支共用，這是合計」（nwSharedWith／nwShareNote），不再讓店長以為每支各要一份；
      #5 新品項申請：採購單位／使用單位／內容量／單價的說明改用廚房紙巾例子，下方即時唸一遍「1 包＝12 卷、每包 85 元」（srUnitHint）；
      #6 店長分頁「查詢」「食材效期」「預約包館」合併成一個「🔎 查詢（用量／效期／團體）」，進去再選（QRY_SUBS／qrySwitch，記在這台裝置）；內部 ST.tab 照舊。總部、出貨中心分頁不變。
+     10/07 經營者追加：店別參數單列「儲存」寫入確認後自動重讀（paramAutoRefresh，2 秒內多列合併一次；儲存並更新原本就會），頂部說明改「店別參數存檔後會自動重算」。
      #1（經營者 10/07 確認）檔期新品開賣後不再倒數「已過下單截止」：開賣當天「🎉 今天開賣」、開賣後「✅ 已開賣 N 天・之後照訂貨單每週叫貨」，首批量欄位改名「開賣前建議首批量」（nwBadge）。用語：「14 天窗口」→「14 天內」。 -->
 <!-- 2026-10-02 cy 批（經營者 10/02 裁示）：器具模具也要像食材一樣標「檔期專屬／共用」，專屬排最前。EventLayer 不算器具模具，前端補算 durExcl（同 EventLayer 標準：除了本檔期甜點，對照表「今天有效」的其他甜點都沒用到＝專屬）。「🆕 檔期新品」器具模具加標籤、排序改「專屬→新品項→品名」、首批量欄器具模具顯示「不自動算」；非專屬品項加灰色「共用」標籤；「🥮 檔期備貨」器具模具清單同樣標籤、專屬排前。 -->
 <!-- 2026-10-02 cx 批（經營者 10/02 裁示）：「🥮 檔期備貨」新增「🔧 本檔期甜點用到的器具／模具」清單（campDurList）：新甜點的器具模具是全新品項、還沒設標配，所以<b>不算各店需求量（留空）</b>，但列出名稱、用在哪些甜點、每份用量與標配狀態，避免各店漏叫貨。只讀 BOM 本產品名稱對照表＋BOM表（loadAnalDims），計算與既有欄位零改動。 -->
@@ -1370,6 +1371,9 @@ function verifyParamBatch(store,list,attempt,total,round){
       list.forEach(function(x){Object.keys(x.fields).forEach(function(lb){pushWarn(store,x.id,lb,x.fields[lb]);});PSTATE[x.id]={pending:0,fail:1,done:true};});
       SAVEALL.busy=false;SAVEALL.txt="";toast("⚠ 讀不到試算表、無法確認寫入結果，數值已保留，請檢查網路後再按一次「儲存並更新」");render();});
   },d);}
+/* 2026-10-07 經營者「各店調整店別參數，點儲存後就應該直接更新」：單列儲存寫入確認後 2 秒自動重讀（連按幾列只重讀一次；「💾 儲存並更新」本來就會） */
+var PAR_RF=null;
+function paramAutoRefresh(){if(PAR_RF)clearTimeout(PAR_RF);PAR_RF=setTimeout(function(){PAR_RF=null;if(SAVEALL.busy||RF.busy)return;if(typeof refreshAll==="function")refreshAll(true);else render();},2000);}
 function savePRow(id){
   var e=EDIT[id]||{},fields={};
   if("zone"in e)fields["盤點分區"]=e.zone;if("ord"in e)fields["盤點順序"]=e.ord;if("par"in e)fields["標配數量"]=e.par;
@@ -1380,7 +1384,8 @@ function savePRow(id){
   if(!Object.keys(fields).length){toast("這一列沒有變更");return;}
   toast("確認寫入中…");
   postParam(ST.storeId,id,fields,function(ok,nf){
-    toast(ok?((SKU[id]?SKU[id].name:"品項")+" 已確認寫入"):("⚠ "+(SKU[id]?SKU[id].name:"品項")+" 有 "+nf+" 項未寫入，請按「重試」"));});
+    toast(ok?((SKU[id]?SKU[id].name:"品項")+" 已確認寫入，重新計算中…"):("⚠ "+(SKU[id]?SKU[id].name:"品項")+" 有 "+nf+" 項未寫入，請按「重試」"));
+    if(ok)paramAutoRefresh();});   /* 2026-10-07 經營者：單列「儲存」後直接更新，不用再按右上「🔄 更新」 */
   var pp=(PARAM[ST.storeId]=PARAM[ST.storeId]||{});pp[id]=pp[id]||{};
   if("custName"in e)pp[id].custName=String(e.custName||"").trim();
   if("custVendor"in e)pp[id].custVendor=String(e.custVendor||"").trim();
@@ -1859,7 +1864,7 @@ function dsbRole(){
   /* 2026-10-06 各儀表板調整 1006 #1：刪「今天存的盤點，明早 07:05 後建議量會重新計算」，只留後面那句（總部那句一起刪，ⓘ 更新方式照舊） */
   if(sp)sp.innerHTML=hq
     ?''
-    :'<b>平常不用按更新</b>；只有<b>改完店別參數</b>、或<b>換一台裝置／別人剛存過盤點</b>想立刻看到最新數字時，才按右上「🔄 更新」。';}
+    :'<b>平常不用按更新</b>；店別參數存檔後會自動重算。只有<b>換一台裝置／別人剛存過盤點</b>想立刻看到最新數字時，才按右上「🔄 更新」。';}
 /* 2026-10-02 cv 批：背景重畫（資料晚到、跨日）會把搜尋框整個換掉。
    ① 游標在搜尋框裡、注音／手寫正在組字 → 這次重畫先延後，組字結束（compositionend）再補做，免得組到一半被打斷
    ② 游標在搜尋框裡、沒在組字 → 照常重畫，畫完把焦點與游標放回去（原本只有打字觸發的重畫會放回，背景重畫會讓搜尋框失焦）
