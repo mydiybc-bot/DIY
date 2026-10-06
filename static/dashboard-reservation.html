@@ -744,6 +744,7 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
         <b>🚨 時段人數警告燈</b>：把同一家店、同一天、<b>同一個時段</b>的有效訂位<b>人數</b>加總（用訂位上的「人數」欄，含陪同；已取消不算），達到該店每時段人數上限的 <b>120%</b> 就亮 🚨，格子裡會寫出是哪個時段、已預約幾人、占上限幾 %。表格上方的紅框列出全部亮燈的時段。<br>
         每時段人數上限與亮燈門檻：<span id="slotCapNote"></span><br>
         <b>點任一格</b>（或紅框裡的任一列）可在表格下方看該店當天<b>每個時段</b>的已預約人數與 %；再點一次收合。<br>
+        <b>👥 團體訂位</b>：滑鼠停在格子上的說明裡，當天有團體訂位（8 人以上，或後台類別是大組／包館／包場；與「團體訂位」分頁同一定義）會另起一行標 👥，列出時段、類別、人數、訂金狀態；各時段人數也會註明「含👥團體 N 人」，一眼看出亮 🚨 是不是團體造成的。<br>
         注意：格子裡的大數字是「筆數」，🚨 看的是「人數」，兩者不同。<br>
         <span class="warnline">重要：這是「到現在為止」的訂位量，不是最終量。</span>越遠的日子還會繼續增加，所以右下角的數字天生比左上角小，<b>不要拿今天跟兩週後直接比多寡</b>，要看的是有沒有標紅、有沒有亮 🚨。<br>
         <b>分區（可複選）</b>：點「北一區／北二區／北三區／中南區」只看該區門市，可同時選多區；點「全部」恢復 12 家店。左邊的「未來3天」合計、🚨 清單會跟著只算所選門市。
@@ -861,6 +862,13 @@ function slotHot(p, cap) { return cap > 0 && p * 100 >= cap * SLOT_WARN_PCT; }  
 function slotPct(p, cap) { return cap > 0 ? Math.round(p / cap * 100) : 0; }
 function slotWarnMin(cap) { return Math.ceil(cap * SLOT_WARN_PCT / 100); }       // 亮燈最少人數
 function pressEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// 團體訂位標示（2026-10-06 v2.16，經營者指定）：訂位壓力格子的滑鼠說明另起一行標 👥。
+// 定義與「👥 團體訂位」分頁相同：人數 ≥ 8（含客服用一般訂位開的），或後台類別含大組／包館／包場
+const GROUP_MIN_SIZE = 8;
+function isGroupRow(r, idx) {
+  const cat = idx.category != null ? String(r[idx.category] || '') : '';
+  return (Number(r[idx.party_size]) || 0) >= GROUP_MIN_SIZE || /大組|包館|包場/.test(cat);
+}
 let PRESS_SLOT_SEL = '';   // 點開明細的「日期|門市」；空＝收合
 function pressSlotOpen(key) { PRESS_SLOT_SEL = (PRESS_SLOT_SEL === key) ? '' : key; renderPressure(); }
 function storeNumOf(name) {
@@ -1810,19 +1818,27 @@ function renderPressure() {
 
   const grid = {};
   const slotPpl = {};   // v2.15：日期 → 門市 → 時段 → 有效訂位人數合計
-  dates.forEach(d => { grid[d] = {}; slotPpl[d] = {}; });
+  const grpRows = {};   // v2.16：日期 → 門市 → [{slot, p, cat, status}] 團體訂位
+  const slotGrp = {};   // v2.16：日期 → 門市 → 時段 → 團體人數合計
+  dates.forEach(d => { grid[d] = {}; slotPpl[d] = {}; grpRows[d] = {}; slotGrp[d] = {}; });
   futureValid.forEach(r => {
     const d = r[fIdx.date], st = r[fIdx.store];
     if (!grid[d]) return; // 理論上不會發生（future 應涵蓋在 15 天內），防呆
     grid[d][st] = (grid[d][st] || 0) + 1;
     const sl = String(r[fIdx.slot] || '').trim() || '（未填時段）';
+    const ppl = Number(r[fIdx.party_size]) || 0;
     const bySlot = slotPpl[d][st] || (slotPpl[d][st] = {});
-    bySlot[sl] = (bySlot[sl] || 0) + (Number(r[fIdx.party_size]) || 0);
+    bySlot[sl] = (bySlot[sl] || 0) + ppl;
+    if (isGroupRow(r, fIdx)) {
+      (grpRows[d][st] || (grpRows[d][st] = [])).push({ slot: sl, p: ppl, cat: fIdx.category != null ? String(r[fIdx.category] || '') : '', status: String(r[fIdx.status] || '') });
+      const g = slotGrp[d][st] || (slotGrp[d][st] = {});
+      g[sl] = (g[sl] || 0) + ppl;
+    }
   });
-  // 該店該日每個時段：[{slot, p, cap, pct, hot}]，依時段排序
+  // 該店該日每個時段：[{slot, p, g, cap, pct, hot}]，依時段排序（g＝其中團體人數）
   const slotList = (d, st) => {
-    const bySlot = (slotPpl[d] || {})[st] || {}, cap = slotCapOf(st);
-    return Object.keys(bySlot).sort().map(sl => ({ slot: sl, p: bySlot[sl], cap, pct: slotPct(bySlot[sl], cap), hot: slotHot(bySlot[sl], cap) }));
+    const bySlot = (slotPpl[d] || {})[st] || {}, g = (slotGrp[d] || {})[st] || {}, cap = slotCapOf(st);
+    return Object.keys(bySlot).sort().map(sl => ({ slot: sl, p: bySlot[sl], g: g[sl] || 0, cap, pct: slotPct(bySlot[sl], cap), hot: slotHot(bySlot[sl], cap) }));
   };
   const hotByStore = {};   // 門市 → 未來 14 天亮燈時段數
   const hotAll = [];       // 所選門市全部亮燈時段
@@ -1896,8 +1912,10 @@ function renderPressure() {
       const bg = isHot ? '#FBE6E3' : (v > 0 ? '#F3EEFA' : '#F8F8F8');
       const color = isHot ? '#B23A2C' : '#2D1A14';
       const sls = slotList(d, st), hot = sls.filter(x => x.hot), key = d + '|' + st;
+      const gs = ((grpRows[d] || {})[st] || []).slice().sort((a, b) => a.slot.localeCompare(b.slot));
       const tip = d + ' ' + st + '：' + v + ' 筆（近28天日均 ' + avg.toFixed(1) + '）'
-        + (sls.length ? '\n各時段人數（上限 ' + slotCapOf(st) + ' 人）：' + sls.map(x => x.slot + ' ' + x.p + '人 ' + x.pct + '%' + (x.hot ? '🚨' : '')).join('、') + '\n點一下看明細' : '');
+        + (gs.length ? '\n👥 團體訂位 ' + gs.length + ' 筆：' + gs.map(x => x.slot + ' ' + (x.cat || '訂位') + ' ' + x.p + '人（' + x.status + '）').join('、') : '')
+        + (sls.length ? '\n各時段人數（上限 ' + slotCapOf(st) + ' 人）：' + sls.map(x => x.slot + ' ' + x.p + '人' + (x.g ? '（含👥團體 ' + x.g + '人）' : '') + ' ' + x.pct + '%' + (x.hot ? '🚨' : '')).join('、') + '\n點一下看明細' : '');
       const cls = 'heat-cell' + (hot.length ? ' slot-hot' : '') + (v > 0 ? ' clk' : '') + (PRESS_SLOT_SEL === key ? ' sel' : '');
       h += '<td><div class="' + cls + '" style="background:' + bg + ';color:' + color + ';" title="' + pressEsc(tip) + '"'
         + (v > 0 ? ' data-k="' + pressEsc(key) + '" onclick="pressSlotOpen(this.dataset.k)"' : '') + '>'
