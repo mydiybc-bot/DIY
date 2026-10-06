@@ -2435,7 +2435,7 @@ function rqToken(){return Date.now().toString(36)+'-'+Math.random().toString(36)
 /* 2026-10-06 登入加速：只讀的登入動作（whoami 驗密碼、adminList 密碼管理清單、rbStatus 後台帳號狀態）。Google 常把單一請求卡 10～60 秒，
    同時另送一份通常 2～9 秒就回（10/06 晚實測成對送出 8 組）→ 5 秒沒回再送一份、15 秒再一份，先拿到答案的算、其餘取消。這三個動作不寫資料，多送無害 */
 var HEDGE_ACTS={whoami:1,adminList:1,rbStatus:1},HEDGE_AT=[5000,15000];
-function apiPost(body,onRetry){var want=body.action,n=0,hedge=!!HEDGE_ACTS[want];
+function apiPost(body,onRetry,verify){var want=body.action,n=0,hedge=!!HEDGE_ACTS[want];   /* verify：回覆在路上掉了（連線類失敗）時，重送前先問系統「其實存好了沒」，存好就直接算成功（10/06） */
   function newCtl(){return window.AbortController?new AbortController():null}
   function once(ctl){var to=ctl?setTimeout(function(){ctl.abort()},60000):null;
     return fetch(REQ_API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:ctl?ctl.signal:undefined})
@@ -2454,9 +2454,12 @@ function apiPost(body,onRetry){var want=body.action,n=0,hedge=!!HEDGE_ACTS[want]
         last=r;if(live===0){if(fired<=HEDGE_AT.length)fire();else end(last)}})}
     HEDGE_AT.forEach(function(ms){tms.push(setTimeout(fire,ms))});fire()})}
   function go(){n++;return (hedge?race():once(newCtl())).then(function(r){
+    if(!r.ok&&RETRY_CODES[r.code]&&verify)return Promise.resolve(verify()).then(function(v){return v||next(r)},function(){return next(r)});
+    return next(r)})}
+  function next(r){
     if(!r.ok&&RETRY_CODES[r.code]&&n<3){if(onRetry)onRetry(n+1);return wait(1500*n).then(go)}
     if(!r.ok&&RETRY_CODES[r.code])r.msg=(r.msg||'')+'；已自動重試 3 次仍失敗。畫面上的內容還在本機草稿，稍後再按一次（同一張不會重複送出）';
-    return r})}
+    return r}
   return go()}
 /* 身分密碼：只記在這個分頁（sessionStorage），關掉分頁就要重新輸入。
    每個身分各記一份（rcp:cred:主廚、rcp:cred:管理者…，主廚送件和管理者密碼管理可以同時用），另記「最近用的」（rcp:cred）給不指定身分的動作 */
@@ -3108,7 +3111,14 @@ function rbCredInit(m,getCr,pre2){var box=m.querySelector('#apRbCred');if(!box)r
       if(!confirm('用 '+em+' 試登入門市食譜後台，成功就存起來給「匯入自己做食譜系統」用？'))return;
       lastEm=em;var cr=getCr(),t0=Date.now(),note='',tick=function(){b.textContent='試登入中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note};
       b.disabled=true;tick();var iv=setInterval(tick,1000);   /* 10/06：顯示已等幾秒（Google 慢的時候要 20～60 秒） */
-      apiPost({action:'rbSetCred',role:cr.role,password:cr.pw,rb_email:em,rb_password:pw,rq:rqToken()},function(k){note='（連線不穩，自動重試第 '+k+' 次）'}).then(function(r){clearInterval(iv);
+      /* 回覆掉了：先讀後台帳號狀態確認——系統記著「最後一次存好的回條編號」，等於這次送的就是存好了（10/06 晚經營者實際遇到：22:47 其實存好了、三次回覆都被 Google 弄丟，畫面卻顯示失敗） */
+      var rq=rqToken(),verify=function(){var c2=getCr();note='（回覆沒收到，正在向系統確認是否已存好）';
+        return apiPost({action:'rbStatus',role:c2.role,password:c2.pw}).then(function(st){var d=st&&st.ok&&st.data;
+          if(d&&d.set&&!d.bad&&d.setRq&&d.setRq===rq)return {ok:true,act:'rbSetCred',data:{ok:true,email:d.email},msg:'食譜後台帳號已更新（'+d.email+'），試登入成功（回覆在路上掉了，已向系統確認存好）'};
+          /* 確認不到存好：不自動重送——重送會再試登入一次，密碼錯時連錯可能把後台帳號鎖住；請人確認後再按 */
+          return {ok:false,code:'unconfirmed',msg:st&&st.ok?'沒收到系統回覆，查了一下這組帳號沒有存成功（可能 Email 或密碼不對，或請求沒送到）。請確認後再按一次「儲存並試登入」。'
+            :'沒收到系統回覆，也暫時查不到有沒有存好（Google 連線不穩）。請等 1 分鐘，關掉視窗再開「🔑 密碼管理」：後台帳號顯示「✓ 已設定」就不用再按。'}})};
+      apiPost({action:'rbSetCred',role:cr.role,password:cr.pw,rb_email:em,rb_password:pw,rq:rq},function(k){note='（連線不穩，自動重試第 '+k+' 次）'},verify).then(function(r){clearInterval(iv);
         if(!r.ok){if(!authFail(r))show('✕ '+esc(r.msg||'失敗'),true);return}
         /* 10/06：存好的回覆就有遮罩帳號，直接畫，不再多讀一次狀態（Google 慢的時候省 20 秒） */
         var d=new Date(),p2=function(x){return (x<10?'0':'')+x};

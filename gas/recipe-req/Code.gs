@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v9';   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v9.1';   /* v9.1＝2026-10-06 晚：rbStatus 多回 setRq（最後一次存好後台帳號的回條編號），前端回覆掉了時用它確認 */   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */

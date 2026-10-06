@@ -25,7 +25,7 @@ function rbStatus_(p, auth) {
   needAdmin_(auth);
   var P = rbProps_(), em = P.getProperty('RB_EMAIL'), at = Number(P.getProperty('RB_OK_AT') || 0);
   return { id: '', data: { set: !!(em && P.getProperty('RB_PASSWORD')), email: rbMask_(em), bad: P.getProperty('RB_BAD') === '1',
-    okAt: at ? Utilities.formatDate(new Date(at), TZ, 'yyyy-MM-dd HH:mm') : '' } };
+    okAt: at ? Utilities.formatDate(new Date(at), TZ, 'yyyy-MM-dd HH:mm') : '', setRq: P.getProperty('RB_SET_RQ') || '' } };   /* setRq：最後一次存成功的回條編號（回覆掉了時前端用它確認「是我這次按的存好了」，10/06 v9.1） */
 }
 function rbSetCred_(p, auth) {
   needAdmin_(auth);
@@ -36,7 +36,7 @@ function rbSetCred_(p, auth) {
   try { sess = rbLoginRaw_(email, pass); }
   catch (e) { throw fail_(errMsg_(e) + '（這組帳號密碼沒有存）', (e && e.code) || 'rbnet'); }
   var P = rbProps_();
-  P.setProperty('RB_EMAIL', email); P.setProperty('RB_PASSWORD', pass); P.deleteProperty('RB_BAD');
+  P.setProperty('RB_EMAIL', email); P.setProperty('RB_PASSWORD', pass); P.deleteProperty('RB_BAD'); P.setProperty('RB_SET_RQ', String(p.rq || '').slice(0, 80));
   rbSaveSession_(sess);
   return { id: '', data: { ok: true, email: rbMask_(email) }, msg: '食譜後台帳號已更新（' + rbMask_(email) + '），試登入成功' };
 }
