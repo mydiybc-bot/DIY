@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v8';   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v9';   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -37,7 +37,8 @@ var TABS = {
   fact_signoff: ['req_id', 'signer', 'decision', 'comment', 'ts'],
   log: ['ts', 'role', 'action', 'id', 'ok', 'msg'],
   fact_req_fill: ['req_id', 'role', 'updated_at'],   /* B 階段新增：每張單每個身分最後一次存檔時間（「已填」徽章）；舊試算表由 migrate_ 自動補建 */
-  fact_push: ['ts', 'req_id', 'batch', 'action', 'table', 'rows', 'detail', 'backup', 'ok', 'msg']   /* C 階段新增：寫入／還原採購系統的逐表紀錄 */
+  fact_push: ['ts', 'req_id', 'batch', 'action', 'table', 'rows', 'detail', 'backup', 'ok', 'msg'],   /* C 階段新增：寫入／還原採購系統的逐表紀錄 */
+  fact_recipe_import: ['ts', 'req_id', 'imp_id', 'action', 'backend_id', 'step', 'ok', 'msg', 'by', 'd1', 'd2', 'd3', 'd4']   /* 2026-10-06 新增：匯入自己做食譜系統的紀錄（start 列 d1～d4＝這次要匯入的完整內容，中斷可接續） */
 };
 /* 數字欄（其餘一律純文字，避免「01」「2026-10-01」被試算表自動轉成數字或日期） */
 var NUM_COLS = { '定價': 1, '成本': 1, '利潤率': 1, '預估銷售數': 1, '出貨中心預估出貨量': 1 };
@@ -125,7 +126,7 @@ function randPw_(len) {
 function migrate_() {
   var P = PropertiesService.getScriptProperties();
   if (!P.getProperty('SHEET_ID')) return;
-  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1' && P.getProperty('MIG_EARLY') === '1') return;
+  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1' && P.getProperty('MIG_EARLY') === '1' && P.getProperty('MIG_RBIMP') === '1') return;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
   try {
@@ -160,6 +161,10 @@ function migrate_() {
       cs.getRange(2, cn, Math.max(1, cs.getMaxRows() - 1), 1).setNumberFormat('@');
       P.setProperty('MIG_EARLY', '1');
     }
+    if (P.getProperty('MIG_RBIMP') !== '1') {   /* ⑥ 2026-10-06：補建 fact_recipe_import 分頁（只新增分頁，不動既有分頁） */
+      ensureTab_(ss_(), 'fact_recipe_import');
+      P.setProperty('MIG_RBIMP', '1');
+    }
   } catch (e) { /* 下次再試 */ } finally { lock.releaseLock(); }
 }
 
@@ -181,16 +186,23 @@ function doGet(e) {
 var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_, saveUnit: saveUnit_, getCampaign: getCampaign_, getReq: getReq_,
   adminList: adminList_, adminSaveSigner: adminSaveSigner_, adminDeleteSigner: adminDeleteSigner_, adminSetPassword: adminSetPassword_,
   listSigners: listSigners_, patchReq: patchReq_, submitSign: submitSign_, withdrawSign: withdrawSign_, signView: signView_, sign: sign_,
-  pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_ };
+  pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_,
+  /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
+  rbStatus: function (p, a) { return rbStatus_(p, a); }, rbSetCred: function (p, a) { return rbSetCred_(p, a); },
+  rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
-  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
+  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
 /* v7（2026-10-04 效能第 2 批）：只讀動作**明確列在 READS**（都已逐一確認沒有任何寫入）→ 不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。
    沒列在 READS 的動作一律走下面原本的加鎖路徑。與「不在 WRITES 就當只讀」的寫法行為等價（WRITES 在 BOM 段落尾端補了 bomSave 等 6 個，
    30 個動作＝12 讀＋18 寫），改白名單是為了日後新增動作忘了登記 WRITES 時預設仍加鎖（審查時改的）。
    adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
-var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1 };
+var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1,
+  rbStatus: 1, rbPreview: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
 var AUDIT_READS = { adminList: 1 };
+/* 2026-10-06：自己管鎖的動作——匯入自己做食譜系統要連後台、一次 30 多秒，不能佔住全系統的鎖（別人送件會卡住）；
+   同一張單不重複跑由 rbImport_ 自己用 CacheService 擋，寫紀錄分頁時才短暫拿鎖 */
+var SELFLOCK = { rbImport: 1 };
 /* 會動到 BOM 本「BOM表／產品名稱對照表」的動作：做完（成功或失敗都算，失敗可能已寫一半又寫回）就讓 bomMeta／mapGet 的暫存失效 */
 var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };
 
@@ -219,6 +231,19 @@ function doPost(e) {
       res = { ok: false, act: act, msg: errMsg_(err2) };
       if (err2 && err2.code) res.code = err2.code;
       if (err2 && err2.extra) res.data = err2.extra;
+      log_(who, act, guessId_(p), false, res.msg);
+    }
+    return out_(res);
+  }
+  if (SELFLOCK[act]) {
+    try {
+      var rs = fn(p, auth) || {};
+      res = { ok: true, act: act, data: rs.data };
+      log_(who, act, rs.id || '', true, rs.msg || '');
+    } catch (err3) {
+      res = { ok: false, act: act, msg: errMsg_(err3) };
+      if (err3 && err3.code) res.code = err3.code;
+      if (err3 && err3.extra) res.data = err3.extra;
       log_(who, act, guessId_(p), false, res.msg);
     }
     return out_(res);
@@ -558,7 +583,7 @@ function getReq_(p, auth) {
   return {
     id: rid,
     data: { req: req, campaign: camp ? plain_(ct.H, camp) : null, units: rowsOf_('fact_req_unit', ids), signoffs: rowsOf_('fact_signoff', ids),
-      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth), push: pushInfo_(rid) },
+      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth), push: pushInfo_(rid), rbimp: (function () { try { return rbInfo_(rid); } catch (e) { return null; } })() },
     msg: '內容 ' + req.payload.length + ' 字'
   };
 }
