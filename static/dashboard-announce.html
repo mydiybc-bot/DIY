@@ -11,7 +11,12 @@
      工作視窗改版＝內容＋「💬 留言與回覆」（編號、作者、身分、時間、附檔縮圖；可在留言裡搜尋、切換舊→新／新→舊、只看有附檔）＋「✍️ 我要留言」表單
      （免密碼、要填名字，名字與店別記在這台裝置；附檔每則 ≤5 個、每個 ≤10MB、合計 ≤20MB）。網址 #w=工作編號 直接打開那件工作（104 公告連過來用）；
      工作清單表格多「最新留言」欄；管理者模式可刪留言（標記刪除）。同日經營者把本頁改名「工作清單儀表板」（頁面標題、頁首、首頁卡片；雲端硬碟資料夾與試算表名稱不變）。
-     2026-10-07 午 v1.5.1（經營者「改成管理者也不能刪留言」；後端 announce-api-v5.1 拿掉 discussDel）：留言送出後誰都不能刪，拿掉管理者模式的「刪除」鈕；送出前的確認與說明改寫。 -->
+     2026-10-07 午 v1.5.1（經營者「改成管理者也不能刪留言」；後端 announce-api-v5.1 拿掉 discussDel）：留言送出後誰都不能刪，拿掉管理者模式的「刪除」鈕；送出前的確認與說明改寫。
+     2026-10-07 傍晚 v1.6（經營者「104 人資系統及工作清單儀表板待處理問題 1007」#2／#3；後端 announce-api-v5.2）：
+     ①從 104 點連結（#w=）開留言區太慢 → 先開「讀取中」視窗、只打 workList（後端 5 分鐘暫存）就打開那件工作，公告清單之後背景補讀；
+       這台裝置記住上次的工作清單（localStorage ann:workcache:v1），再開時先顯示再背景更新；讀取遇到 Google 錯誤頁（不是 JSON）自動重試一次。
+     ②拿掉「🔗 複製這件工作的連結」；「關閉」移到「送出留言」旁（管理者編輯工作時下方另有「取消／儲存」）。
+     ③NUEIP 搬來的工作標題／內文有雙重跳脫（畫面出現 &amp;、&quot; 字樣）→ 顯示前轉回一層（資料本身不改）。 -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -248,7 +253,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
   </section>
 </div>
 
-<div class="footer">自己做烘焙聚樂部 ｜ 工作清單儀表板（原「公告及工作清單」）v1.5.1（2026-10-07）</div>
+<div class="footer">自己做烘焙聚樂部 ｜ 工作清單儀表板（原「公告及工作清單」）v1.6（2026-10-07）</div>
 
 <!-- 讀公告 -->
 <div class="mask" id="mView"><div class="dlg">
@@ -308,7 +313,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
     <div id="rFileList"></div>
     <div class="hint">附檔：每則最多 5 個、每個 10MB 以內、合計 20MB；可傳圖片、PDF、Word、Excel、PowerPoint、文字檔、影片、錄音。</div>
     <div class="err" id="rErr"></div><div class="prog" id="rProg"></div>
-    <div class="acts" style="margin-top:6px"><button class="btn" id="rSend" type="button">送出留言</button></div>
+    <div class="acts" style="margin-top:6px"><button class="btn ghost" type="button" data-close>關閉</button><button class="btn" id="rSend" type="button">送出留言</button></div>
   </div>
   <div id="wForm" style="display:none">
     <div class="form">
@@ -322,7 +327,7 @@ pre.fmt{background:#fff;border:1px solid var(--border);border-radius:8px;padding
     </div>
   </div>
   <div class="err" id="wErr"></div>
-  <div class="acts"><button class="btn ghost" id="wLink" type="button">🔗 複製這件工作的連結</button><button class="btn danger pubonly" id="wDel">🗑 刪除</button><button class="btn ghost pubonly" id="wEditBtn">✎ 編輯</button><button class="btn ghost" data-close>關閉</button><button class="btn" id="wSave" style="display:none">💾 儲存</button></div>
+  <div class="acts" id="wActs"><button class="btn danger pubonly" id="wDel">🗑 刪除</button><button class="btn ghost pubonly" id="wEditBtn">✎ 編輯</button><button class="btn ghost" data-close id="wCancel" style="display:none">取消</button><button class="btn" id="wSave" style="display:none">💾 儲存</button></div>
 </div></div>
 
 <script>
@@ -353,6 +358,13 @@ function call(body, pw, ms){
     .then(function(r){ return r.json(); })
     .then(function(j){ clearTimeout(to); return j; }, function(e){ clearTimeout(to); return { ok:false, code:'net', msg: (e && e.name==='AbortError') ? '連線逾時' : '連線失敗（'+(e&&e.message||e)+'）' }; });
 }
+/* v1.6：讀取用。Google 偶爾回錯誤頁（不是 JSON）或冷啟動逾時 → 等 1.5 秒再試一次 */
+function callRead(body, pw, ms){
+  return call(body, pw, ms).then(function(r){ if (r.ok || r.code!=='net') return r; return new Promise(function(ok){ setTimeout(ok, 1500); }).then(function(){ return call(body, pw, ms); }); });
+}
+/* v1.6：NUEIP 搬來的資料有雙重跳脫（&amp;quot; 之類）→ 顯示前轉回一層；只用在顯示，資料不改 */
+function deEnt(s){ return String(s==null?'':s).replace(/&(quot|amp|lt|gt|#39);/g, function(m,k){ return {quot:'"',amp:'&',lt:'<',gt:'>','#39':"'"}[k]; }); }
+function fixHtml(h){ return String(h||'').replace(/&amp;(gt|lt|quot|amp|#39);/g,'&$1;'); }
 /* 寫入：帶回條；網路斷掉時用同一張回條再送一次（後端認得回條，不會重複寫） */
 function write(body, ms){
   body.rq = body.rq || rq();
@@ -440,7 +452,7 @@ function loadLegacy(pw){
   });
 }
 function loadBundle(pw, ms){
-  return call({action:'bundle'}, pw, ms).then(function(r){ return (!r.ok && /不支援的動作/.test(r.msg||'')) ? loadLegacy(pw) : r; });
+  return callRead({action:'bundle'}, pw, ms).then(function(r){ return (!r.ok && /不支援的動作/.test(r.msg||'')) ? loadLegacy(pw) : r; });
 }
 function loadAll(){
   dsb('dsb-auto','讀取中…');
@@ -453,7 +465,8 @@ function loadAll(){
   });
 }
 function applyBundle(d){
-  S.anns = d.list.rows; S.workLocked = !d.work; S.works = d.work ? d.work.rows : []; S.opts = d.options || {};
+  S.anns = d.list.rows; S.workLocked = !d.work; S.works = d.work ? d.work.rows : S.works; S.opts = d.options || {};
+  if (d.work) { cacheWorks(d.work.rows); S.workStale=false; }
   S.loadedAt = new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'});
   var nu = S.anns.filter(function(a){ return a.src==='nueip'; }).length;
   dsb('dsb-auto','雲端硬碟「自己做 公告及工作清單」試算表 ｜ 公告 <b>'+S.anns.length+'</b> 則（NUEIP 搬來 '+nu+'）・工作 '+(S.workLocked?'—（這次沒讀到）':'<b>'+S.works.length+'</b> 件')+' ｜ 讀取時間 '+S.loadedAt+' ｜ 看公告、工作清單、工作留言免密碼');
@@ -461,6 +474,36 @@ function applyBundle(d){
   var dm=(location.hash||'').match(/^#a=([\w-]+)/);   /* 決策中心店長頁連過來：#a=公告編號 直接打開那則 */
   if (dm && !S.deepDone) { S.deepDone=1; openAnn(decodeURIComponent(dm[1])); }
   if (S.deepW && !S.deepWDone) { S.deepWDone=1; showTab('work'); openWork(S.deepW); }   /* v1.5：104 公告連過來：#w=工作編號 直接打開那件工作（啟動時先記下，showTab 會改網址） */
+  else refreshOpenWork();
+}
+/* v1.6：工作清單本機暫存（只存工作與留言，不存公告；約 80KB）。讀不到／寫不進去就當沒有 */
+var K_WCACHE='ann:workcache:v1';
+function cacheWorks(rows){ try{ localStorage.setItem(K_WCACHE, JSON.stringify({ at:Date.now(), rows:rows })); }catch(_){} }
+function cachedWorks(){ try{ var o=JSON.parse(localStorage.getItem(K_WCACHE)||'null'); return (o && Array.isArray(o.rows)) ? o : null; }catch(_){ return null; } }
+/* 新資料到了：工作視窗開著（看的模式）就換成新的那一份、只重畫留言，不動正在打的留言 */
+function refreshOpenWork(){
+  if (!$('mWork').classList.contains('on') || !S.curWork || $('wForm').style.display!=='none') return;
+  var n=S.works.filter(function(x){ return x.work_id===S.curWork.work_id; })[0]; if (!n) return;
+  S.curWork=n; renderDiscList();
+}
+/* v1.6：#w= 進來先開視窗顯示「讀取中」，不讓人對著空白頁等 */
+function showWorkLoading(msg){
+  $('wHead').textContent='⏳ 讀取工作中…';
+  $('wView').innerHTML='<div class="hint" style="padding:18px 0;font-size:14px">'+(msg||'正在讀取這件工作與留言（第一次開可能要幾秒）…')+'</div>';
+  $('wDisc').innerHTML=''; $('wDisc').style.display='none'; $('wReply').style.display='none'; $('wForm').style.display='none'; $('wSave').style.display='none'; $('wCancel').style.display='none';
+  $('mWork').classList.add('on');
+}
+/* v1.6：只讀工作清單（後端有 5 分鐘暫存），讀到就打開那件工作；公告清單由 loadAll 背景補 */
+function loadWorkFirst(){
+  var c=cachedWorks();
+  if (c && c.rows.some(function(x){ return x.work_id===S.deepW; })) {
+    S.works=c.rows; S.workStale=c.at; fillOpts(); renderWork(); S.deepWDone=1; openWork(S.deepW);
+  } else showWorkLoading();
+  return callRead({action:'workList'}, S.pw, 60000).then(function(r){
+    if (!r.ok) { if (!S.deepWDone) showWorkLoading('❌ 讀取失敗：'+esc(r.msg)+'　<a href="#" onclick="location.reload();return false">重新整理</a>'); return; }
+    cacheWorks(r.data.rows); S.works=r.data.rows; S.workStale=false; S.workLocked=false; fillOpts(); renderWork();
+    if (!S.deepWDone) { S.deepWDone=1; openWork(S.deepW); } else refreshOpenWork();
+  });
 }
 function optList(kind, extra){ var o=(S.opts[kind]||[]).slice(); (extra||[]).forEach(function(v){ if(v && o.indexOf(v)<0) o.push(v); }); return o; }
 function fillSel(sel, vals, first){ var cur=sel.value; sel.innerHTML=(first!==undefined?'<option value="">'+first+'</option>':'')+vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join(''); if (vals.indexOf(cur)>-1||cur==='') sel.value=cur; }
@@ -684,7 +727,7 @@ function renderWork(){
   var rows=wkFiltered(), ts=terms($('wkQ').value), t=today();
   $('wkBody').innerHTML = rows.length ? rows.map(function(w){
     var late = !isDone(w) && w.due_date && w.due_date<t, ds=w.discuss||[], ld=ds.reduce(function(m,d){ return (!m || String(d.ts)>=String(m.ts)) ? d : m; }, null);
-    return '<tr class="r" data-id="'+esc(w.work_id)+'"><td><b>'+hl(w.item,ts)+'</b>'+(w.src==='nueip'?' <span class="pill p-nu">NUEIP</span>':'')+'</td><td>'+hl(w.owner,ts)+'</td><td>'+esc(w.date)+'</td><td class="'+(late?'late':'')+'">'+esc(w.due_date)+(late?' ⚠️逾期':'')+'</td><td>'+esc(w.progress)+'</td><td>'+esc(w.importance)+'</td><td>'+esc(w.origin)+'</td><td>'+(ds.length||'')+'</td>'
+    return '<tr class="r" data-id="'+esc(w.work_id)+'"><td><b>'+hl(deEnt(w.item),ts)+'</b>'+(w.src==='nueip'?' <span class="pill p-nu">NUEIP</span>':'')+'</td><td>'+hl(w.owner,ts)+'</td><td>'+esc(w.date)+'</td><td class="'+(late?'late':'')+'">'+esc(w.due_date)+(late?' ⚠️逾期':'')+'</td><td>'+esc(w.progress)+'</td><td>'+esc(w.importance)+'</td><td>'+esc(w.origin)+'</td><td>'+(ds.length||'')+'</td>'
       +'<td>'+(ld?'<span class="hint">'+esc(String(ld.ts).slice(0,10))+'</span> '+esc(ld.author):'')+'</td></tr>';
   }).join('') : '<tr><td colspan="9" class="empty">沒有符合條件的工作'+(S.works.length?'':'（目前資料庫是空的）')+'</td></tr>';
 }
@@ -698,13 +741,13 @@ function openWork(id){
   if (id && !w) { alert('找不到這件工作（可能已刪除）。'); return; }
   S.curWork=w; $('wErr').textContent='';
   if (w) {
-    $('wHead').textContent='✅ '+w.item;
+    $('wHead').textContent='✅ '+deEnt(w.item);
     $('wView').innerHTML='<div class="meta" style="font-size:12px;color:var(--muted);margin:6px 0 12px;display:flex;flex-wrap:wrap;gap:4px 12px">'
       +'<span>👤 負責人：'+esc(w.owner||'—')+'</span><span>📅 '+esc(w.date||'—')+'</span><span>⏰ 期限 '+esc(w.due_date||'—')+'</span>'+(w.done_date?'<span>✔ 完成 '+esc(w.done_date)+'</span>':'')
       +'<span>進度：'+esc(w.progress||'—')+'</span><span>重要性：'+esc(w.importance||'—')+'</span><span>來源：'+esc(w.origin||'—')+'</span><span>✍️ '+esc(w.creator||'')+'</span>'+(w.src==='nueip'?'<span class="pill p-nu">NUEIP 搬來</span>':'')+'</div>'
-      +'<div class="content">'+(w.html?clean(w.html):esc(w.text||'（沒有內容）').replace(/\n/g,'<br>'))+'</div>';
+      +'<div class="content">'+(w.html?clean(fixHtml(w.html)):esc(deEnt(w.text||'（沒有內容）')).replace(/\n/g,'<br>'))+'</div>';
     /* v1.5：留言區（標題列＋工具只建一次，打字時清單重畫不會吃掉游標） */
-    $('wDisc').innerHTML='<div class="dhead"><b>💬 留言與回覆（<span id="dCount"></span>）</b>'
+    $('wDisc').innerHTML='<div class="dhead"><b>💬 留言與回覆（<span id="dCount"></span>）</b><span class="hint" id="dStale"></span>'
       +'<input type="search" id="dQ" placeholder="🔍 在留言裡找（名字、內容、檔名）">'
       +'<select id="dSort"><option value="asc">舊 → 新</option><option value="desc">新 → 舊</option></select>'
       +'<label class="hint" style="white-space:nowrap"><input type="checkbox" id="dAtt"> 只看有附檔</label></div><div id="dList"></div>';
@@ -718,8 +761,8 @@ function openWork(id){
     if (!$('rRole').value) $('rRole').value=ls(K_ROLE);
     $('rCount').textContent=$('rText').value.length+'／'+DISC_TEXT_MAX+' 字';
     ['wView','wDisc','wReply'].forEach(function(k){ $(k).style.display=''; });
-    $('wForm').style.display='none'; $('wSave').style.display='none';
-    $('wDel').style.visibility=''; $('wEditBtn').style.visibility=''; $('wLink').style.display='';
+    $('wForm').style.display='none'; $('wSave').style.display='none'; $('wCancel').style.display='none';   /* v1.6：看的時候「關閉」在送出留言旁 */
+    $('wDel').style.visibility=''; $('wEditBtn').style.visibility='';
     try{ history.replaceState(null,'','#w='+encodeURIComponent(w.work_id)); }catch(_){}
   } else editWork(null);
   $('mWork').classList.add('on');
@@ -756,6 +799,7 @@ function renderDiscList(){
   });
   if (S.dsort==='desc') rows.reverse();
   $('dCount').textContent = all.length + (rows.length!==all.length ? '，符合 '+rows.length : '');
+  if ($('dStale')) $('dStale').textContent = S.workStale ? '（先顯示這台裝置 '+Math.max(1,Math.round((Date.now()-S.workStale)/60000))+' 分鐘前存的資料，更新中…）' : '';
   $('dList').innerHTML = rows.length ? rows.map(function(d){
     var body = d.text ? (ts.length ? hl(d.text, ts) : linkify(d.text)) : '';
     var att = (d.att||[]).map(function(a){ var th=isImg(a)&&thumb(a.url);
@@ -809,14 +853,8 @@ $('rSend').onclick=function(){
     var el=document.getElementById('d-'+r.data.disc_id); if (el && el.scrollIntoView) el.scrollIntoView({ behavior:'smooth', block:'center' });
   }).catch(function(e){ btn.disabled=false; prog(''); err.textContent='❌ '+(e&&e.message||e); });
 };
-$('wLink').onclick=function(){
-  var w=S.curWork; if (!w) return;
-  var u=location.origin+location.pathname+'#w='+encodeURIComponent(w.work_id);
-  (navigator.clipboard && window.isSecureContext ? navigator.clipboard.writeText(u) : Promise.reject()).then(function(){ alert('已複製這件工作的連結：\n'+u); }, function(){ prompt('請複製這個連結：', u); });
-};
-
 function editWork(w){
-  ['wDisc','wReply'].forEach(function(k){ $(k).style.display='none'; }); $('wLink').style.display='none';
+  ['wDisc','wReply'].forEach(function(k){ $(k).style.display='none'; }); $('wCancel').style.display='';   /* v1.6：編輯時下方「取消／儲存」 */
   $('wHead').textContent = w ? '✎ 編輯工作' : '＋ 新增工作';
   $('wItem').value=w?w.item:''; $('wOwner').value=w?w.owner:''; $('wDate').value=w?w.date:today(); $('wDue').value=w?w.due_date:''; $('wDone').value=w?w.done_date:'';
   fillSel($('wProg'), optList('progress',[w&&w.progress])); $('wProg').value=w?(w.progress||''):(optList('progress')[0]||'');
@@ -930,6 +968,8 @@ if (h==='work' || S.deepW) showTab('work'); else if (h==='imp' && S.pub) showTab
 S.workLocked = false;   /* v1.4（2026-10-06 晚）：工作清單免密碼 */
 if (/__ANNOUNCE_DEPLOYMENT__/.test(API)) { $('gate').style.display='none'; dsb('dsb-err','⚠️ 公告系統後端還沒部署完成（等經營者完成 Google 授權）。'); return; }
 if (S.pw) warmAuth();   /* 已存「看公告」密碼：bundle 帶著送（連工作清單一起拿），順手叫醒權限中心 */
+if (S.deepW) loadWorkFirst();   /* v1.6：104 連過來＝先只讀工作清單、馬上打開那件工作 */
+else { var c0=cachedWorks(); if (c0) { S.works=c0.rows; S.workStale=c0.at; fillOpts(); renderWork(); } }   /* v1.6：工作清單先用本機暫存畫出來，bundle 回來再換新 */
 loadAll();   /* 2026-10-06：公告免密碼，一進來就讀；v1.4 起工作清單也免密碼，不再問 */
 })();
 </script>

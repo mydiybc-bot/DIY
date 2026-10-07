@@ -27,8 +27,10 @@
  *       留言附檔存「工作討論附檔/<工作編號>/」。workList 的 discuss 多回 disc_id／role／att／src，依時間舊到新排、不含已刪除。
  * v5.1（2026-10-07 午，經營者「改成管理者也不能刪留言」）：拿掉 discussDel（API 不再提供刪留言，管理者密碼也刪不了；discussDel_ 與一次性
  *       selfTestV5_20261007 一併移除）。deleted／deleted_at 欄保留（v5 自我測試留下 1 列已標記刪除的測試留言，discBy_ 照樣濾掉）。
+ * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
+ *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v5.1';   // 2026-10-07 v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
+var VERSION = 'announce-api-v5.2';   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
@@ -371,8 +373,14 @@ function workView_(r) {
     progress: r.progress, importance: r.importance, origin: r.origin, text: r.content_text, html: str_(r.content_html_1) + str_(r.content_html_2), updated_at: r.updated_at };
 }
 function workList_(p, who) {
+  /* v5.2：結果暫存 5 分鐘（同公告清單的 ann:ver 版本號；寫入後 listCacheClear_ 換號＝失效）；放不進去就照常每次讀 */
+  var cache = CacheService.getScriptCache(), key = 'work:list:' + (cache.get('ann:ver') || '0'), hit = null;
+  try { hit = cacheGetBig_(cache, key); } catch (e) { hit = null; }
+  if (hit) { try { return { data: JSON.parse(hit) }; } catch (e) { /* 壞掉就重讀 */ } }
   var t = load_('fact_work'), d = load_('fact_work_discuss'), by = discBy_(d.rows);
-  return { data: { rows: t.rows.filter(function (r) { return r.deleted !== 'Y' && r.work_id; }).map(function (r) { var o = workView_(r); o.discuss = by[r.work_id] || []; return o; }) } };
+  var data = { rows: t.rows.filter(function (r) { return r.deleted !== 'Y' && r.work_id; }).map(function (r) { var o = workView_(r); o.discuss = by[r.work_id] || []; return o; }) };
+  try { cachePutBig_(cache, key, JSON.stringify(data), LIST_TTL); } catch (e) { }
+  return { data: data };
 }
 /* v5：留言 → 給前端的樣子（附檔 JSON 解開；不回 Drive 檔案 ID 以外的內部欄位） */
 function parseAtt_(s) { try { var a = JSON.parse(String(s || '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
