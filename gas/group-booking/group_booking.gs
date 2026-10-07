@@ -1,10 +1,12 @@
 /**
- * 團體訂位追蹤 group_booking.gs  v1.4（2026-10-07）
+ * 團體訂位追蹤 group_booking.gs  v1.4.1（2026-10-07）
+ *   v1.4.1（經營者同日更正）：8 人以上（含 8 人）都算團體、都要先選甜點 → need_dessert 改回「團體就要」（類別大組／包館／包場，或 8 人以上），
+ *         v1.4 的②（一般訂位不必先選）取消；①門市卡位不變。
  *   v1.4（經營者 2026-10-07 裁定）：
  *         ①客服訂位＋備註有「卡位」兩字但沒寫時間（例「人力不足卡位」）＝客服配合門市狀況卡位、避免現場客人太多，不是真的客人
  *           → 不算團體，不列「未付訂金」「未選甜點」等任何問題；改列為「門市卡位」（hold.type＝'block'，儀表板預設收在「正常的卡位」）。
  *           寫了時間的「14:00卡位」照舊是保護團體的卡位；客服訂位但備註沒有「卡位」（例：替客人代訂的包館）照舊當真的團體檢查。
- *         ②一般訂位（散客）公司不規定先選甜點 → 未選甜點只檢查大組／包館／包場（輸出 need_dessert；摘要的「還沒選甜點」同口徑）。
+ *         ②（v1.4.1 已取消）一般訂位（散客）不必先選甜點 → 改回 8 人以上都要選。
  *   v1.3：團體甜點自動同步到採購系統（fact_booking＝採購系統「預約」需求）。
  *         每一輪抓完後，把「有效團體訂位 × 客人選的甜點」寫進採購系統，客人改甜點／改數量／取消都會每天跟著更新；
  *         甜點名稱用採購系統同一套比對規則（產品名稱對照表）轉成 BOM 名，對不到的保留後台名稱，由採購系統標紅請店長選擇；
@@ -82,7 +84,7 @@ function gbStatus() {
 
 // ============ 設定 ============
 const GB = {
-  VERSION: 'gb-v1.4-20261007',
+  VERSION: 'gb-v1.4.1-20261007',
   BASE: 'https://diybc.azurewebsites.net',
   TZ: 'Asia/Taipei',
   DAYS_AHEAD: 60,            // 抓今天～60 天後（未來訂位表只有 35 天，團體常更早訂）
@@ -523,7 +525,7 @@ function gbBuildReport_(rows, today) {
     x.hold_anchor = (gbIsHoldName_(r) && hm) ? (('0' + hm[1]).slice(-2) + ':' + hm[2]) : '';
     x.hold_block = gbIsHoldName_(r) && !x.hold_anchor && BLOCK_RE.test(String(r.memo || ''));
     x.is_group = !x.hold_anchor && !x.hold_block && gbIsGroupRaw_(r);
-    x.need_dessert = GB.GROUP_CAT_RE.test(String(r.category || ''));   // v1.4：一般訂位（散客）不規定先選甜點，只有大組／包館／包場要選
+    x.need_dessert = gbIsGroupRaw_(r);   // v1.4.1：團體（8 人以上，或大組／包館／包場）都要先選甜點；未滿 8 人的散客本來就不在檢查範圍
     x.cust_key = gbIsHoldName_(r) ? '' : (String(r.phone || '').replace(/\D/g, '').length >= 8 ? 'P' + String(r.phone).replace(/\D/g, '') : (r.member ? 'N' + r.member : ''));
     x.issues = [];
     x.hold = null; x.awaiting = null; x.changes = [];

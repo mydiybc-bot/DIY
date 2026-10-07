@@ -2082,7 +2082,7 @@ function calcC_(res, rule, map) {
       return;
     }
     var ltU = (sid !== ALL_ROW && q.urg >= rule.GB_URGENT_RED) ? '🔴' : '', ltN = (sid !== ALL_ROW && q.nd >= rule.GB_NODESSERT_ORANGE) ? '🟠' : '';
-    rec_(res, sid, 'C2_no_dessert', G.window || '', q.nd, '', '有效團體中還沒選甜點的筆數（大組／包館／包場；一般訂位散客不必先選；＝團體頁「還沒選甜點」）', gbLatest, ltN, 'C 團體未選甜點');
+    rec_(res, sid, 'C2_no_dessert', G.window || '', q.nd, '', '有效團體中還沒選甜點的筆數（團體＝8 人以上或大組／包館／包場，都要先選；客服門市卡位不算；＝團體頁「還沒選甜點」）', gbLatest, ltN, 'C 團體未選甜點');
     rec_(res, sid, 'C2_unpaid', G.window || '', q.unpN, r0_(q.unpNT), '有效團體中已付 < 應付訂金的筆數（比較值＝差額 NT$；合計＝團體頁「應收未收」）', gbLatest, '', 'C 團體未付足訂金');
     rec_(res, sid, 'C2_urgent', G.window || '', q.urg, '', '🚨 需立即處理的項目數（＝團體頁「需立即處理」）', gbLatest, ltU, 'C 團體需立即處理');
     if (ltU) alert_(res, '🔴', sid, map.name[sid] + ' 團體訂位有 ' + q.urg + ' 項需要立即處理（例如已取消卻仍掛已付款、逾期未付訂金、7 天內到店還沒選甜點），請客服打開訂位分析的「團體訂位」頁處理', q.urg + ' 項', '≥' + rule.GB_URGENT_RED + ' 項 🔴');
@@ -2097,7 +2097,7 @@ function calcC_(res, rule, map) {
  * 團體 GAS fn=group：只取各店計數，回傳內容（含客人姓名電話）不寫入任何地方。
  * 各店口徑對照團體頁（dashboard-reservation.html md5 78812639…）：
  *   有效團體＝rows 中 active 且 is_group（＝L2310 團體總表 groups 的條件；全公司＝summary.active_groups，L2279）
- *   未選甜點＝有效團體中 menu 為空且 need_dessert 不是 false（＝summary.no_dessert；團體 GAS v1.4 起一般訂位散客不必先選、客服門市卡位不算團體）
+ *   未選甜點＝有效團體中 menu 為空且 need_dessert 不是 false（＝summary.no_dessert；團體 GAS v1.4.1：8 人以上或大組／包館／包場都要先選，客服門市卡位不算團體）
  *   未付足訂金＝有效團體中 deposit > paid 且非 exempt（差額合計＝summary.unpaid「應收未收」，L2280）
  *   需立即處理＝所有列 issues 中 sev＝'high' 的項目數（＝summary.high，L2276 pending）
  * 全公司數字會與 summary 逐項核對，不一致寫進 meta。
@@ -2141,7 +2141,7 @@ function readGroupCounts_(map) {
     if (x.active && x.is_group) {
       var ppl = Number(x.size) || 0, dep = Number(x.deposit) || 0, paid = Number(x.paid) || 0;
       b.act++; A.act++; b.ppl += ppl; A.ppl += ppl;
-      if (!(x.menu && x.menu.length) && x.need_dessert !== false) { b.nd++; A.nd++; }   // 團體 v1.4：一般訂位散客不必先選
+      if (!(x.menu && x.menu.length) && x.need_dessert !== false) { b.nd++; A.nd++; }   // 與團體摘要同口徑（團體 v1.4.1 起團體都要選）
       if (dep > paid && !x.exempt) { b.unpN++; A.unpN++; b.unpNT += dep - paid; A.unpNT += dep - paid; }
     }
   });
@@ -2288,7 +2288,7 @@ function calcE_(res, rule, map) {
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
 //   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-07.14';   // .14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
+var WEB_VER = 'e6-2026-10-07.15';   // .15：經營者更正 8 人以上（含）都算團體、都要先選甜點（團體 v1.4.1 need_dessert＝團體就要），只改說明文字；.14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊
 var BUNDLE_TTL = 21600;               // CacheService 最長 6 小時；runAll 寫完快照時另外主動清除
 
@@ -2516,7 +2516,7 @@ function liveBuild_() {
       if (!(x.active && x.is_group)) return;
       var dep = Number(x.deposit) || 0, paid = Number(x.paid) || 0, menu = x.menu || [];
       g.act++; g.ppl += Number(x.size) || 0;
-      var nd = x.need_dessert !== false;   // 團體 v1.4：一般訂位散客不必先選甜點
+      var nd = x.need_dessert !== false;   // 團體 GAS 的 need_dessert（v1.4.1 起團體都要選）
       if (!menu.length && nd) g.nd++;
       if (dep > paid && !x.exempt) g.unpN++;
       if (d < today || d > last) return;
