@@ -25,8 +25,10 @@
  *       與 discussDel（刪留言＝標記刪除＋附檔搬「_已刪除」，要管理者密碼）。fact_work_discuss 表頭在原 4 欄後面補 6 欄
  *       （disc_id／role／att（附檔 JSON）／src／deleted／deleted_at）；升級要在編輯器執行一次 setupV5_20261007（先備份分頁、再補表頭與舊討論的留言編號）。
  *       留言附檔存「工作討論附檔/<工作編號>/」。workList 的 discuss 多回 disc_id／role／att／src，依時間舊到新排、不含已刪除。
+ * v5.1（2026-10-07 午，經營者「改成管理者也不能刪留言」）：拿掉 discussDel（API 不再提供刪留言，管理者密碼也刪不了；discussDel_ 與一次性
+ *       selfTestV5_20261007 一併移除）。deleted／deleted_at 欄保留（v5 自我測試留下 1 列已標記刪除的測試留言，discBy_ 照樣濾掉）。
  */
-var VERSION = 'announce-api-v5';   // 2026-10-07 v5：工作清單留言 discussAdd（免密碼、可附檔）＋discussDel（管理者）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
+var VERSION = 'announce-api-v5.1';   // 2026-10-07 v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
@@ -110,10 +112,10 @@ function doGet(e) {
 function pingData_() { return { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') }; }
 var ACTIONS = { whoami: whoami_, list: list_, get: get_, save: save_, del: del_, upload: upload_, uploadImg: uploadImg_, attDel: attDel_,
   workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_, active: active_,
-  discussAdd: discussAdd_, discussDel: discussDel_ };
+  discussAdd: discussAdd_ };   /* v5.1：沒有刪留言的動作（經營者：管理者也不能刪） */
 var OPEN = { list: 1, get: 1, options: 1, active: 1, workList: 1, discussAdd: 1 };   /* v5：工作留言免密碼（要填名字）；v4（2026-10-06 晚）：工作清單也免密碼；v3：公告免密碼。其他寫入照舊要管理者密碼 */
-var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1, discussAdd: 1, discussDel: 1 };
-var PUB_ONLY = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1, discussDel: 1 };   /* v5 起與 WRITES 分開：discussAdd 是寫入（要鎖、要記 log）但免密碼 */
+var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1, discussAdd: 1 };
+var PUB_ONLY = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1 };   /* v5 起與 WRITES 分開：discussAdd 是寫入（要鎖、要記 log）但免密碼 */
 var RQ_SEC = 21600;
 function doPost(e) {
   var p;
@@ -440,16 +442,6 @@ function discussAdd_(p, who) {
   return { id: id, data: { disc_id: o.disc_id, discuss: discBy_(d.rows)[id] || [] },
     msg: '留言 ' + o.disc_id + '：' + author + (role ? '（' + role + '）' : '') + '｜' + row.item + (att.length ? '｜附檔 ' + att.length + ' 個' : '') };
 }
-/* v5：刪留言（管理者）。標記刪除＋附檔搬「_已刪除」，不永久刪 */
-function discussDel_(p, who) {
-  var did = str_(p.disc_id), d = load_('fact_work_discuss'), r = d.rows.filter(function (x) { return did && x.disc_id === did && x.deleted !== 'Y'; })[0];
-  if (!r) throw fail_('找不到這則留言', 'notfound');
-  var trash = sub_('_已刪除');
-  parseAtt_(r.att).forEach(function (a) { try { var f = DriveApp.getFileById(a.id); if (inRoot_(f)) f.moveTo(trash); } catch (e) { } });
-  putCols_(d, r._row, { deleted: 'Y', deleted_at: now_() }, function (h) { return h === 'deleted' || h === 'deleted_at'; });
-  r.deleted = 'Y';
-  return { id: r.work_id, data: { disc_id: did, discuss: discBy_(d.rows)[r.work_id] || [] }, msg: '刪除留言 ' + did + '（' + r.author + '）' };
-}
 /* v5 一次性升級（2026-10-07，在編輯器執行；可重跑）：
    ①先把 fact_work_discuss 整張複製成「backup_fact_work_discuss_20261007」（已存在就不再複製）
    ②表頭第 5～10 欄補 disc_id／role／att／src／deleted／deleted_at（原 4 欄不動；已有字且不同就停）
@@ -484,28 +476,6 @@ function setupV5_20261007() {
     try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
     var msg = name + ' 升級完成：表頭 ' + H.length + ' 欄；舊討論補留言編號 ' + n + ' 列；資料列 ' + before + ' → ' + after + '（應相同）；備份分頁 ' + bk;
     log_('升級程式', 'setupV5', '', true, msg); Logger.log(msg); return msg;
-  } finally { lock.releaseLock(); }
-}
-/* v5 自我測試（在編輯器執行；部署前後驗證用）：在第一件未刪除的工作留一則「系統測試」留言（附 1 個小 txt 檔）→ 確認讀得到 →
-   立刻用 discussDel_ 刪掉（標記刪除＋附檔搬「_已刪除」）。留下 1 列已刪除的測試留言當紀錄，大家看不到。 */
-function selfTestV5_20261007() {
-  var lock = LockService.getScriptLock(); lock.waitLock(30000);
-  try {
-    var w = load_('fact_work', true).rows.filter(function (r) { return r.deleted !== 'Y' && r.work_id; })[0];
-    if (!w) throw new Error('沒有工作可測');
-    var before = load_('fact_work_discuss').rows.length;
-    var r = discussAdd_({ work_id: w.work_id, author: '系統測試', role: 'Claude', text: 'v5 留言功能自我測試（會立刻刪除）',
-      files: [{ name: 'v5自我測試.txt', mime: 'text/plain', b64: Utilities.base64Encode('v5 self test ' + now_()) }] }, '升級程式');
-    var mine = (r.data.discuss || []).filter(function (d) { return d.disc_id === r.data.disc_id; })[0];
-    if (!mine || mine.att.length !== 1) throw new Error('新增後讀不到測試留言或附檔');
-    var fid = parseAtt_(load_('fact_work_discuss').rows.filter(function (x) { return x.disc_id === r.data.disc_id; })[0].att)[0].id;
-    var inFolder = DriveApp.getFileById(fid).getParents().next().getName();
-    var del = discussDel_({ disc_id: r.data.disc_id }, '升級程式');
-    var gone = (del.data.discuss || []).every(function (d) { return d.disc_id !== r.data.disc_id; });
-    var trashed = DriveApp.getFileById(fid).getParents().next().getName();   /* 2026-10-07 實測：沿用刪除前拿到的檔案物件，所在資料夾會是舊的（檔案其實已搬到 _已刪除），所以重新取一次 */
-    var after = load_('fact_work_discuss').rows.length;
-    var msg = 'v5 自我測試：工作「' + w.item + '」留言 ' + r.data.disc_id + '（附檔存在「' + inFolder + '」）→ 刪除後清單' + (gone ? '已不見' : '仍看得到！') + '、附檔在「' + trashed + '」；討論列數 ' + before + ' → ' + after;
-    log_('升級程式', 'selfTestV5', w.work_id, gone && trashed === '_已刪除', msg); Logger.log(msg); return msg;
   } finally { lock.releaseLock(); }
 }
 function workSave_(p, who) {
