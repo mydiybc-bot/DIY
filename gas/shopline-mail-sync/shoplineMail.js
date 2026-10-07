@@ -448,3 +448,30 @@ function slmDiag() {
   }
   slmLog_({mode: 'diag', note: out ? '診斷 #' + out.ord : '找不到門市單', check: out});
 }
+
+/* ---------- 刪掉指定訂單號碼（完全相同才刪；刪前把列記進 log；刪後核對列數） ---------- */
+function slmRemoveOrders_(nums, why) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('鎖不到');
+  var st = {mode: 'remove', removed: 0, removedRows: [], fail: [], warn: [], note: ''};
+  try {
+    var sh = SpreadsheetApp.openById(SLM.MONTH_SS).getSheetByName(SLM.SHEET);
+    slmCheckHeader_(sh);
+    var vals = sh.getDataRange().getValues(), want = {}, idx = [];
+    nums.forEach(function (n) { want[String(n).trim()] = 1; });
+    for (var i = 1; i < vals.length; i++) if (want[String(vals[i][2]).trim()]) {
+      idx.push(i + 1);
+      st.removedRows.push([vals[i][0], slmFmt_(vals[i][1]), vals[i][2], String(vals[i][3]).slice(0, 40), vals[i][5], vals[i][6]]);
+    }
+    var before = sh.getLastRow();
+    if (idx.length) slmDeleteRows_(sh, idx);
+    st.removed = idx.length;
+    if (sh.getLastRow() !== before - idx.length) st.warn.push('刪後列數不對：刪前 ' + before + '、刪 ' + idx.length + '、刪後 ' + sh.getLastRow());
+    st.note = (why || '') + '：刪除 ' + nums.join('、') + ' 共 ' + idx.length + ' 列';
+  } catch (e) { st.fail.push(String(e && e.message || e)); st.note = '錯誤：' + st.fail[0]; }
+  finally { lock.releaseLock(); }
+  slmLog_(st);
+  return st;
+}
+/* 2026-10-07 全面核對：7 號店 9/13 訂單在 Shopline 已取消，fact_shopline 還留 2 列 */
+function slmFix20261007() { return slmRemoveOrders_(['#20260913103735151'], '全面核對（Shopline 已取消）'); }
