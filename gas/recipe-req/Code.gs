@@ -754,11 +754,14 @@ function signData_(t, row, rid) {
   return { req: req, campaign: camp ? plain_(ct.H, camp) : null, others: others, units: rowsOf_('fact_req_unit', ids),
     signoffs: rowsOf_('fact_signoff', ids), comments: commentsOf_(rid) };
 }
-/* 本人第一次簽核時自設 PIN（簽核連結 k）：只限名單上啟用中、PIN 還是空的人；設好之後要改只能找管理者 */
+/* 本人第一次簽核時自設 PIN（簽核連結 k）：只限「這張單被指定的簽核人」、名單上啟用中、PIN 還是空的人（別人拿到連結也不能替同事設）；
+   設好之後要改只能找管理者（清空 PIN 讓本人重設） */
 function signSetPin_(p, auth) {
   var rid = str_(p.req_id).trim(), name = str_(p.signer).trim(), pin = str_(p.new_pin).trim();
   if (!name) throw fail_('請先選你的名字');
   if (!/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字');
+  var qt = load_('fact_recipe_req', true), qrow = reqRow_(qt, rid);
+  if (!qrow || signersOf_(qrow).indexOf(name) < 0) throw fail_('「' + name + '」不是這張單的簽核人，不能在這裡設定 PIN；請主廚把你加進簽核人，或請管理者在「🔑 密碼管理」幫你設定', 'perm');
   var t = load_('dim_signer'), row = t.rows.filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
   if (!row) throw fail_('名單上沒有「' + name + '」（或已停用），請找管理者', 'notfound');
   if (str_(row.pin).trim()) throw fail_('「' + name + '」已經設定過 PIN；忘記請找管理者在「🔑 密碼管理」重設', 'haspin');
