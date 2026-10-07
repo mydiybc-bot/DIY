@@ -20,21 +20,29 @@
  *       新增 active＝今天在有效期內的公告（含純文字內文與附檔清單；給決策中心店長頁）；GET（JSONP）也可讀 active。
  * v4（2026-10-06 晚，經營者「工作清單也不需要密碼就可以看」）：workList 免密碼；bundle 不帶密碼也回公告＋工作清單＋選單（work 不再 null）。
  *       寫入（發佈／修改／刪除／上傳／匯入／工作新增修改）照舊要管理者密碼（announce_pub）。「看公告」密碼（dim_auth：announce）從此沒有地方用到。
+ * v5（2026-10-07，經營者：工作清單搬進 104 指定員工公告，參與人員點公告裡的連結回到本系統留言、可上傳檔案）：
+ *       新增 discussAdd（工作留言，免密碼、要填名字；每則 ≤5 個檔、每個 ≤10MB、合計 ≤20MB、限常見格式；防灌：同件工作每分鐘 10 則、全站每分鐘 30 則、每天 500 則）
+ *       與 discussDel（刪留言＝標記刪除＋附檔搬「_已刪除」，要管理者密碼）。fact_work_discuss 表頭在原 4 欄後面補 6 欄
+ *       （disc_id／role／att（附檔 JSON）／src／deleted／deleted_at）；升級要在編輯器執行一次 setupV5_20261007（先備份分頁、再補表頭與舊討論的留言編號）。
+ *       留言附檔存「工作討論附檔/<工作編號>/」。workList 的 discuss 多回 disc_id／role／att／src，依時間舊到新排、不含已刪除。
  */
-var VERSION = 'announce-api-v4';   // 2026-10-06 晚 v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
+var VERSION = 'announce-api-v5';   // 2026-10-07 v5：工作清單留言 discussAdd（免密碼、可附檔）＋discussDel（管理者）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var DASH_VIEW = 'announce', DASH_PUB = 'announce_pub';
 var SEG_MAX = 45000, SEG_N = 4, LOG_KEEP = 5000, MAX_FILE = 10 * 1024 * 1024, MAX_ATT = 10;
+/* v5 工作留言：上限與可收的副檔名（前端 dashboard-announce.html 的 DISC_* 要跟這裡一致） */
+var DISC_TEXT_MAX = 3000, DISC_MAX_FILES = 5, DISC_MAX_FILE = 10 * 1024 * 1024, DISC_MAX_TOTAL = 20 * 1024 * 1024;
+var DISC_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'mp4', 'mov', 'm4a', 'mp3'];
 var TABS = {
   fact_announce: ['ann_id', 'src', 'nueip_id', 'category', 'type', 'title', 'start_date', 'end_date', 'pinned', 'audience', 'creator',
     'created_at', 'updated_at', 'updated_by', 'content_text', 'content_html_1', 'content_html_2', 'content_html_3', 'content_html_4', 'att_count', 'deleted', 'deleted_at'],
   fact_announce_att: ['att_id', 'ann_id', 'file_name', 'mime', 'size', 'drive_file_id', 'url', 'src_url', 'uploaded_at', 'deleted'],
   fact_work: ['work_id', 'src', 'nueip_id', 'item', 'owner', 'creator', 'date', 'due_date', 'done_date', 'progress', 'importance', 'origin',
     'content_text', 'content_html_1', 'content_html_2', 'created_at', 'updated_at', 'updated_by', 'deleted', 'deleted_at'],
-  fact_work_discuss: ['work_id', 'author', 'ts', 'text'],
+  fact_work_discuss: ['work_id', 'author', 'ts', 'text', 'disc_id', 'role', 'att', 'src', 'deleted', 'deleted_at'],   /* v5：後 6 欄是 2026-10-07 補的（setupV5_20261007） */
   dim_option: ['kind', 'value', 'sort'],
   log: ['ts', 'who', 'action', 'id', 'ok', 'msg'],
   meta_import: ['ts', 'batch', 'kind', 'count', 'note']
@@ -101,10 +109,11 @@ function doGet(e) {
 }
 function pingData_() { return { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('DB_ID') }; }
 var ACTIONS = { whoami: whoami_, list: list_, get: get_, save: save_, del: del_, upload: upload_, uploadImg: uploadImg_, attDel: attDel_,
-  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_, active: active_ };
-var OPEN = { list: 1, get: 1, options: 1, active: 1, workList: 1 };   /* v4（2026-10-06 晚）：工作清單也免密碼；v3：公告免密碼。寫入照舊要管理者密碼 */
-var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1 };
-var PUB_ONLY = WRITES;
+  workList: workList_, workSave: workSave_, workDel: workDel_, options: options_, optSave: optSave_, importBatch: importBatch_, bundle: bundle_, active: active_,
+  discussAdd: discussAdd_, discussDel: discussDel_ };
+var OPEN = { list: 1, get: 1, options: 1, active: 1, workList: 1, discussAdd: 1 };   /* v5：工作留言免密碼（要填名字）；v4（2026-10-06 晚）：工作清單也免密碼；v3：公告免密碼。其他寫入照舊要管理者密碼 */
+var WRITES = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1, discussAdd: 1, discussDel: 1 };
+var PUB_ONLY = { save: 1, del: 1, upload: 1, uploadImg: 1, attDel: 1, workSave: 1, workDel: 1, optSave: 1, importBatch: 1, discussDel: 1 };   /* v5 起與 WRITES 分開：discussAdd 是寫入（要鎖、要記 log）但免密碼 */
 var RQ_SEC = 21600;
 function doPost(e) {
   var p;
@@ -360,9 +369,144 @@ function workView_(r) {
     progress: r.progress, importance: r.importance, origin: r.origin, text: r.content_text, html: str_(r.content_html_1) + str_(r.content_html_2), updated_at: r.updated_at };
 }
 function workList_(p, who) {
-  var t = load_('fact_work'), d = load_('fact_work_discuss'), by = {};
-  d.rows.forEach(function (x) { (by[x.work_id] = by[x.work_id] || []).push({ author: x.author, ts: x.ts, text: x.text }); });
+  var t = load_('fact_work'), d = load_('fact_work_discuss'), by = discBy_(d.rows);
   return { data: { rows: t.rows.filter(function (r) { return r.deleted !== 'Y' && r.work_id; }).map(function (r) { var o = workView_(r); o.discuss = by[r.work_id] || []; return o; }) } };
+}
+/* v5：留言 → 給前端的樣子（附檔 JSON 解開；不回 Drive 檔案 ID 以外的內部欄位） */
+function parseAtt_(s) { try { var a = JSON.parse(String(s || '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function discView_(x) {
+  return { disc_id: x.disc_id || '', author: x.author, role: x.role || '', ts: x.ts, text: x.text, src: x.src || '',
+    att: parseAtt_(x.att).map(function (a) { return { name: a.name, size: Number(a.size) || 0, mime: a.mime || '', url: a.url }; }) };
+}
+/* 依工作編號分組、不含已刪除、時間舊到新（NUEIP 舊討論的時間只有到分或到日，字串比照樣正確） */
+function discBy_(rows) {
+  var by = {};
+  rows.forEach(function (x) { if (x.deleted === 'Y' || !x.work_id) return; (by[x.work_id] = by[x.work_id] || []).push(x); });
+  Object.keys(by).forEach(function (k) {
+    by[k] = by[k].map(function (x, i) { return { x: x, i: i }; })
+      .sort(function (a, b) { return String(a.x.ts).localeCompare(String(b.x.ts)) || a.i - b.i; })
+      .map(function (o) { return discView_(o.x); });
+  });
+  return by;
+}
+/* v5 防灌：CacheService 計數（呼叫端已拿到腳本鎖，不會互搶）；超過就擋 */
+function rate_(key, max, sec, msg) {
+  var c = CacheService.getScriptCache(), n = parseInt(c.get(key) || '0', 10) || 0;
+  if (n >= max) throw fail_(msg, 'rate');
+  c.put(key, String(n + 1), sec);
+}
+/* v5（2026-10-07）：工作留言（免密碼；104 指定員工公告裡的「點這裡留言」連過來）。要填名字；身分（店別／職稱）可空白。
+   附檔：每則 ≤ DISC_MAX_FILES 個、每個 ≤10MB、合計 ≤20MB、副檔名要在 DISC_EXT；存「工作討論附檔/<工作編號>/」（只在根資料夾底下建）。
+   先全部檢查完才建檔，避免檢查到一半失敗留下孤兒檔。 */
+function discussAdd_(p, who) {
+  var id = str_(p.work_id), w = load_('fact_work', true), row = w.rows.filter(function (x) { return x.work_id === id && x.deleted !== 'Y'; })[0];
+  if (!id || !row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
+  var author = cleanTxt_(p.author, 30).replace(/\s+/g, ' ').trim();
+  if (!author) throw fail_('請填寫你的名字', 'invalid');
+  var role = cleanTxt_(p.role, 30).replace(/\s+/g, ' ').trim();
+  var text = cleanTxt_(p.text, DISC_TEXT_MAX + 50).replace(/\r\n?/g, '\n').trim();
+  if (text.length > DISC_TEXT_MAX) throw fail_('留言最多 ' + DISC_TEXT_MAX + ' 字', 'invalid');
+  var files = Array.isArray(p.files) ? p.files : [];
+  if (!text && !files.length) throw fail_('請輸入留言內容或附上檔案', 'invalid');
+  if (files.length > DISC_MAX_FILES) throw fail_('每則留言最多 ' + DISC_MAX_FILES + ' 個檔案', 'invalid');
+  var blobs = [], total = 0;
+  files.forEach(function (f) {
+    var name = cleanTxt_(f && f.name, 150).replace(/[\\\/:*?"<>|]/g, '_').trim() || 'file', m = name.match(/\.([A-Za-z0-9]{1,5})$/), ext = m ? m[1].toLowerCase() : '';
+    if (DISC_EXT.indexOf(ext) < 0) throw fail_('「' + name + '」的檔案類型不收（可上傳：' + DISC_EXT.join('、') + '）', 'invalid');
+    var bytes = Utilities.base64Decode(String((f && f.b64) || ''));
+    if (!bytes.length) throw fail_('「' + name + '」是空的', 'invalid');
+    if (bytes.length > DISC_MAX_FILE) throw fail_('「' + name + '」超過 10MB', 'invalid');
+    total += bytes.length;
+    if (total > DISC_MAX_TOTAL) throw fail_('這次附的檔案合計超過 20MB，請分成幾則留言', 'invalid');
+    blobs.push({ blob: Utilities.newBlob(bytes, cleanTxt_(f.mime, 100) || 'application/octet-stream', name), size: bytes.length });
+  });
+  rate_('disc:w:' + id, 10, 60, '這件工作 1 分鐘內留言太多次，請稍後再送');
+  rate_('disc:all', 30, 60, '全站 1 分鐘內留言太多，請稍後再送');
+  rate_('disc:day:' + today_(), 500, 86400, '今天的留言量已達上限（500 則），請聯絡管理者');
+  var att = [];
+  if (blobs.length) {
+    var folder = subOf_(sub_('工作討論附檔'), id);
+    blobs.forEach(function (b) {
+      var f = folder.createFile(b.blob);
+      try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (se) { }   /* 同 upload_：資料夾已是「知道連結」時會被拒，略過 */
+      att.push({ name: b.blob.getName(), size: b.size, mime: b.blob.getContentType(), id: f.getId(), url: f.getUrl() });
+    });
+  }
+  var d = load_('fact_work_discuss');
+  var o = { work_id: id, author: author, ts: now_(), text: text, disc_id: 'D' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + Math.floor(Math.random() * 900 + 100),
+    role: role, att: att.length ? JSON.stringify(att) : '', src: 'web', deleted: '', deleted_at: '' };
+  put_(d, nextRow_(d), o);
+  d.rows.push(o);
+  return { id: id, data: { disc_id: o.disc_id, discuss: discBy_(d.rows)[id] || [] },
+    msg: '留言 ' + o.disc_id + '：' + author + (role ? '（' + role + '）' : '') + '｜' + row.item + (att.length ? '｜附檔 ' + att.length + ' 個' : '') };
+}
+/* v5：刪留言（管理者）。標記刪除＋附檔搬「_已刪除」，不永久刪 */
+function discussDel_(p, who) {
+  var did = str_(p.disc_id), d = load_('fact_work_discuss'), r = d.rows.filter(function (x) { return did && x.disc_id === did && x.deleted !== 'Y'; })[0];
+  if (!r) throw fail_('找不到這則留言', 'notfound');
+  var trash = sub_('_已刪除');
+  parseAtt_(r.att).forEach(function (a) { try { var f = DriveApp.getFileById(a.id); if (inRoot_(f)) f.moveTo(trash); } catch (e) { } });
+  putCols_(d, r._row, { deleted: 'Y', deleted_at: now_() }, function (h) { return h === 'deleted' || h === 'deleted_at'; });
+  r.deleted = 'Y';
+  return { id: r.work_id, data: { disc_id: did, discuss: discBy_(d.rows)[r.work_id] || [] }, msg: '刪除留言 ' + did + '（' + r.author + '）' };
+}
+/* v5 一次性升級（2026-10-07，在編輯器執行；可重跑）：
+   ①先把 fact_work_discuss 整張複製成「backup_fact_work_discuss_20261007」（已存在就不再複製）
+   ②表頭第 5～10 欄補 disc_id／role／att／src／deleted／deleted_at（原 4 欄不動；已有字且不同就停）
+   ③舊討論補留言編號 N＋列號、來源 nueip（只填空白格，已有的不改）④建「工作討論附檔」資料夾 */
+function setupV5_20261007() {
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var ss = ss_(), name = 'fact_work_discuss', sh = ss.getSheetByName(name), H = TABS[name];
+    if (!sh) throw new Error('找不到分頁 ' + name);
+    var bk = 'backup_' + name + '_20261007', before = Math.max(0, sh.getLastRow() - 1);
+    if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+    var cur = sh.getRange(1, 1, 1, H.length).getValues()[0].map(function (x) { return String(x).trim(); });
+    for (var i = 0; i < H.length; i++) {
+      if (!cur[i]) sh.getRange(1, i + 1).setValue(H[i]).setFontWeight('bold').setBackground('#FFF3E0');
+      else if (cur[i] !== H[i]) throw new Error(name + ' 表頭第 ' + (i + 1) + ' 欄是「' + cur[i] + '」，應為「' + H[i] + '」，停止升級');
+    }
+    ensureTab_(ss, name);
+    var n = 0, last = sh.getLastRow();
+    if (last > 1) {
+      var ci = H.indexOf('disc_id') + 1, cs = H.indexOf('src') + 1;
+      var ids = sh.getRange(2, ci, last - 1, 1).getValues(), src = sh.getRange(2, cs, last - 1, 1).getValues(), wid = sh.getRange(2, 1, last - 1, 1).getValues();
+      for (var r = 0; r < ids.length; r++) {
+        if (!String(wid[r][0]).trim()) continue;
+        if (!String(ids[r][0]).trim()) { ids[r][0] = 'N' + ('00000' + (r + 2)).slice(-6); n++; }
+        if (!String(src[r][0]).trim()) src[r][0] = 'nueip';
+      }
+      sh.getRange(2, ci, last - 1, 1).setNumberFormat('@').setValues(ids);
+      sh.getRange(2, cs, last - 1, 1).setNumberFormat('@').setValues(src);
+    }
+    sub_('工作討論附檔');
+    var after = Math.max(0, sh.getLastRow() - 1);
+    try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
+    var msg = name + ' 升級完成：表頭 ' + H.length + ' 欄；舊討論補留言編號 ' + n + ' 列；資料列 ' + before + ' → ' + after + '（應相同）；備份分頁 ' + bk;
+    log_('升級程式', 'setupV5', '', true, msg); Logger.log(msg); return msg;
+  } finally { lock.releaseLock(); }
+}
+/* v5 自我測試（在編輯器執行；部署前後驗證用）：在第一件未刪除的工作留一則「系統測試」留言（附 1 個小 txt 檔）→ 確認讀得到 →
+   立刻用 discussDel_ 刪掉（標記刪除＋附檔搬「_已刪除」）。留下 1 列已刪除的測試留言當紀錄，大家看不到。 */
+function selfTestV5_20261007() {
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var w = load_('fact_work', true).rows.filter(function (r) { return r.deleted !== 'Y' && r.work_id; })[0];
+    if (!w) throw new Error('沒有工作可測');
+    var before = load_('fact_work_discuss').rows.length;
+    var r = discussAdd_({ work_id: w.work_id, author: '系統測試', role: 'Claude', text: 'v5 留言功能自我測試（會立刻刪除）',
+      files: [{ name: 'v5自我測試.txt', mime: 'text/plain', b64: Utilities.base64Encode('v5 self test ' + now_()) }] }, '升級程式');
+    var mine = (r.data.discuss || []).filter(function (d) { return d.disc_id === r.data.disc_id; })[0];
+    if (!mine || mine.att.length !== 1) throw new Error('新增後讀不到測試留言或附檔');
+    var fid = parseAtt_(load_('fact_work_discuss').rows.filter(function (x) { return x.disc_id === r.data.disc_id; })[0].att)[0].id;
+    var inFolder = DriveApp.getFileById(fid).getParents().next().getName();
+    var del = discussDel_({ disc_id: r.data.disc_id }, '升級程式');
+    var gone = (del.data.discuss || []).every(function (d) { return d.disc_id !== r.data.disc_id; });
+    var trashed = DriveApp.getFileById(fid).getParents().next().getName();   /* 2026-10-07 實測：沿用刪除前拿到的檔案物件，所在資料夾會是舊的（檔案其實已搬到 _已刪除），所以重新取一次 */
+    var after = load_('fact_work_discuss').rows.length;
+    var msg = 'v5 自我測試：工作「' + w.item + '」留言 ' + r.data.disc_id + '（附檔存在「' + inFolder + '」）→ 刪除後清單' + (gone ? '已不見' : '仍看得到！') + '、附檔在「' + trashed + '」；討論列數 ' + before + ' → ' + after;
+    log_('升級程式', 'selfTestV5', w.work_id, gone && trashed === '_已刪除', msg); Logger.log(msg); return msg;
+  } finally { lock.releaseLock(); }
 }
 function workSave_(p, who) {
   var w = p.work || {}, t = load_('fact_work'), id = str_(w.work_id), row = null;
