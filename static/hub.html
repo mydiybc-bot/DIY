@@ -9,6 +9,7 @@
 <!-- 2026-09-29 食譜系統刪除「食譜成本分析」分頁：卡片說明改「新品申請表・送件到檔期／半成品・材料包」，統計標籤「可算成本甜點」→「BOM 本甜點」（數字查詢不變） -->
 <!-- 2026-10-02 新增第 11 張卡「📢 公告及工作清單」→ dashboard-announce.html（取代 NUEIP 公告／工作清單；後端＝獨立 GAS「公告及工作清單 API」）；標題 10→11；新增 ANNOUNCE_API 與 loadAnnounceStat()（只讀公開數字，不含內容） -->
 <!-- 2026-10-02 登入穩定化（待處理事項 1002 #3）：<head> 加入全站共用 AUTH-CORE v2（權限中心慢／回 404 自動補發、預熱、瀏覽器空間滿不卡）；authVerify／setUnlock／isUnlocked 改走它，AUTH_API 常數移到那一段；解鎖後與點卡片前先預熱 -->
+<!-- 2026-10-07 經營者裁定「原物料成本用不到」：移除「🧾 原物料成本」卡（dashboard-materials.html 一併刪除；廠商單價 Sheet 與 vendor-price-tracker 不動）；標題 11→10；移除 VENDOR_SHEET 與 loadVendorStat() -->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -297,7 +298,7 @@ cursor: pointer; transition: background .15s;
 <div class="header">
 <div class="header-left">
 <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
-<p>整合 11 個營運系統 ｜ 12 間門市</p>
+<p>整合 10 個營運系統 ｜ 12 間門市</p>
 </div>
 <div class="header-badge" id="updateBadge">載入中…</div>
 </div>
@@ -364,19 +365,6 @@ cursor: pointer; transition: background .15s;
 <div class="card-stat-label" id="statScheduleLabel">本週工時</div>
 <div class="upd-hint">每月：拖放上傳 12 店班表 xlsx</div>
 <div class="card-fresh wait" data-fresh="schedule">🕒 最後更新讀取中…</div>
-<div class="card-arrow">→</div>
-</div>
-
-<!-- 原物料成本（2026-09-02 Phase 2 合併；2026-09-05 食譜成本卡搬到「食譜系統」，本卡回到廠商單價口徑） -->
-<div class="hub-card vendor" onclick="goTo('dashboard-materials.html')">
-<div class="card-icon">🧾</div>
-<div class="card-title">原物料成本 <span class="upd upd-quarter">🟠 每季手動</span></div>
-<div class="card-desc">查價比價・季漲跌<br>議價智囊・單價趨勢</div>
-<div class="card-stat" id="statMaterials"><span class="spin-sm"></span></div>
-<div class="card-stat-label" id="statMaterialsLabel">最新季單價筆數</div>
-<div class="lock-badge" style="margin-top:8px">🔒 需要密碼</div>
-<div class="upd-hint">每季：單據交 Claude 抽價、更新單價表</div>
-<div class="card-fresh wait" data-fresh="vendor">🕒 最後更新讀取中…</div>
 <div class="card-arrow">→</div>
 </div>
 
@@ -452,7 +440,6 @@ cursor: pointer; transition: background .15s;
 const REVIEWS_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
 const MEMBER_SHEET = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const BOM_SHEET = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
-const VENDOR_SHEET = '1Pp0C7zLWWwhO7miAxDQmxfYmX0bbh6crOK7dk0a_Zyw';   /* 2026-09-05 廠商單價 Sheet（fact_vendor_price），原物料成本卡統計用 */
 const SCHEDULE_API = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
 const RESERVATION_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
 const ANNOUNCE_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';
@@ -678,9 +665,6 @@ loadReservationStat();
 // ── 食譜系統:BOM 本可算成本甜點支數（2026-09-05 起顯示在食譜系統卡） ──
 loadRecipeStat();
 
-// ── 原物料成本:fact_vendor_price 最新季別＋該季筆數 ──
-loadVendorStat();
-
 // ── 公告及工作清單:進行中公告數＋未完成工作數（公開 stat，只有數字） ──
 loadAnnounceStat();
 
@@ -867,50 +851,6 @@ scriptEl.onerror = () => {
 clearTimeout(to);
 document.getElementById('statRecipe').textContent = '—';
 document.getElementById('statRecipeLabel').textContent = '無法取得';
-};
-document.head.appendChild(scriptEl);
-}
-
-// ── 原物料成本卡（2026-09-05 新增）：直讀廠商單價 Sheet「fact_vendor_price」，取 A 欄季別最大值＋該季筆數，顯示「2026Q3 · N 筆單價」 ──
-function loadVendorStat() {
-if (hubStatUse('vendor', ['statMaterials', 'statMaterialsLabel'])) return;   /* 2026-10-04：10 分鐘內有暫存就不發請求 */
-const cbName = 'vendor_cb_' + Date.now();
-/* 2026-10-04：加 15 秒逾時（原本沒設）；逾時顯示原本的「無法取得」，晚到的回應丟掉 */
-const to = setTimeout(() => { if (window[cbName]) { window[cbName] = function(){}; try { document.head.removeChild(scriptEl); } catch(e) {}
-document.getElementById('statMaterials').textContent = '—';
-document.getElementById('statMaterialsLabel').textContent = '無法取得'; } }, HUB_REQ_TIMEOUT);
-window[cbName] = function(json) {
-clearTimeout(to);
-delete window[cbName];
-try { document.head.removeChild(scriptEl); } catch(e) {}
-try {
-const rows = (json && json.table && json.table.rows) ? json.table.rows : [];
-const r = rows.length ? rows[0].c : null;
-const q = (r && r[0] && r[0].v != null) ? String(r[0].v) : '';
-const n = (r && r[1] && r[1].v != null) ? Number(r[1].v) : 0;
-if (q) {
-document.getElementById('statMaterials').textContent = q + ' · ' + n + ' 筆單價';
-document.getElementById('statMaterialsLabel').textContent = '最新季單價筆數';
-hubStatSave('vendor', ['statMaterials', 'statMaterialsLabel']);
-} else {
-document.getElementById('statMaterials').textContent = '—';
-document.getElementById('statMaterialsLabel').textContent = '暫無單價資料';
-}
-} catch (e) {
-document.getElementById('statMaterials').textContent = '—';
-document.getElementById('statMaterialsLabel').textContent = '無法取得';
-}
-};
-const scriptEl = document.createElement('script');
-scriptEl.src = 'https://docs.google.com/spreadsheets/d/' + VENDOR_SHEET + '/gviz/tq'
-+ '?sheet=' + encodeURIComponent('fact_vendor_price')
-+ '&tqx=responseHandler:' + cbName + ';out:json'
-+ '&tq=' + encodeURIComponent('select A,count(B) group by A order by A desc limit 1')
-+ '&_cb=' + Date.now();
-scriptEl.onerror = () => {
-clearTimeout(to);
-document.getElementById('statMaterials').textContent = '—';
-document.getElementById('statMaterialsLabel').textContent = '無法取得';
 };
 document.head.appendChild(scriptEl);
 }
