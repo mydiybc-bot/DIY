@@ -93,10 +93,16 @@ function rbMatchStep_(ings, s) {
   var ok = [], miss = [], notes = [];
   (s.ing || []).forEach(function (g) {
     var label = g[0] + ' ' + g[1] + ' ' + g[2];
-    var r = rbMatch_(ings, { name: g[0], unit: g[2], cate: g[3] });
+    var r = rbMatch_(ings, { name: g[0], unit: g[2], cate: g[3] }), inUnit = false;
+    /* 後台單位本身帶括號（例：【D區】動物餅乾模「組 (貓/熊/兔子/鱷魚各1)」）：匯出檔會把括號那段拆成附註 → 合回單位再比一次（2026-10-07） */
+    if (!r.hit && r.miss === 'unit' && g[5]) {
+      var want = rbNorm_(g[2] + '(' + g[5] + ')').replace(/\s+/g, '');
+      var u2 = r.units.filter(function (u) { return rbNorm_(u).replace(/\s+/g, '') === want; })[0];
+      if (u2) { r = rbMatch_(ings, { name: g[0], unit: u2, cate: g[3] }); inUnit = !!r.hit; }
+    }
     if (r.hit) ok.push({ id: r.hit.id, amount: g[1], unit: r.hit.unit, cont: g[4] });
     else miss.push(label + (r.miss === 'unit' ? '（後台這個品項的單位是 ' + r.units.join('／') + '）' : '（後台食材清單沒有）'));
-    if (g[5]) notes.push(label + '（' + g[5] + '）');
+    if (g[5] && !inUnit) notes.push(label + '（' + g[5] + '）');
   });
   return { ok: ok, miss: miss, notes: notes };
 }
