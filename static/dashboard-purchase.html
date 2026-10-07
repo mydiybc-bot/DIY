@@ -741,7 +741,7 @@ function refreshAll(noRebuild){
   if(RF.busy)return;RF.busy=true;
   var el=$("#upd");if(el)el.textContent="更新中…";
   Object.keys(GV.bad).forEach(function(k){delete GV.bad[k];});
-  ANMAP=null;ANBOM=null;AN_FAILED=false;SHIST={};FLOWST="";PLATOWN={};CAMP=null;SUPC={};WMED=null;
+  ANMAP=null;ANBOM=null;AN_FAILED=false;SHIST={};FLOWST="";PLATOWN={};CAMP=null;SUPC={};WMED=null;dcohReset();
   return bootstrap(true).then(function(){
     RF.busy=false;stampUpd();
     try{render();}catch(e){console.warn(e);}
@@ -2180,16 +2180,48 @@ function zonesOrderedZ(store,items){var by={};items.forEach(function(s){var z=zo
      同期用量 ＝ 訂貨引擎近 4 週週用量 × 4（引擎值含 +5% 緩衝，比率會略保守，方向安全）
    ≤1.5 不顯示／1.5–3 🟠／>3 🔴／有下單但無用量 🔴／只訂 1 個包裝不顯示（最小訂購量）
    只對廠商＝出貨中心的品項顯示。純提示，不擋單。 */
+/* ===== 2026-10-07 上線前（經營者「做」）：出貨中心訂單併入「下單紀錄」=====
+   門市改在系統向出貨中心下單後，大平台（fact_shopline）停在 Shopline 停用那天，只算大平台會把新訂單漏掉。改成「大平台＋出貨中心訂單」一起算的三處：
+     ①檔期備貨「已出貨／估計在店／調撥／需採購」與展開明細（campHQShipped、campShipDetail）
+     ②盤點頁「📦 近4週已訂」（supplyOf）
+     ③查詢頁「各店使用量」的出貨中心判讀、「各店採購量」（anPlatLoad → ANRES.plat、shipCalc）
+   出貨中心訂單一筆＝一個品項：排除已取消；日期＝下單日；數量＝已出貨用實出量、其他用訂購量（跟大平台「下單」同口徑）。
+   每筆帶 sku（sku_id），配對不靠品名猜（ordMatch）；數量是採購單位，×本店內容量＝使用單位（ordUnit）。
+   大平台頁本身（訂單／排行／採購參考）、檔期新品「已下單」（nwOrdered 本來就另外讀出貨中心訂單）不動，避免算兩次。 */
+var DCOH={rows:{},ld:{},fail:{}},DCOH_DAYS=200;
+function dcohRows(orders){var out=[];(orders||[]).forEach(function(o){if(!o||o.status==="已取消"||!o.lines)return;var d=String(o.time||"").slice(0,10);if(!d)return;
+  o.lines.forEach(function(l){var q=(o.status==="已出貨"&&l.ship!=null)?num(l.ship):num(l.qty);if(!(q>0)||!l.sku_id)return;
+    out.push({st:String(o.store),date:d,ord:String(o.id||""),name:String(l.name||""),cat:"",qty:q,price:num(l.price),sku:String(l.sku_id),unit:String(l.unit||""),dco:1});});});
+  out.sort(function(a,b){return a.date<b.date?-1:(a.date>b.date?1:0);});return out;}
+function dcohLoad(key,from,to){   /* key＝店號或 "ALL"；給 from/to＝查詢頁指定期間（不進快取） */
+  if(!dcoOn())return Promise.resolve([]);
+  var p={action:"orders",from:from||ymd(new Date(TODAY.getTime()-DCOH_DAYS*864e5))};if(to)p.to=to;if(key&&key!=="ALL")p.store=String(key);
+  if(from)return dcoJsonp(p).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到出貨中心訂單");return dcohRows(d.orders);});
+  if(DCOH.rows[key])return Promise.resolve(DCOH.rows[key]);
+  if(DCOH.ld[key])return DCOH.ld[key];
+  var box=DCOH;   /* 讀到一半被 dcohReset 換掉的話，舊結果不寫進新的暫存 */
+  box.ld[key]=dcoJsonp(p).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到出貨中心訂單");delete box.fail[key];return dcohRows(d.orders);})
+    .catch(function(){box.fail[key]=1;return [];}).then(function(r){box.rows[key]=r;delete box.ld[key];return r;});
+  return box.ld[key];}
+function dcohOf(st){st=String(st);if(DCOH.rows[st])return DCOH.rows[st];if(st!=="ALL"&&DCOH.rows.ALL)return DCOH.rows.ALL.filter(function(r){return r.st===st;});return dcoOn()?null:[];}
+function dcohReady(st){return dcohOf(st)!==null;}
+function dcohReset(){DCOH={rows:{},ld:{},fail:{}};SUPC={};}
+function ordMatch(r,s){return r.sku?(!!s&&r.sku===s.id):anPlatMatch(r.name,s);}
+function ordUnit(st,s,r){if(!r.sku)return shipUnitG(st,{unit:s.useUnit,sku:s},r.name);var pq=pqOf(st,s);
+  var g=(r.unit&&r.unit===s.useUnit&&s.useUnit!==s.buyUnit)?1:(pq>0?pq:1);return {g:g,src:"dco",hq:pq,mis:false};}
+function ordKey(x){return x.dco?("📤 出貨中心訂單（"+(x.unit||"")+"）"):x.name;}
+function ordTag(k){return /^📤/.test(String(k))?'':anPlatTag(k);}
 var SUP_DAYS=28,SUPC={};
 function supplyOf(st,s){
   st=String(st);
   if(!s||!isDC(st,s))return null;
-  var rows=SHIST[st];if(!rows)return null;
+  var rows=SHIST[st];if(!rows||!dcohReady(st))return null;   /* 2026-10-07：大平台＋出貨中心訂單 */
+  rows=rows.concat(dcohOf(st));
   var c=SUPC[st]=SUPC[st]||{};if(Object.prototype.hasOwnProperty.call(c,s.id))return c[s.id];
   var from=ymd(new Date(TODAY.getTime()-SUP_DAYS*864e5)),today=ymd(TODAY);
   var g=0,packs=0,m={unit:s.useUnit,sku:s};
-  rows.forEach(function(r){if(!r.date||r.date<from||r.date>today)return;if(!anPlatMatch(r.name,s))return;
-    var u=shipUnitG(st,m,r.name);g+=num(r.qty)*u.g;packs+=num(r.qty);});
+  rows.forEach(function(r){if(!r.date||r.date<from||r.date>today)return;if(!ordMatch(r,s))return;
+    var u=ordUnit(st,s,r);g+=num(r.qty)*u.g;packs+=num(r.qty);});
   if(!(packs>0)){c[s.id]=null;return null;}
   var a=aggOf(st,s),wk=num(a.avg4)||num(a.week)||0,use=wk*SUP_DAYS/7;
   var ratio=use>0?g/use:null;
@@ -2199,10 +2231,13 @@ function supplyBadge(st,s){
   var k=supplyOf(st,s);if(!k||k.lv==="ok"||k.lv==="minpack")return '';
   var hot=(k.lv==="over"||k.lv==="nouse"),bg=hot?"#fdecea":"#fff7e6",col=hot?"#c62828":"#b45309";
   var t=(k.lv==="nouse")?('近4週已訂 '+fmt(k.g)+' '+s.useUnit+'，但沒有用量'):('近4週已訂 '+fmt(k.g)+' '+s.useUnit+'，是用量的 <b>'+dec(k.ratio)+' 倍</b>');
-  return '<span style="display:inline-block;margin-left:4px;padding:1px 7px;border-radius:10px;background:'+bg+';color:'+col+';border:1px solid '+col+';font-size:12px;font-weight:700" title="訂貨引擎近4週用量 '+fmt(k.use)+' '+s.useUnit+'；下單量依大平台品名規格換算。手上如果已經很多，這次不必再訂；請確認盤點數字沒填錯。">📦 '+t+'</span>';}
+  return '<span style="display:inline-block;margin-left:4px;padding:1px 7px;border-radius:10px;background:'+bg+';color:'+col+';border:1px solid '+col+';font-size:12px;font-weight:700" title="訂貨引擎近4週用量 '+fmt(k.use)+' '+s.useUnit+'；下單量＝大平台（依品名規格換算）＋出貨中心訂單（依內容量換算）。手上如果已經很多，這次不必再訂；請確認盤點數字沒填錯。">📦 '+t+'</span>';}
 function supplyEnsure(st){   /* 盤點頁開啟時載入本店下單紀錄；載入完只在店長還沒開始填時才重繪，避免打斷輸入 */
-  st=String(st);if(SHIST[st]||SHLOAD[st])return;
-  loadShist(st).then(function(){SUPC[st]={};if(!Object.keys(DIRTY[st]||{}).length)try{render();}catch(e){}});}
+  st=String(st);var ps=[];
+  if(!SHIST[st]&&!SHLOAD[st])ps.push(loadShist(st));
+  if(!dcohReady(st)&&!DCOH.ld[st])ps.push(dcohLoad(st));   /* 2026-10-07：出貨中心訂單一起載 */
+  if(!ps.length)return;
+  Promise.all(ps.map(function(x){return x.catch(function(){});})).then(function(){SUPC[st]={};if(!Object.keys(DIRTY[st]||{}).length)try{render();}catch(e){}});}
 /* ===== 🥮 檔期備貨總表（2026-09-05 ao 批，總部／出貨中心用）=====
    資料：agg_evneed（EventLayer v1.6，每檔期 × 店 × sku：剩餘推估用量／已用量／已售份數／推估總份數）
        ＋ agg_evcurve（逐週）＋ fact_shopline（12 店大平台下單，al 批 loadShistAll）。
@@ -2344,10 +2379,10 @@ function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台�
   var ws=EVCV[ev]||[],lead=campLead(s),_st=ws.length?null:campStartOf(ev);   /* cu 批：沒有曲線的檔期用 dim_event 開始日 */
   var from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-lead*864e5)):(_st?ymd(new Date(_st.getTime()-lead*864e5)):"");
   var g=0,packs=0,names={},preG=0,prePacks=0,preFirst="";
-  (rows||[]).forEach(function(r){if(!anPlatMatch(r.name,s))return;
-    var u=shipUnitG(String(r.st),{unit:s.useUnit,sku:s},r.name);
+  (rows||[]).forEach(function(r){if(!ordMatch(r,s))return;
+    var u=ordUnit(String(r.st),s,r);
     if(from&&r.date<from){preG+=num(r.qty)*u.g;prePacks+=num(r.qty);if(!preFirst||r.date<preFirst)preFirst=r.date;return;}
-    g+=num(r.qty)*u.g;packs+=num(r.qty);names[r.name]=1;});
+    g+=num(r.qty)*u.g;packs+=num(r.qty);names[ordKey(r)]=1;});
   return {g:g,packs:packs,from:from,lead:lead,preG:preG,prePacks:prePacks,preFirst:preFirst,names:Object.keys(names)};}
 /* cf 批（2026-09-23 經營者裁示）：檔期備貨頁「需採購」只差不到這個比例的一包（瓶／罐）就不叫。0.5＝半包；要改門檻只改這一個數字 */
 var CAMPHQ_TINY=0.5;
@@ -2416,6 +2451,7 @@ function viewCampHQOne(sub){
   if(!evs.length)return '<div class="note">🥮 <b>檔期備貨總表</b>　目前沒有進行中的檔期，也沒有開賣前的新品計畫。檔期開賣滿 3 天後才會有推估；核准的新品在開賣前 14 天起會出現在這裡。</div>';
   if(!EVND){loadEvNeed().then(function(){if(ST.tab==="檔期備貨")render();});return '<div class="note">🥮 載入檔期備貨資料中…</div>';}
   if(!SHIST.ALL){loadShistAll().then(function(){if(ST.tab==="檔期備貨")render();});}
+  if(!dcohReady("ALL")&&!DCOH.ld.ALL){dcohLoad("ALL").then(function(){if(ST.tab==="檔期備貨")render();});}   /* 2026-10-07 */
   var ev=ST.chEv&&evs.indexOf(ST.chEv)>=0?ST.chEv:evs[0];ST.chEv=ev;
   var ws=EVCV[ev]||[],nd=EVND[ev]||{},isPlan=!ws.length;   /* cu 批：isPlan＝開賣前計畫（沒有曲線） */
   var estTot=0,soldTot=0,_td=ymd(TODAY);ws.forEach(function(w){estTot+=(w.cTo<_td?w.cSold:Math.max(w.cEst,w.cSold));soldTot+=w.cSold;});   /* bv 批：已過的週一律用實際已售 */
@@ -2459,7 +2495,7 @@ function viewCampHQOne(sub){
   h+=campDurCard(ev);
   /* 逐品項 × 店 */
   var q=(ST.chQ||"").toLowerCase();
-  var rowsAll=SHIST.ALL||null;
+  var rowsAll=(SHIST.ALL&&dcohReady("ALL"))?SHIST.ALL.concat(dcohOf("ALL")):null;   /* 2026-10-07：大平台＋出貨中心訂單 */
   /* 2026-09-05 as 批：器具／模具不進檔期備貨（可重複使用，看標配就好）。EventLayer 本來就不寫它們進 agg_evneed，
      但主檔品類別改了要等下次重算才會反映；這裡用「現在的品類別」把關，改主檔立刻生效。 */
   var hiddenDur=Object.keys(nd).filter(function(id){var s=SKU[id];return s&&isDur(s);});
@@ -2588,26 +2624,27 @@ function viewCampHQOne(sub){
    起算日之前的單照樣列出，但標「未計入」，所以「計入」那幾筆加起來一定等於表上的已出貨。純顯示，不改任何數字。 */
 function campShipDetail(ev,s,st,p){
   if(!p.dc)return '<div class="sub muted">這家店的「'+escA(s.name)+'」不是向出貨中心叫（自購或其他廠商），大平台沒有紀錄。</div>';
-  if(!SHIST.ALL)return '<div class="sub muted">大平台紀錄載入中…</div>';
-  var sh=campHQShipped(ev,s,SHIST.ALL.filter(function(r){return String(r.st)===String(st);})),from=sh.from,uu=s.useUnit;
-  var rows=SHIST.ALL.filter(function(r){return String(r.st)===String(st)&&anPlatMatch(r.name,s);}).map(function(r){
-    var u=shipUnitG(String(st),{unit:uu,sku:s},r.name);return {date:r.date,ord:r.ord,name:r.name,qty:num(r.qty),price:num(r.price),amt:num(r.qty)*num(r.price),use:num(r.qty)*u.g,inWin:!(from&&r.date<from)};});
+  if(!SHIST.ALL||!dcohReady("ALL"))return '<div class="sub muted">下單紀錄載入中…</div>';
+  var all=SHIST.ALL.concat(dcohOf("ALL"));   /* 2026-10-07：大平台＋出貨中心訂單（與表上「已出貨」同一份資料） */
+  var sh=campHQShipped(ev,s,all.filter(function(r){return String(r.st)===String(st);})),from=sh.from,uu=s.useUnit;
+  var rows=all.filter(function(r){return String(r.st)===String(st)&&ordMatch(r,s);}).map(function(r){
+    var u=ordUnit(String(st),s,r);return {date:r.date,ord:r.ord,name:r.name,dco:!!r.dco,qty:num(r.qty),price:num(r.price),amt:num(r.qty)*num(r.price),use:num(r.qty)*u.g,inWin:!(from&&r.date<from)};});
   rows.sort(function(a,b){return a.date<b.date?1:(a.date>b.date?-1:(a.ord<b.ord?1:-1));});
   var last=SHIST.ALL.length?SHIST.ALL[SHIST.ALL.length-1].date:"";
   function agg(L){var o={},q=0,a=0,g=0;L.forEach(function(r){o[r.ord]=1;q+=r.qty;a+=r.amt;g+=r.use;});return {n:Object.keys(o).length,q:q,a:a,g:g};}
   var W=agg(rows.filter(function(r){return r.inWin;})),P=agg(rows.filter(function(r){return !r.inWin;}));
   /* 手機：店別表本身比螢幕寬（橫向捲動），明細框用 sticky 貼住畫面左邊、寬度不超過螢幕，不用左右滑就看得到次數與金額 */
   var box='<div style="position:sticky;left:0;max-width:calc(100vw - 56px)">';
-  var h=box+'<div style="font-weight:700;color:#1e4e8c;margin-bottom:4px">🏬 '+escA(storeName(st))+'　'+escA(s.name)+'　大平台下單紀錄</div>';
-  if(!rows.length)return h+'<div class="sub muted">大平台紀錄（資料到 '+escA(last)+'）裡，這家店沒有叫過這個品項。</div></div>';
+  var h=box+'<div style="font-weight:700;color:#1e4e8c;margin-bottom:4px">🏬 '+escA(storeName(st))+'　'+escA(s.name)+'　下單紀錄（大平台＋出貨中心訂單）</div>';
+  if(!rows.length)return h+'<div class="sub muted">大平台紀錄（資料到 '+escA(last)+'）與出貨中心訂單裡，這家店都沒有叫過這個品項。</div></div>';
   h+='<div style="display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;margin-bottom:6px">'
     +'<span>'+(from?escA(from)+' 起':'')+'下單 <b>'+fmt(W.n)+'</b> 次</span>'
     +'<span>共 <b>'+fmt(W.q)+'</b> '+escA(s.buyUnit||"包")+'（＝'+fmt(Math.round(W.g))+' '+escA(uu)+'，就是表上的「已出貨」）</span>'
     +'<span>金額 <b>NT$'+fmt(Math.round(W.a))+'</b></span></div>';
   if(P.n)h+='<div class="sub" style="color:#8B0000;margin-bottom:6px">另有 '+escA(from)+' 以前 '+fmt(P.n)+' 次、'+fmt(P.q)+' '+escA(s.buyUnit||"包")+'、NT$'+fmt(Math.round(P.a))+'，沒有算進「已出貨」（下面灰字那幾筆）。</div>';
-  h+='<div style="overflow-x:auto"><table style="font-size:12.5px;min-width:460px"><thead><tr><th>日期</th><th class="right">數量</th><th class="right">單價</th><th class="right">金額</th><th class="right">換算 '+escA(uu)+'</th><th>大平台品項</th><th>訂單號碼</th></tr></thead><tbody>';
-  rows.forEach(function(r){h+='<tr'+(r.inWin?'':' style="color:#9aa0a6"')+'><td style="white-space:nowrap">'+escA(r.date.slice(5))+(r.inWin?'':'<div class="sub">未計入</div>')+'</td><td class="right">'+fmt(r.qty)+'</td><td class="right">@'+fmt(r.price)+'</td><td class="right">NT$'+fmt(Math.round(r.amt))+'</td><td class="right">'+fmt(Math.round(r.use))+'</td><td>'+escA(r.name)+anPlatTag(r.name)+'</td><td class="sub">'+escA(r.ord)+'</td></tr>';});
-  h+='</tbody></table></div><div class="sub muted" style="margin-top:4px">資料到 '+escA(last)+'（出貨中心最後一次上傳的報表）。金額＝數量 × 大平台單價。</div></div>';
+  h+='<div style="overflow-x:auto"><table style="font-size:12.5px;min-width:460px"><thead><tr><th>日期</th><th class="right">數量</th><th class="right">單價</th><th class="right">金額</th><th class="right">換算 '+escA(uu)+'</th><th>品項（📤＝出貨中心訂單）</th><th>訂單號碼</th></tr></thead><tbody>';
+  rows.forEach(function(r){h+='<tr'+(r.inWin?'':' style="color:#9aa0a6"')+'><td style="white-space:nowrap">'+escA(r.date.slice(5))+(r.inWin?'':'<div class="sub">未計入</div>')+'</td><td class="right">'+fmt(r.qty)+'</td><td class="right">@'+fmt(r.price)+'</td><td class="right">NT$'+fmt(Math.round(r.amt))+'</td><td class="right">'+fmt(Math.round(r.use))+'</td><td>'+(r.dco?'📤 '+escA(r.name):escA(r.name)+anPlatTag(r.name))+'</td><td class="sub">'+escA(r.ord)+'</td></tr>';});
+  h+='</tbody></table></div><div class="sub muted" style="margin-top:4px">大平台資料到 '+escA(last)+'（最後一次上傳的報表）；📤 是門市在系統送出的出貨中心訂單（即時，已出貨的照實出量算）。金額＝數量 × 單價。</div></div>';
   return h;}
 /* ===== 🥮 檔期備料進度（2026-09-03 z 批）=====
    問題：檔期限定原料（月餅冰皮粉之類）最容易「一次訂滿整檔期」→ 檔期結束變呆料。
@@ -2957,10 +2994,11 @@ function anPlatLoad(){
   if(ANRES.platLoad)return ANRES.platLoad;
   var R=ANRES;R.platFrom=anPlatFrom();
   var tq="select A,B,C,D,E,F,G where B >= date '"+R.platFrom+"' and B <= date '"+R.to+"'"+(R.store?" and A="+(+R.store):"");
-  R.platLoad=gvizQ("fact_shopline",tq,MONTH_SHEET_ID).then(function(rs){
+  var dp=dcohLoad(R.store||"ALL",R.platFrom,R.to).catch(function(){R.dcoFail=true;return [];});   /* 2026-10-07：出貨中心訂單同期間一起讀 */
+  R.platLoad=Promise.all([gvizQ("fact_shopline",tq,MONTH_SHEET_ID),dp]).then(function(two){var rs=two[0];
     R.plat=rs.map(function(r){var d=gvDate(r["日期"]);
       return {st:String(r["店號"]==null?"":r["店號"]).trim(),date:d?ymd(d):String(r["日期"]||"").slice(0,10),ord:String(r["訂單號碼"]||""),name:String(r["品項"]||""),qty:num(r["數量"]),price:num(r["單價"])};
-    }).filter(function(x){return x.st&&x.st!=="13"&&x.name;});
+    }).filter(function(x){return x.st&&x.st!=="13"&&x.name;}).concat((two[1]||[]).filter(function(x){return x.st!=="13";}));
     R.platFail=!!rs.__failed;delete R.platLoad;});
   return R.platLoad;}
 function anNorm(x){return String(x||"").replace(/[\s（）()\[\]【】\/／\-－_·．.｜|,，、]/g,"").toLowerCase();}
@@ -3167,7 +3205,7 @@ function shipCalc(st,m,rows,usage,isCamp){
      實測結果：199 可判讀格中 169 正常（85%）、16 偏多、10 過多、4 零用量，誤報幾乎清空。 */
   if(!rows||!rows.length)return null;
   var g=0,packs=0,est=false,mis=false,hq=0,spec=0,per=0,detail=[];
-  rows.forEach(function(r){var u=shipUnitG(st,m,r.name);
+  rows.forEach(function(r){var u=(r.sku&&m.sku)?ordUnit(st,m.sku,r):shipUnitG(st,m,r.name);   /* 2026-10-07：出貨中心訂單用內容量換算 */
     g+=num(r.qty)*u.g;packs+=num(r.qty);
     if(u.g>per)per=u.g;
     if(u.src==="hq")est=true; else spec=u.g;
@@ -3240,13 +3278,13 @@ function anDrillStores(m,h){
   if(!ANRES.plat&&!ANRES.platLoad)anPlatLoad().then(function(){render();});
   if(!ANRES.lw&&!ANRES.lwLoad)anLwLoad().then(function(){render();});
   var lwu=ANRES.lw?anLwUsage(m):null;
-  var plat=ANRES.plat?ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);}):null;
+  var plat=ANRES.plat?ANRES.plat.filter(function(x){return ordMatch(x,m.sku);}):null;
   var pq={};if(plat)plat.forEach(function(x){pq[x.st]=(pq[x.st]||0)+x.qty;});
   /* 2026-09-03 y 批 ④：下單量只有數字看不出「7」是 7 包還是 7 g。大平台品名本身就帶規格，
      所以把配對到的品名列在表頭，並在每格下面標出該店訂的是哪個品名 × 幾件。 */
   var pnAll={},pnBy={};
-  if(plat)plat.forEach(function(x){pnAll[x.name]=(pnAll[x.name]||0)+x.qty;
-    ((pnBy[x.st]=pnBy[x.st]||{})[x.name]=(pnBy[x.st][x.name]||0)+x.qty);});
+  if(plat)plat.forEach(function(x){var k=ordKey(x);pnAll[k]=(pnAll[k]||0)+x.qty;
+    ((pnBy[x.st]=pnBy[x.st]||{})[k]=(pnBy[x.st][k]||0)+x.qty);});
   /* 2026-09-03 ac 批：出貨中心判讀——每店把下單量換算成使用單位，扣掉同期用量，換算成可用週數 */
   var shipK={},shipOver=[],shipWarn=[],shipMis=[],shipUnder=[],shipDC=false,shipCamp=false;
   /* 2026-09-03 af 批：①只判讀「廠商＝出貨中心」的品項（大平台才是它的供給來源）
@@ -3260,15 +3298,15 @@ function anDrillStores(m,h){
   var shipDur=!!(m.sku&&isDur(m.sku));
   if(plat&&m.sku&&!shipDur){
     shipCamp=isCampSku(m.sku);
-    var pnAlign={};
-    plat.forEach(function(x){if(x.date>=ANRES.from&&x.date<=ANRES.to)((pnAlign[x.st]=pnAlign[x.st]||{})[x.name]=(pnAlign[x.st][x.name]||0)+x.qty);});
+    var pnAlign={},pnMeta={};
+    plat.forEach(function(x){if(x.date>=ANRES.from&&x.date<=ANRES.to){var k=ordKey(x);if(x.dco)pnMeta[k]={sku:x.sku,unit:x.unit};((pnAlign[x.st]=pnAlign[x.st]||{})[k]=(pnAlign[x.st][k]||0)+x.qty);}});
     sts.forEach(function(st){
       if(!isDC(st,m.sku))return;
       shipDC=true;
       /* 2026-09-04 al 批 ④：有用量卻整個期間一張單都沒下 → 收進「可能偏少」清單（檔期品除外，走檔期備料進度） */
       var mp=pnAlign[st];
       if(!mp){if(!shipCamp&&num(usAll[st]||0)>0)shipUnder.push(storeName(st));return;}
-      var rws=Object.keys(mp).map(function(n){return {name:n,qty:mp[n]};});
+      var rws=Object.keys(mp).map(function(n){var mt=pnMeta[n];return mt?{name:n,qty:mp[n],sku:mt.sku,unit:mt.unit,dco:1}:{name:n,qty:mp[n]};});
       var k=shipCalc(st,m,rws,usAll[st]||0,shipCamp);if(!k)return;
       shipK[st]=k;
       if(k.lv==="over")shipOver.push(storeName(st)+'（'+dec(k.ratio)+' 倍）');
@@ -3279,7 +3317,7 @@ function anDrillStores(m,h){
   function pnCell(st){var m=pnBy[st];if(!m)return '';
     var ks=Object.keys(m).sort(function(a,b){return m[b]-m[a];});
     if(!ks.length)return '';
-    var show=ks.slice(0,2).map(function(k){return shEsc(k)+anPlatTag(k)+' ×'+fmt(m[k]);}).join('<br>')+(ks.length>2?'<br>等 '+ks.length+' 種':'');
+    var show=ks.slice(0,2).map(function(k){return shEsc(k)+ordTag(k)+' ×'+fmt(m[k]);}).join('<br>')+(ks.length>2?'<br>等 '+ks.length+' 種':'');
     return '<div class="sub" style="font-weight:400;color:#6F4E45">'+show+'</div>';}
   var pfrom=ANRES.platFrom||anPlatFrom();
   /* 2026-09-01 w 批：查詢有主類別／次類別篩選時，「期間用量」只含篩選內甜點，「上週用量」卻是引擎全甜點值——2026-09-01 杏仁片 28 g vs 55 g 誤判實例（次類別篩 2026 中秋節，漏掉南瓜子杏仁瓦片 40 g/份）。有篩選就標警語、上週用量欄灰掉。 */
@@ -3342,11 +3380,11 @@ function anDrillPlat(m,h){
   if(!ANRES.plat){anPlatLoad().then(function(){render();});anStoreLoad();return h+'<div class="sub" style="margin:4px 0">讀取大平台下單明細中…</div>';}
   if(!ANRES.byStore)anStoreLoad().then(function(){render();});
   if(!m.sku)return h+'<div class="sub" style="margin:4px 0">此物料未對應主檔品項，無法比對大平台。</div>';
-  var rows=ANRES.plat.filter(function(x){return anPlatMatch(x.name,m.sku);});
-  var names={};rows.forEach(function(x){names[x.name]=(names[x.name]||0)+x.qty;});
-  h+='<div class="sub" style="margin:4px 0">統計期間 <b>'+(ANRES.platFrom||anPlatFrom())+'〜'+ANRES.to+'</b>（指定期間往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）　·　來源：採購大平台的下單紀錄（到上次匯入為止）'+(ANRES.platFail?'　·　<span style="color:#b3261e">⚠️ 資料源沒回應</span>':'')+'</div>';
+  var rows=ANRES.plat.filter(function(x){return ordMatch(x,m.sku);});
+  var names={};rows.forEach(function(x){var k=ordKey(x);names[k]=(names[k]||0)+x.qty;});
+  h+='<div class="sub" style="margin:4px 0">統計期間 <b>'+(ANRES.platFrom||anPlatFrom())+'〜'+ANRES.to+'</b>（指定期間往前推 '+AN_PLAT_LEAD+' 天，涵蓋開賣前備貨）　·　來源：採購大平台的下單紀錄（到上次匯入為止）＋📤 出貨中心訂單（即時）'+(ANRES.dcoFail?'　·　<span style="color:#b3261e">⚠️ 出貨中心訂單沒讀到</span>':'')+(ANRES.platFail?'　·　<span style="color:#b3261e">⚠️ 資料源沒回應</span>':'')+'</div>';
   if(!rows.length)return h+'<div class="sub">大平台 '+(ANRES.platFrom||anPlatFrom())+'〜'+ANRES.to+' 找不到對應「'+shEsc(m.sku.name)+'」的品名（可能是自購、未上架，或大平台品名差異太大）。</div>';
-  h+='<div class="sub" style="margin:2px 0 6px">配對到的大平台品名（每個大平台品項只會歸給一個主檔品項；標 ⚠近似 者是依相似度配對，請核對）：'+Object.keys(names).map(function(n){return '<span class="spectag">'+shEsc(n)+anPlatTag(n)+' ×'+fmt(names[n])+'</span>';}).join(' ')+'</div>';
+  h+='<div class="sub" style="margin:2px 0 6px">配對到的大平台品名（每個大平台品項只會歸給一個主檔品項；標 ⚠近似 者是依相似度配對，請核對）：'+Object.keys(names).map(function(n){return '<span class="spectag">'+shEsc(n)+ordTag(n)+' ×'+fmt(names[n])+'</span>';}).join(' ')+'</div>';
   var us=ANRES.byStore?anStoreUsage(m):null;
   var by={};rows.forEach(function(x){var b=by[x.st]=by[x.st]||{qty:0,amt:0,ords:{},rows:[]};b.qty+=x.qty;b.amt+=x.qty*x.price;b.ords[x.ord]=1;b.rows.push(x);});
   var sts=Object.keys(by).sort(function(a,b){return by[b].qty-by[a].qty;});
@@ -3360,7 +3398,7 @@ function anDrillPlat(m,h){
   rows.sort(function(a,b){return (+a.st)-(+b.st)||(a.date<b.date?1:a.date>b.date?-1:0);});
   h+='<div class="sub" style="margin:8px 0 4px"><b>訂單明細</b>（'+rows.length+' 筆，依店、日期新→舊）</div>';
   h+='<div style="overflow-x:auto"><table class="dtab"><tr><th>店</th><th>日期</th><th>訂單號碼</th><th>大平台品項</th><th class="right">數量</th><th class="right">單價</th><th class="right">金額</th></tr>';
-  rows.forEach(function(x){h+='<tr><td>'+storeName(x.st)+'</td><td>'+x.date+'</td><td>'+shEsc(x.ord)+'</td><td>'+shEsc(x.name)+'</td><td class="right">'+fmt(x.qty)+'</td><td class="right">@'+dec(x.price)+'</td><td class="right">NT$'+fmt(x.qty*x.price)+'</td></tr>';});
+  rows.forEach(function(x){h+='<tr><td>'+storeName(x.st)+'</td><td>'+x.date+'</td><td>'+shEsc(x.ord)+'</td><td>'+(x.dco?'📤 ':'')+shEsc(x.name)+'</td><td class="right">'+fmt(x.qty)+'</td><td class="right">@'+dec(x.price)+'</td><td class="right">NT$'+fmt(x.qty*x.price)+'</td></tr>';});
   h+='</table></div>';
   return h;}
 function anCut(arr){return AN_DRILL_TOP>0?arr.slice(0,AN_DRILL_TOP):arr;}
@@ -4036,10 +4074,10 @@ function dcoWrite(body,check){
   return dcoPostRaw(body).then(function(r){if(r&&r.ok)return r;throw dcoApiErr(r);})
     .catch(function(e){if(!dcoNetErr(e))throw e;
       var n=0;return (function loop(){return dcoWait(2000*(++n)).then(check).then(function(r){if(r)return r;if(n<3)return loop();throw new Error("沒有確認到寫入，請按「🔄 重新整理」看結果，不要重複送出");});})();});}
-function dcoLoadStore(st){DCO.storeLd[st]=true;
+function dcoLoadStore(st){DCO.storeLd[st]=true;dcohReset();   /* 2026-10-07：送單／取消後重讀時，下單紀錄（📦／檔期備貨）也重讀 */
   return dcoJsonp({action:"orders",store:st,days:45}).then(function(d){DCO.store[st]=(d&&d.ok)?d.orders:[];})
     .catch(function(){DCO.store[st]=DCO.store[st]||[];}).then(function(){DCO.storeLd[st]=false;if(ST.tab==="訂貨單")render();});}
-function dcoLoadAll(){DCO.allLd=true;
+function dcoLoadAll(){DCO.allLd=true;dcohReset();
   return dcoJsonp({action:"orders",days:30}).then(function(d){DCO.all=(d&&d.ok)?d.orders:[];if(!(d&&d.ok))toast("⚠️ 讀不到出貨中心訂單："+((d&&d.error)||""));})
     .catch(function(e){DCO.all=DCO.all||[];toast("⚠️ 讀不到出貨中心訂單（"+e.message+"）");}).then(function(){DCO.allLd=false;if(ST.tab==="訂單"||ST.tab==="庫存")render();});}
 function dcoLoadStock(){DCO.stockLd=true;
