@@ -280,6 +280,21 @@ table.nwt.nwin{min-width:520px;background:#fff}
 .nwtag{display:inline-block;margin-left:4px;padding:0 6px;border-radius:6px;background:#E3F2FD;color:#0D47A1;font-size:12px;font-weight:700}
 .nwtag.ex{background:#F3E5F5;color:#6A1B9A}
 .nwtag.sh{background:#ECEFF1;color:#546E7A}
+/* 2026-10-07 經營者「核准後的新品資料要完整易讀」：店長（單一門市）手機上，新品項改成一塊一塊的卡片——
+   建議首批量、是否已下單排在品名正下方（原本在 8 欄表格最右邊，要往右滑才看得到）；電腦版與總部「全部店」表格不變 */
+@media(max-width:760px){
+  table.nwt.nwone{min-width:0}
+  table.nwt.nwone tr.nwhdr{display:none}
+  table.nwt.nwone tr{display:flex;flex-direction:column;border-bottom:1px solid #EFE7E1;padding:6px 0}
+  table.nwt.nwone td{display:flex;gap:8px;align-items:flex-start;border:0;padding:2px 4px;text-align:left}
+  table.nwt.nwone td::before{content:attr(data-th);flex:0 0 96px;color:#8A7F78;font-size:12px;line-height:1.7}
+  table.nwt.nwone td.nwnm{display:block;padding-bottom:4px}
+  table.nwt.nwone td.nwnm::before{content:none}
+  table.nwt.nwone td.nwqty{order:1;font-size:14px}
+  table.nwt.nwone td.nword{order:2}
+  table.nwt.nwone td.nwoth{order:3}
+  table.nwt.nwone .nwv{flex:1;min-width:0}
+}
 </style>
 <script>
 /* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
@@ -1678,12 +1693,24 @@ function nwOrdered(st,s,since){if(!s)return {n:0,last:"",src:""};var dco=nwOrder
   dco.forEach(function(o){var t=String(o.time||"").slice(0,10);if(t&&t<since)return;(o.lines||[]).forEach(function(l){if(l.sku_id===s.id&&num(l.qty)>0){n+=num(l.qty);if(t>last)last=t;if(src.indexOf("出貨中心訂單")<0)src.push("出貨中心訂單");}});});
   sh.forEach(function(r){if(String(r.st)!==String(st)||r.date<since||!anPlatMatch(r.name,s))return;n+=num(r.qty);if(r.date>last)last=r.date;if(src.indexOf("大平台")<0)src.push("大平台");});
   return {n:n,last:last,src:src.join("＋")};}
+/* 2026-10-07：這個料在 agg_newitem 有沒有任何一店的列（開賣前 14 天起才有）——沒有時「本檔專屬／共用」改用配方判斷（同器具模具 durExcl） */
+function nwAggHas(id){var k=Object.keys(NEWAGG);for(var i=0;i<k.length;i++){if(NEWAGG[k[i]][id])return true;}return false;}
+/* 2026-10-07：每份用量不是 g／ml 時，用單位對照換成克（例：1 平匙 ≈ 2.5 g）；查不到就不寫 */
+function nwGram(it,s){var u=String(it.u||"").trim();if(!u||u==="g"||u==="ml"||!(it.q>0))return "";var c=null;
+  UNITCONV.forEach(function(r){if(!c&&(r.item===it.m||(s&&r.item===s.name))&&r.unit===u)c=r;});
+  if(!c)UNITCONV.forEach(function(r){var t=String(r.item||"");if(!c&&(t==="（通用）"||t==="(通用)"||t==="通用")&&r.unit===u)c=r;});
+  if(!c||!(num(c.amt)>0))return "";var b=String(c.base||"").trim()||(s?s.useUnit:"");if(!b||b===u)return "";
+  return '<div class="sub muted">≈ '+dec(it.q*num(c.amt))+' '+escH(b)+'</div>';}
+/* 2026-10-07：建議首批量還沒有數字時說清楚原因（原本只有「—」，說明藏在滑鼠提示裡、手機看不到） */
+function nwNoQty(d,x){if(d.to&&d.to<nwToday())return '<span class="muted">檔期已結束</span>';
+  if(nwToday()<x.dl)return '<span class="muted">'+nwMd(x.dl)+' 起才有數字</span>';
+  return '<span class="muted">還沒有數字</span><div class="sub muted">請總部確認主檔單價</div>';}
 function nwItems(d){var rows=(NW.bom||{})[d.bom]||[],idx=anSkuIdx(),agg={},order=[],pub=(NW.pub||{})[d.bom]||{};
   if((!ANMAP||!ANBOM)&&!ANLOAD)loadAnalDims().then(function(){if(ST.tab==="新品"||ST.tab==="檔期備貨")render();});   /* cy 批：器具模具專屬判定要對照表＋BOM表 */
   var dek=nwEvKey(d.sub),dy=d.from?String(d.from.getFullYear()):"";
   rows.forEach(function(r){var k=r.m+"|"+r.u;if(!agg[k]){agg[k]={m:r.m,u:r.u,q:0,c:r.c};order.push(k);}var s0=idx[r.m];agg[k].q=(s0&&isDur(s0))?Math.max(agg[k].q,r.q):agg[k].q+r.q;if(!agg[k].c&&r.c)agg[k].c=r.c;});
   var out=order.map(function(k){var a=agg[k],s=idx[a.m]||null,p=pub[a.m]||null;
-    var fresh=!s||/^自動草稿/.test(String(s.src||""))||!!(p&&p.is_new),ex=!!(s&&(isDur(s)?durExcl(s,dek,dy):campExcl(s.id)));   /* cy 批：器具模具前端補算專屬 */
+    var fresh=!s||/^自動草稿/.test(String(s.src||""))||!!(p&&p.is_new),ex=!!(s&&((isDur(s)||(fresh&&!nwAggHas(s.id)))?durExcl(s,dek,dy):campExcl(s.id)));   /* cy 批：器具模具前端補算專屬；2026-10-07：新品項在還沒有 agg_newitem 前也用配方判斷（原本一律標「共用」） */
     return {m:a.m,u:a.u,q:a.q,c:a.c,s:s,p:p,isNew:fresh||ex,fresh:fresh,excl:ex};});
   /* BOM 寫的是半成品（例：吉利丁凍），採購系統讀 dim_semi 拆成原料（吉利丁粉）才備料 → 這些原料不在 BOM 列上，改從 agg_newitem 的新品清單補進來 */
   var have={},ek=nwEvKey(d.sub);out.forEach(function(i){if(i.s)have[i.s.id]=1;});
@@ -1746,7 +1773,7 @@ function viewNewItems(){nwLoad();var hq=ST.role!=="店長";
 function nwDessertHTML(d,hq){var x=nwDays(d),since=ymd(new Date(d.from.getTime()-NW_ORD*864e5));
   var h='<div class="card nwcard"><div class="nwhd"><b style="font-size:16px">🍰 '+escH(d.bom)+'</b>'+(d.pos&&d.pos!==d.bom?' <span class="muted">POS：'+escH(d.pos)+'</span>':'')
     +'<div class="nwdates">開賣 <b>'+nwMd(d.from)+'</b>'+(x.sell<0?' <span class="muted">（已開賣 '+(-x.sell)+' 天）</span>':x.sell===0?' <span class="muted">（今天）</span>':' <span class="muted">（還有 '+x.sell+' 天）</span>')+'　～ '+nwMd(d.to)+'　·　下單截止 <b>'+nwMd(x.dl)+'</b>　'+nwBadge(x)+'</div>'
-    +((NW.pubQty&&NW.pubQty[d.bom])?'<div class="sub" style="margin-top:4px;color:#1e4e8c">📋 新品申請表預估銷售數 <b>'+fmt(NW.pubQty[d.bom].qty)+'</b> 份（整檔 12 店合計'+(NW.pubQty[d.bom].brand?'，'+escH(NW.pubQty[d.bom].brand):'')+'）→ 開賣前「建議首批量」＝預估×本店份額×首批比例×每份用量；開賣後改用實際銷量推估</div>':'')   /* cu 批 */
+    +((NW.pubQty&&NW.pubQty[d.bom])?'<div class="sub" style="margin-top:4px;color:#1e4e8c" title="開賣前「建議首批量」＝預估×本店份額×首批比例×每份用量'+(NW.pubQty[d.bom].brand?'；品牌別 '+escA(NW.pubQty[d.bom].brand):'')+'">📋 申請表預估整檔 <b>'+fmt(NW.pubQty[d.bom].qty)+'</b> 份（全部門市合計）・開賣前的首批量照這個數字算，開賣後改照實際銷量</div>':'')   /* cu 批 */
     +'</div>';
   if(!NW.bom)return h+'<div class="loading">讀取 BOM 表…</div></div>';
   var all=nwItems(d),its=ST.nwAll?all:all.filter(function(i){return i.isNew;});
@@ -1754,20 +1781,21 @@ function nwDessertHTML(d,hq){var x=nwDays(d),since=ymd(new Date(d.from.getTime()
   if(!its.length)h+='<div class="muted" style="margin-top:6px">沒有新品項（用到的 '+all.length+' 項都是店裡常備）。勾「顯示全部用料」可看全部。</div>';
   else{var sts=hq?(ST.nwSt==="ALL"?STORES.map(function(s){return s.id;}):[ST.nwSt]):[ST.storeId],one=sts.length===1;
     if((ST.nwMode||"order")==="shelf")return h+nwShelfHTML(its,sts,one)+'</div>';
-    h+='<div class="nwwrap"><table class="nwt"><tr><th>新增品名</th><th>貼紙名稱</th><th class="right">每份用量</th><th>叫貨方式</th><th>供應商</th><th>購買連結</th><th class="right">'+(x.sell<0?(one?"開賣前建議首批量":sts.length+" 店開賣前首批量合計"):(one?"本店建議首批量":sts.length+" 店建議首批量合計"))+'</th><th>'+(one?"是否已下單":"是否已下單（出貨中心）")+'</th></tr>';
+    var qTh=x.sell<0?"開賣前建議首批量":"本店建議首批量";
+    h+='<div class="nwwrap"><table class="nwt'+(one?' nwone':'')+'"><tr class="nwhdr"><th>新增品名</th><th>貼紙名稱</th><th class="right">每份用量</th><th>叫貨方式</th><th>供應商</th><th>購買連結</th><th class="right">'+(x.sell<0?(one?"開賣前建議首批量":sts.length+" 店開賣前首批量合計"):(one?"本店建議首批量":sts.length+" 店建議首批量合計"))+'</th><th>'+(one?"是否已下單":"是否已下單（出貨中心）")+'</th></tr>';
     its.forEach(function(it,k){var s=it.s,key=d.bom+"|"+it.m,open=!!(ST.nwExp||{})[key];
       var tag=(it.fresh?'<span class="nwtag">🆕</span>':'')+(it.excl?'<span class="nwtag ex">本檔專屬</span>':'<span class="nwtag sh">共用</span>');
       var own=s?s.name:it.m,vn=(it.p&&it.p.vname)?String(it.p.vname).trim():"";
       var nm='<b>'+escH(vn||own)+'</b>'+tag+(vn&&vn!==own?'<div class="sub muted">店內叫「'+escH(own)+'」'+(s?' · '+escH(s.id):'')+'</div>':(s?' <span class="muted">'+escH(s.id)+'</span>':''))+(s?'':'<div class="sub" style="color:#B3261E">主檔還沒有這個品項</div>')+(it.p&&it.p.note?'<div class="sub muted">'+escH(it.p.note)+'</div>':'');
-      var per=it.via?'<span class="muted" title="BOM 寫的是半成品，採購系統拆成這個原料">經半成品拆出</span>':dec(it.q)+" "+escH(it.u);
+      var per=it.via?'<span class="muted" title="BOM 寫的是半成品，採購系統拆成這個原料">經半成品拆出</span>':dec(it.q)+" "+escH(it.u)+nwGram(it,s);
       if(one){var st=sts[0],md=nwModeOf(st,s),nd=nwNeed(st,s,d);
-        h+='<tr><td>'+nm+'</td><td>'+escH(it.p&&it.p.sticker||"—")+'</td><td class="right">'+per+'</td><td>'+escH(md.t)+'</td><td>'+nwVendor(st,s,it.p)+'</td><td>'+nwLink(it.p)+'</td>'
-          +'<td class="right">'+(s&&isDur(s)?'<span class="muted" title="器具模具可重複使用，依各店標配；新品還沒設標配時請各店自行確認">不自動算（看標配）</span>':nd.has?nwQty(s,nd.qty,it.u)+nwShareNote(st,s,d,nd.qty):(d.to&&d.to<nwToday()?'<span class="muted">檔期已結束</span>':'<span class="muted" title="agg_newitem 沒有這列：開賣前 14 天才開始算；或主檔沒有這個料／單價是 0">—</span>'))+'</td><td>'+nwOrdCell(st,it,since,x)+'</td></tr>';}
+        h+='<tr><td class="nwnm">'+nm+'</td><td class="nwoth" data-th="貼紙名稱"><span class="nwv">'+escH(it.p&&it.p.sticker||"—")+'</span></td><td class="right nwoth" data-th="每份用量"><span class="nwv">'+per+'</span></td><td class="nwoth" data-th="叫貨方式"><span class="nwv">'+escH(md.t)+'</span></td><td class="nwoth" data-th="供應商"><span class="nwv">'+nwVendor(st,s,it.p)+'</span></td><td class="nwoth" data-th="購買連結"><span class="nwv">'+nwLink(it.p)+'</span></td>'
+          +'<td class="right nwqty" data-th="'+qTh+'"><span class="nwv">'+(s&&isDur(s)?'<span class="muted" title="器具模具可重複使用，依各店標配；新品還沒設標配時請各店自行確認">不自動算（看標配）</span>':nd.has?nwQty(s,nd.qty,it.u)+nwShareNote(st,s,d,nd.qty):nwNoQty(d,x))+'</span></td><td class="nword" data-th="是否已下單"><span class="nwv">'+nwOrdCell(st,it,since,x)+'</span></td></tr>';}
       else{var tot=0,nHas=0,dc=0,self=0,ord=0,dcNeed=0,wait=false;
         sts.forEach(function(st){var nd=nwNeed(st,s,d),md=nwModeOf(st,s);if(nd.has){tot+=nd.qty;nHas++;}if(md.k==="dc"){dc++;if(nd.qty>0){dcNeed++;var o=nwOrdered(st,s,since);if(o===null)wait=true;else if(o.n>0)ord++;}}else if(s)self++;});
         var modeT=!s?"主檔還沒有":(dc&&self?"出貨中心 "+dc+" 店／自購或廠商 "+self+" 店":dc?"出貨中心":nwModeOf(sts[0],s).t);
         h+='<tr class="nwrow" data-nwexp="'+escH(key)+'" style="cursor:pointer"><td>'+nm+'<div class="sub muted">'+(open?"▾ 收起各店":"▸ 看各店")+'</div></td><td>'+escH(it.p&&it.p.sticker||"—")+'</td><td class="right">'+per+'</td><td>'+escH(modeT)+'</td><td>'+(it.p&&it.p.vendor_override?escH(it.p.vendor_override):(s?(dc?"出貨中心":escH(s.vendor||"—")):"—"))+'</td><td>'+nwLink(it.p)+'</td>'
-          +'<td class="right">'+(s&&isDur(s)?'<span class="muted" title="器具模具可重複使用，依各店標配；新品還沒設標配時請各店自行確認">不自動算（看標配）</span>':nHas?nwQty(s,tot,it.u)+'<div class="sub muted">'+nHas+' 店有數字</div>':(d.to&&d.to<nwToday()?'<span class="muted">檔期已結束</span>':'<span class="muted">—</span>'))+'</td>'
+          +'<td class="right">'+(s&&isDur(s)?'<span class="muted" title="器具模具可重複使用，依各店標配；新品還沒設標配時請各店自行確認">不自動算（看標配）</span>':nHas?nwQty(s,tot,it.u)+'<div class="sub muted">'+nHas+' 店有數字</div>':nwNoQty(d,x))+'</td>'
           +'<td>'+(!s||!dc?'<span class="muted">—</span>':wait?'<span class="muted">讀取中…</span>':(dcNeed?'<b style="color:'+(ord>=dcNeed?"#2E7D32":x.left<=3?"#B3261E":"#8A5A00")+'">'+ord+'／'+dcNeed+' 店</b><div class="sub muted">要備的出貨中心店</div>':'<span class="muted">沒有店要備</span>'))+'</td></tr>';
         if(open){h+='<tr><td colspan="8" style="background:#FAFAF7;padding:6px 8px"><table class="nwt nwin"><tr><th>門市</th><th>叫貨方式</th><th>供應商</th><th class="right">建議首批量</th><th>已下單</th></tr>';
           sts.forEach(function(st){var nd=nwNeed(st,s,d),md=nwModeOf(st,s);
@@ -1779,9 +1807,9 @@ function nwDessertHTML(d,hq){var x=nwDays(d),since=ymd(new Date(d.from.getTime()
 /* E 階段：上架用（新品項、貼紙名稱、區域、容器）。區域＝申請單填的 → 本店盤點分區 → 主檔預設分區；容器＝BOM 容器 → 申請單品項補充 */
 function nwZone(st,s,p){if(p&&p.zone)return p.zone;if(!s)return "";return st?zoneOf(st,s):(s.defZone?zoneAlias(s.defZone):"");}
 function nwShelfHTML(its,sts,one){var st=one?sts[0]:"";
-  var h='<div class="nwwrap"><table class="nwt nwshelf"><tr><th>新品項（店內叫法）</th><th>貼紙名稱</th><th>區域</th><th>容器</th><th>廠商品名</th></tr>';
+  var h='<div class="nwwrap"><table class="nwt nwshelf'+(one?' nwone':'')+'"><tr class="nwhdr"><th>新品項（店內叫法）</th><th>貼紙名稱</th><th>區域</th><th>容器</th><th>廠商品名</th></tr>';
   its.forEach(function(it){var s=it.s,own=s?s.name:it.m,p=it.p||{},z=nwZone(st,s,p),c=it.c||p.container||"";
-    h+='<tr><td><b>'+escH(own)+'</b>'+(it.fresh?'<span class="nwtag">🆕</span>':'')+(it.excl?'<span class="nwtag ex">本檔專屬</span>':'<span class="nwtag sh">共用</span>')+'</td><td>'+escH(p.sticker||"—")+'</td><td>'+escH(z||"—")+(p.zone?'':(z?'<div class="sub muted">'+(one?'本店盤點分區':'主檔預設分區')+'</div>':''))+'</td><td>'+escH(c||"—")+'</td><td>'+escH(p.vname||"—")+'</td></tr>';});
+    h+='<tr><td class="nwnm"><b>'+escH(own)+'</b>'+(it.fresh?'<span class="nwtag">🆕</span>':'')+(it.excl?'<span class="nwtag ex">本檔專屬</span>':'<span class="nwtag sh">共用</span>')+'</td><td class="nwoth" data-th="貼紙名稱"><span class="nwv">'+escH(p.sticker||"—")+'</span></td><td class="nwoth" data-th="區域"><span class="nwv">'+escH(z||"—")+(p.zone?'':(z?'<div class="sub muted">'+(one?'本店盤點分區':'主檔預設分區')+'</div>':''))+'</span></td><td class="nwoth" data-th="容器"><span class="nwv">'+escH(c||"—")+'</span></td><td class="nwoth" data-th="廠商品名"><span class="nwv">'+escH(p.vname||"—")+'</span></td></tr>';});
   return h+'</table></div>'+(one?'':'<div class="sub muted" style="margin-top:4px">總部看「全部店」時，區域是主檔預設分區；選單一門市會改用那家店的盤點分區。</div>');}
 function nwPrint(){var v=document.getElementById("view");if(!v)return;var parts=[];
   Array.prototype.forEach.call(v.querySelectorAll(".nwsub,.nwcard"),function(el){parts.push(el.outerHTML);});
@@ -2553,7 +2581,8 @@ function viewCampHQOne(sub){
     +'<span class="seg">'+[["0","不限"],["1","🎯 檔期專屬"+(nExcl?" "+nExcl:"")]].map(function(o){return '<div class="'+((ST.chExclOnly?"1":"0")===o[0]?"on":"")+'" data-chexcl="'+o[0]+'">'+o[1]+'</div>';}).join('')+'</span>'
     +'<span class="muted">'+shown.length+' / '+items.length+' 品項'+(rowsAll?'':'　<span style="color:#B45309">大平台紀錄載入中，已出貨暫顯示 —</span>')+'</span></div>'
     +(hiddenDur.length?'<div class="sub muted" style="margin-bottom:6px">🔧 器具／模具可重複使用、依各店標配，不列入下表的數量計算（名稱請看上方「🔧 本檔期甜點用到的器具／模具」；已隱藏 '+hiddenDur.length+' 項：'+hiddenDur.map(function(id){return escA(SKU[id].name);}).join('、')+'）</div>':'');
-  if(!shown.length){h+='<div class="muted">沒有符合的品項。</div></div>';return h;}
+  if(!shown.length){var _allSelf=ST.chNeedOnly&&items.length&&items.every(function(it){return !it.dc;});   /* 2026-10-07：全是各店自購／向廠商叫的料時講清楚，不要只寫「沒有符合」 */
+    h+='<div class="muted">'+(_allSelf?'這一檔用到的料，出貨中心都不用備（各店自購或向廠商叫）。按上面「全部」可以看各店還要用多少。':(ST.chNeedOnly&&items.length?'目前沒有還要備的品項。按上面「全部」可以看全部 '+items.length+' 項。':'沒有符合的品項。'))+'</div></div>';return h;}
   var _chHead='<th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th>';
   h+='<div class="chWrap"><table><thead class="chThead"><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
   shown.forEach(function(it){var s=it.s,open=!!ST.chExp[it.id],u=s.useUnit,bu=s.buyUnit||"包";
@@ -2567,18 +2596,18 @@ function viewCampHQOne(sub){
     if(_mine&&!_p)h+='<td class="muted" colspan="8">本店這檔期不用這個料（按「全部店」可看別店）</td></tr>';
     else if(_mine){var _xin=0;(_p.xin||[]).forEach(function(x){_xin+=x.qty;});
       h+='<td class="right">'+fmt(Math.round(_p.rem+_p.used))+' '+u+'</td><td class="right">'+fmt(Math.round(_p.used))+' '+u+'</td><td class="right">'+fmt(Math.round(_p.rem))+' '+u+'</td>'
-        +'<td class="right">'+(_p.dc?(_p.noShip?'—':fmt(Math.round(_p.shipped))+' '+u):'<span class="muted">自購</span>')+'</td>'
+        +'<td class="right">'+(_p.dc?(_p.noShip?'—':fmt(Math.round(_p.shipped))+' '+u):'<span class="muted">自購／廠商</span>')+'</td>'
         +'<td class="right muted">'+(_p.dc&&!_p.noShip?'≈ '+fmt(Math.round(_p.onhand))+' '+u:'—')+'</td>'
         +'<td class="right" style="color:#1e4e8c;font-weight:700">'+(_xin>0?fmt(Math.round(_xin))+' '+u:'<span class="muted">—</span>')+'</td>'
         +'<td class="right" style="color:'+(_p.buy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(_p.buy))+' '+u
-          +(_p.self>0?'<div class="sub muted" style="font-weight:400">自購，還要用 '+fmt(Math.round(_p.self))+'，自行判斷</div>':'')+(_p.tiny>0?'<div class="sub muted" style="font-weight:400">只差 '+fmt(Math.round(_p.tiny))+'，不叫</div>':'')+(_p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">貨到已下架，不採購</div>':'')+'</td>'
+          +(_p.self>0?'<div class="sub muted" style="font-weight:400">自購／向廠商叫，還要用 '+fmt(Math.round(_p.self))+'，店長自行判斷</div>':'')+(_p.tiny>0?'<div class="sub muted" style="font-weight:400">只差 '+fmt(Math.round(_p.tiny))+'，不叫</div>':'')+(_p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">貨到已下架，不採購</div>':'')+'</td>'
         +'<td class="right"><b>'+fmt(_p.packs)+'</b> '+s.buyUnit+'</td></tr>';}
     else h+='<td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumRem))+' '+u+'</td>'
-      +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購</span>')+'</td>'
+      +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購／廠商</span>')+'</td>'
       +'<td class="right muted">'+(it.dc&&rowsAll?'≈ '+fmt(Math.round(it.sumOn))+' '+u:'—')+'</td>'
       +'<td class="right" style="color:#1e4e8c;font-weight:700">'+(it.sumXfer>0?fmt(Math.round(it.sumXfer))+' '+u:'<span class="muted">—</span>')+'</td>'
       +'<td class="right" style="color:'+(it.sumBuy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(it.sumBuy))+' '+u
-        +((it.nTiny||it.nSelf)?'<div class="sub muted" style="font-weight:400">'+[it.nTiny?it.nTiny+' 店只差一點點':'',it.nSelf?it.nSelf+' 店自購':''].filter(Boolean).join('、')+'，不列</div>':'')+'</td>'
+        +((it.nTiny||it.nSelf)?'<div class="sub muted" style="font-weight:400">'+[it.nTiny?it.nTiny+' 店只差一點點':'',it.nSelf?it.nSelf+' 店自購或向廠商叫':''].filter(Boolean).join('、')+'，不列</div>':'')+'</td>'
       +'<td class="right"><b>'+fmt(it.sumPacks)+'</b> '+s.buyUnit+'</td></tr>';
     if(open){
       h+='<tr><td colspan="9" style="background:#fffdf2;padding:4px 10px"><div class="sub muted chMobNote" style="margin:2px 0 4px">📱 手機已隱藏「推估總份數、已售份數、推估總需求、已用」四欄，橫放或用電腦可看全部</div><table style="font-size:12.5px"><thead><tr><th class="chStore">店</th><th class="right chMH">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right chMH">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（'+escA(bu)+'數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥'+(it.xm==="whole"?'<div class="sub" style="font-weight:400">整'+escA(bu)+'調、不拆</div>':(it.xm==="none"?'<div class="sub" style="font-weight:400">此料不調撥</div>':''))+'</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
@@ -2590,12 +2619,12 @@ function viewCampHQOne(sub){
         var _me=(String(st)===String(ST.storeId));   /* aw 批：店長看總表時標出自己的店 */
         var _sk=it.id+"|"+st,_so=!!ST.chSt[_sk];   /* cd 批 */
         h+='<tr data-chst="'+escA(_sk)+'" title="點一下看這家店的大平台下單紀錄" style="cursor:pointer'+(_me?';background:#eaf3ff':'')+(_so?';box-shadow:inset 3px 0 0 #1e4e8c':'')+'"><td class="chStore"><b>'+escA(storeName(st))+'</b> <span style="color:#1e4e8c;font-size:12px">'+(_so?'▴':'▾')+'</span>'+(_me?'<span class="badge" style="background:#1e4e8c">本店</span>':'')+(regionOf(st)?'<span class="muted" style="font-size:12px">　'+regionOf(st)+'</span>':'')+'</td><td class="right chMH">'+fmt(Math.round(p.est))+'</td><td class="right chMH">'+fmt(Math.round(p.sold))+'</td><td class="right chMH">'+fmt(Math.round(p.rem+p.used))+'</td><td class="right chMH">'+fmt(Math.round(p.used))+'</td><td class="right">'+fmt(Math.round(p.rem))+'</td>'
-          +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+')</span>')):'<span class="muted">自購</span>')+'</td>'
+          +'<td class="right">'+(p.dc?(p.noShip?'—':(fmt(Math.round(p.shipped))+' <span class="muted">('+fmt(p.packs0)+')</span>')):'<span class="muted">自購／廠商</span>')+'</td>'
           +'<td class="right muted">'+(p.dc&&!p.noShip?'≈ '+fmt(Math.round(p.onhand)):'—')+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.need>0?'#B3261E':(p.surplus>0?'#2E7D32':'#6b7280'))+'">'+(p.need>0?fmt(Math.round(p.need)):(p.dc&&!p.noShip&&p.surplus>0?'多 '+fmt(Math.round(p.surplus)):'0'))+'</td>'
           +'<td>'+xf+'</td>'
           +'<td class="right" style="font-weight:700;color:'+(p.buy>0?'#B3261E':'#2E7D32')+'">'+fmt(Math.round(p.buy))
-            +(p.self>0?'<div class="sub" style="font-weight:400;color:#6b7280;white-space:nowrap" title="自購或向其他廠商叫，還要用 '+fmt(Math.round(p.self))+' '+escA(u)+'，店長自行判斷">自購・店長判斷</div>':'')
+            +(p.self>0?'<div class="sub" style="font-weight:400;color:#6b7280;white-space:nowrap" title="自購或向其他廠商叫，還要用 '+fmt(Math.round(p.self))+' '+escA(u)+'，店長自行判斷">自購／廠商・店長判斷</div>':'')
             +(p.tiny>0?'<div class="sub" style="font-weight:400;color:#6b7280;white-space:nowrap" title="只差 '+fmt(Math.round(p.tiny))+' '+escA(u)+'，不到半'+escA(bu)+'，不硬進位">差 '+fmt(Math.round(p.tiny))+'・不叫</div>':'')+(p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">⏳ 貨到已下架，不採購（原需 '+fmt(Math.round(p.late))+'）</div>':'')+'</td>'
           +'<td class="right"><b>'+fmt(p.packs)+'</b></td></tr>';
         if(_so)h+='<tr><td colspan="12" style="background:#f4f8fd;padding:6px 10px">'+campShipDetail(ev,s,st,p)+'</td></tr>';});
