@@ -1932,18 +1932,21 @@ function clearAll(){if(!confirm('清空整張申請表（含草稿）？'+(AP.he
   OUT=null;ERRS=[];try{localStorage.removeItem(DRAFT_KEY)}catch(e){}_savedAt='';render()}
 
 /* ---- 匯入食譜檔（沿用「新品試算」的 .doc 解析器；分區走 ZONE_ALIAS） ---- */
+var DOCX_TIP='請改選食譜後台「匯出」下載的原始 .doc，不要先用 Word 打開再另存';   /* 2026-10-07：Word 另存的 .docx 是壓縮檔，食材分區與容器標記都不見了，讀不到 */
+function isDocx(name,raw){return /\.docx$/i.test(String(name||''))||String(raw||'').slice(0,2)==='PK'}
 function importFiles(fs){if(!fs||!fs.length)return;
-  var got=[],names=[],warns=[],text='',done=0,rcs=[];
+  var got=[],names=[],warns=[],text='',done=0,rcs=[],anyDx=false;
   Array.prototype.forEach.call(fs,function(f){var rd=new FileReader();
-    rd.onload=function(){var r=R.parseRecipeHTML(String(rd.result||''),f.name);
+    rd.onload=function(){var raw=String(rd.result||''),dx=isDocx(f.name,raw);if(dx)anyDx=true;
+      var r=dx?null:R.parseRecipeHTML(raw,f.name);
       if(r&&r.lines.length){got=got.concat(r.lines);names.push(r.name||f.name);warns=warns.concat(r.warn||[]);text+=(r.text||'')}
-      else warns.push('（'+f.name+' 讀不到食材列，格式可能不同）');
-      var st=parseSteps(String(rd.result||''),f.name);if(st)rcs.push(st);   /* 2026-10-06：門市食譜步驟一起記下（核准後匯入自己做食譜系統用） */
+      else warns.push(dx?('（'+f.name+' 是 Word 另存的 .docx，讀不到食材列：'+DOCX_TIP+'）'):('（'+f.name+' 讀不到食材列，格式可能不同）'));
+      var st=dx?null:parseSteps(raw,f.name);if(st)rcs.push(st);   /* 2026-10-06：門市食譜步驟一起記下（核准後匯入自己做食譜系統用） */
       if(++done===fs.length){
         AP.recipe=null;AP.recipeMsg='';
         if(fs.length===1&&rcs.length===1){var sz=JSON.stringify(rcs[0]).length;if(sz<=RC_MAX)AP.recipe=rcs[0];else AP.recipeMsg='這個食譜檔的步驟內容太大（'+sz+' 字），沒有記進申請單；核准後匯入自己做食譜系統時再選一次這個檔案'}
         else if(fs.length>1)AP.recipeMsg='一次選了 '+fs.length+' 個檔案，門市食譜步驟沒有記下（核准後匯入時再選這支甜點的食譜檔）';
-        else AP.recipeMsg='這個檔案看不到步驟（黃底的步驟標題），門市食譜步驟沒有記下';
+        else AP.recipeMsg=anyDx?('這是 Word 另存的 .docx，門市食譜步驟讀不到：'+DOCX_TIP):'這個檔案看不到步驟（黃底的步驟標題），門市食譜步驟沒有記下';
         AP.lines=got.map(function(l){var s=skuOf(l.m);var cat=s?s.cat:(R.isTool(l.m)?'器具':'食材');
           var z=mapZone(l.zone)||defaultZone(l.m,cat);
           var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';return o});
@@ -3059,7 +3062,9 @@ function rbPaint(){var m=document.getElementById('apModal');if(!m||!document.get
   if(q('apRbGo'))q('apRbGo').onclick=rbGo;
   if(q('apRbAgain'))q('apRbAgain').onclick=function(){if(!RB.imp)return;RB.fails=0;rbStart({action:'rbImport',role:RB.cr.role,password:RB.cr.pw,req_id:RB.rid,imp_id:RB.imp})};
   var f=q('apRbFile');if(f)f.onchange=function(){var fl=f.files&&f.files[0];if(!fl)return;var rd=new FileReader();
-    rd.onload=function(){var r=parseSteps(String(rd.result||''),fl.name);if(!r){rbMsg('<span class="ap-bad">✕ 這個檔案看不到步驟（黃底的步驟標題），不是公司格式的食譜 .doc？</span>');return}
+    rd.onload=function(){var raw=String(rd.result||'');
+      if(isDocx(fl.name,raw)){rbMsg('<span class="ap-bad">✕ 「'+esc(fl.name)+'」是 Word 另存的 .docx，讀不到步驟：'+DOCX_TIP+'</span>');return}
+      var r=parseSteps(raw,fl.name);if(!r){rbMsg('<span class="ap-bad">✕ 這個檔案看不到步驟（黃底的步驟標題），不是公司格式的食譜 .doc？</span>');return}
       RB.rc=r;RB.pv=null;RB.msg='';rbPaint()};rd.readAsText(fl,'utf-8')};
   var t=q('apRbTitle');if(t)t.oninput=function(){RB.title=t.value};
   var c=q('apRbCat');if(c)c.onchange=function(){RB.cat=c.value};
