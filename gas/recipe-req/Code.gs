@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v10';   /* v10＝2026-10-07 經營者「儀表板待處理問題 1007」：①加速（設定一次讀完、身分表暫存、檔期清單暫存 2 分鐘）②簽核連結帶通行碼 k（點連結就能看申請單，免 PIN）③意見交流 fact_req_comment（commentAdd）④簽核人 PIN 可由本人第一次簽核時自設（signSetPin）⑤送簽一次完成「存檔＋送簽」⑥核准寫入採購系統時一併新增「新單位換算」到 dim_unitconv（主廚在申請表填的 1 平匙≈幾 g；備註「自動草稿…請採購確認」） */   /* v9.2＝2026-10-07 匯入比對：後台單位本身帶括號（動物餅乾模「組 (貓/熊/兔子/鱷魚各1)」）時把匯出檔拆成附註的括號合回單位再比 */   /* v9.1＝2026-10-06 晚：rbStatus 多回 setRq（最後一次存好後台帳號的回條編號），前端回覆掉了時用它確認 */   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v11';   /* v11＝2026-10-07 晚 經營者裁示：①整檔一次送簽、一次簽完、單支可退回（submitSignCamp／signOpenCamp／signCamp，連結 #sign=檔期編號&k=）②簽核人固定批次（dim_signer.batch；前一批全部同意才輪下一批）③新器具／模具「每店要幾個」→ 核准時寫成各店標配（dim_store_par，BOM 本＋專用檔，還原一起刪）④提供方式＝出貨中心出貨 → 主檔廠商寫「出貨中心」⑤newItemsPub 多回第一批配貨日、檔期作業時間 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -33,7 +33,7 @@ var TABS = {
     'created_at', 'updated_at', 'updated_by'],
   fact_req_unit: ['req_id', '品項', '容器', '購買連結', '供應商覆寫', '出貨中心預估出貨量', '品項備註', 'updated_at', 'updated_by'],
   dim_role: ['role', 'password', 'fields'],
-  dim_signer: ['name', 'role', 'pin', 'enabled'],
+  dim_signer: ['name', 'role', 'pin', 'enabled', 'batch'],   /* batch：2026-10-07 晚新增（簽核批次 1～9，空白＝第 1 批；migrate_ ⑩ 自動補表頭） */
   fact_signoff: ['req_id', 'signer', 'decision', 'comment', 'ts'],
   log: ['ts', 'role', 'action', 'id', 'ok', 'msg'],
   fact_req_fill: ['req_id', 'role', 'updated_at'],   /* B 階段新增：每張單每個身分最後一次存檔時間（「已填」徽章）；舊試算表由 migrate_ 自動補建 */
@@ -124,7 +124,7 @@ function randPw_(len) {
    ① 2026-09-28「管理者」身分（🔑 密碼管理用）：舊試算表沒有這一列 → 補上；密碼 10 碼隨機，只在 dim_role 分頁
    ② 2026-09-29 B 階段：補建 fact_req_fill 分頁（只新增分頁，不動既有分頁）
    ③ 2026-09-29 C 階段：補建 fact_push 分頁 */
-var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT'];
+var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH'];
 /* 2026-10-07 加速：每次請求的指令碼屬性只讀一次（原本 migrate_ 逐一讀 6 個、ss_ 再讀 1 個；一個約 50～100 毫秒） */
 var _props = null;
 function props_() { if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {}; return _props; }
@@ -176,6 +176,15 @@ function migrate_() {
       ensureTab_(ss_(), 'fact_req_comment');
       setProp_('MIG_CMT', '1');
     }
+    if (P.getProperty('MIG_BATCH') !== '1') {   /* ⑩ 2026-10-07 晚：dim_signer 最後補一欄「batch」（簽核批次；只加表頭，既有資料一格不動；空白＝第 1 批） */
+      var gs = ss_().getSheetByName('dim_signer'), GH = TABS.dim_signer, gn = GH.length;
+      if (gs.getMaxColumns() < gn) gs.insertColumnsAfter(gs.getMaxColumns(), gn - gs.getMaxColumns());
+      var gc = gs.getRange(1, gn);
+      if (String(gc.getValue()).trim() === '') gc.setValue(GH[gn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
+      if (String(gc.getValue()).trim() !== GH[gn - 1]) throw new Error('dim_signer 第 ' + gn + ' 欄表頭不對');
+      authCacheClear_();
+      setProp_('MIG_BATCH', '1');
+    }
     if (!P.getProperty('SIGN_SECRET')) setProp_('SIGN_SECRET', Utilities.getUuid() + Utilities.getUuid());   /* ⑧ 簽核連結通行碼的密鑰（只在伺服器；在鎖裡產生，不會兩個請求各產一組） */
     var seed = P.getProperty('SIGNER_SEED');
     if (seed) {   /* ⑨ 2026-10-07：簽核人名單初始值（管理者／Claude 放在指令碼屬性 SIGNER_SEED＝[{name,role}]；只補名單沒有的人，PIN 留空＝本人第一次簽核時設定；用完就刪，名字不進程式碼） */
@@ -206,7 +215,7 @@ function doGet(e) {
   var p = (e && e.parameter) || {}, a = String(p.action || 'ping'), res;
   migrate_();
   try {
-    if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!props_().SHEET_ID } };
+    if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!props_().SHEET_ID, mig: MIG_KEYS.filter(function (k) { return props_()[k] === '1'; }).length + '/' + MIG_KEYS.length } };   /* mig：遷移完成幾項（上線後從外面確認，不含資料） */
     else if (a === 'listCampaigns') res = { ok: true, data: listCampaignsCached_() };
     else if (a === 'signInfo') res = { ok: true, data: signInfo_(p.req_id) };
     else if (a === 'newItemsPub') res = { ok: true, data: newItemsPub_() };
@@ -222,15 +231,17 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_,
   /* 2026-10-07：簽核連結（帶通行碼 k）免 PIN 看申請單、本人第一次自設 PIN、意見交流 */
   signOpen: signOpen_, signSetPin: signSetPin_, commentAdd: commentAdd_,
+  /* 2026-10-07 晚：整檔一次送簽／一次簽完 */
+  submitSignCamp: submitSignCamp_, signOpenCamp: signOpenCamp_, signCamp: signCamp_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
   rbStatus: function (p, a) { return rbStatus_(p, a); }, rbSetCred: function (p, a) { return rbSetCred_(p, a); },
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
-  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
+  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
-var KEY_ACTS = { signOpen: 1, signSetPin: 1 };
+var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1 };   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
 /* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
-var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1 };
+var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1 };
 /* 寫完要讓身分表暫存失效的動作 */
 var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1 };
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
@@ -239,13 +250,13 @@ var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 →
    30 個動作＝12 讀＋18 寫），改白名單是為了日後新增動作忘了登記 WRITES 時預設仍加鎖（審查時改的）。
    adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
 var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1,
-  rbStatus: 1, rbPreview: 1, signOpen: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
+  rbStatus: 1, rbPreview: 1, signOpen: 1, signOpenCamp: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
 var AUDIT_READS = { adminList: 1 };
 /* 2026-10-06：自己管鎖的動作——匯入自己做食譜系統要連後台、一次 30 多秒，不能佔住全系統的鎖（別人送件會卡住）；
    同一張單不重複跑由 rbImport_ 自己用 CacheService 擋，寫紀錄分頁時才短暫拿鎖 */
 var SELFLOCK = { rbImport: 1 };
 /* 會動到 BOM 本「BOM表／產品名稱對照表」的動作：做完（成功或失敗都算，失敗可能已寫一半又寫回）就讓 bomMeta／mapGet 的暫存失效 */
-var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1 };
+var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, signCamp: 1, pushPurchase: 1, rollbackPurchase: 1 };
 
 function doPost(e) {
   var p;
@@ -349,6 +360,12 @@ function signKey_(rid) {
   return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 16);
 }
 function keyAuth_(p) {
+  var cid = str_(p.campaign_id).trim();
+  if (cid && !str_(p.req_id).trim()) {   /* 2026-10-07 晚：整檔簽核連結（#sign=檔期編號&k=）——k 用「camp:」前綴，和單張的 k 分開 */
+    var kc = str_(p.k).trim();
+    if (!kc || kc !== signKey_('camp:' + cid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 104 公告裡的連結', 'key');
+    return { kind: 'key', name: '', role: '', rules: [], camp: cid };
+  }
   var rid = str_(p.req_id).trim(), k = str_(p.k).trim();
   if (!rid || !k || k !== signKey_(rid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 104 公告裡的連結', 'key');
   return { kind: 'key', name: '', role: '', rules: [] };
@@ -415,23 +432,26 @@ function adminList_(p, auth) {
   var roles = load_('dim_role').rows.filter(function (x) { return str_(x.role).trim(); })
     .map(function (x) { return { role: str_(x.role).trim(), password: str_(x.password), fields: str_(x.fields) }; });
   var signers = load_('dim_signer').rows.filter(function (x) { return str_(x.name).trim(); })
-    .map(function (x) { return { name: str_(x.name).trim(), role: str_(x.role), pin: str_(x.pin), enabled: signerOn_(x.enabled) ? 'Y' : 'N' }; });
+    .map(function (x) { return { name: str_(x.name).trim(), role: str_(x.role), pin: str_(x.pin), enabled: signerOn_(x.enabled) ? 'Y' : 'N', batch: str_(x.batch).trim() }; });
   return { id: '', data: { roles: roles, signers: signers }, msg: '身分 ' + roles.length + '、簽核主管 ' + signers.length };
 }
 function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核人 PIN 登入用，不能混用） */
   needAdmin_(auth);
   var g = p.entry || {}, orig = str_(g.orig_name).trim(), name = str_(g.name).trim(), title = str_(g.role).trim(), pin = str_(g.pin).trim();
-  var en = (g.enabled === false || str_(g.enabled).toUpperCase() === 'N') ? 'N' : 'Y';
+  var en = (g.enabled === false || str_(g.enabled).toUpperCase() === 'N') ? 'N' : 'Y', bt = str_(g.batch).trim();
   if (!name) throw fail_('請填簽核主管姓名');
+  if (bt && !/^[1-9]$/.test(bt)) throw fail_('批次請填 1～9（空白＝第 1 批）');
+  var keepBatch = g.batch === undefined || g.batch === null;   /* 舊版網頁（沒有批次欄）存檔：批次照舊，不清掉 */
   if (/[,，、;；\s]/.test(name)) throw fail_('姓名不能有逗號、頓號、分號或空白');   /* signers 欄用這些符號分隔 */
   if (pin && !/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字（留空＝本人第一次簽核時自己設定）');
   var t = load_('dim_signer');
   var row = orig ? t.rows.filter(function (r) { return str_(r.name).trim() === orig; })[0] : null;
   if (orig && !row) throw fail_('找不到簽核主管「' + orig + '」', 'notfound');
   if (t.rows.some(function (r) { return r !== row && str_(r.name).trim() === name; })) throw fail_('已經有叫「' + name + '」的簽核主管', 'dup');
-  put_(t, row ? row._row : nextRow_(t), { name: name, role: title, pin: pin, enabled: en });
+  if (keepBatch) bt = row ? str_(row.batch).trim() : '';
+  put_(t, row ? row._row : nextRow_(t), { name: name, role: title, pin: pin, enabled: en, batch: bt });
   return {
-    id: name, data: { name: name, role: title, enabled: en, created: !row },
+    id: name, data: { name: name, role: title, enabled: en, batch: bt, created: !row },
     msg: (row ? '更新' : '新增') + '簽核主管 ' + name + (orig && orig !== name ? '（原名 ' + orig + '）' : '') + (en === 'N' ? '（停用）' : '')
   };
 }
@@ -645,7 +665,8 @@ function getCampaign_(p, auth) {
   return {
     id: cid,
     data: { campaign: plain_(ct.H, camp), reqs: reqs, units: rowsOf_('fact_req_unit', ids), signoffs: rowsOf_('fact_signoff', ids),
-      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth) },
+      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth),
+      camp_key: (auth.kind === 'role' && (auth.role === ADMIN || can_(auth, 'P:*'))) ? signKey_('camp:' + cid) : '' },   /* 2026-10-07 晚：整檔簽核連結（只給主廚／管理者） */
     msg: reqs.length + ' 支' + (lite ? '（清單）' : '')
   };
 }
@@ -705,8 +726,11 @@ function listSigners_(p, auth) {
 /* 啟用中的簽核人（只回姓名、職稱／部門、有沒有設 PIN，不含 PIN） */
 function peopleOf_() {
   return authRows_('dim_signer').filter(function (r) { return str_(r.name).trim() && signerOn_(r.enabled); })
-    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim(), hasPin: !!str_(r.pin).trim() }; });
+    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim(), hasPin: !!str_(r.pin).trim(), batch: batchOf_(r.batch) }; });
 }
+/* 2026-10-07 晚：簽核批次（1～9；空白或亂填＝1）。前一批（數字小的）全部同意，下一批才能簽 */
+function batchOf_(v) { var n = parseInt(str_(v).trim(), 10); return n >= 1 && n <= 9 ? n : 1; }
+function batchMap_() { var m = {}; authRows_('dim_signer').forEach(function (r) { var n = str_(r.name).trim(); if (n) m[n] = batchOf_(r.batch); }); return m; }
 
 /* ===== 2026-10-07 💬 意見交流（fact_req_comment）＋簽核連結 =====
    ‧ 誰都看得到所有人的留言與簽核意見（申請表「送簽核」卡、簽核頁都會顯示）；留言送出後不能改、不能刪
@@ -761,6 +785,10 @@ function signSetPin_(p, auth) {
   if (!name) throw fail_('請先選你的名字');
   if (!/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字');
   var qt = load_('fact_recipe_req', true), qrow = reqRow_(qt, rid);
+  if (auth && auth.camp) {   /* 2026-10-07 晚：整檔連結——檔期內任一張的簽核人都可以自設 */
+    var hit = qt.rows.filter(function (r) { return str_(r.campaign_id) === auth.camp && signersOf_(r).indexOf(name) >= 0; })[0];
+    qrow = hit || null; rid = hit ? str_(hit.req_id) : auth.camp;
+  }
   if (!qrow || signersOf_(qrow).indexOf(name) < 0) throw fail_('「' + name + '」不是這張單的簽核人，不能在這裡設定 PIN；請主廚把你加進簽核人，或請管理者在「🔑 密碼管理」幫你設定', 'perm');
   var t = load_('dim_signer'), row = t.rows.filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
   if (!row) throw fail_('名單上沒有「' + name + '」（或已停用），請找管理者', 'notfound');
@@ -911,6 +939,15 @@ function sign_(p, auth) {
   if (names.indexOf(auth.name) < 0) throw fail_('你不在這張單的簽核人名單', 'perm');
   if (st !== '送簽中') throw fail_('這張單目前是「' + st + '」，不用再簽', 'locked', { status: st });
   var so = load_('fact_signoff');
+  /* 2026-10-07 晚：分批簽核——自己的批次比「還沒同意的人裡最小的批次」大 → 還沒輪到 */
+  var bmap = batchMap_(), myB = bmap[auth.name] || 1, agreed0 = {};
+  so.rows.forEach(function (r) { if (str_(r.req_id) === rid && str_(r.decision).trim() === '同意') agreed0[str_(r.signer).trim()] = 1; });
+  var pend0 = names.filter(function (n) { return n !== auth.name && !agreed0[n]; });
+  var turn0 = Math.min.apply(null, pend0.map(function (n) { return bmap[n] || 1; }).concat([myB]));
+  if (myB > turn0) {
+    var wait0 = pend0.filter(function (n) { return (bmap[n] || 1) < myB; });
+    throw fail_('還沒輪到你：第 ' + turn0 + ' 批（' + wait0.join('、') + '）全部同意後才能簽', 'notyet', { turn: turn0, wait: wait0 });
+  }
   var mine = so.rows.filter(function (r) { return str_(r.req_id) === rid && str_(r.signer).trim() === auth.name && isLive_(r.decision); })[0];
   var rec = { req_id: rid, signer: auth.name, decision: dec, comment: cm, ts: now_() };
   var rowNo = mine ? mine._row : nextRow_(so);
@@ -929,6 +966,87 @@ function sign_(p, auth) {
   }
   return { id: rid, data: { status: status, decision: dec, signers: names, agreed: agreed, signoffs: live.map(function (r) { return plain_(so.H, r); }), push: push },
     msg: auth.name + ' ' + dec + '（' + agreed.length + '/' + names.length + ' 同意）' + (status !== st ? '→' + status : '') + (push ? '｜' + (push.ok === false ? push.msg : pushMsg_(push)) : '') };
+}
+
+/* ===== 2026-10-07 晚 經營者：「一個檔期 4～6 支新甜點，整檔一次簽核，不要一支一支簽」=====
+   ‧ submitSignCamp（主廚）：勾這個檔期要送的幾支（草稿／退回、而且是系統上最新版），同一組簽核人一起送簽；全部檢查通過才寫（一支不合格整批不送）
+   ‧ signOpenCamp（整檔連結 k）：整個檔期每一支的申請單、品項補充、簽核紀錄、意見交流＋可選的名字（不用 PIN 就能看）
+   ‧ signCamp（簽核人 PIN）：一次送多支的決定（全部同意，或某幾支退回）；每一支照原本 sign_ 的規則（分批、退回要原因、全部同意就核准並寫入採購系統）
+     某一支不能簽（例：還沒輪到、已經不在送簽中）不影響其他支，結果逐支回報 */
+function submitSignCamp_(p, auth) {
+  if (!can_(auth, 'P:*')) throw fail_('只有主廚可以送簽', 'perm');
+  var cid = str_(p.campaign_id).trim();
+  if (!cid) throw fail_('請先選檔期');
+  var items = (p.items || []).map(function (x) { return { rid: str_(x && x.req_id).trim(), base: str_(x && x.base_updated_at) }; }).filter(function (x) { return x.rid; });
+  if (!items.length) throw fail_('請至少勾一支要送簽的甜點');
+  var seen = {}, names = [];
+  (p.signers || []).forEach(function (x) { var n = str_(x).trim(); if (n && !seen[n]) { seen[n] = 1; names.push(n); } });
+  if (!names.length) throw fail_('請至少勾一位簽核主管');
+  var on = {};
+  load_('dim_signer').rows.forEach(function (r) { if (signerOn_(r.enabled)) on[str_(r.name).trim()] = 1; });
+  var bad = names.filter(function (n) { return !on[n]; });
+  if (bad.length) throw fail_('這些人不在啟用中的簽核主管名單：' + bad.join('、'), 'badsigner');
+  /* 主廚畫面上正在改的那一支（save）：先存最新內容（規則同「📨 送件到檔期」，別人在你之後改過 → conflict 不覆蓋），再用存好的版本一起送簽 */
+  var saved = null;
+  if (p.save && p.save.req && typeof p.save.payload === 'string' && p.save.payload) {
+    var srid = str_(p.save.req.req_id).trim(), sit = items.filter(function (x) { return x.rid === srid; })[0];
+    if (!sit) throw fail_('要先存的那一支不在這次送簽的清單裡，請重新整理', 'bad');
+    if (str_(p.save.req.campaign_id).trim() !== cid) throw fail_('畫面上這一支選的檔期和這次整檔送簽的檔期不同，請先按「📨 送件到檔期」', 'bad');
+    saved = saveReq_({ req: p.save.req, payload: p.save.payload, base_updated_at: p.save.base_updated_at, force: false }, auth).data;
+    sit.base = saved.updated_at;
+  }
+  var t = load_('fact_recipe_req', true), probs = [], rows = [], dup = {};
+  items.forEach(function (x) {
+    if (dup[x.rid]) return; dup[x.rid] = 1;
+    var row = reqRow_(t, x.rid), nm = row ? (str_(row['商品正式名稱']) || str_(row['商品暫定名稱']) || x.rid) : x.rid;
+    if (!row) { probs.push(x.rid + ' 找不到'); return; }
+    if (str_(row.campaign_id) !== cid) { probs.push(nm + ' 不是這個檔期的單'); return; }
+    var st = str_(row.status);
+    if (st !== '草稿' && st !== '退回') { probs.push(nm + ' 目前是「' + st + '」，不能送簽'); return; }
+    if (!p.force && str_(row.updated_at) !== x.base) { probs.push(nm + ' 在 ' + str_(row.updated_at) + ' 被「' + str_(row.updated_by) + '」改過，請先按「🔄 重新整理」'); return; }
+    rows.push(row);
+  });
+  if (probs.length) throw fail_((saved ? '畫面上這一支已存檔，但' : '') + '整檔送簽沒有送出（一支都沒送）：' + probs.join('；'), 'conflict', { probs: probs, saved: saved });
+  var now = now_(), voided = 0;
+  rows.forEach(function (row) {
+    voided += voidSignoffs_(str_(row.req_id));
+    putCols_(t, row._row, { status: '送簽中', signers: names.join('、'), updated_at: now, updated_by: auth.role },
+      function (h) { return h === 'status' || h === 'signers' || h === 'updated_at' || h === 'updated_by'; });
+  });
+  return { id: cid, data: { campaign_id: cid, req_ids: rows.map(function (r) { return str_(r.req_id); }), status: '送簽中', signers: names, updated_at: now, voided: voided,
+      camp_key: signKey_('camp:' + cid), saved: saved },
+    msg: '整檔送簽 ' + rows.length + ' 支給 ' + names.join('、') + (voided ? '｜上一輪簽核 ' + voided + ' 筆標記作廢' : '') };
+}
+function signOpenCamp_(p, auth) {
+  var cid = (auth && auth.camp) || str_(p.campaign_id).trim();
+  var ct = load_('fact_campaign'), camp = ct.rows.filter(function (r) { return str_(r.campaign_id) === cid; })[0];
+  if (!camp) throw fail_('找不到這個檔期（可能已刪除）', 'notfound');
+  var t = load_('fact_recipe_req', true);
+  var rows = t.rows.filter(function (r) { return str_(r.campaign_id) === cid; })
+    .sort(function (a, b) { return (parseInt(str_(a.seq), 10) || 0) - (parseInt(str_(b.seq), 10) || 0); });
+  var ids = {}; rows.forEach(function (r) { ids[str_(r.req_id)] = 1; });
+  var units = rows.length ? safeRows_('fact_req_unit', ids) : [], sos = rows.length ? safeRows_('fact_signoff', ids) : [], cms = rows.length ? safeRows_('fact_req_comment', ids) : [];
+  var byTs = function (a, b) { return str_(a.ts) < str_(b.ts) ? -1 : str_(a.ts) > str_(b.ts) ? 1 : 0; };
+  var reqs = rows.map(function (r) {
+    var rid = str_(r.req_id), q = plain_(t.H, r); q.payload = readPayload_(t, r._row);
+    return { req: q, units: units.filter(function (u) { return str_(u.req_id) === rid; }), signoffs: sos.filter(function (o) { return str_(o.req_id) === rid; }),
+      comments: cms.filter(function (c) { return str_(c.req_id) === rid; }).sort(byTs) };
+  });
+  return { id: cid, data: { campaign: plain_(ct.H, camp), reqs: reqs, people: peopleOf_() }, msg: '整檔簽核連結 ' + cid + '（' + reqs.length + ' 支）' };
+}
+function signCamp_(p, auth) {
+  if (auth.kind !== 'signer') throw fail_('簽核要用簽核人 PIN', 'perm');
+  var cid = str_(p.campaign_id).trim(), list = (p.decisions || []).slice(0, 30), out = [];
+  if (!list.length) throw fail_('沒有要簽的甜點');
+  var t = load_('fact_recipe_req', true);
+  list.forEach(function (d) {
+    var rid = str_(d && d.req_id).trim(), row = reqRow_(t, rid);
+    if (!row || (cid && str_(row.campaign_id) !== cid)) { out.push({ req_id: rid, ok: false, code: 'notfound', msg: '不是這個檔期的單' }); return; }
+    try { var r = sign_({ req_id: rid, decision: d.decision, comment: d.comment }, auth) || {}; out.push({ req_id: rid, ok: true, data: r.data, msg: r.msg }); }
+    catch (e) { out.push({ req_id: rid, ok: false, code: (e && e.code) || '', msg: errMsg_(e), data: e && e.extra }); }
+  });
+  var okN = out.filter(function (x) { return x.ok; }).length;
+  return { id: cid, data: { results: out }, msg: auth.name + ' 整檔簽核 ' + okN + '／' + out.length + ' 支' + (okN < out.length ? '｜沒成功：' + out.filter(function (x) { return !x.ok; }).map(function (x) { return x.req_id + ' ' + x.msg; }).join('；') : '') };
 }
 
 /* 公開（簽核連結第一頁用）：只回狀態、簽核人名字、誰已經簽了——不含商品名稱與內容（看內容要 PIN） */
@@ -955,7 +1073,10 @@ function signInfo_(rid) {
           fact_push 分頁逐表記錄；同一張單寫過且未還原 → 不重寫；rollbackReq(單號)／管理者「還原」只刪這張單寫的列 */
 var PURCHASE_ID_DEFAULT = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';   /* BOM 本；指令碼屬性 PURCHASE_ID 有值時改用它（測試副本用） */
 var DASH_ID_DEFAULT = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';       /* 儀表板專用檔（只寫 dim_sku）；指令碼屬性 DASH_PURCHASE_ID 可覆蓋 */
-var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv' };
+var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv', par: 'dim_store_par', par2: 'dim_store_par（儀表板專用檔）' };
+var PAR_NEED = ['店號', 'sku_id', '標配數量'];   /* 2026-10-07 晚：新器具／模具每店標配（店別參數只寫這三欄，其餘留空＝用預設） */
+var BRAND_STORES = { '自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], '吳寶春自己做': [11, 12], '自己做＆吳寶春自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] };   /* 同採購系統 EventLayer EV_BRAND_STORES */
+function brandStores_(b) { b = ptName_(b); return (BRAND_STORES[b] || BRAND_STORES['自己做＆吳寶春自己做']).slice(); }
 var PT_COLS = { map: 8, bom: 5, conv: 5 };                /* 讀寫範圍（欄數）；dim_sku 依表頭。dim_unitconv 只寫 A–E（F1 是單位對照網址，不碰） */
 var PT_HEAD = {                                            /* 表頭對不上就停，不寫 */
   map: { 1: 'POS 資料產品名稱', 2: '手動對應產品名稱', 5: '起始有效日', 6: '結束有效日', 7: '主類別', 8: '次類別' },
@@ -988,8 +1109,8 @@ function dss_() {
 }
 function ptName_(v) { return str_(v).trim(); }
 function ptRead_(key) {
-  var sh = key === 'sku2' ? dss_().getSheetByName('dim_sku') : pss_().getSheetByName(PT[key]);
-  if (!sh) throw fail_((key === 'sku2' ? '儀表板專用檔' : 'BOM 本') + '找不到分頁「' + PT[key] + '」', 'purchase');
+  var sh = key === 'sku2' ? dss_().getSheetByName('dim_sku') : key === 'par2' ? dss_().getSheetByName('dim_store_par') : pss_().getSheetByName(PT[key]);
+  if (!sh) throw fail_((key === 'sku2' || key === 'par2' ? '儀表板專用檔' : 'BOM 本') + '找不到分頁「' + PT[key] + '」', 'purchase');
   var last = sh.getLastRow(), w = PT_COLS[key] || sh.getLastColumn();
   if (last < 1 || w < 1) throw fail_('BOM 本「' + PT[key] + '」是空的', 'purchase');
   var all = sh.getRange(1, 1, last, w).getValues(), H = all[0].map(function (x) { return String(x).trim(); });
@@ -1000,6 +1121,7 @@ function ptRead_(key) {
   var col = {};
   H.forEach(function (h, j) { if (h && col[h] === undefined) col[h] = j; });
   if (key === 'sku' || key === 'sku2') SKU_NEED.forEach(function (h) { if (col[h] === undefined) throw fail_(PT[key] + ' 找不到欄位「' + h + '」——先停下不寫', 'purchase'); });
+  if (key === 'par' || key === 'par2') PAR_NEED.forEach(function (h) { if (col[h] === undefined) throw fail_(PT[key] + ' 找不到欄位「' + h + '」——先停下不寫', 'purchase'); });
   var vals = all.slice(1), lastA = 1;
   for (var i = vals.length - 1; i >= 0; i--) if (ptName_(vals[i][0]) !== '') { lastA = i + 2; break; }
   return { key: key, sh: sh, H: H, col: col, w: w, vals: vals, lastA: lastA };
@@ -1049,7 +1171,8 @@ function planPush_(rid) {
   var lines = (pl.lines || []).map(function (l) {
     return { name: ptName_(l.name), qty: Number(l.qty) || 0, unit: ptName_(l.unit), cat: ptName_(l.cat), vendor: ptName_(l.vendor),
       pkgCost: Number(l.pkg_cost) || 0, pkgSpec: ptName_(l.pkg_spec), pack: Number(l.pack) || 0, zone: ptName_(l.zone),
-      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname),
+      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname), supply: ptName_(l.supply),
+      perStore: Number(l.per_store) > 0 ? Math.round(Number(l.per_store)) : 0,   /* 2026-10-07 晚：新器具／模具每店要幾個 */
       conv: Number(l.conv) > 0 ? Number(l.conv) : 0, cbase: ptName_(l.conv_base) };   /* 2026-10-07：新單位換算（1 unit ≈ conv cbase） */
   }).filter(function (l) { return l.name; });
   var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null, conv: null };
@@ -1109,14 +1232,45 @@ function planPush_(rid) {
     } else if (/勺|匙|適量|少許|些許|酌量|滴/.test(u)) warn.push('新品項「' + l.name + '」用「' + u + '」計量、沒有填換算：採購系統會把 1 ' + u + ' 當 1 個單位算，請採購補單位換算');
     if (l.pack > 1) { var cm = l.pkgSpec.match(/[包袋箱盒罐瓶桶組件套盤打]/); buy = cm ? cm[0] : '包'; pack = l.pack; price = l.pkgCost; }
     else if (l.pack === 1) price = l.pkgCost;
+    var dcSup = l.supply === '出貨中心出貨';   /* 2026-10-07 晚：提供方式＝出貨中心出貨 → 各店向出貨中心叫（主檔廠商寫「出貨中心」）；出貨中心向誰進貨寫在來源 */
     var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '') + (l.vname && l.vname !== l.name ? '；廠商品名 ' + l.vname : '')
+      + (dcSup && l.vendor && l.vendor !== '出貨中心' ? '；出貨中心向 ' + l.vendor + ' 進貨' : '')
       + ((l.pkgCost || l.pkgSpec) ? '；原包裝 ' + (l.pkgCost ? l.pkgCost + ' 元' : '—') + '／' + (l.pkgSpec || '—') : '') + '）';
-    var o = { sku_id: id, '品名': l.name, '品類別': cat, '廠商': l.vendor || (isSemi ? '半成品' : ''), '使用單位': u, '採購單位': buy,
+    var o = { sku_id: id, '品名': l.name, '品類別': cat, '廠商': dcSup ? '出貨中心' : (l.vendor || (isSemi ? '半成品' : '')), '使用單位': u, '採購單位': buy,
       '每採購單位內容量': pack, '單價': price, '預設分區': l.zone, '來源': src, '效期': l.shelf };
     var arr = S.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; });
     var arr2 = P.sku2 ? P.sku2.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; }) : null;
     skuRows.push({ sku_id: id, name: l.name, vname: l.vname, cat: cat, vendor: o['廠商'], unit: u, buy: buy, pack: pack, price: price, semi: isSemi, arr: arr, arr2: arr2 });
   });
+
+  /* ④（寫在主檔之後）2026-10-07 晚：這次新建的器具／模具，申請表填了「每店要幾個」→ 各店 dim_store_par 一列（店號、sku_id、標配數量），
+     店＝品牌別對應的門市（且店別參數裡有這家店）；BOM 本＋儀表板專用檔都寫（專用檔寫不到不擋，07:05 會同步）。沒填 → 提醒 */
+  var parRows = [], parRows2 = [], parShow = [], lineBy = {};
+  lines.forEach(function (l) { if (!lineBy[l.name]) lineBy[l.name] = l; });
+  var newTools = skuRows.filter(function (r) { return r.cat === '器具' || r.cat === '模具'; });
+  if (newTools.length) {
+    try { P.par = ptRead_('par'); } catch (e) { P.par = null; P.parerr = errMsg_(e); }
+    try { P.par2 = ptRead_('par2'); } catch (e) { P.par2 = null; P.par2err = errMsg_(e); }
+    /* 店＝甜點品牌別 ∩ 檔期品牌別（檔期只在自己做、甜點預設兩個品牌 → 只放自己做 1～10 店；同採購系統檔期新品用檔期品牌別） */
+    var bD = ptName_(h.brand), bC = camp ? ptName_(camp['品牌別']) : '', stores = brandStores_(bD || bC), haveSt = {};
+    if (bD && bC && BRAND_STORES[bD] && BRAND_STORES[bC]) stores = stores.filter(function (n) { return BRAND_STORES[bC].indexOf(n) >= 0; });
+    if (!stores.length) warn.push('甜點品牌別「' + bD + '」和檔期品牌別「' + bC + '」沒有共同的店：新器具／模具各店標配沒有寫，請總部到採購系統店別參數設定');
+    if (P.par) P.par.vals.forEach(function (r) { var n = Number(r[P.par.col['店號']]); if (n > 0) haveSt[n] = 1; });
+    if (Object.keys(haveSt).length) stores = stores.filter(function (n) { return haveSt[n]; });
+    newTools.forEach(function (r) {
+      var l = lineBy[r.name] || {};
+      if (!(l.perStore > 0)) { warn.push('新' + r.cat + '「' + r.name + '」申請表沒填「每店要幾個」：各店標配是 0（採購系統不會提醒補貨），請總部到採購系統店別參數設定'); return; }
+      if (!P.par) { warn.push('店別參數讀不到（' + P.parerr + '）：新' + r.cat + '「' + r.name + '」每店 ' + l.perStore + ' 個要請總部手動設定標配'); return; }
+      stores.forEach(function (st) {
+        var o = { '店號': st, 'sku_id': r.sku_id, '標配數量': l.perStore };
+        parRows.push(P.par.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; }));
+        if (P.par2) parRows2.push(P.par2.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; }));
+        parShow.push([st, r.sku_id, r.name, l.perStore]);
+      });
+    });
+    if (parRows.length) warn.push('新器具／模具每店標配 ' + parShow.length + ' 列會加進店別參數：' + newTools.filter(function (r) { return (lineBy[r.name] || {}).perStore > 0; }).map(function (r) { return r.name + ' 每店 ' + lineBy[r.name].perStore + ' 個（' + stores.length + ' 店）'; }).join('、'));
+    if (parRows.length && !P.par2) warn.push('儀表板專用檔的店別參數讀不到（' + P.par2err + '）：明天 07:05 會同步');
+  }
 
   /* ② BOM表：同品項＋同單位合併（同前端「複製 BOM 表貼上列」）；只收數量 > 0 */
   var agg = {}, order = [];
@@ -1160,13 +1314,15 @@ function planPush_(rid) {
   if (skuRows.length && !P.sku2) warn.push('儀表板專用檔讀不到（' + P.sku2err + '）：主檔新品項只寫 BOM 本、明天 07:05 同步；這段期間請不要在採購系統主檔頁新增品項（會撞號）');
   if (!skuRows.length && bom.skip && map.skip && !convRows.length) warn.push('三張表都不用寫（都已經有了）');
   if (convRows.length) warn.push('新單位換算 ' + convRows.length + ' 筆會加進 dim_unitconv（備註「' + DRAFT_TAG + '…請採購確認」）：' + convRows.map(function (c) { return c[0] + ' 1 ' + c[1] + '≈' + c[3] + ' ' + c[2]; }).join('、') + '，請採購到採購系統「單位對照」確認數字');
-  return { rid: rid, name: name, campaign: campName, from: d1, to: d2, sku: { rows: skuRows, existing: existing }, bom: bom, map: map, conv: { rows: convRows }, warn: warn, P: P };
+  return { rid: rid, name: name, campaign: campName, from: d1, to: d2, sku: { rows: skuRows, existing: existing }, bom: bom, map: map, conv: { rows: convRows },
+    par: { rows: parRows, rows2: parRows2, show: parShow }, warn: warn, P: P };
 }
 function planView_(pl) {
   return { req_id: pl.rid, name: pl.name, campaign: pl.campaign, from: pl.from, to: pl.to, warn: pl.warn, dash: !!pl.P.sku2,
     sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, vname: r.vname || '', cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
     existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip,
-    conv: (pl.conv ? pl.conv.rows : []).map(function (r) { return r.slice(0, 4).map(ptNorm_); }) };
+    conv: (pl.conv ? pl.conv.rows : []).map(function (r) { return r.slice(0, 4).map(ptNorm_); }),
+    par: (pl.par ? pl.par.show : []).map(function (r) { return r.map(ptNorm_); }) };
 }
 
 /* 寫入紀錄：這張單最近一批是否「寫了、還沒還原」 */
@@ -1214,6 +1370,7 @@ function ptRemove_(tab, rec) {
     if (tab.key === 'map') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1];
     if (tab.key === 'bom') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1] && ptSame_(r[2], x[2]) && ptName_(r[3]) === String(x[3]);
     if (tab.key === 'conv') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1] && ptName_(r[2]) === x[2] && ptSame_(r[3], x[3]);
+    if (tab.key === 'par' || tab.key === 'par2') { var cs = tab.col['店號'], cq = tab.col['sku_id']; return ptSame_(r[cs], x[cs]) && ptName_(r[cq]) === String(x[cq]); }
     var ci = tab.col['sku_id'], cn = tab.col['品名'];
     return ptName_(r[ci]) === String(x[ci]) && ptName_(r[cn]) === String(x[cn]);
   }
@@ -1240,9 +1397,10 @@ function backupTab_(pl, batch) {
   var sh = ss.insertSheet(nm, ss.getSheets().length);
   var out = [['批次', batch, '申請單', pl.rid, '甜點', pl.name],
     ['表', '分頁', '寫入前 A 欄最後一列', '寫入前指紋', '這次要寫的列數', '說明']];
-  ['sku', 'bom', 'map', 'sku2', 'conv'].forEach(function (key) {   /* 2026-10-07 加 conv（dim_unitconv）：還原時讀第 3～7 列 */
-    var tab = pl.P[key], n = (key === 'sku' || key === 'sku2') ? pl.sku.rows.length : key === 'bom' ? (pl.bom.skip ? 0 : pl.bom.rows.length) : key === 'conv' ? pl.conv.rows.length : (pl.map.skip ? 0 : 1);
-    if (!tab) { out.push([key, PT[key], '', '讀不到', '0', (key === 'conv' ? pl.P.converr : pl.P.sku2err) || '']); return; }
+  ['sku', 'bom', 'map', 'sku2', 'conv', 'par', 'par2'].forEach(function (key) {   /* 2026-10-07 加 conv（dim_unitconv）；晚上再加 par／par2（店別參數）：還原時讀第 3～9 列 */
+    var tab = pl.P[key], n = (key === 'sku' || key === 'sku2') ? pl.sku.rows.length : key === 'bom' ? (pl.bom.skip ? 0 : pl.bom.rows.length) : key === 'conv' ? pl.conv.rows.length
+      : key === 'par' ? pl.par.rows.length : key === 'par2' ? pl.par.rows2.length : (pl.map.skip ? 0 : 1);
+    if (!tab) { out.push([key, PT[key], '', '讀不到', '0', (key === 'conv' ? pl.P.converr : key === 'par' ? (pl.P.parerr || (pl.par.rows.length ? '' : '這次沒有新器具／模具標配')) : key === 'par2' ? (pl.P.par2err || '') : pl.P.sku2err) || '']); return; }
     tab.digest = ptDigest_(tab);
     out.push([key, PT[key], String(tab.lastA), tab.digest, String(n), key === 'bom' && pl.bom.skip ? pl.bom.skip : key === 'map' && pl.map.skip ? pl.map.skip : '']);
   });
@@ -1252,6 +1410,7 @@ function backupTab_(pl, batch) {
   if (!pl.bom.skip) pl.bom.rows.forEach(function (r) { out.push(['bom', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   if (!pl.map.skip) out.push(['map', JSON.stringify(pl.map.row.map(ptNorm_)), '', '', '', '']);
   pl.conv.rows.forEach(function (r) { out.push(['conv', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
+  pl.par.rows.forEach(function (r) { out.push(['par', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   var rg = sh.getRange(1, 1, out.length, 6);
   rg.setNumberFormat('@');
   rg.setValues(out.map(function (r) { return r.map(function (v) { return safe_(String(v)); }); }));
@@ -1269,6 +1428,11 @@ function pushToPurchase_(rid, who) {
       try { done.push(ptAppend_(pl.P.sku2, pl.sku.rows.map(function (r) { return r.arr2; }))); }
       catch (e2) { soft.push('儀表板專用檔主檔沒寫到（' + errMsg_(e2) + '）：明天 07:05 會同步；這段期間請不要在採購系統主檔頁新增品項（會撞號）'); }
     }
+    if (pl.par.rows.length && pl.P.par) done.push(ptAppend_(pl.P.par, pl.par.rows));   /* 2026-10-07 晚：新器具／模具每店標配 */
+    if (pl.par.rows2.length && pl.P.par2) {
+      try { done.push(ptAppend_(pl.P.par2, pl.par.rows2)); }
+      catch (e3) { soft.push('儀表板專用檔的店別參數沒寫到（' + errMsg_(e3) + '）：明天 07:05 會同步'); }
+    }
     if (!pl.bom.skip) done.push(ptAppend_(pl.P.bom, pl.bom.rows));
     if (pl.conv.rows.length && pl.P.conv) done.push(ptAppend_(pl.P.conv, pl.conv.rows));   /* 2026-10-07：新單位換算（對照表仍最後寫＝備料啟動開關） */
     if (!pl.map.skip) done.push(ptAppend_(pl.P.map, [pl.map.row]));
@@ -1283,8 +1447,8 @@ function pushToPurchase_(rid, who) {
     throw fail_('寫入採購系統失敗：' + errMsg_(e) + (undo.length ? '（已把這次寫的列刪回：' + undo.join('；') + '）' : '（沒有寫進任何一列）'), 'push');
   }
   var show = { sku: pl.sku.rows.map(function (r) { return [r.sku_id, r.name, r.cat, r.vendor]; }), bom: pl.bom.rows.map(function (r) { return r.map(ptNorm_); }), map: [pl.map.show],
-    conv: pl.conv.rows.map(function (r) { return r.slice(0, 4).map(ptNorm_); }) };
-  show.sku2 = show.sku;
+    conv: pl.conv.rows.map(function (r) { return r.slice(0, 4).map(ptNorm_); }), par: pl.par.show.map(function (r) { return r.map(ptNorm_); }) };
+  show.sku2 = show.sku; show.par2 = show.par;
   done.forEach(function (d) {
     pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: d.table, rows: String(d.rows.length),
       detail: JSON.stringify({ start: d.start, rows: d.rows, show: show[d.table] || [] }), backup: bk, ok: 'Y', msg: (who || '') + '｜' + PT[d.table] + ' 第 ' + d.start + '～' + (d.start + d.rows.length - 1) + ' 列' });
@@ -1302,14 +1466,14 @@ function rollbackPush_(rid, who) {
   var res = [], now = now_(), bkDig = {};
   try {
     var bs = ss_().getSheetByName(st.backup);
-    if (bs) bs.getRange(3, 1, 5, 4).getValues().forEach(function (r) { if (String(r[0])) bkDig[String(r[0])] = String(r[3]); });   /* 2026-10-07 起第 7 列是 conv；舊備份第 7 列是空白 */
+    if (bs) bs.getRange(3, 1, 7, 4).getValues().forEach(function (r) { if (String(r[0])) bkDig[String(r[0])] = String(r[3]); });   /* 2026-10-07 起第 7 列是 conv、晚上起第 8、9 列是 par／par2；舊備份那幾列是空白 */
   } catch (e) { }
-  ['map', 'conv', 'bom', 'sku', 'sku2'].forEach(function (key) {
+  ['map', 'conv', 'bom', 'par', 'par2', 'sku', 'sku2'].forEach(function (key) {   /* 店別參數比主檔先刪（列裡有新品項的 sku_id） */
     var rec = st.tables[key];
-    if ((key === 'sku2' || key === 'conv') && !rec) return;   /* 當初沒寫到專用檔／這張單沒有新單位換算 */
+    if ((key === 'sku2' || key === 'conv' || key === 'par' || key === 'par2') && !rec) return;   /* 當初沒寫到專用檔／這張單沒有新單位換算／沒有新器具標配 */
     var tab;
     try { tab = ptRead_(key); } catch (e) {
-      if (key !== 'sku2') throw e;
+      if (key !== 'sku2' && key !== 'par2') throw e;
       res.push({ table: key, name: PT[key], removed: 0, miss: [], digest: '', backToBackup: null, error: errMsg_(e) });
       pushLog_({ ts: now, req_id: rid, batch: st.batch, action: 'rollback', table: key, rows: '0', detail: '{}', backup: st.backup, ok: 'N', msg: (who || '') + '｜專用檔沒刪到（' + errMsg_(e) + '），明天 07:05 會跟 BOM 本同步' });
       return;
@@ -1395,7 +1559,7 @@ function pushInfo_(rid) {
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v5', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v6', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -1417,7 +1581,9 @@ function newItemsPub_() {
     }).filter(Boolean);
     return { req_id: str_(r.req_id), status: str_(r.status), dessert: str_(h.fname).trim() || str_(h.name).trim() || str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(),
       campaign: str_(c['檔期名稱']), from: normDate_(c['起']), to: normDate_(c['迄']), early: normDate_(c['自己人搶先開賣日']), lines: lines,
-      qty: Number(r['預估銷售數']) || 0, brand: str_(c['品牌別']) };   /* 2026-10-01 需求 6：預估銷售數（整檔 12 店合計）＋品牌別，採購「檔期新品」顯示首批量的來源 */
+      qty: Number(r['預估銷售數']) || 0, brand: str_(c['品牌別']),
+      ship: normDate_(c['第一批配貨日']),   /* 2026-10-07 晚：採購系統整檔總表顯示第一批配貨日、檔期作業時間 */
+      ops: [['第一批出貨', str_(c['作業_第一批出貨_時間']).trim()], ['貼紙', str_(c['作業_貼紙_時間']).trim()], ['POS 上架', str_(c['作業_POS_時間']).trim()]].filter(function (o) { return o[1]; }) };   /* 2026-10-01 需求 6：預估銷售數（整檔 12 店合計）＋品牌別，採購「檔期新品」顯示首批量的來源 */
   }).filter(function (x) { return x.dessert; });
   var res = { at: now_(), items: out };
   try { var js = JSON.stringify(res); if (js.length < 90000) cache.put(ck, js, 120); } catch (e) { }
