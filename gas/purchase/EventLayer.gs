@@ -1,4 +1,13 @@
 // ================================================================
+// EventLayer.gs — 節慶事件層 v1.10（2026-10-07）
+// v1.10：★ 開賣前 28 天起先算「預計首批量」（經營者 2026-10-07 晚裁定：首批量提早到開賣前 28 天顯示、第 14 天才進訂貨單）
+//   ① 檔期在「開賣前 28～15 天」（today < 開賣−LEADIN_DAYS 且 ≥ 開賣−PREVIEW_DAYS）：照原本開賣前的同一套算法算首批量，
+//      但寫進新表 agg_newitem_pv（欄位與 agg_newitem 相同），鏡像到專用檔；只有採購系統「🆕 檔期新品」頁讀它、標「預計」。
+//   ② agg_newitem／agg_evneed／agg_evcurve／dim_event／agg_endcut 完全不變（預覽中的檔期不寫 agg_evneed、不寫 dim_event 備料警示列）
+//      ⇒ 訂貨單、盤點清單、決策中心（直接讀 agg_newitem）、健康檢查 H2／H3 都和 v1.9 逐字相同；開賣前 14 天起才進訂貨單（原規則）。
+//   ③ 舊網頁不讀 agg_newitem_pv；新網頁讀不到這張表時照舊顯示「M/D 起才有數字」。
+// ================================================================
+// ================================================================
 // EventLayer.gs — 節慶事件層 v1.9（2026-10-01）
 // v1.9：★ 新品申請表「預估銷售數」→ 開賣前首批量與檔期總需求（經營者「20261001 待處理事項」#6）
 //   經營者裁示：預估銷售數＝「整個檔期、12 店合計份數」。
@@ -237,7 +246,7 @@ function evPlanSplit_(pl, pool, recent) {
   return { t: t, src: src };
 }
 var EV_DASH_ID = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';   // ★ v1.6.1 儀表板專用檔（與 Code.gs 的 DASH_ID 相同）
-var EV_MIRROR_TABS = ['dim_event', 'agg_newitem', 'agg_evcurve', 'agg_evneed', 'agg_endcut'];   /* v1.8 ＋agg_endcut */
+var EV_MIRROR_TABS = ['dim_event', 'agg_newitem', 'agg_evcurve', 'agg_evneed', 'agg_endcut', 'agg_newitem_pv'];   /* v1.8 ＋agg_endcut；v1.10 ＋agg_newitem_pv（預計首批量） */
 
 // 檔期別名：同一節慶不同年份叫法不同時，在此對應（雙向都列）
 var EV_ALIAS = {
@@ -264,6 +273,7 @@ var EV_CFG = {
   FRAC_LONG: 0.2,         // ≥30天首批比例
   BASE_DAYS: 28,          // 係數分母：檔期開始前 N 天
   LEADIN_DAYS: 14,        // 開賣前 N 天啟動新品備料層
+  PREVIEW_DAYS: 28,       // ★ v1.10：開賣前 N 天起先算預計首批量（寫 agg_newitem_pv，只給檔期新品頁顯示；LEADIN_DAYS 起才進 agg_newitem／訂貨單）
   TAKEOVER_DAYS: 7,       // 新品累積 N 天 POS 後備料層歸零（v1.6：曲線模式不適用）
   RESPLIT_MIN_DAYS: 3,    // 開賣滿 N 天改用實際份額
   PEAK_WIN: 7,            // 節日週視窗天數
@@ -368,7 +378,7 @@ function rebuildEventLayer() {
   }
 
   // ---------- 逐檔期處理 ----------
-  var evRows = [], niRows = [], curveRows = [], needRows = [];
+  var evRows = [], niRows = [], curveRows = [], needRows = [], pvRows = [];   /* v1.10 pvRows＝agg_newitem_pv */
   var lookEnd = evAddDays_(today, EV_CFG.LOOKAHEAD_DAYS);
   EV_ALERTS = [];
   var posMin = evPosMinDate_(dayTotal);
@@ -416,8 +426,10 @@ function rebuildEventLayer() {
     }
 
     // ===== agg_newitem：新品備料層＋標示 =====
-    var leadStart = evAddDays_(C.start, -EV_CFG.LEADIN_DAYS);
-    if (today < leadStart || today > C.end) return;
+    var leadStart = evAddDays_(C.start, -EV_CFG.LEADIN_DAYS), pvStart = evAddDays_(C.start, -EV_CFG.PREVIEW_DAYS);
+    if (today < pvStart || today > C.end) return;
+    var isPv = today < leadStart;   /* ★ v1.10：開賣前 28～15 天＝預覽：同一套算法，結果只寫 agg_newitem_pv */
+    if (isPv) log.push('👀 ' + k + ' 預覽：開賣 ' + evYmd_(C.start) + '，' + evYmd_(leadStart) + ' 起才進 agg_newitem／訂貨單；現在只寫 agg_newitem_pv（檔期新品頁顯示預計首批量）');
     var frac = L <= EV_CFG.SUPER_SHORT_MAX ? EV_CFG.FRAC_SUPER_SHORT : (L <= EV_CFG.SHORT_MAX ? EV_CFG.FRAC_SHORT : EV_CFG.FRAC_LONG);
     var names = Object.keys(C.items); if (!names.length) return;
 
@@ -457,7 +469,7 @@ function rebuildEventLayer() {
 
     // ===== ★ v1.6：去年曲線 → 今年推估（全公司口徑） =====
     var cv = null;
-    if (P && poolAll > 0) {
+    if (P && poolAll > 0 && !isPv) {   /* v1.10：預覽（還沒開賣）不會是曲線模式，不必算 */
       cv = evCurve_(P, C, instDay, today);
       var cvWhy = !cv.ok ? cv.why
         : (daysOn < EV_CFG.RESPLIT_MIN_DAYS ? '開賣未滿 ' + EV_CFG.RESPLIT_MIN_DAYS + ' 天'
@@ -504,9 +516,12 @@ function rebuildEventLayer() {
       var poolMsg = '⚠️ 無去年總池：agg_newitem 該檔期全 12 店 qty=0，備料建議為 0（非真的不用備料）' +
         '｜去年檔期=' + (P ? (P.year + ' ' + P.evName + ' ' + evYmd_(P.start) + '~' + evYmd_(P.end)) : '找不到') +
         '｜POS資料 最舊日期=' + (posMin || '未知');
-      log.push('⚠️ ' + k + ' 無去年總池，備料層量=0 僅輸出標示列');
-      evRows.push([C.evName + '(備料警示)', evYmd_(C.start), evYmd_(C.end), 1, '全部', '否', '自動', poolMsg]);
-      EV_ALERTS.push({ camp: k, evName: C.evName, year: C.year, kind: 'agg_newitem', msg: poolMsg });
+      if (isPv) log.push('ℹ️ ' + k + '（預覽）無去年總池、也沒有新品申請表預估：預計首批量＝0（開賣前 ' + EV_CFG.LEADIN_DAYS + ' 天起才寫 dim_event 備料警示）');
+      else {
+        log.push('⚠️ ' + k + ' 無去年總池，備料層量=0 僅輸出標示列');
+        evRows.push([C.evName + '(備料警示)', evYmd_(C.start), evYmd_(C.end), 1, '全部', '否', '自動', poolMsg]);
+        EV_ALERTS.push({ camp: k, evName: C.evName, year: C.year, kind: 'agg_newitem', msg: poolMsg });
+      }
     }
     var recentFrom = evYmd_(evAddDays_(today, -EV_CFG.RECENT_DAYS));
     var paceStat = { AB: 0, A: 0, B: 0, zero: 0, newFloor: 0, capped: 0, remSum: 0, list: [] };   /* ★ v1.7 log 用 */
@@ -563,7 +578,7 @@ function rebuildEventLayer() {
             n.remainUse += remainServ * per;   /* ★ v1.7：剩餘份數直接來自各店速度，不再是 max(0, 推估−已售) */
             n.usedUse += sold * per;
             n.sold += sold; n.est += estTot; n.who[nm] = 1;
-          } else if (!curveMode && planT[nm] && !isDur) {
+          } else if (!curveMode && planT[nm] && !isDur && !isPv) {   /* v1.10：預覽中的檔期不寫 agg_evneed（和 v1.9 一樣開賣前 14 天起才寫） */
             /* ★ v1.9：開賣前（非曲線）也寫 agg_evneed，出貨中心看得到 12 店總需求：推估總份數＝max(T, 已售) */
             var per2 = toUse(b.mat, b.qty, b.unit), est2 = Math.max(planEst, sold);
             var n2 = need[key] = need[key] || { st: stn, id: u.id, remainUse: 0, usedUse: 0, sold: 0, est: 0, who: {} };
@@ -597,7 +612,7 @@ function rebuildEventLayer() {
     if (Object.keys(unmatched).length) log.push('⚠️ ' + k + ' 用料對不上 dim_sku: ' + Object.keys(unmatched).join('、'));
     Object.keys(acc).forEach(function (key) {
       var o = acc[key];
-      niRows.push([o.st, o.id, Math.round(o.qty * 10) / 10, C.evName, o.excl ? '是' : '否', Object.keys(o.who).join('、')]);
+      (isPv ? pvRows : niRows).push([o.st, o.id, Math.round(o.qty * 10) / 10, C.evName, o.excl ? '是' : '否', Object.keys(o.who).join('、')]);   /* v1.10：預覽寫 agg_newitem_pv */
     });
     Object.keys(need).forEach(function (key) {
       var n = need[key];
@@ -628,6 +643,13 @@ function rebuildEventLayer() {
   niSheet.getRange(2, 1, Math.max(1, niSheet.getLastRow()), 6).clearContent();
   if (niRows.length) niSheet.getRange(2, 1, niRows.length, 6).setValues(niRows);
 
+  // ---------- ★ v1.10 寫回 agg_newitem_pv（開賣前 28～15 天的預計首批量；全量重建；只給檔期新品頁顯示，不進訂貨單／盤點／決策中心） ----------
+  var pvSheet = evEnsureSmall_(ss, 'agg_newitem_pv', ['店號', 'sku_id', '需求量', '事件名', '專屬', '新品清單']);
+  evEnsureRows_(pvSheet, pvRows.length + 1);
+  try { pvSheet.getRange(1, 2, pvSheet.getMaxRows(), 1).setNumberFormat('@'); pvSheet.getRange(1, 4, pvSheet.getMaxRows(), 3).setNumberFormat('@'); } catch (ePf) { }   /* 文字欄設純文字，不讓試算表自動改成日期／數字 */
+  pvSheet.getRange(2, 1, Math.max(1, pvSheet.getLastRow()), 6).clearContent();
+  if (pvRows.length) pvSheet.getRange(2, 1, pvRows.length, 6).setValues(pvRows);
+
   // ---------- ★ v1.6 寫回 agg_evcurve / agg_evneed（全量重建，小表） ----------
   var CV_H = ['事件名', '週序', '去年週起', '去年週訖', '去年份數', '佔比%', '今年週起', '今年週訖', '今年已售', '今年推估', '相對開賣週', '更新日'];
   var cvSheet = evEnsureSmall_(ss, 'agg_evcurve', CV_H);
@@ -651,7 +673,7 @@ function rebuildEventLayer() {
   /* ★ v1.6.1：四張表鏡像到專用檔（v1.8 起五張） */
   log.push('專用檔鏡像：' + evMirror_(ss, EV_MIRROR_TABS).join('；'));
   try { var dstEc = SpreadsheetApp.openById(EV_DASH_ID).getSheetByName('agg_endcut'); if (dstEc) evFormatEndcut_(dstEc); } catch (eF) { log.push('⚠️ 專用檔 agg_endcut 設定格式失敗：' + eF); }   /* v1.8.2 */
-  log.push('dim_event 自動列 ' + evRows.length + '、手動列保留 ' + keep.length + '；agg_newitem ' + niRows.length + ' 列；agg_evcurve ' + curveRows.length + ' 列；agg_evneed ' + needRows.length + ' 列');
+  log.push('dim_event 自動列 ' + evRows.length + '、手動列保留 ' + keep.length + '；agg_newitem ' + niRows.length + ' 列；agg_newitem_pv（預覽）' + pvRows.length + ' 列；agg_evcurve ' + curveRows.length + ' 列；agg_evneed ' + needRows.length + ' 列');
   evRows.forEach(function (r) { log.push('   [dim_event] ' + r[0] + ' ' + r[1] + '~' + r[2] + ' ×' + r[3] + ' 啟用=' + r[5]); });
 
   if (EV_ALERTS.length) {
