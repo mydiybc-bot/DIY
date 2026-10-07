@@ -2718,17 +2718,16 @@ function zzLiveTest() {
 
 // ============================================================
 // h. 各儀表板「最後更新」（2026-10-06 經營者「各儀表板調整 1006」#7：每個儀表板都要明確顯示最後更新時間）：action=fresh
-//   一次回 11 個系統各自的資料時間（只讀各系統試算表的表尾一欄，或指令碼屬性），存 CacheService 10 分鐘。
-//   首頁 hub 每張卡片、各儀表板頂部資料狀態列都讀這一支（key：reviews／pos／member／pnl／schedule／vendor／recipe／purchase／monthly／reservation／announce）。
+//   一次回 10 個系統各自的資料時間（只讀各系統試算表的表尾一欄，或指令碼屬性），存 CacheService 10 分鐘。
+//   首頁 hub 每張卡片、各儀表板頂部資料狀態列都讀這一支（key：reviews／pos／member／pnl／schedule／recipe／purchase／monthly／reservation／announce；2026-10-07 原物料成本儀表板刪除，vendor 項拿掉）。
 //   每項回 {txt（顯示用一句話）, at（最後更新時間 yyyy-MM-dd HH:mm，沒有就空白）, to（資料到哪一天）, warn（是否比正常慢）}；讀不到該項回 {err}。
 //   只讀；不回傳任何內容資料（只有日期時間）。
 // ============================================================
-var FRESH_TTL = 1800, FRESH_KEY = 'fresh|v2';   // 30 分鐘（第一次組要開 9 個試算表，約 20～60 秒）
+var FRESH_TTL = 1800, FRESH_KEY = 'fresh|v3';   // 30 分鐘（第一次組要開 8 個試算表，約 20～60 秒）；v3：2026-10-07 拿掉 vendor（原物料成本儀表板刪除），換鍵讓舊暫存不再使用
 var FRESH_SS = {
   BOM: '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao',      // BOM 本（POS資料）
   PNL: '1khrFp_AYp3mEsL02cTRrYu1LNiRTP68aowM5_ClsE_c',      // P&L 資料倉儲（fact_pnl）
   SCH: '19X3cqX70aWNTc6KFTP5jushG5S06xNicYV1ulDXl-hM',      // 排班分析資料倉（fact_daily_sales、import_log）
-  VENDOR: '1Pp0C7zLWWwhO7miAxDQmxfYmX0bbh6crOK7dk0a_Zyw',   // 廠商單價（fact_vendor_price）
   RSV: '13NI3vGV4MSsngeO_DecVYKrOzky-fXCsN9ActscJorQ',      // DIYBC 訂位資料（fact_reservations_future）
   ANN: '1GXyGp9Y79HDhvqe4ZJbuQQBmyWnmnLOmXVVTD-x8uYs'       // 公告及工作清單_資料庫（fact_announce）
 };
@@ -2785,13 +2784,6 @@ function freshBuild_() {
     var ss = open(FRESH_SS.SCH), x = freshTailMax_(ss, 'fact_daily_sales', 1, 3000), u = null;
     try { u = freshTailMax_(ss, 'import_log', 1, 50); } catch (e) {}
     return { to: x && x.d, at: u ? u.d + ' ' + u.t : '', warn: !!(x && x.d < addDays_(today, -2)), txt: '營收到 ' + freshMd_(x && x.d) + '・班表最後上傳 ' + (u ? freshMd_(u.d) + ' ' + u.t : '—') };
-  });
-  run('vendor', function () {   // 原物料：fact_vendor_price A 欄季別、K 欄日期（表尾 3000 列）
-    var sh = open(FRESH_SS.VENDOR).getSheetByName('fact_vendor_price'); if (!sh) throw new Error('找不到分頁 fact_vendor_price');
-    var last = sh.getLastRow(); if (last < 2) return { txt: '還沒有單價資料' };
-    var k = Math.min(3000, last - 1), v = sh.getRange(last - k + 1, 1, k, 11).getValues(), q = '', d = '';
-    v.forEach(function (r) { var qq = String(r[0] || '').trim(); if (/^\d{4}Q[1-4]$/.test(qq) && qq > q) q = qq; var x = freshVal_(r[10]); if (x && x.d > d) d = x.d; });
-    return { to: d, txt: '單價最新 ' + (q || '—') + '・最後一筆 ' + freshMd_(d) + '（每季手動）' };
   });
   run('recipe', function () { return { txt: '即時（開頁直接讀 BOM 本與採購主檔）' }; });
   run('purchase', function () {   // 採購：agg_purchase G 欄「重算時間」＋ agg_usage_day C 欄「日」
