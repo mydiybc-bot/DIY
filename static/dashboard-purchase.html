@@ -1688,6 +1688,8 @@ function nwLoad(force){if(force){NW={map:null,bom:null,pub:null,err:"",ld:false,
     NW.pubCamp[x.dessert]={early:x.early||"",ship:x.ship||"",ops:(x.ops||[]).filter(function(o){return o&&o[0]&&o[1];})};var m=(g[x.dessert]=g[x.dessert]||{});(x.lines||[]).forEach(function(l){if(!m[l.name])m[l.name]=l;});});NW.pub=g;if(ST.tab==="新品")render();},
     function(e){NW.pub={};NW.pubErr=String(e&&e.message||e);if(ST.tab==="新品")render();});}
 function nwEvKey(sub){return String(sub||"").replace(/^\d{4}\s*/,"").trim();}
+function nwNoCamp(sub){var k=String(sub||"").trim();return !k||k==="無";}   /* 2026-10-07：次類別空白或「無」＝不是檔期（例：10月群友體驗的單支新甜點），不當檔期名、不算檔期專屬 */
+function nwSubLabel(sub){return nwNoCamp(sub)?"其他新甜點（沒有檔期名稱）":String(sub);}
 function nwWhoHas(who,name){return String(who||"").split("、").some(function(w){return w.trim()===name;});}
 /* 這家店、這個檔期、這個料的建議首批量（使用單位）；has＝agg_newitem 有沒有這列 */
 function nwNeed(st,s,d){var m=s&&(NEWAGG[String(st)]||{})[s.id];if(!m)return {qty:0,has:false};var ek=nwEvKey(d.sub),q=0,has=false;
@@ -1715,10 +1717,11 @@ function nwGram(it,s){var u=String(it.u||"").trim();if(!u||u==="g"||u==="ml"||!(
 /* 2026-10-07：建議首批量還沒有數字時說清楚原因（原本只有「—」，說明藏在滑鼠提示裡、手機看不到） */
 function nwNoQty(d,x){if(d.to&&d.to<nwToday())return '<span class="muted">檔期已結束</span>';
   if(nwToday()<x.dl)return '<span class="muted">'+nwMd(x.dl)+' 起才有數字</span>';
+  if(x.sell<0)return '<span class="muted">已開賣，照訂貨單叫</span>';   /* 開賣後首批量交棒給訂貨單（近 4 週用量），不是主檔有問題 */
   return '<span class="muted">還沒有數字</span><div class="sub muted">請總部確認主檔單價</div>';}
 function nwItems(d){var rows=(NW.bom||{})[d.bom]||[],idx=anSkuIdx(),agg={},order=[],pub=(NW.pub||{})[d.bom]||{};
   if((!ANMAP||!ANBOM)&&!ANLOAD)loadAnalDims().then(function(){if(ST.tab==="新品"||ST.tab==="檔期備貨")render();});   /* cy 批：器具模具專屬判定要對照表＋BOM表 */
-  var dek=nwEvKey(d.sub),dy=d.from?String(d.from.getFullYear()):"";
+  var dek=nwNoCamp(d.sub)?"":nwEvKey(d.sub),dy=d.from?String(d.from.getFullYear()):"";
   rows.forEach(function(r){var k=r.m+"|"+r.u;if(!agg[k]){agg[k]={m:r.m,u:r.u,q:0,c:r.c};order.push(k);}var s0=idx[r.m];agg[k].q=(s0&&isDur(s0))?Math.max(agg[k].q,r.q):agg[k].q+r.q;if(!agg[k].c&&r.c)agg[k].c=r.c;});
   var out=order.map(function(k){var a=agg[k],s=idx[a.m]||null,p=pub[a.m]||null;
     var fresh=!s||/^自動草稿/.test(String(s.src||""))||!!(p&&p.is_new),ex=!!(s&&((isDur(s)||(fresh&&!nwAggHas(s.id)))?durExcl(s,dek,dy):campExcl(s.id)));   /* cy 批：器具模具前端補算專屬；2026-10-07：新品項在還沒有 agg_newitem 前也用配方判斷（原本一律標「共用」） */
@@ -1778,7 +1781,7 @@ function viewNewItems(){nwLoad();var hq=ST.role!=="店長";
   var nwList=NW.map;
   if(selEv.length){var dup={};nwList=[];camps.forEach(function(c){if(selEv.indexOf(c.sub)<0)return;c.list.forEach(function(d){var k=c.sub+"|"+d.bom;if(!dup[k]){dup[k]=1;nwList.push(d);}});});}
   var bySub=[],subs={};nwList.forEach(function(d){if(!subs[d.sub]){subs[d.sub]=[];bySub.push(d.sub);}subs[d.sub].push(d);});
-  bySub.forEach(function(sub){h+='<div class="nwsub">🎪 '+escH(sub||"（沒有次類別）")+'　<span class="muted">'+subs[sub].length+' 支</span></div>';
+  bySub.forEach(function(sub){h+='<div class="nwsub">🎪 '+escH(nwSubLabel(sub))+'　<span class="muted">'+subs[sub].length+' 支</span></div>';
     h+=nwCampSumHTML(sub,subs[sub],hq);   /* 2026-10-07：整檔總表 */
     var dOpen=!!(ST.nwDet||{})[sub];
     h+='<details class="nwdet" data-nwdet="'+escA(sub)+'"'+(dOpen?' open':'')+'><summary>🍰 各支甜點的細節（'+subs[sub].length+' 支）'+(dOpen?'　▴ 收起':'　▾ 點這裡展開')+'</summary>';
@@ -1791,7 +1794,7 @@ function nwCampNeed(st,s,ek,names){var m=s&&(NEWAGG[String(st)]||{})[s.id];if(!m
   (m.parts||[]).forEach(function(p){if((ek&&p.ev===ek)||names.some(function(n){return nwWhoHas(p.who,n);})){q+=num(p.qty);has=true;}});return {qty:q,has:has};}
 var NW_CATORD={"食材":1,"耗材":2,"器具":3,"模具":4};
 function nwCampSumHTML(sub,ds,hq){if(!NW.bom||!ds.length)return '';
-  var sts=hq?(ST.nwSt==="ALL"?STORES.map(function(s){return s.id;}):[ST.nwSt]):[ST.storeId],one=sts.length===1,ek=nwEvKey(sub),names=ds.map(function(d){return d.bom;});
+  var sts=hq?(ST.nwSt==="ALL"?STORES.map(function(s){return s.id;}):[ST.nwSt]):[ST.storeId],one=sts.length===1,ek=nwNoCamp(sub)?"":nwEvKey(sub),names=ds.map(function(d){return d.bom;});
   var f0=null,t0=null;ds.forEach(function(d){if(d.from&&(!f0||d.from<f0))f0=d.from;if(d.to&&(!t0||d.to>t0))t0=d.to;});if(!f0)return '';
   var x0=nwDays({from:f0,to:t0}),since=ymd(new Date(f0.getTime()-NW_ORD*864e5)),pubT=0,pubN=0;
   ds.forEach(function(d){var q=(NW.pubQty||{})[d.bom];if(q&&q.qty>0){pubT+=q.qty;pubN++;}});   /* 申請表預估銷售數：整檔各支加總 */
@@ -1800,7 +1803,7 @@ function nwCampSumHTML(sub,ds,hq){if(!NW.bom||!ds.length)return '';
   ds.forEach(function(d){var xd=nwDays(d);nwItems(d).filter(function(i){return i.isNew;}).forEach(function(it){var k=it.s?it.s.id:"n:"+it.m,e=map[k];
     if(!e){e=map[k]={it:it,who:[],d:d,x:xd};order.push(k);}if(e.who.indexOf(d.bom)<0)e.who.push(d.bom);if(xd.dl<e.x.dl){e.d=d;e.x=xd;}if(it.excl&&!e.it.excl)e.it=it;});});
   var rows=order.map(function(k){return map[k];}).sort(function(a,b){var ca=a.it.s?(NW_CATORD[a.it.s.cat]||9):9,cb=b.it.s?(NW_CATORD[b.it.s.cat]||9):9;return (ca-cb)||(b.it.excl-a.it.excl)||(a.it.m<b.it.m?-1:1);});
-  var h='<div class="card nwcard nwsum"><div class="nwsumh">📋 整檔總表　'+escH(sub||"")+'</div>'
+  var h='<div class="card nwcard nwsum"><div class="nwsumh">'+(nwNoCamp(sub)?'📋 總表　'+escH(nwSubLabel(sub)):'📋 整檔總表　'+escH(sub))+'</div>'
     +'<div class="nwdl">開賣 <b>'+nwMd(f0)+'</b>'+(x0.sell<0?' <span class="muted">（已開賣 '+(-x0.sell)+' 天）</span>':x0.sell===0?' <span class="muted">（今天）</span>':' <span class="muted">（還有 '+x0.sell+' 天）</span>')+(t0?'　～ '+nwMd(t0):'')
     +'　·　下單截止 <b>'+nwMd(x0.dl)+'</b>　'+nwBadge(x0)
     +(cinfo.early?'　·　自己人搶先 <b>'+escH(String(cinfo.early).slice(5).replace("-","/"))+'</b>':'')
