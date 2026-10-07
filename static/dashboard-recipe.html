@@ -363,6 +363,16 @@
   .sg-done .sg-closehint{margin-top:10px;padding:8px 10px;border:1px solid #F0C27A;border-radius:8px;background:#FFFBF2;color:#8A5A00;font-size:14px}
   details.sg-dec>summary{list-style:none}
   details.sg-dec>summary::-webkit-details-marker{display:none}
+  /* 2026-10-07 經營者：「內容文字太多，應該要隱藏，有需要再點擊出現就好」→ 各段收起來，點標題才展開 */
+  .sg-sec{padding-top:10px;padding-bottom:10px}
+  .sg-sec>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;min-height:32px;-webkit-tap-highlight-color:transparent}
+  .sg-sec>summary::-webkit-details-marker{display:none}
+  .sg-sec>summary .sg-h2{margin:0;white-space:nowrap}
+  .sg-sec .sg-meta{flex:1;min-width:0;color:#6F4E45;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sg-sec .sg-arrow{flex:none;font-size:12px;color:#00796B;border:1px solid #CFE5E1;border-radius:999px;padding:2px 8px;background:#F6FBFA}
+  .sg-sec .sg-arrow::after{content:'展開 ▾'}
+  .sg-sec[open] .sg-arrow::after{content:'收起 ▴'}
+  .sg-sec .sg-secb{margin-top:10px}
 </style>
 <style id="semiCss">/* 09-24：欄位裡的灰色提示字縮小，才看得到整句 */
 #tab-apply input::placeholder,#tab-apply textarea::placeholder,#tab-semi input::placeholder,#tab-semi textarea::placeholder{font-size:12px;opacity:.75}
@@ -4635,7 +4645,7 @@ return {ensureInit:ensureInit,_S:S,_checkRow:checkRow,_parseDoc:parseDoc};
      留言、同意／退回才要點自己的名字＋PIN；第一次用的人自己設定 PIN；這支手機記住（localStorage rcp:signme），之後點連結就是本人
    ‧ 舊連結（沒有 k）維持原流程：選名字 → PIN → 看內容；網址可帶 &who=姓名 */
 window.SignMod=(function(){
-var S={rid:'',k:'',who:'',view:null,me:null,step:null,busy:false,msg:'',started:null,last:null,info:null,cmt:'',chg:false,closeHint:false};
+var S={rid:'',k:'',who:'',view:null,me:null,step:null,busy:false,msg:'',started:null,last:null,info:null,cmt:'',chg:false,closeHint:false,open:{}};
 var ME_KEY='rcp:signme';
 function A(){return window.ApplyMod&&ApplyMod.api}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -4657,7 +4667,7 @@ function people(){return (S.view&&S.view.people)||null}
 function personOf(n){var p=people();if(!p)return null;for(var i=0;i<p.length;i++)if(p[i].name===n)return p[i];return null}
 function onR(k){S.msg='連線不穩，自動重試中（第 '+k+' 次）…';paint()}
 function start(){var h=parseHash();if(S.started===location.hash)return;S.started=location.hash;
-  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.chg=false;S.closeHint=false;
+  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.chg=false;S.closeHint=false;S.open={};
   document.body.classList.add('sign-mode');document.title='新品申請單 '+(S.rid||'');
   if(!A()){root().innerHTML='<div class="sg-card sg-bad">簽核頁載入失敗，請重新整理。</div>';return}
   if(S.k)openKey();else loadInfo()}
@@ -4731,12 +4741,10 @@ function decide(dec){if(S.busy||!S.me)return;var ta=document.getElementById('sgC
 /* 2026-10-07 經營者：「簽核同意後，不知道是否應該關閉這個網頁，或是有其他事項要處理」
    → 簽完（或之後再點連結、已經簽過）最上面一張完成卡：你的決定＋「你這邊已經完成，可以關閉這個網頁」＋接下來會怎樣；
      底下的同意／退回收進「要改變決定？」（送簽中還能改），畫面不再像還沒做完 */
-function myDec(){if(!S.me||signers().indexOf(S.me.name)<0)return null;
-  var o=live().filter(function(r){return r.signer===S.me.name})[0];
-  if(!o&&S.last)o={decision:S.last.decision,ts:'',comment:''};
-  return o||null}
+function myDec(){if(!S.me||signers().indexOf(S.me.name)<0)return null;   /* 只看系統上的有效決定：重送、撤回後上一輪作廢 → 不再顯示完成卡 */
+  return live().filter(function(r){return r.signer===S.me.name})[0]||null}
 function doneHTML(){var d=myDec();if(!d)return '';
-  var q=(S.view&&S.view.req)||{},st=q.status||(S.last&&S.last.status)||'',names=signers(),lv=live(),ok=d.decision==='同意',nx;
+  var q=(S.view&&S.view.req)||{},st=q.status||'',names=signers(),lv=live(),ok=d.decision==='同意',nx;
   var agreed=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}),wait=names.filter(function(n){return !lv.some(function(o){return o.signer===n})});
   if(/^已核准|^已寫入採購/.test(st))nx='全部 '+names.length+' 位都同意了 → 這張單<b>已核准</b>'
     +(st==='已寫入採購'?'，並已自動寫入採購系統。':st==='已核准（採購寫入失敗）'?'。自動寫入採購系統這次沒有成功，主廚會在申請表重試，核准不受影響。':'。')
@@ -4755,6 +4763,10 @@ function doneHTML(){var d=myDec();if(!d)return '';
 /* 瀏覽器只准關「自己開的」分頁：關不掉（多半是從 104 App 裡打開）就說怎麼關 */
 function closePage(){S.closeHint=false;try{window.close()}catch(e){}
   setTimeout(function(){if(window.closed)return;S.closeHint=true;paint();var c=document.getElementById('sgDone');if(c)try{c.scrollIntoView({block:'nearest'})}catch(e){}},400)}
+/* 2026-10-07 經營者：「內容文字太多，應該要隱藏，有需要再點擊出現就好」→ 細節一律收起來，標題列寫重點（幾項、幾位同意），點了才展開；
+   開關記在 S.open（按「看最新」、送出留言重畫時不會收回去）。meta 由呼叫端先跳脫 */
+function sec(key,title,meta,body,id,def){var open=(key in S.open)?!!S.open[key]:!!def;
+  return '<details class="sg-card sg-sec" data-sec="'+key+'"'+(id?' id="'+id+'"':'')+(open?' open':'')+'><summary><span class="sg-h2">'+title+'</span><span class="sg-meta">'+(meta||'')+'</span><span class="sg-arrow"></span></summary><div class="sg-secb">'+body+'</div></details>'}
 function kv(k,v){v=String(v==null?'':v).trim();return v?'<dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd>':''}
 function safeUrl(u){u=String(u||'').trim();return /^https?:\/\//i.test(u)?u:''}
 /* 舊連結的登入（選名字＋PIN） */
@@ -4781,48 +4793,53 @@ function meHTML(){var x='<div class="sg-card" id="sgMe"><div class="sg-h2">🙋 
   var ps=people()||[],sg=signers(),lv=live();
   function btn(p){var d=lv.some(function(o){return o.signer===p.name});return '<button type="button" class="sg-name'+(sg.indexOf(p.name)>=0?' mine':'')+(d?' done':'')+'" data-who="'+esc(p.name)+'">'+esc(p.name)+'<small>'+esc(d?'已簽':(p.hasPin?(p.role||''):'第一次用'))+'</small></button>'}
   var a=ps.filter(function(p){return sg.indexOf(p.name)>=0}),b=ps.filter(function(p){return sg.indexOf(p.name)<0&&p.hasPin});   /* 不是這張單的簽核人：已經有 PIN 的才能登入留言（自設 PIN 只限被指定的簽核人） */
-  x+='<div class="sg-muted">只看內容不用選。要<b>留言或簽核</b>，請點你的名字（第一次會請你設定 PIN，之後這支手機會記住）。</div>';
+  x+='<div class="sg-muted">要<b>留言或簽核</b>，請點你的名字（第一次要設定 PIN）。只看內容不用點。</div>';
   if(a.length)x+='<div class="sg-grp">這張單的簽核人</div><div class="sg-names">'+a.map(btn).join('')+'</div>';
   if(b.length)x+='<details'+(a.length?'':' open')+'><summary class="sg-grp" style="cursor:pointer">其他人（已設 PIN，只能留言）'+b.length+' 位</summary><div class="sg-names">'+b.map(btn).join('')+'</div></details>';
   if(!ps.length)x+='<div class="sg-bad">簽核人名單是空的，請通知管理者。</div>';
   return x+'</div>'}
-function cmtHTML(){var v=S.view;
-  return '<div class="sg-card" id="sgCmtCard"><div class="sg-h2">💬 意見交流</div><div class="sg-muted">簽核人、主廚、各單位的留言和簽核意見都在這裡，大家都看得到（送出後不能刪）。</div>'+A().threadHTML(v.comments,v.signoffs,'sg')
-    +'<div class="sg-cmtbox"><textarea id="sgCmt" maxlength="1000" placeholder="'+(S.me?'寫下你的意見或問題…':'先在上面點你的名字，就能留言')+'">'+esc(S.cmt)+'</textarea><div style="margin-top:8px"><button type="button" class="sg-btn" id="sgCmtGo"'+(S.busy?' disabled':'')+'>💬 送出留言</button></div></div></div>'}
+function seenGet(){try{return parseInt(localStorage.getItem('rcp:seen:'+S.rid)||'0',10)||0}catch(e){return 0}}
+function seenSet(n){try{localStorage.setItem('rcp:seen:'+S.rid,String(n))}catch(e){}}
+function cmtHTML(){var v=S.view,cs=v.comments||[],lc=cs[cs.length-1],nw=Math.max(0,cs.length-seenGet());
+  if(nw&&!('cmt' in S.open))S.open.cmt=true;   /* 有新留言：這次打開就展開（看最新、重畫都不會突然收起來） */
+  if(S.open.cmt)seenSet(cs.length);
+  return sec('cmt','💬 意見交流',cs.length?(nw?'<b class="sg-new">🆕 '+nw+' 則新留言</b>｜':'')+cs.length+' 則留言｜最新：'+esc(lc.who||'')+(lc.ts?' '+esc(String(lc.ts).slice(5,16)):''):'還沒有留言',
+    '<div class="sg-muted">大家都看得到，送出後不能刪。</div>'+A().threadHTML(v.comments,v.signoffs,'sg')
+    +'<div class="sg-cmtbox"><textarea id="sgCmt" maxlength="1000" placeholder="'+(S.me?'寫下你的意見或問題…':'先在上面點你的名字，就能留言')+'">'+esc(S.cmt)+'</textarea><div style="margin-top:8px"><button type="button" class="sg-btn" id="sgCmtGo"'+(S.busy?' disabled':'')+'>💬 送出留言</button></div></div>','sgCmtCard')}
 function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')}catch(e){j={}}
   var hd=j.head||{},cost=j.cost||{},camp=v.campaign||{},st=q.status,lv=live(),mine=S.me?lv.filter(function(o){return o.signer===S.me.name})[0]:null,x='';
   x+=doneHTML();
   x+='<div class="sg-card"><div class="sg-h">'+(q.seq?'第 '+esc(q.seq)+' 支　':'')+esc(prodName())+'</div>'
     +'<div class="sg-muted">'+esc(camp['檔期名稱']||q.campaign_id||'')+((camp['起']||camp['迄'])?'　'+esc((camp['起']||'?')+'～'+(camp['迄']||'?')):'')+(camp['第一批配貨日']?'　第一批配貨 '+esc(camp['第一批配貨日']):'')+'</div>'
     +'<div class="sg-kpi"><div><span>定價</span><b>'+esc(hd.price||q['定價']||'—')+' 元</b></div><div><span>每份成本</span><b>'+money(hd.cost!=null?hd.cost:q['成本'])+' 元</b></div>'
-    +'<div><span>成本率</span><b>'+(hd.cost_rate!=null?esc(hd.cost_rate)+'%':'—')+'</b></div><div><span>利潤率</span><b>'+(hd.margin!=null?esc(hd.margin)+'%':'—')+'</b></div><div><span>預估銷售數</span><b>'+esc(hd.qty||'—')+'</b></div></div>'
-    +'<dl class="sg-kv">'+kv('商品暫定名稱',hd.name)+kv('商品正式名稱',hd.fname)+kv('品牌別',hd.brand)+kv('葷素',hd.diet)+kv('保存方式',hd.keep)+kv('產品規格',hd.spec)+kv('製作時間',hd.time)
+    +'<div><span>成本率</span><b>'+(hd.cost_rate!=null?esc(hd.cost_rate)+'%':'—')+'</b></div><div><span>利潤率</span><b>'+(hd.margin!=null?esc(hd.margin)+'%':'—')+'</b></div><div><span>預估銷售數</span><b>'+esc(hd.qty||'—')+'</b></div></div></div>';
+  x+=sec('base','📋 基本資料',esc([hd.brand,hd.diet,hd.keep].filter(Boolean).join('｜')),'<dl class="sg-kv">'+kv('商品暫定名稱',hd.name)+kv('商品正式名稱',hd.fname)+kv('品牌別',hd.brand)+kv('葷素',hd.diet)+kv('保存方式',hd.keep)+kv('產品規格',hd.spec)+kv('製作時間',hd.time)
     +kv('POS 分類',hd.cat_text||(hd.cat==='__other'?hd.catOther:hd.cat))+kv('申請日期',hd.date)+'</dl>'
-    +(cost&&cost.total!=null?'<div class="sg-muted" style="margin-top:6px">成本組成：食材 '+money(cost.food)+'／包材 '+money(cost.pack)+' 元｜有憑據 '+esc(cost.evidence_pct!=null?cost.evidence_pct+'%':'—')+(cost.gaps?'｜缺價 '+esc(cost.gaps)+' 項':'')+(cost.new_items?'｜🆕 '+esc(cost.new_items)+' 項':'')+'</div>':'')+'</div>';
-  var L=j.lines||[];
-  x+='<div class="sg-card"><div class="sg-h2">🧾 用料（全部）</div><div class="sg-tbl"><table><tr><th>品項</th><th>用量</th><th>每份成本</th></tr>'+L.map(function(l){
-    return '<tr><td>'+esc(l.name)+(l.is_new?' <b class="sg-new">🆕</b>':'')+'</td><td>'+esc(((l.qty!=null?l.qty:'')+' '+(l.unit||'')).trim())+(l.conv?'<div class="sg-muted">新單位：1 '+esc(l.unit)+'≈'+esc(l.conv)+' '+esc(l.conv_base||'')+'</div>':'')+'</td><td>'+(l.cost!=null?money(l.cost):esc(l.basis||'—'))+'</td></tr>'}).join('')+'</table></div></div>';
+    +(cost&&cost.total!=null?'<div class="sg-muted" style="margin-top:6px">成本組成：食材 '+money(cost.food)+'／包材 '+money(cost.pack)+' 元｜有憑據 '+esc(cost.evidence_pct!=null?cost.evidence_pct+'%':'—')+(cost.gaps?'｜缺價 '+esc(cost.gaps)+' 項':'')+(cost.new_items?'｜🆕 '+esc(cost.new_items)+' 項':'')+'</div>':''));
+  var L=j.lines||[],nNew=L.filter(function(l){return l.is_new}).length;
+  x+=sec('lines','🧾 用料（全部）',L.length+' 項'+(nNew?'｜🆕 '+nNew+' 項':''),'<div class="sg-tbl"><table><tr><th>品項</th><th>用量</th><th>每份成本</th></tr>'+L.map(function(l){
+    return '<tr><td>'+esc(l.name)+(l.is_new?' <b class="sg-new">🆕</b>':'')+'</td><td>'+esc(((l.qty!=null?l.qty:'')+' '+(l.unit||'')).trim())+(l.conv?'<div class="sg-muted">新單位：1 '+esc(l.unit)+'≈'+esc(l.conv)+' '+esc(l.conv_base||'')+'</div>':'')+'</td><td>'+(l.cost!=null?money(l.cost):esc(l.basis||'—'))+'</td></tr>'}).join('')+'</table></div>');
   var N=L.filter(function(l){return l.is_new||l.pinned});
-  if(N.length)x+='<div class="sg-card"><div class="sg-h2">🆕 新增食材/器模具</div><div class="sg-tbl"><table class="wide"><tr><th>品項</th><th>貼紙名稱</th><th>原包裝成本</th><th>規格</th><th>廠商</th><th>包裝類型</th><th>第一單</th><th>保存期限</th><th>備註</th></tr>'+N.map(function(l){
-    return '<tr><td>'+esc(l.name)+'</td><td>'+esc(l.sticker||'')+'</td><td>'+(l.pkg_cost!=null?money(l.pkg_cost):'—')+'</td><td>'+esc(l.pkg_spec||'')+'</td><td>'+esc(l.vendor||'')+'</td><td>'+esc(l.pkg_type||'')+'</td><td>'+esc(l.first||'')+'</td><td>'+esc(l.shelf||'')+'</td><td>'+esc(l.note||'')+'</td></tr>'}).join('')+'</table></div></div>';
+  if(N.length)x+=sec('new','🆕 新增食材/器模具',N.length+' 項','<div class="sg-tbl"><table class="wide"><tr><th>品項</th><th>貼紙名稱</th><th>原包裝成本</th><th>規格</th><th>廠商</th><th>包裝類型</th><th>第一單</th><th>保存期限</th><th>備註</th></tr>'+N.map(function(l){
+    return '<tr><td>'+esc(l.name)+'</td><td>'+esc(l.sticker||'')+'</td><td>'+(l.pkg_cost!=null?money(l.pkg_cost):'—')+'</td><td>'+esc(l.pkg_spec||'')+'</td><td>'+esc(l.vendor||'')+'</td><td>'+esc(l.pkg_type||'')+'</td><td>'+esc(l.first||'')+'</td><td>'+esc(l.shelf||'')+'</td><td>'+esc(l.note||'')+'</td></tr>'}).join('')+'</table></div>');
   var SM=j.semis||[];
-  if(SM.length)x+='<div class="sg-card"><div class="sg-h2">🧪 半成品/材料包</div>'+SM.map(function(s){
+  if(SM.length)x+=sec('semi','🧪 半成品/材料包',SM.length+' 個',SM.map(function(s){
     return '<div style="margin:6px 0"><b>'+esc(s.name||s.link||'（未命名）')+'</b> <span class="sg-muted">'+esc([s.kind,s.maker,(s.yield_qty?'一批做出 '+s.yield_qty+' '+(s.yield_unit||''):'')].filter(Boolean).join('｜'))+'</span>'
-      +'<div class="sg-muted">'+esc((s.items||[]).map(function(it){return (it.name||'')+' '+(it.qty_batch!=null?it.qty_batch:'')+' '+(it.unit||'')}).join('、'))+'</div></div>'}).join('')+'</div>';
+      +'<div class="sg-muted">'+esc((s.items||[]).map(function(it){return (it.name||'')+' '+(it.qty_batch!=null?it.qty_batch:'')+' '+(it.unit||'')}).join('、'))+'</div></div>'}).join(''));
   var U=v.units||[];
-  if(U.length)x+='<div class="sg-card"><div class="sg-h2">🏷 各單位補充</div><div class="sg-tbl"><table class="wide" style="min-width:520px"><tr><th>品項</th><th>容器</th><th>預估出貨量</th><th>購買連結</th><th>供應商覆寫</th><th>備註</th></tr>'+U.map(function(u){var url=safeUrl(u['購買連結']);
-    return '<tr><td>'+esc(u['品項'])+'</td><td>'+esc(u['容器'])+'</td><td>'+esc(u['出貨中心預估出貨量'])+'</td><td>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">開啟</a>':esc(u['購買連結']))+'</td><td>'+esc(u['供應商覆寫'])+'</td><td>'+esc(u['品項備註'])+'</td></tr>'}).join('')+'</table></div></div>';
+  if(U.length)x+=sec('units','🏷 各單位補充',U.length+' 項','<div class="sg-tbl"><table class="wide" style="min-width:520px"><tr><th>品項</th><th>容器</th><th>預估出貨量</th><th>購買連結</th><th>供應商覆寫</th><th>備註</th></tr>'+U.map(function(u){var url=safeUrl(u['購買連結']);
+    return '<tr><td>'+esc(u['品項'])+'</td><td>'+esc(u['容器'])+'</td><td>'+esc(u['出貨中心預估出貨量'])+'</td><td>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">開啟</a>':esc(u['購買連結']))+'</td><td>'+esc(u['供應商覆寫'])+'</td><td>'+esc(u['品項備註'])+'</td></tr>'}).join('')+'</table></div>');
   var ops=[['第一批出貨','作業_第一批出貨_'],['貼紙','作業_貼紙_'],['POS 上架','作業_POS_']].filter(function(o){return camp[o[1]+'時間']||camp[o[1]+'備註']});
-  if(ops.length)x+='<div class="sg-card"><div class="sg-h2">📅 檔期作業</div><dl class="sg-kv">'+ops.map(function(o){return kv(o[0],[camp[o[1]+'時間'],camp[o[1]+'備註']].filter(Boolean).join('｜'))}).join('')+'</dl></div>';
-  if(hd.note)x+='<div class="sg-card"><div class="sg-h2">📝 其他備註</div><div style="white-space:pre-wrap;font-size:14px">'+esc(hd.note)+'</div></div>';
+  if(ops.length)x+=sec('ops','📅 檔期作業',esc(ops.map(function(o){return o[0]}).join('、')),'<dl class="sg-kv">'+ops.map(function(o){return kv(o[0],[camp[o[1]+'時間'],camp[o[1]+'備註']].filter(Boolean).join('｜'))}).join('')+'</dl>');
+  if(hd.note){var nt=String(hd.note).replace(/\s+/g,' ').trim();x+=sec('note','📝 其他備註',esc(nt.length>24?nt.slice(0,24)+'…':nt),'<div style="white-space:pre-wrap;font-size:14px">'+esc(hd.note)+'</div>')}
   var O=v.others||[];
-  if(O.length)x+='<div class="sg-card"><div class="sg-h2">📦 這個檔期的所有商品</div><div class="sg-tbl"><table><tr><th>#</th><th>商品</th><th>定價</th><th>成本</th><th>狀態</th></tr>'+O.map(function(o){var me=o.req_id===q.req_id;
-    return '<tr'+(me?' class="sg-me"':'')+'><td>'+esc(o.seq)+'</td><td>'+esc(o.name||'（未命名）')+(me?' <b>（這張）</b>':'')+'</td><td>'+esc(o.price===''||o.price==null?'—':o.price)+'</td><td>'+(o.cost===''||o.cost==null?'—':money(o.cost))+'</td><td>'+esc(o.status)+'</td></tr>'}).join('')+'</table></div></div>';
-  var names=signers();
-  x+='<div class="sg-card"><div class="sg-h2">✍️ 簽核進度</div><div class="sg-prog">'+(names.length?names.map(function(n){var o=lv.filter(function(r){return r.signer===n})[0];
+  if(O.length)x+=sec('others','📦 這個檔期的所有商品',O.length+' 支','<div class="sg-tbl"><table><tr><th>#</th><th>商品</th><th>定價</th><th>成本</th><th>狀態</th></tr>'+O.map(function(o){var me=o.req_id===q.req_id;
+    return '<tr'+(me?' class="sg-me"':'')+'><td>'+esc(o.seq)+'</td><td>'+esc(o.name||'（未命名）')+(me?' <b>（這張）</b>':'')+'</td><td>'+esc(o.price===''||o.price==null?'—':o.price)+'</td><td>'+(o.cost===''||o.cost==null?'—':money(o.cost))+'</td><td>'+esc(o.status)+'</td></tr>'}).join('')+'</table></div>');
+  var names=signers(),nAg=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,nBk=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='退回'})}).length;
+  x+=sec('prog','✍️ 簽核進度',names.length?nAg+'／'+names.length+' 位同意'+(nBk?'｜'+nBk+' 位退回':''):'還沒送簽','<div class="sg-prog">'+(names.length?names.map(function(n){var o=lv.filter(function(r){return r.signer===n})[0];
     return '<div>'+(o?(o.decision==='同意'?'<span class="sg-ok">✓ 同意</span>':'<span class="sg-bad">✕ 退回</span>'):'<span class="sg-muted">⏳ 未簽</span>')+' <b>'+esc(n)+'</b>'+(S.me&&n===S.me.name?'（你）':'')
       +(o&&o.ts?' <span class="sg-muted">'+esc(o.ts)+'</span>':'')+(o&&o.comment?'<div class="sg-muted">「'+esc(o.comment)+'」</div>':'')+'</div>'}).join(''):'<div class="sg-muted">主廚還沒送簽（還沒指定簽核人）。可以先看內容、留言。</div>')+'</div>'
-    +(voided().length?'<div class="sg-muted" style="margin-top:6px">先前送簽的紀錄（已作廢）'+voided().length+' 筆，見意見交流</div>':'')+'</div>';
+    +(voided().length?'<div class="sg-muted" style="margin-top:6px">先前送簽的紀錄（已作廢）'+voided().length+' 筆，見意見交流</div>':''));
   if(people())x+=meHTML();
   x+=cmtHTML();
   var isSigner=!!(S.me&&names.indexOf(S.me.name)>=0);
@@ -4831,12 +4848,13 @@ function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')
     x+=mine?'<details class="sg-card sg-dec" id="sgChg"'+(S.chg?' open':'')+'><summary class="sg-h2" style="cursor:pointer;margin-bottom:0">要改變決定？ <span class="sg-muted" style="font-weight:400">（你已經「'+esc(mine.decision)+'」'+(mine.ts?'，'+esc(mine.ts):'')+'；還沒全部簽完前都可以改）</span></summary><div style="margin-top:10px">'+decBody+'</div></details>'
       :'<div class="sg-card sg-dec"><div class="sg-h2">你的決定</div>'+decBody+'</div>'}
   else if(st==='送簽中'&&!S.me&&names.length)x+='<div class="sg-card sg-hint">簽核人請先在上面「🙋 你是誰？」點自己的名字，這裡就會出現「同意／退回」。</div>';
-  else if(st!=='送簽中'&&!myDec())x+='<div class="sg-card sg-muted">這張單目前是「<b>'+esc(st)+'</b>」，'+(st==='草稿'||st==='退回'?'還不能簽（主廚修改後會重新送簽）。':'不需要再簽。')+'</div>';
+  else if(st!=='送簽中'&&!myDec())x+='<div class="sg-card sg-muted">這張單目前是「<b>'+esc(st)+'</b>」，'+(st==='草稿'||st==='退回'?'還不能簽（主廚修改後會重新送簽）。':'不需要再簽。')
+    +(st==='退回'?lv.filter(function(o){return o.decision==='退回'}).map(function(o){return '<div style="margin-top:6px">✕ <b>'+esc(o.signer)+'</b> 退回：「'+esc(o.comment||'')+'」</div>'}).join(''):'')+'</div>';
   if(!people()&&S.me)x+='<div class="sg-card"><button type="button" class="sg-btn2" id="sgOut">登出（換人簽）</button></div>';
   return x}
 function paint(){var h='<div class="sg-card sg-top"><div class="sg-h">✍️ 新品申請單</div><div class="sg-muted">申請單 '+esc(S.rid||'（連結沒有單號）')
     +(S.view?'　<button type="button" class="sg-btn2" id="sgRefresh" style="min-height:30px;padding:0 10px;font-size:13px">🔄 看最新</button>':'')+'</div>'
-    +(S.view?'<div class="sg-muted" style="margin-top:6px">'+(myDec()?'你已經簽完這張單了（看下面的結果）。':'往下看完內容，最下面可以留言、簽核。')+'</div>':'')+'</div>';
+    +(S.view?'<div class="sg-muted" style="margin-top:6px">'+(myDec()?'你已經簽完這張單了（看下面的結果）。':'點各段標題可以看細節；簽核在最下面。')+'</div>':'')+'</div>';
   if(S.msg)h+='<div class="sg-card '+(/^✕/.test(S.msg)?'sg-badbox':(/^✓/.test(S.msg)?'sg-okbox':'sg-muted'))+'">'+esc(S.msg)+'</div>';
   h+=S.view?viewHTML():loginHTML();
   root().innerHTML=h;wire()}   /* 打到一半的留言：oninput 隨時記在 S.cmt，重畫時放回去 */
@@ -4859,6 +4877,7 @@ function wire(){var r=root();
   var ct=document.getElementById('sgCmt');if(ct)ct.oninput=function(){S.cmt=ct.value};
   var rf=document.getElementById('sgRefresh');if(rf)rf.onclick=refresh;
   var cl=document.getElementById('sgClose');if(cl)cl.onclick=closePage;
+  r.querySelectorAll('details[data-sec]').forEach(function(d){d.ontoggle=function(){var k=d.getAttribute('data-sec');S.open[k]=d.open;if(k==='cmt'&&d.open&&S.view)seenSet((S.view.comments||[]).length)}});
   var dg=document.getElementById('sgChg');if(dg)dg.ontoggle=function(){S.chg=dg.open};
   var cg2=document.getElementById('sgChgGo');if(cg2)cg2.onclick=function(){S.chg=true;paint();var e=document.getElementById('sgChg');if(e)try{e.scrollIntoView({behavior:'smooth',block:'center'})}catch(x){}};
   var o=document.getElementById('sgOut');if(o)o.onclick=function(){meDrop();S.step=null;S.last=null;S.chg=false;S.closeHint=false;S.msg='';if(!S.k){S.view=null;S.who='';loadInfo()}else paint()}}
