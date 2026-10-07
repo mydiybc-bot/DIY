@@ -350,6 +350,19 @@
   .sg-pin2 input{font-size:20px;letter-spacing:4px;padding:10px;border:1px solid #B9B0A9;border-radius:10px;text-align:center}
   .sg-chk{font-size:14px;color:#6F4E45;display:flex;align-items:center;gap:6px}
   .sg-hint{background:#FFFBF2;border-color:#F0C27A;color:#8A5A00;font-size:14px}
+  /* 2026-10-07 經營者：簽完不知道要不要關網頁、還有沒有別的事 → 最上面一張「完成」卡 */
+  .sg-done{border-width:2px}
+  .sg-done.ok{background:#EFF7EF;border-color:#8CC59A}
+  .sg-done.back{background:#FFF4F2;border-color:#E9A898}
+  .sg-done .sg-dh{font-size:20px;font-weight:800;margin-bottom:4px}
+  .sg-done.ok .sg-dh{color:#2E7D32}
+  .sg-done.back .sg-dh{color:#C0392B}
+  .sg-done .sg-close{font-size:17px;font-weight:800;margin:10px 0 4px;color:#2E2320}
+  .sg-done .sg-next{font-size:14px;line-height:1.6;margin-top:8px;color:#2E2320}
+  .sg-done .sg-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+  .sg-done .sg-closehint{margin-top:10px;padding:8px 10px;border:1px solid #F0C27A;border-radius:8px;background:#FFFBF2;color:#8A5A00;font-size:14px}
+  details.sg-dec>summary{list-style:none}
+  details.sg-dec>summary::-webkit-details-marker{display:none}
 </style>
 <style id="semiCss">/* 09-24：欄位裡的灰色提示字縮小，才看得到整句 */
 #tab-apply input::placeholder,#tab-apply textarea::placeholder,#tab-semi input::placeholder,#tab-semi textarea::placeholder{font-size:12px;opacity:.75}
@@ -4622,7 +4635,7 @@ return {ensureInit:ensureInit,_S:S,_checkRow:checkRow,_parseDoc:parseDoc};
      留言、同意／退回才要點自己的名字＋PIN；第一次用的人自己設定 PIN；這支手機記住（localStorage rcp:signme），之後點連結就是本人
    ‧ 舊連結（沒有 k）維持原流程：選名字 → PIN → 看內容；網址可帶 &who=姓名 */
 window.SignMod=(function(){
-var S={rid:'',k:'',who:'',view:null,me:null,step:null,busy:false,msg:'',started:null,last:null,info:null,cmt:''};
+var S={rid:'',k:'',who:'',view:null,me:null,step:null,busy:false,msg:'',started:null,last:null,info:null,cmt:'',chg:false,closeHint:false};
 var ME_KEY='rcp:signme';
 function A(){return window.ApplyMod&&ApplyMod.api}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -4644,7 +4657,7 @@ function people(){return (S.view&&S.view.people)||null}
 function personOf(n){var p=people();if(!p)return null;for(var i=0;i<p.length;i++)if(p[i].name===n)return p[i];return null}
 function onR(k){S.msg='連線不穩，自動重試中（第 '+k+' 次）…';paint()}
 function start(){var h=parseHash();if(S.started===location.hash)return;S.started=location.hash;
-  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.busy=false;S.info=null;S.me=null;S.cmt='';
+  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.chg=false;S.closeHint=false;
   document.body.classList.add('sign-mode');document.title='新品申請單 '+(S.rid||'');
   if(!A()){root().innerHTML='<div class="sg-card sg-bad">簽核頁載入失敗，請重新整理。</div>';return}
   if(S.k)openKey();else loadInfo()}
@@ -4708,13 +4721,40 @@ function decide(dec){if(S.busy||!S.me)return;var ta=document.getElementById('sgC
         (S.k?A().post({action:'signOpen',req_id:S.rid,k:S.k}):A().post({action:'signView',signer:me.name,pin:me.pin,req_id:S.rid})).then(function(v){S.busy=false;
           var mine=v.ok?((v.data.signoffs||[]).filter(function(o){return isLive(o.decision)&&o.signer===me.name})[0]):null;
           if(mine&&mine.decision===dec){var keepP=S.view&&S.view.people;S.view=v.data;if(!S.view.people&&keepP)S.view.people=keepP;var names=signers(),lv=live();
-            S.last={decision:dec,status:v.data.req.status,agreed:names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,total:names.length};S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}return}
+            S.last={decision:dec,status:v.data.req.status,agreed:names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,total:names.length};S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}return}
           S.msg='✕ '+(r.msg||'送出失敗')+'（系統上還沒有你的決定，請再按一次）';paint()});return}
       if(r.code==='locked'&&r.data&&r.data.status&&S.view)S.view.req.status=r.data.status;authLost(r);S.msg='✕ '+(r.msg||'送出失敗');paint();return}
     var d=r.data||{};S.view.req.status=d.status;
     S.view.signoffs=((S.view.signoffs||[]).filter(function(o){return !isLive(o.decision)})).concat(d.signoffs||[]);
     S.last={decision:dec,status:d.status,agreed:(d.agreed||[]).length,total:(d.signers||[]).length,push:d.push||null};
-    S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}})}
+    S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}})}
+/* 2026-10-07 經營者：「簽核同意後，不知道是否應該關閉這個網頁，或是有其他事項要處理」
+   → 簽完（或之後再點連結、已經簽過）最上面一張完成卡：你的決定＋「你這邊已經完成，可以關閉這個網頁」＋接下來會怎樣；
+     底下的同意／退回收進「要改變決定？」（送簽中還能改），畫面不再像還沒做完 */
+function myDec(){if(!S.me||signers().indexOf(S.me.name)<0)return null;
+  var o=live().filter(function(r){return r.signer===S.me.name})[0];
+  if(!o&&S.last)o={decision:S.last.decision,ts:'',comment:''};
+  return o||null}
+function doneHTML(){var d=myDec();if(!d)return '';
+  var q=(S.view&&S.view.req)||{},st=q.status||(S.last&&S.last.status)||'',names=signers(),lv=live(),ok=d.decision==='同意',nx;
+  var agreed=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}),wait=names.filter(function(n){return !lv.some(function(o){return o.signer===n})});
+  if(/^已核准|^已寫入採購/.test(st))nx='全部 '+names.length+' 位都同意了 → 這張單<b>已核准</b>'
+    +(st==='已寫入採購'?'，並已自動寫入採購系統。':st==='已核准（採購寫入失敗）'?'。自動寫入採購系統這次沒有成功，主廚會在申請表重試，核准不受影響。':'。')
+    +'之後的上架、備料由主廚和總部接手。';
+  else if(st==='退回')nx='這張單已<b>退回給主廚修改</b>。主廚改好重新送簽時，會再發 104 公告給你，到時候再點連結看、再簽一次。';
+  else if(st==='送簽中')nx='目前 '+agreed.length+'／'+names.length+' 位同意'+(wait.length?'，還在等 <b>'+esc(wait.join('、'))+'</b>':'')+'。全部同意後這張單就核准，系統會自動把新品寫進採購系統，不用你再操作。想看最新進度，之後再點同一個連結就可以。';
+  else nx='這張單目前是「'+esc(st)+'」。';
+  return '<div class="sg-card sg-done '+(ok?'ok':'back')+'" id="sgDone"><div class="sg-dh">'+(ok?'✅ 已記錄你的「同意」':'✕ 已記錄你的「退回」')+'</div>'
+    +((d.ts||d.comment)?'<div class="sg-muted">'+(d.ts?'簽核時間 '+esc(d.ts):'')+(d.comment?(d.ts?'｜':'')+'你的意見：「'+esc(d.comment)+'」':'')+'</div>':'')
+    +'<div class="sg-close">你這邊已經完成，可以直接關閉這個網頁。</div>'
+    +'<div class="sg-next"><b>接下來：</b>'+nx+'</div>'
+    +'<div class="sg-muted" style="margin-top:6px">104 那則公告如果還沒按「傳送讀取回條」，可以順手按一下；沒按也不影響簽核。</div>'
+    +'<div class="sg-row"><button type="button" class="sg-btn" id="sgClose">關閉這個網頁</button>'
+    +(st==='送簽中'&&ok?'<button type="button" class="sg-btn2" id="sgChgGo">要改變決定？</button>':'')+'</div>'
+    +(S.closeHint?'<div class="sg-closehint">這個瀏覽器不讓網頁自己關閉，請直接關掉這個分頁（或按手機的返回鍵回到 104）。</div>':'')+'</div>'}
+/* 瀏覽器只准關「自己開的」分頁：關不掉（多半是從 104 App 裡打開）就說怎麼關 */
+function closePage(){S.closeHint=false;try{window.close()}catch(e){}
+  setTimeout(function(){if(window.closed)return;S.closeHint=true;paint();var c=document.getElementById('sgDone');if(c)try{c.scrollIntoView({block:'nearest'})}catch(e){}},400)}
 function kv(k,v){v=String(v==null?'':v).trim();return v?'<dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd>':''}
 function safeUrl(u){u=String(u||'').trim();return /^https?:\/\//i.test(u)?u:''}
 /* 舊連結的登入（選名字＋PIN） */
@@ -4731,7 +4771,7 @@ function loginHTML(){var i=S.info;if(!i)return '';var st=i.status,x='<div class=
 function meHTML(){var x='<div class="sg-card" id="sgMe"><div class="sg-h2">🙋 你是誰？</div>';
   if(S.me){var mine=signers().indexOf(S.me.name)>=0,p=personOf(S.me.name);
     return x+'<div class="sg-mebar">你是 <b>'+esc(S.me.name)+'</b>'+(p&&p.role?'<span class="sg-muted">'+esc(p.role)+'</span>':'')+'<button type="button" class="sg-btn2" id="sgOut">不是我／換人</button></div>'
-      +'<div class="sg-muted" style="margin-top:6px">'+(mine?'這張單請你簽核：看完內容，在最下面按「同意」或「退回」。有問題先在「💬 意見交流」問。':'你不是這張單的簽核人，可以在「💬 意見交流」留言。')+'</div></div>'}
+      +'<div class="sg-muted" style="margin-top:6px">'+(mine?(myDec()?'你已經簽完這張單（「'+esc(myDec().decision)+'」），不用再做什麼；下面還可以看內容、在「💬 意見交流」留言。':'這張單請你簽核：看完內容，在最下面按「同意」或「退回」。有問題先在「💬 意見交流」問。'):'你不是這張單的簽核人，可以在「💬 意見交流」留言。')+'</div></div>'}
   if(S.step){var st=S.step;
     if(st.mode==='set')return x+'<div class="sg-h2" style="font-size:16px">'+esc(st.name)+'，第一次使用，請設定你的簽核 PIN</div><div class="sg-muted">4～8 位數字，自己記得就好；勾「這支手機記住我」之後點連結就不用再輸入。忘記可以請管理者重設。</div>'
       +'<div class="sg-pin2"><input type="password" id="sgNew1" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="設定 PIN（4～8 位數字）"><input type="password" id="sgNew2" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="再輸入一次">'
@@ -4751,8 +4791,7 @@ function cmtHTML(){var v=S.view;
     +'<div class="sg-cmtbox"><textarea id="sgCmt" maxlength="1000" placeholder="'+(S.me?'寫下你的意見或問題…':'先在上面點你的名字，就能留言')+'">'+esc(S.cmt)+'</textarea><div style="margin-top:8px"><button type="button" class="sg-btn" id="sgCmtGo"'+(S.busy?' disabled':'')+'>💬 送出留言</button></div></div></div>'}
 function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')}catch(e){j={}}
   var hd=j.head||{},cost=j.cost||{},camp=v.campaign||{},st=q.status,lv=live(),mine=S.me?lv.filter(function(o){return o.signer===S.me.name})[0]:null,x='';
-  if(S.last)x+='<div class="sg-card '+(S.last.decision==='同意'?'sg-okbox':'sg-badbox')+'">'+(S.last.decision==='同意'?'✓ 已記錄你的「同意」。':'✕ 已記錄你的「退回」。')
-    +(/^已核准|^已寫入採購/.test(S.last.status)?'全部 '+S.last.total+' 位都同意了 → 這張單已核准'+(S.last.status==='已寫入採購'?'，並已自動寫入採購系統。':S.last.status==='已核准（採購寫入失敗）'?'（自動寫入採購系統沒有成功，主廚會在申請表重試；核准不受影響）。':'。'):S.last.status==='退回'?'這張單已退回給主廚修改。':'目前 '+S.last.agreed+'／'+S.last.total+' 位同意。')+'</div>';
+  x+=doneHTML();
   x+='<div class="sg-card"><div class="sg-h">'+(q.seq?'第 '+esc(q.seq)+' 支　':'')+esc(prodName())+'</div>'
     +'<div class="sg-muted">'+esc(camp['檔期名稱']||q.campaign_id||'')+((camp['起']||camp['迄'])?'　'+esc((camp['起']||'?')+'～'+(camp['迄']||'?')):'')+(camp['第一批配貨日']?'　第一批配貨 '+esc(camp['第一批配貨日']):'')+'</div>'
     +'<div class="sg-kpi"><div><span>定價</span><b>'+esc(hd.price||q['定價']||'—')+' 元</b></div><div><span>每份成本</span><b>'+money(hd.cost!=null?hd.cost:q['成本'])+' 元</b></div>'
@@ -4787,16 +4826,17 @@ function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')
   if(people())x+=meHTML();
   x+=cmtHTML();
   var isSigner=!!(S.me&&names.indexOf(S.me.name)>=0);
-  if(st==='送簽中'&&isSigner)x+='<div class="sg-card sg-dec"><div class="sg-h2">你的決定</div>'+(mine?'<div class="sg-muted" style="margin-bottom:6px">你已經「'+esc(mine.decision)+'」（'+esc(mine.ts)+'）。要改可以再按一次。</div>':'')
-    +'<textarea id="sgCm" placeholder="簽核意見（退回一定要寫原因；同意可以不寫）">'+esc((mine&&mine.comment)||'')+'</textarea>'
-    +'<div class="sg-row"><button type="button" class="sg-btn" id="sgYes"'+(S.busy?' disabled':'')+'>✓ 同意</button><button type="button" class="sg-btn no" id="sgNo"'+(S.busy?' disabled':'')+'>✕ 退回</button></div></div>';
+  if(st==='送簽中'&&isSigner){var decBody='<textarea id="sgCm" placeholder="簽核意見（退回一定要寫原因；同意可以不寫）">'+esc((mine&&mine.comment)||'')+'</textarea>'
+      +'<div class="sg-row"><button type="button" class="sg-btn" id="sgYes"'+(S.busy?' disabled':'')+'>✓ 同意</button><button type="button" class="sg-btn no" id="sgNo"'+(S.busy?' disabled':'')+'>✕ 退回</button></div>';
+    x+=mine?'<details class="sg-card sg-dec" id="sgChg"'+(S.chg?' open':'')+'><summary class="sg-h2" style="cursor:pointer;margin-bottom:0">要改變決定？ <span class="sg-muted" style="font-weight:400">（你已經「'+esc(mine.decision)+'」'+(mine.ts?'，'+esc(mine.ts):'')+'；還沒全部簽完前都可以改）</span></summary><div style="margin-top:10px">'+decBody+'</div></details>'
+      :'<div class="sg-card sg-dec"><div class="sg-h2">你的決定</div>'+decBody+'</div>'}
   else if(st==='送簽中'&&!S.me&&names.length)x+='<div class="sg-card sg-hint">簽核人請先在上面「🙋 你是誰？」點自己的名字，這裡就會出現「同意／退回」。</div>';
-  else if(st!=='送簽中')x+='<div class="sg-card sg-muted">這張單目前是「<b>'+esc(st)+'</b>」，'+(st==='草稿'||st==='退回'?'還不能簽（主廚修改後會重新送簽）。':'不需要再簽。')+'</div>';
+  else if(st!=='送簽中'&&!myDec())x+='<div class="sg-card sg-muted">這張單目前是「<b>'+esc(st)+'</b>」，'+(st==='草稿'||st==='退回'?'還不能簽（主廚修改後會重新送簽）。':'不需要再簽。')+'</div>';
   if(!people()&&S.me)x+='<div class="sg-card"><button type="button" class="sg-btn2" id="sgOut">登出（換人簽）</button></div>';
   return x}
 function paint(){var h='<div class="sg-card sg-top"><div class="sg-h">✍️ 新品申請單</div><div class="sg-muted">申請單 '+esc(S.rid||'（連結沒有單號）')
     +(S.view?'　<button type="button" class="sg-btn2" id="sgRefresh" style="min-height:30px;padding:0 10px;font-size:13px">🔄 看最新</button>':'')+'</div>'
-    +(S.view?'<div class="sg-muted" style="margin-top:6px">往下看完內容，最下面可以留言、簽核。</div>':'')+'</div>';
+    +(S.view?'<div class="sg-muted" style="margin-top:6px">'+(myDec()?'你已經簽完這張單了（看下面的結果）。':'往下看完內容，最下面可以留言、簽核。')+'</div>':'')+'</div>';
   if(S.msg)h+='<div class="sg-card '+(/^✕/.test(S.msg)?'sg-badbox':(/^✓/.test(S.msg)?'sg-okbox':'sg-muted'))+'">'+esc(S.msg)+'</div>';
   h+=S.view?viewHTML():loginHTML();
   root().innerHTML=h;wire()}   /* 打到一半的留言：oninput 隨時記在 S.cmt，重畫時放回去 */
@@ -4818,7 +4858,10 @@ function wire(){var r=root();
   var cg=document.getElementById('sgCmtGo');if(cg)cg.onclick=sendCmt;
   var ct=document.getElementById('sgCmt');if(ct)ct.oninput=function(){S.cmt=ct.value};
   var rf=document.getElementById('sgRefresh');if(rf)rf.onclick=refresh;
-  var o=document.getElementById('sgOut');if(o)o.onclick=function(){meDrop();S.step=null;S.last=null;S.msg='';if(!S.k){S.view=null;S.who='';loadInfo()}else paint()}}
+  var cl=document.getElementById('sgClose');if(cl)cl.onclick=closePage;
+  var dg=document.getElementById('sgChg');if(dg)dg.ontoggle=function(){S.chg=dg.open};
+  var cg2=document.getElementById('sgChgGo');if(cg2)cg2.onclick=function(){S.chg=true;paint();var e=document.getElementById('sgChg');if(e)try{e.scrollIntoView({behavior:'smooth',block:'center'})}catch(x){}};
+  var o=document.getElementById('sgOut');if(o)o.onclick=function(){meDrop();S.step=null;S.last=null;S.chg=false;S.closeHint=false;S.msg='';if(!S.k){S.view=null;S.who='';loadInfo()}else paint()}}
 return {start:start};
 })();
 </script>
