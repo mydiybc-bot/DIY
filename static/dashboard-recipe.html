@@ -1932,29 +1932,108 @@ function clearAll(){if(!confirm('清空整張申請表（含草稿）？'+(AP.he
   OUT=null;ERRS=[];try{localStorage.removeItem(DRAFT_KEY)}catch(e){}_savedAt='';render()}
 
 /* ---- 匯入食譜檔（沿用「新品試算」的 .doc 解析器；分區走 ZONE_ALIAS） ---- */
-var DOCX_TIP='請改選食譜後台「匯出」下載的原始 .doc，不要先用 Word 打開再另存';   /* 2026-10-07：Word 另存的 .docx 是壓縮檔，食材分區與容器標記都不見了，讀不到 */
-function isDocx(name,raw){return /\.docx$/i.test(String(name||''))||String(raw||'').slice(0,2)==='PK'}
+/* 2026-10-07：食譜檔讀取——.doc／.html 照舊；Word 存的 .docx 也能讀（經營者：「希望未來匯入 docx 也可以正常讀取」）。
+   .docx＝壓縮檔：瀏覽器內建解壓（DecompressionStream）取出 word/document.xml，照「食譜後台匯出 .doc」的樣子還原：
+   黃底「步驟標題：」→ 一步；步驟內容保留顏色／粗體／底線／字級／置中／說明圖片網址；食材工具的分區標題＋每行「品名 數量 單位 彩色塑膠碗／白色瓷碗」→ 分區與容器。
+   還原後交給原本的解析（用料 R.parseRecipeHTML、步驟 parseSteps），所以 .docx 和 .doc 讀到的結果一樣 */
+var DOCX_TIP='改用食譜後台「匯出」下載的原始 .doc';
+var RC_ZONES=['洞洞牆區','洞洞牆下方或蛋櫃區','冰箱區','模具區','烘烤區','飲料區','請向店員拿取'];
+function rcUnzip(buf,want){var u8=new Uint8Array(buf),dv=new DataView(buf),n=u8.length,eo=-1,out={},jobs=[],td=new TextDecoder('utf-8');
+  for(var i=n-22;i>=Math.max(0,n-65557);i--){if(dv.getUint32(i,true)===0x06054b50){eo=i;break}}
+  if(eo<0)return Promise.reject(new Error('zip'));
+  var cnt=dv.getUint16(eo+10,true),off=dv.getUint32(eo+16,true);
+  for(var k=0;k<cnt&&off+46<=n;k++){
+    if(dv.getUint32(off,true)!==0x02014b50)break;
+    var meth=dv.getUint16(off+10,true),csz=dv.getUint32(off+20,true),nl=dv.getUint16(off+28,true),xl=dv.getUint16(off+30,true),cl=dv.getUint16(off+32,true),lo=dv.getUint32(off+42,true);
+    var name=td.decode(u8.subarray(off+46,off+46+nl));
+    if(want.indexOf(name)>=0&&lo+30<=n&&dv.getUint32(lo,true)===0x04034b50){
+      var st=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
+      jobs.push((function(name,meth,data){
+        if(meth===0){out[name]=td.decode(data);return Promise.resolve()}
+        if(meth!==8||typeof DecompressionStream==='undefined')return Promise.reject(new Error(meth!==8?'zipmethod':'nodecomp'));
+        return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer().then(function(ab){out[name]=td.decode(new Uint8Array(ab))})})(name,meth,u8.subarray(st,st+csz)))}
+    off+=46+nl+xl+cl}
+  return Promise.all(jobs).then(function(){return out})}
+function docxToHtml(xml,rels){
+  var W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',RN='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  var d=new DOMParser().parseFromString(String(xml||''),'application/xml'),link={};
+  if(d.getElementsByTagName('parsererror').length)return '';
+  try{Array.prototype.forEach.call(new DOMParser().parseFromString(rels||'<Relationships/>','application/xml').getElementsByTagName('Relationship'),function(r){link[r.getAttribute('Id')]=r.getAttribute('Target')||''})}catch(e){}
+  function kid(el,ln){if(!el)return null;for(var c=el.firstChild;c;c=c.nextSibling)if(c.nodeType===1&&c.localName===ln)return c;return null}
+  function av(el,a){return el?(el.getAttributeNS(W,a||'val')||el.getAttribute('w:'+(a||'val'))||''):''}
+  function on(el){return !!el&&!/^(0|false|none)$/i.test(av(el)||'1')}
+  function yel(pr){var s=kid(pr,'shd');return /^yellow$/i.test(av(kid(pr,'highlight')))||(!!s&&/^FFFF00$/i.test(av(s,'fill')))}
+  function runHtml(r){var pr=kid(r,'rPr'),h='';
+    for(var c=r.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;var ln=c.localName;
+      if(ln==='t')h+=esc(c.textContent);else if(ln==='br'||ln==='cr')h+='<br>';else if(ln==='tab')h+='&nbsp;&nbsp;';
+      else if(ln==='drawing'||ln==='pict'||ln==='object'){var bl=c.getElementsByTagNameNS('*','blip')[0],im=c.getElementsByTagNameNS('*','imagedata')[0];
+        var id=bl?(bl.getAttributeNS(RN,'link')||bl.getAttributeNS(RN,'embed')):(im?im.getAttributeNS(RN,'id'):''),src=link[id]||'';
+        if(/^https?:\/\//i.test(src))h+='<img src="'+esc(src)+'" style="max-width: 100%;">'}}
+    if(!h||!pr)return h;
+    var sz=+av(kid(pr,'sz'))||0,col=av(kid(pr,'color'));
+    if(sz)h='<span style="font-size: '+Math.round(sz*2/3)+'px;">'+h+'</span>';   /* sz＝半點；px＝sz÷2×4/3 */
+    if(/^[0-9A-F]{6}$/i.test(col)&&col.toUpperCase()!=='000000')h='<font color="#'+col.toLowerCase()+'">'+h+'</font>';
+    if(on(kid(pr,'u')))h='<u>'+h+'</u>';
+    if(on(kid(pr,'b')))h='<b>'+h+'</b>';
+    return h}
+  var name='',info={},steps=[],cur=null,mode='',zone='';
+  Array.prototype.forEach.call(d.getElementsByTagNameNS(W,'p'),function(p){
+    var ppr=kid(p,'pPr'),html='',txt='',ry=false,center=av(kid(ppr,'jc'))==='center';
+    Array.prototype.forEach.call(p.getElementsByTagNameNS(W,'r'),function(r){html+=runHtml(r);if(yel(kid(r,'rPr')))ry=true;
+      for(var c=r.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;if(c.localName==='t')txt+=c.textContent;else if(c.localName==='br'||c.localName==='cr')txt+='\n';else if(c.localName==='tab')txt+=' '}});
+    var t=txt.replace(/\s+/g,' ').trim();
+    if(/^步驟標題[：:]/.test(t)||((yel(ppr)||(ry&&t.length<=40))&&t&&!/^(步驟內容|食材工具)[：:]?$/.test(t))){cur={t:t.replace(/^步驟標題[：:]\s*/,''),h:[],ing:[]};steps.push(cur);mode='';return}
+    if(!cur){var m=t.match(/^(製作時間|尺寸|產品特色|保存方式)[：:]/);
+      if(m){var v=txt.replace(/^[\s\S]*?[：:]\s*/,'');if(m[1]==='產品特色'||m[1]==='保存方式')v=v.replace(/[ \t]+(?=[●🎁［（])/g,'\n');info[m[1]]=v.trim();return}
+      if(!name&&t)name=t;return}
+    if(/^步驟內容[：:]?$/.test(t)){mode='content';return}
+    if(/^食材工具[：:]?$/.test(t)){mode='ing';zone='';return}
+    if(mode==='ing'){if(!t)return;if(RC_ZONES.indexOf(t)>=0){zone=t;return}
+      var mm=t.match(/^(.*?)\s*(彩色塑膠碗|白色瓷碗)$/);
+      cur.ing.push({t:mm?mm[1]:t,z:zone,c:mm?(mm[2]==='彩色塑膠碗'?'container1':'container2'):'',l:mm?mm[2]:''});return}
+    if(mode==='content'&&html)cur.h.push(center?'<div style="text-align: center;">'+html+'</div>':'<p>'+html+'</p>')});
+  if(!steps.length)return '';
+  var H='<html><head><meta charset="utf-8"><title>Export HTML To Doc</title></head><body><div class="container" id="exportContent"><h3 style="text-align:center" id="name">'+esc(name)+'</h3>';
+  ['製作時間','尺寸','產品特色','保存方式'].forEach(function(k){H+='<div><span style="font-weight:bold">'+k+'：</span>'+esc(info[k]||'')+'</div>'});
+  steps.forEach(function(s){
+    H+='<div style="background:yellow;font-size:24px;"><span style="font-weight:bold">步驟標題：</span>'+esc(s.t)+'</div><div><span style="font-weight:bold">步驟內容：</span></div><div>'+s.h.join('')+'</div>';
+    if(s.ing.length)H+='<div><span style="font-weight:bold">食材工具：</span></div><div class="ingred-wrapper">'
+      +s.ing.map(function(g){return '<div class="ingred" data-container="'+g.c+'" data-cate="'+esc(g.z)+'">'+esc(g.t)+(g.l?'<span> '+esc(g.l)+'</span>':'')+'</div>'}).join('')+'</div>';
+    H+='<br>'});
+  return H+'</div></body></html>'}
+/* 讀一個食譜檔 → {html}（.doc／.html／.docx 都還原成匯出 .doc 的 HTML）或 {err:'看不懂的原因'} */
+function readRecipeFile(f){
+  return new Promise(function(res){var rd=new FileReader();rd.onload=function(){res(rd.result)};rd.onerror=function(){res(null)};rd.readAsArrayBuffer(f)}).then(function(buf){
+    if(!buf)return {err:'讀不到這個檔案'};
+    var u8=new Uint8Array(buf);
+    if(u8[0]===0xD0&&u8[1]===0xCF&&u8[2]===0x11&&u8[3]===0xE0)return {err:'是 Word 97～2003 舊格式，讀不到：請在 Word 改存成 .docx，或'+DOCX_TIP};
+    if(!(u8[0]===0x50&&u8[1]===0x4B))return {html:new TextDecoder('utf-8').decode(u8)};
+    if(typeof DecompressionStream==='undefined')return {err:'是 .docx，但這台電腦的瀏覽器太舊打不開：請更新瀏覽器，或'+DOCX_TIP};
+    return rcUnzip(buf,['word/document.xml','word/_rels/document.xml.rels']).then(function(z){
+      if(!z['word/document.xml'])return {err:'不是 Word 的 .docx：請'+DOCX_TIP};
+      var h=docxToHtml(z['word/document.xml'],z['word/_rels/document.xml.rels']);
+      return h?{html:h,docx:true}:{err:'是 .docx，但看不到公司食譜格式的步驟（黃底「步驟標題：」）'}},
+      function(){return {err:'是壓縮檔但打不開：請'+DOCX_TIP}})})}
 function importFiles(fs){if(!fs||!fs.length)return;
-  var got=[],names=[],warns=[],text='',done=0,rcs=[],anyDx=false;
-  Array.prototype.forEach.call(fs,function(f){var rd=new FileReader();
-    rd.onload=function(){var raw=String(rd.result||''),dx=isDocx(f.name,raw);if(dx)anyDx=true;
-      var r=dx?null:R.parseRecipeHTML(raw,f.name);
+  var got=[],names=[],warns=[],text='',done=0,rcs=[],bad='';
+  Array.prototype.forEach.call(fs,function(f){readRecipeFile(f).then(function(res){
+      var raw=res.html||'';if(res.err)bad=res.err;
+      var r=res.err?null:R.parseRecipeHTML(raw,f.name);
       if(r&&r.lines.length){got=got.concat(r.lines);names.push(r.name||f.name);warns=warns.concat(r.warn||[]);text+=(r.text||'')}
-      else warns.push(dx?('（'+f.name+' 是 Word 另存的 .docx，讀不到食材列：'+DOCX_TIP+'）'):('（'+f.name+' 讀不到食材列，格式可能不同）'));
-      var st=dx?null:parseSteps(raw,f.name);if(st)rcs.push(st);   /* 2026-10-06：門市食譜步驟一起記下（核准後匯入自己做食譜系統用） */
+      else warns.push('（'+f.name+' '+(res.err||'讀不到食材列，格式可能不同')+'）');
+      var st=res.err?null:parseSteps(raw,f.name);if(st)rcs.push(st);   /* 2026-10-06：門市食譜步驟一起記下（核准後匯入自己做食譜系統用） */
       if(++done===fs.length){
         AP.recipe=null;AP.recipeMsg='';
         if(fs.length===1&&rcs.length===1){var sz=JSON.stringify(rcs[0]).length;if(sz<=RC_MAX)AP.recipe=rcs[0];else AP.recipeMsg='這個食譜檔的步驟內容太大（'+sz+' 字），沒有記進申請單；核准後匯入自己做食譜系統時再選一次這個檔案'}
         else if(fs.length>1)AP.recipeMsg='一次選了 '+fs.length+' 個檔案，門市食譜步驟沒有記下（核准後匯入時再選這支甜點的食譜檔）';
-        else AP.recipeMsg=anyDx?('這是 Word 另存的 .docx，門市食譜步驟讀不到：'+DOCX_TIP):'這個檔案看不到步驟（黃底的步驟標題），門市食譜步驟沒有記下';
+        else AP.recipeMsg=bad?('門市食譜步驟沒有記下：這個檔案'+bad):'這個檔案看不到步驟（黃底的步驟標題），門市食譜步驟沒有記下';
         AP.lines=got.map(function(l){var s=skuOf(l.m);var cat=s?s.cat:(R.isTool(l.m)?'器具':'食材');
           var z=mapZone(l.zone)||defaultZone(l.m,cat);
           var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';return o});
         if(!AP.lines.length)AP.lines=[newLine()];
         AP.warn=warns;AP.miss=text?R.proseMiss(text,got):[];AP.srcName=names.join(' + ');
         if(!String(AP.head.name||'').trim())AP.head.name=AP.srcName;
-        OUT=null;saveDraft();render()}};
-    rd.readAsText(f,'utf-8')})}
+        OUT=null;saveDraft();render()}})})}
 
 /* ---- 產出申請單（Phase 1：複製文字 ×4 ＋ 下載 .json v3）---- */
 function reqDate(){var d=new Date();return 'R-'+d.getFullYear()+pad2(d.getMonth()+1)+pad2(d.getDate())}
@@ -3061,11 +3140,11 @@ function rbPaint(){var m=document.getElementById('apModal');if(!m||!document.get
   if(q('apRbCheck'))q('apRbCheck').onclick=rbCheck;
   if(q('apRbGo'))q('apRbGo').onclick=rbGo;
   if(q('apRbAgain'))q('apRbAgain').onclick=function(){if(!RB.imp)return;RB.fails=0;rbStart({action:'rbImport',role:RB.cr.role,password:RB.cr.pw,req_id:RB.rid,imp_id:RB.imp})};
-  var f=q('apRbFile');if(f)f.onchange=function(){var fl=f.files&&f.files[0];if(!fl)return;var rd=new FileReader();
-    rd.onload=function(){var raw=String(rd.result||'');
-      if(isDocx(fl.name,raw)){rbMsg('<span class="ap-bad">✕ 「'+esc(fl.name)+'」是 Word 另存的 .docx，讀不到步驟：'+DOCX_TIP+'</span>');return}
-      var r=parseSteps(raw,fl.name);if(!r){rbMsg('<span class="ap-bad">✕ 這個檔案看不到步驟（黃底的步驟標題），不是公司格式的食譜 .doc？</span>');return}
-      RB.rc=r;RB.pv=null;RB.msg='';rbPaint()};rd.readAsText(fl,'utf-8')};
+  var f=q('apRbFile');if(f)f.onchange=function(){var fl=f.files&&f.files[0];if(!fl)return;
+    readRecipeFile(fl).then(function(res){   /* 2026-10-07：.docx 也能讀 */
+      if(res.err){rbMsg('<span class="ap-bad">✕ 「'+esc(fl.name)+'」'+esc(res.err)+'</span>');return}
+      var r=parseSteps(res.html||'',fl.name);if(!r){rbMsg('<span class="ap-bad">✕ 這個檔案看不到步驟（黃底的步驟標題），不是公司格式的食譜檔？</span>');return}
+      RB.rc=r;RB.pv=null;RB.msg='';rbPaint()})};
   var t=q('apRbTitle');if(t)t.oninput=function(){RB.title=t.value};
   var c=q('apRbCat');if(c)c.onchange=function(){RB.cat=c.value};
   m.querySelectorAll('[data-rbm]').forEach(function(s){s.onchange=function(){RB.media[+s.getAttribute('data-rbm')]=s.value;rbPaint()}})}
@@ -3225,7 +3304,7 @@ function paint(){var root=document.getElementById('apRoot');
     +roleBarHTML()
     +headHTML(c)+'</div><div class="ap-area-cost">'+costCardHTML(c)+'</div><div class="ap-area-rest">';
   /* 匯入 */
-  s+='<div class="ap-card"><div class="ap-h">📄 匯入食譜檔（主廚給的 .doc）</div><div class="ap-muted" style="margin-bottom:6px">選主廚的食譜檔（食譜管理系統每道食譜的「匯出 Export」下載的 .doc，或請 Claude「依公司格式產出食譜」得到的 .doc），會自動抓出食材、耗材、器具、模具與用量灌進下方「用料（全部）」；主檔查不到的會自動列進「新增食材/器模具」（食譜分區會對映成申請單區域：冰箱區→冰箱、凍庫區→冷凍庫、洞洞牆區→洞洞牆區，其餘留空請自選）。'
+  s+='<div class="ap-card"><div class="ap-h">📄 匯入食譜檔（主廚給的 .doc 或 .docx）</div><div class="ap-muted" style="margin-bottom:6px">選主廚的食譜檔（食譜管理系統每道食譜的「匯出 Export」下載的 .doc，或請 Claude「依公司格式產出食譜」得到的 .doc；用 Word 打開另存成 .docx 也可以），會自動抓出食材、耗材、器具、模具與用量灌進下方「用料（全部）」；主檔查不到的會自動列進「新增食材/器模具」（食譜分區會對映成申請單區域：冰箱區→冰箱、凍庫區→冷凍庫、洞洞牆區→洞洞牆區，其餘留空請自選）。'
    +(AP.srcName?('　目前來源：<b>'+esc(AP.srcName)+'</b>'):'')+'</div>'+rcLineHTML()+'<input type="file" id="apFile" accept=".doc,.docx,.html,.htm,.txt" multiple></div>';
   if(AP.warn.length)s+='<div class="ap-note"><b>匯入時有 '+AP.warn.length+' 行看不懂，未計入：</b><div class="ap-muted">'+esc(AP.warn.slice(0,12).join('｜'))+(AP.warn.length>12?' …':'')+'</div></div>';
   if(AP.miss.length)s+='<div class="ap-note"><b>⚠ 食譜內文提到、但「食材工具」清單沒列的品項（'+AP.miss.length+' 項）</b><div class="ap-muted">這些沒被計入成本，門市備料與週用量推算也會漏。請主廚補進食材清單，或手動加到表一。</div><div style="margin-top:4px"><b>'+esc(AP.miss.join('、'))+'</b></div></div>';
