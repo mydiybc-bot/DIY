@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v9.2';   /* v9.2＝2026-10-07 匯入比對：後台單位本身帶括號（動物餅乾模「組 (貓/熊/兔子/鱷魚各1)」）時把匯出檔拆成附註的括號合回單位再比 */   /* v9.1＝2026-10-06 晚：rbStatus 多回 setRq（最後一次存好後台帳號的回條編號），前端回覆掉了時用它確認 */   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
+var VERSION = 'recipe-req-v10';   /* v10＝2026-10-07 經營者「儀表板待處理問題 1007」：①加速（設定一次讀完、身分表暫存、檔期清單暫存 2 分鐘）②簽核連結帶通行碼 k（點連結就能看申請單，免 PIN）③意見交流 fact_req_comment（commentAdd）④簽核人 PIN 可由本人第一次簽核時自設（signSetPin）⑤送簽一次完成「存檔＋送簽」⑥核准寫入採購系統時一併新增「新單位換算」到 dim_unitconv（主廚在申請表填的 1 平匙≈幾 g；備註「自動草稿…請採購確認」） */   /* v9.2＝2026-10-07 匯入比對：後台單位本身帶括號（動物餅乾模「組 (貓/熊/兔子/鱷魚各1)」）時把匯出檔拆成附註的括號合回單位再比 */   /* v9.1＝2026-10-06 晚：rbStatus 多回 setRq（最後一次存好後台帳號的回條編號），前端回覆掉了時用它確認 */   /* v9＝2026-10-06 🍰 匯入自己做食譜系統（門市食譜後台）：rbStatus／rbSetCred／rbPreview／rbImport＋fact_recipe_import 分頁（程式在 rb_backend.gs、rb_import.gs） */   /* v8＝2026-10-05 檔期多一欄「自己人搶先開賣日」：有填就當成對照表的起始有效日（採購系統以它當開賣日提前備料） */   /* v7＝2026-10-04 效能第 2 批：只讀動作不排鎖、不寫 log；bomMeta／mapGet 讀表結果快取 5 分鐘（寫入後清）；新增 bomMetaMap 合併查詢 */   /* v6.1＝2026-10-02 BOM 異動批次編號不再撞號 */   /* v6＝2026-10-01 需求 7：📚 BOM 管理（BOM表／產品名稱對照表 由食譜系統維護）＋POS 分類改主類別 */   /* v4＝D 階段：公開查詢 newItemsPub；v5＝E 階段：廠商品名 vname */   /* v2＝B 階段：各單位局部填寫、送簽、簽核；v3＝C 階段：核准 → 寫入採購系統 BOM 本 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -38,7 +38,8 @@ var TABS = {
   log: ['ts', 'role', 'action', 'id', 'ok', 'msg'],
   fact_req_fill: ['req_id', 'role', 'updated_at'],   /* B 階段新增：每張單每個身分最後一次存檔時間（「已填」徽章）；舊試算表由 migrate_ 自動補建 */
   fact_push: ['ts', 'req_id', 'batch', 'action', 'table', 'rows', 'detail', 'backup', 'ok', 'msg'],   /* C 階段新增：寫入／還原採購系統的逐表紀錄 */
-  fact_recipe_import: ['ts', 'req_id', 'imp_id', 'action', 'backend_id', 'step', 'ok', 'msg', 'by', 'd1', 'd2', 'd3', 'd4']   /* 2026-10-06 新增：匯入自己做食譜系統的紀錄（start 列 d1～d4＝這次要匯入的完整內容，中斷可接續） */
+  fact_recipe_import: ['ts', 'req_id', 'imp_id', 'action', 'backend_id', 'step', 'ok', 'msg', 'by', 'd1', 'd2', 'd3', 'd4'],   /* 2026-10-06 新增：匯入自己做食譜系統的紀錄（start 列 d1～d4＝這次要匯入的完整內容，中斷可接續） */
+  fact_req_comment: ['ts', 'req_id', 'who', 'who_kind', 'text']   /* 2026-10-07 新增：申請單「💬 意見交流」（簽核人、主廚、各單位留言；大家都看得到；送出後不能刪） */
 };
 /* 數字欄（其餘一律純文字，避免「01」「2026-10-01」被試算表自動轉成數字或日期） */
 var NUM_COLS = { '定價': 1, '成本': 1, '利潤率': 1, '預估銷售數': 1, '出貨中心預估出貨量': 1 };
@@ -123,10 +124,16 @@ function randPw_(len) {
    ① 2026-09-28「管理者」身分（🔑 密碼管理用）：舊試算表沒有這一列 → 補上；密碼 10 碼隨機，只在 dim_role 分頁
    ② 2026-09-29 B 階段：補建 fact_req_fill 分頁（只新增分頁，不動既有分頁）
    ③ 2026-09-29 C 階段：補建 fact_push 分頁 */
+var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT'];
+/* 2026-10-07 加速：每次請求的指令碼屬性只讀一次（原本 migrate_ 逐一讀 6 個、ss_ 再讀 1 個；一個約 50～100 毫秒） */
+var _props = null;
+function props_() { if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {}; return _props; }
+function setProp_(k, v) { PropertiesService.getScriptProperties().setProperty(k, v); props_()[k] = v; }
 function migrate_() {
+  var A = props_();
+  if (!A.SHEET_ID) return;
+  if (MIG_KEYS.every(function (k) { return A[k] === '1'; }) && A.SIGN_SECRET && !A.SIGNER_SEED) return;
   var P = PropertiesService.getScriptProperties();
-  if (!P.getProperty('SHEET_ID')) return;
-  if (P.getProperty('MIG_ADMIN') === '1' && P.getProperty('MIG_FILL') === '1' && P.getProperty('MIG_PUSH') === '1' && P.getProperty('MIG_BOM') === '1' && P.getProperty('MIG_EARLY') === '1' && P.getProperty('MIG_RBIMP') === '1') return;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
   try {
@@ -165,7 +172,33 @@ function migrate_() {
       ensureTab_(ss_(), 'fact_recipe_import');
       P.setProperty('MIG_RBIMP', '1');
     }
+    if (P.getProperty('MIG_CMT') !== '1') {   /* ⑦ 2026-10-07：補建 fact_req_comment 分頁（意見交流；只新增分頁） */
+      ensureTab_(ss_(), 'fact_req_comment');
+      setProp_('MIG_CMT', '1');
+    }
+    if (!P.getProperty('SIGN_SECRET')) setProp_('SIGN_SECRET', Utilities.getUuid() + Utilities.getUuid());   /* ⑧ 簽核連結通行碼的密鑰（只在伺服器；在鎖裡產生，不會兩個請求各產一組） */
+    var seed = P.getProperty('SIGNER_SEED');
+    if (seed) {   /* ⑨ 2026-10-07：簽核人名單初始值（管理者／Claude 放在指令碼屬性 SIGNER_SEED＝[{name,role}]；只補名單沒有的人，PIN 留空＝本人第一次簽核時設定；用完就刪，名字不進程式碼） */
+      seedSigners_(seed);
+      P.deleteProperty('SIGNER_SEED'); delete props_().SIGNER_SEED;
+    }
   } catch (e) { /* 下次再試 */ } finally { lock.releaseLock(); }
+}
+function seedSigners_(json) {
+  var list; try { list = JSON.parse(json); } catch (e) { return 0; }
+  if (!Array.isArray(list)) return 0;
+  var t = load_('dim_signer'), have = {}, n = 0;
+  t.rows.forEach(function (r) { have[str_(r.name).trim()] = 1; });
+  list.forEach(function (o) {
+    var name = str_(o && o.name).trim(), role = str_(o && o.role).trim();
+    if (!name || have[name] || /[,，、;；\s]/.test(name)) return;
+    have[name] = 1;
+    put_(t, nextRow_(t), { name: name, role: role, pin: '', enabled: 'Y' });
+    t.rows.push({ _row: t.sh.getLastRow(), name: name });
+    n++;
+  });
+  if (n) authCacheClear_();
+  return n;
 }
 
 /* ================= 入口 ================= */
@@ -173,8 +206,8 @@ function doGet(e) {
   var p = (e && e.parameter) || {}, a = String(p.action || 'ping'), res;
   migrate_();
   try {
-    if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!PropertiesService.getScriptProperties().getProperty('SHEET_ID') } };
-    else if (a === 'listCampaigns') res = { ok: true, data: listCampaigns_() };
+    if (a === 'ping') res = { ok: true, data: { version: VERSION, now: now_(), ready: !!props_().SHEET_ID } };
+    else if (a === 'listCampaigns') res = { ok: true, data: listCampaignsCached_() };
     else if (a === 'signInfo') res = { ok: true, data: signInfo_(p.req_id) };
     else if (a === 'newItemsPub') res = { ok: true, data: newItemsPub_() };
     else res = { ok: false, msg: '不支援的查詢：' + a + '（讀申請單內容要用 POST 並帶密碼）' };
@@ -187,18 +220,26 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   adminList: adminList_, adminSaveSigner: adminSaveSigner_, adminDeleteSigner: adminDeleteSigner_, adminSetPassword: adminSetPassword_,
   listSigners: listSigners_, patchReq: patchReq_, submitSign: submitSign_, withdrawSign: withdrawSign_, signView: signView_, sign: sign_,
   pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_,
+  /* 2026-10-07：簽核連結（帶通行碼 k）免 PIN 看申請單、本人第一次自設 PIN、意見交流 */
+  signOpen: signOpen_, signSetPin: signSetPin_, commentAdd: commentAdd_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
   rbStatus: function (p, a) { return rbStatus_(p, a); }, rbSetCred: function (p, a) { return rbSetCred_(p, a); },
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
-  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
+  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
+/* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
+var KEY_ACTS = { signOpen: 1, signSetPin: 1 };
+/* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
+var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1 };
+/* 寫完要讓身分表暫存失效的動作 */
+var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1 };
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
 /* v7（2026-10-04 效能第 2 批）：只讀動作**明確列在 READS**（都已逐一確認沒有任何寫入）→ 不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。
    沒列在 READS 的動作一律走下面原本的加鎖路徑。與「不在 WRITES 就當只讀」的寫法行為等價（WRITES 在 BOM 段落尾端補了 bomSave 等 6 個，
    30 個動作＝12 讀＋18 寫），改白名單是為了日後新增動作忘了登記 WRITES 時預設仍加鎖（審查時改的）。
    adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
 var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1,
-  rbStatus: 1, rbPreview: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
+  rbStatus: 1, rbPreview: 1, signOpen: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
 var AUDIT_READS = { adminList: 1 };
 /* 2026-10-06：自己管鎖的動作——匯入自己做食譜系統要連後台、一次 30 多秒，不能佔住全系統的鎖（別人送件會卡住）；
    同一張單不重複跑由 rbImport_ 自己用 CacheService 擋，寫紀錄分頁時才短暫拿鎖 */
@@ -216,7 +257,7 @@ function doPost(e) {
   /* 先驗身分（在鎖外面）：密碼錯 → 停 1 秒再回（拖慢亂猜，不佔鎖、不影響別人）；不做「錯太多次就鎖整個身分」——
      那會讓知道網址的人故意打錯把全部主廚鎖在外面（2026-09-28 測試時實際發生過） */
   var auth;
-  try { auth = auth_(p); } catch (err) {
+  try { auth = KEY_ACTS[act] ? keyAuth_(p) : auth_(p); } catch (err) {
     Utilities.sleep(1000);
     res = { ok: false, act: act, code: (err && err.code) || 'auth', msg: errMsg_(err) };
     log_(who, act, guessId_(p), false, res.msg);
@@ -268,8 +309,49 @@ function doPost(e) {
     if (err && err.code) res.code = err.code;
     if (err && err.extra) res.data = err.extra;
     log_(who, act, guessId_(p), false, res.msg);
-  } finally { lock.releaseLock(); if (BOM_TOUCH[act]) bomCacheClear_(); }
+  } finally {
+    lock.releaseLock();
+    if (BOM_TOUCH[act]) bomCacheClear_();
+    if (CAMP_TOUCH[act]) campCacheClear_();
+    if (AUTH_TOUCH[act]) authCacheClear_();
+  }
   return out_(res);
+}
+
+/* ===== 2026-10-07 加速：暫存（CacheService）=====
+   ①身分表 dim_role／dim_signer：每個請求驗身分都要讀一次（約 0.2～0.5 秒）→ 暫存 90 秒；🔑 密碼管理改密碼、改簽核人、本人設 PIN 後立刻失效。
+     直接在試算表手改 dim_role／dim_signer（例：可填欄位、密碼）最多 90 秒後生效。
+   ②檔期清單 listCampaigns：暫存 2 分鐘；新增／改檔期、送件（支數會變）後立刻失效。 */
+var AUTH_TTL = 90, CAMP_TTL = 120;
+function authRows_(name) {
+  var c = CacheService.getScriptCache(), k = 'auth:' + name + ':v1', hit = c.get(k);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var rows = load_(name).rows.map(function (r) { var o = {}; TABS[name].forEach(function (h) { o[h] = str_(r[h]); }); return o; });
+  try { c.put(k, JSON.stringify(rows), AUTH_TTL); } catch (e) { }
+  return rows;
+}
+function authCacheClear_() { try { CacheService.getScriptCache().removeAll(['auth:dim_role:v1', 'auth:dim_signer:v1']); } catch (e) { } }
+function listCampaignsCached_() {
+  var c = CacheService.getScriptCache(), k = 'camps:v1', hit = c.get(k);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var list = listCampaigns_();
+  try { c.put(k, JSON.stringify(list), CAMP_TTL); } catch (e) { }
+  return list;
+}
+function campCacheClear_() { try { CacheService.getScriptCache().remove('camps:v1'); } catch (e) { } }
+
+/* ===== 2026-10-07 簽核連結通行碼 k：HMAC(申請單號, 只在伺服器的密鑰) 前 16 碼。
+   拿到連結（104 指定員工公告）的人點開就能看申請單與意見交流；留言、同意／退回仍要選自己名字＋PIN */
+function signKey_(rid) {
+  var sec = props_().SIGN_SECRET || PropertiesService.getScriptProperties().getProperty('SIGN_SECRET');   /* 剛上線那一刻：別的請求剛在鎖裡產生密鑰，這個請求的設定暫存還沒有 → 重讀一次 */
+  if (!sec) throw fail_('簽核連結尚未啟用（系統設定中），請 1 分鐘後再試', 'key');
+  var sig = Utilities.computeHmacSha256Signature(String(rid), sec);
+  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 16);
+}
+function keyAuth_(p) {
+  var rid = str_(p.req_id).trim(), k = str_(p.k).trim();
+  if (!rid || !k || k !== signKey_(rid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 104 公告裡的連結', 'key');
+  return { kind: 'key', name: '', role: '', rules: [] };
 }
 
 function out_(res, cb) {
@@ -293,14 +375,15 @@ function auth_(p) {
     var cache = CacheService.getScriptCache(), ck = 'pinfail:' + Utilities.base64EncodeWebSafe(Utilities.newBlob(name).getBytes()).slice(0, 200);
     var fails = parseInt(cache.get(ck) || '0', 10) || 0;
     if (fails >= PIN_MAX) throw fail_('「' + name + '」PIN 錯太多次，請 15 分鐘後再試（其他人不受影響）', 'pinlock');
-    var s = load_('dim_signer').rows.filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
+    var s = authRows_('dim_signer').filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
+    if (s && !str_(s.pin).trim()) throw fail_('「' + name + '」還沒有設定 PIN：請點主廚在 104 公告裡的簽核連結，選自己的名字設定 PIN', 'nopin');
     if (!s || !pin || str_(s.pin).trim() !== pin) { cache.put(ck, String(fails + 1), PIN_LOCK_SEC); throw fail_('簽核人或 PIN 不對', 'auth'); }
     if (fails) cache.remove(ck);
     return { kind: 'signer', name: name, role: str_(s.role).trim(), rules: [] };
   }
   var role = String(p.role || '').trim(), pw = String(p.password || '').trim();
   if (!role) throw fail_('請選擇身分並輸入密碼', 'auth');
-  var r = load_('dim_role').rows.filter(function (x) { return str_(x.role).trim() === role; })[0];
+  var r = authRows_('dim_role').filter(function (x) { return str_(x.role).trim() === role; })[0];
   if (!r || !pw || str_(r.password).trim() !== pw) throw fail_('密碼不對', 'auth');
   return { kind: 'role', role: role, name: '', rules: parseRules_(r.fields), fields: str_(r.fields) };
 }
@@ -341,7 +424,7 @@ function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核
   var en = (g.enabled === false || str_(g.enabled).toUpperCase() === 'N') ? 'N' : 'Y';
   if (!name) throw fail_('請填簽核主管姓名');
   if (/[,，、;；\s]/.test(name)) throw fail_('姓名不能有逗號、頓號、分號或空白');   /* signers 欄用這些符號分隔 */
-  if (!/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字');
+  if (pin && !/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字（留空＝本人第一次簽核時自己設定）');
   var t = load_('dim_signer');
   var row = orig ? t.rows.filter(function (r) { return str_(r.name).trim() === orig; })[0] : null;
   if (orig && !row) throw fail_('找不到簽核主管「' + orig + '」', 'notfound');
@@ -583,7 +666,8 @@ function getReq_(p, auth) {
   return {
     id: rid,
     data: { req: req, campaign: camp ? plain_(ct.H, camp) : null, units: rowsOf_('fact_req_unit', ids), signoffs: rowsOf_('fact_signoff', ids),
-      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth), push: pushInfo_(rid), rbimp: (function () { try { return rbInfo_(rid); } catch (e) { return null; } })() },
+      fills: safeRows_('fact_req_fill', ids), me: meOf_(auth), push: pushInfo_(rid), rbimp: (function () { try { return rbInfo_(rid); } catch (e) { return null; } })(),
+      comments: commentsOf_(rid), sign_key: (auth.kind === 'role' && (auth.role === ADMIN || can_(auth, 'P:*'))) ? signKey_(rid) : '' },   /* 2026-10-07：意見交流＋簽核連結通行碼（只給主廚／管理者，貼進 104 公告用） */
     msg: '內容 ' + req.payload.length + ' 字'
   };
 }
@@ -616,9 +700,70 @@ function markFill_(rid, role) {
 /* 送簽時勾選用：啟用中的簽核主管（只回姓名、職稱，不含 PIN） */
 function listSigners_(p, auth) {
   if (auth.kind !== 'role') throw fail_('要用身分密碼', 'perm');
-  var list = load_('dim_signer').rows.filter(function (r) { return str_(r.name).trim() && signerOn_(r.enabled); })
-    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim() }; });
-  return { id: '', data: list, msg: list.length + ' 位' };
+  return { id: '', data: peopleOf_(), msg: '' };
+}
+/* 啟用中的簽核人（只回姓名、職稱／部門、有沒有設 PIN，不含 PIN） */
+function peopleOf_() {
+  return authRows_('dim_signer').filter(function (r) { return str_(r.name).trim() && signerOn_(r.enabled); })
+    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim(), hasPin: !!str_(r.pin).trim() }; });
+}
+
+/* ===== 2026-10-07 💬 意見交流（fact_req_comment）＋簽核連結 =====
+   ‧ 誰都看得到所有人的留言與簽核意見（申請表「送簽核」卡、簽核頁都會顯示）；留言送出後不能改、不能刪
+   ‧ 留言身分：簽核人（姓名＋PIN）或各身分（主廚、出貨中心…＋密碼） */
+var CMT_MAX = 1000;
+function commentsOf_(rid) {
+  var ids = {}; ids[rid] = 1;
+  return safeRows_('fact_req_comment', ids).sort(function (a, b) { return str_(a.ts) < str_(b.ts) ? -1 : str_(a.ts) > str_(b.ts) ? 1 : 0; });
+}
+function commentAdd_(p, auth) {
+  var rid = str_(p.req_id).trim(), text = str_(p.text).replace(/\r\n?/g, '\n').trim();
+  if (!rid) throw fail_('缺申請單號');
+  if (!text) throw fail_('請寫留言內容');
+  if (text.length > CMT_MAX) throw fail_('留言最多 ' + CMT_MAX + ' 字（現在 ' + text.length + ' 字），請分兩則');
+  var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
+  if (!row) throw fail_('找不到申請單 ' + rid, 'notfound');
+  var who, kind;
+  if (auth.kind === 'signer') { who = auth.name; kind = '簽核人' + (auth.role ? '｜' + auth.role : ''); }
+  else if (auth.kind === 'role') { who = auth.role; kind = '身分'; }
+  else throw fail_('留言要先選自己的名字並輸入 PIN', 'perm');
+  var ct = load_('fact_req_comment'), rec = { ts: now_(), req_id: rid, who: who, who_kind: kind, text: text.slice(0, CMT_MAX) };
+  put_(ct, nextRow_(ct), rec);
+  return { id: rid, data: { comment: rec, comments: commentsOf_(rid) }, msg: who + ' 留言 ' + text.length + ' 字' };
+}
+/* 簽核連結（k）打開：整張申請單＋同檔期清單＋品項補充＋簽核紀錄＋意見交流＋可選的名字（不用 PIN） */
+function signOpen_(p, auth) {
+  var rid = str_(p.req_id).trim();
+  var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
+  if (!row) throw fail_('找不到這張申請單（可能已刪除）', 'notfound');
+  var d = signData_(t, row, rid);
+  d.people = peopleOf_();
+  return { id: rid, data: d, msg: '簽核連結 ' + rid };
+}
+function signData_(t, row, rid) {
+  var req = plain_(t.H, row);
+  req.payload = readPayload_(t, row._row);
+  var cid = str_(row.campaign_id), ct = load_('fact_campaign'), camp = ct.rows.filter(function (r) { return str_(r.campaign_id) === cid; })[0];
+  var others = t.rows.filter(function (r) { return str_(r.campaign_id) === cid; })
+    .sort(function (a, b) { return (parseInt(str_(a.seq), 10) || 0) - (parseInt(str_(b.seq), 10) || 0); })
+    .map(function (r) {
+      return { req_id: str_(r.req_id), seq: str_(r.seq), name: str_(r['商品正式名稱']) || str_(r['商品暫定名稱']),
+        price: r['定價'] === '' ? '' : r['定價'], cost: r['成本'] === '' ? '' : r['成本'], margin: r['利潤率'] === '' ? '' : r['利潤率'], status: str_(r.status) };
+    });
+  var ids = {}; ids[rid] = 1;
+  return { req: req, campaign: camp ? plain_(ct.H, camp) : null, others: others, units: rowsOf_('fact_req_unit', ids),
+    signoffs: rowsOf_('fact_signoff', ids), comments: commentsOf_(rid) };
+}
+/* 本人第一次簽核時自設 PIN（簽核連結 k）：只限名單上啟用中、PIN 還是空的人；設好之後要改只能找管理者 */
+function signSetPin_(p, auth) {
+  var rid = str_(p.req_id).trim(), name = str_(p.signer).trim(), pin = str_(p.new_pin).trim();
+  if (!name) throw fail_('請先選你的名字');
+  if (!/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字');
+  var t = load_('dim_signer'), row = t.rows.filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
+  if (!row) throw fail_('名單上沒有「' + name + '」（或已停用），請找管理者', 'notfound');
+  if (str_(row.pin).trim()) throw fail_('「' + name + '」已經設定過 PIN；忘記請找管理者在「🔑 密碼管理」重設', 'haspin');
+  putCols_(t, row._row, { pin: pin }, function (h) { return h === 'pin'; });
+  return { id: name, data: { name: name, role: str_(row.role).trim() }, msg: name + ' 第一次簽核自設 PIN（' + rid + '）' };
 }
 
 /* 各單位只改自己負責的申請單內容欄位（P:head.xxx／P:lines.xxx），伺服器逐欄檢查權限；
@@ -691,6 +836,15 @@ function submitSign_(p, auth) {
   if (!can_(auth, 'P:*')) throw fail_('只有主廚可以送簽', 'perm');
   var rid = str_(p.req_id).trim();
   if (!rid) throw fail_('缺申請單號');
+  /* 2026-10-07 加速：帶了 req＋payload ＝「先存最新內容再送簽」在同一次請求做完（原本前端要先送件、再送簽，等兩趟 Google）。
+     存檔規則與「📨 送件到檔期」完全相同（別人在你之後改過 → conflict，不覆蓋） */
+  var saved = null;
+  if (p.req && typeof p.payload === 'string' && p.payload) {
+    var sq = p.req || {};
+    if (str_(sq.req_id).trim() !== rid) throw fail_('送簽的單號和內容對不上，請重新整理', 'bad');
+    saved = saveReq_({ req: sq, payload: p.payload, base_updated_at: p.base_updated_at, force: false }, auth).data;
+    p.base_updated_at = saved.updated_at;
+  }
   var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
   if (!row) throw fail_('找不到申請單 ' + rid, 'notfound');
   var st = str_(row.status);
@@ -708,8 +862,8 @@ function submitSign_(p, auth) {
   var voided = voidSignoffs_(rid), now = now_();
   putCols_(t, row._row, { status: '送簽中', signers: names.join('、'), updated_at: now, updated_by: auth.role },
     function (h) { return h === 'status' || h === 'signers' || h === 'updated_at' || h === 'updated_by'; });
-  return { id: rid, data: { status: '送簽中', signers: names, updated_at: now, updated_by: auth.role, voided: voided },
-    msg: '送簽給 ' + names.join('、') + (voided ? '｜上一輪簽核 ' + voided + ' 筆標記作廢' : '') };
+  return { id: rid, data: { status: '送簽中', signers: names, updated_at: now, updated_by: auth.role, voided: voided, saved: saved, sign_key: signKey_(rid) },
+    msg: (saved ? '存檔＋' : '') + '送簽給 ' + names.join('、') + (voided ? '｜上一輪簽核 ' + voided + ' 筆標記作廢' : '') };
 }
 
 /* 撤回送簽（主廚）：送簽中 → 草稿；已經簽的標記作廢 */
@@ -736,18 +890,9 @@ function signView_(p, auth) {
   var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
   if (!row) throw fail_('找不到申請單 ' + rid, 'notfound');
   if (signersOf_(row).indexOf(auth.name) < 0) throw fail_('你不在這張單的簽核人名單（可能已改派其他主管）', 'perm');
-  var req = plain_(t.H, row);
-  req.payload = readPayload_(t, row._row);
-  var cid = str_(row.campaign_id), ct = load_('fact_campaign'), camp = ct.rows.filter(function (r) { return str_(r.campaign_id) === cid; })[0];
-  var others = t.rows.filter(function (r) { return str_(r.campaign_id) === cid; })
-    .sort(function (a, b) { return (parseInt(str_(a.seq), 10) || 0) - (parseInt(str_(b.seq), 10) || 0); })
-    .map(function (r) {
-      return { req_id: str_(r.req_id), seq: str_(r.seq), name: str_(r['商品正式名稱']) || str_(r['商品暫定名稱']),
-        price: r['定價'] === '' ? '' : r['定價'], cost: r['成本'] === '' ? '' : r['成本'], margin: r['利潤率'] === '' ? '' : r['利潤率'], status: str_(r.status) };
-    });
-  var ids = {}; ids[rid] = 1;
-  return { id: rid, data: { req: req, campaign: camp ? plain_(ct.H, camp) : null, others: others, units: rowsOf_('fact_req_unit', ids),
-    signoffs: rowsOf_('fact_signoff', ids), me: meOf_(auth) }, msg: '簽核頁 ' + rid };
+  var d = signData_(t, row, rid);
+  d.me = meOf_(auth);
+  return { id: rid, data: d, msg: '簽核頁 ' + rid };
 }
 
 /* 簽核（簽核人 PIN）：同意／退回（退回要寫原因）。任一退回 → 退回；全部同意 → 已核准。送簽中可以改自己的決定 */
@@ -807,12 +952,15 @@ function signInfo_(rid) {
           fact_push 分頁逐表記錄；同一張單寫過且未還原 → 不重寫；rollbackReq(單號)／管理者「還原」只刪這張單寫的列 */
 var PURCHASE_ID_DEFAULT = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';   /* BOM 本；指令碼屬性 PURCHASE_ID 有值時改用它（測試副本用） */
 var DASH_ID_DEFAULT = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';       /* 儀表板專用檔（只寫 dim_sku）；指令碼屬性 DASH_PURCHASE_ID 可覆蓋 */
-var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）' };
-var PT_COLS = { map: 8, bom: 5 };                         /* 讀寫範圍（欄數）；dim_sku 依表頭 */
+var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv' };
+var PT_COLS = { map: 8, bom: 5, conv: 5 };                /* 讀寫範圍（欄數）；dim_sku 依表頭。dim_unitconv 只寫 A–E（F1 是單位對照網址，不碰） */
 var PT_HEAD = {                                            /* 表頭對不上就停，不寫 */
   map: { 1: 'POS 資料產品名稱', 2: '手動對應產品名稱', 5: '起始有效日', 6: '結束有效日', 7: '主類別', 8: '次類別' },
-  bom: { 1: '甜點名稱', 2: '食材/器具名稱', 3: '數量', 4: '單位', 5: '容器' }
+  bom: { 1: '甜點名稱', 2: '食材/器具名稱', 3: '數量', 4: '單位', 5: '容器' },
+  conv: { 1: '適用品項', 2: '單位', 3: '基準單位', 4: '換算量', 5: '備註' }   /* 2026-10-07：新單位換算（主廚在申請表填「1 平匙≈幾 g」） */
 };
+var CONV_COUNT = { '個': 1, '支': 1, '張': 1, '片': 1, '顆': 1, '包': 1, '罐': 1, '條': 1, '組': 1, '份': 1, '雙': 1, '對': 1, '朵': 1, '段': 1, '捲': 1, '卷': 1, '杯': 1, '碗': 1, '台': 1, '盒': 1, '瓶': 1, '袋': 1, '塊': 1, '根': 1 };
+var CONV_GENERIC = { '（通用）': 1, '(通用)': 1, '通用': 1 };
 var MAP_WRITE_COLS = [1, 2, 5, 6, 7, 8];                   /* 對照表 C／D 欄（偵測新產品公式區）永遠不寫 */
 var SKU_NEED = ['sku_id', '品名', '品類別', '廠商', '使用單位', '採購單位', '每採購單位內容量', '單價', '來源'];
 var SKU_PREFIX = { '食材': 'F', '耗材': 'C', '器具': 'T', '模具': 'M' };   /* 與主檔慣例、semiApi 相同 */
@@ -898,10 +1046,26 @@ function planPush_(rid) {
   var lines = (pl.lines || []).map(function (l) {
     return { name: ptName_(l.name), qty: Number(l.qty) || 0, unit: ptName_(l.unit), cat: ptName_(l.cat), vendor: ptName_(l.vendor),
       pkgCost: Number(l.pkg_cost) || 0, pkgSpec: ptName_(l.pkg_spec), pack: Number(l.pack) || 0, zone: ptName_(l.zone),
-      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname) };
+      shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname),
+      conv: Number(l.conv) > 0 ? Number(l.conv) : 0, cbase: ptName_(l.conv_base) };   /* 2026-10-07：新單位換算（1 unit ≈ conv cbase） */
   }).filter(function (l) { return l.name; });
-  var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null };
+  var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null, conv: null };
   try { P.sku2 = ptRead_('sku2'); } catch (e) { P.sku2 = null; P.sku2err = errMsg_(e); }
+  /* 單位換算表讀不到（分頁改名、表頭不對）→ 不擋核准寫入，只提醒「新單位要請採購手動加」 */
+  try { P.conv = ptRead_('conv'); } catch (e) { P.conv = null; P.converr = errMsg_(e); }
+  var convHave = {}, convGen = {}, convRows = [], convSeen = {}, convNote = DRAFT_TAG + ' ' + Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd') + '（新品申請 ' + rid + '：' + name + '；請採購確認）';
+  if (P.conv) P.conv.vals.forEach(function (r) { var it = ptName_(r[0]), u = ptName_(r[1]); if (!it || !u) return; convHave[it + '|' + u] = 1; if (CONV_GENERIC[it]) convGen[u] = 1; });
+  function convNeeded(unit, base) {   /* 和採購系統引擎同口徑：同單位、g／ml 互通、兩邊都是計數單位 → 不用換算 */
+    if (!unit || !base || unit === base) return false;
+    if ((unit === 'g' || unit === 'ml') && (base === 'g' || base === 'ml')) return false;
+    if (CONV_COUNT[unit] && CONV_COUNT[base]) return false;
+    return true;
+  }
+  function convHas(names, unit) { if (convGen[unit]) return true; for (var i = 0; i < names.length; i++) if (names[i] && convHave[names[i] + '|' + unit]) return true; return false; }
+  function convAdd(l, base) {
+    var key = l.name + '|' + l.unit; if (convSeen[key]) return; convSeen[key] = 1;
+    convRows.push([l.name, l.unit, base, r4_(l.conv), convNote]);
+  }
 
   /* ① dim_sku：品名或 BOM別名（trim 後全等）對得到＝已有主檔 */
   var S = P.sku, cN = S.col['品名'], cA = S.col['BOM別名'], cU = S.col['使用單位'], known = {};
@@ -924,13 +1088,22 @@ function planPush_(rid) {
     var k = known[l.name];
     if (k) {
       existing.push(l.name);
-      if (l.unit && k.unit && l.unit !== k.unit) warn.push('「' + l.name + '」申請單寫 ' + l.unit + '、主檔使用單位是 ' + k.unit + '：採購系統要有單位換算（dim_unitconv）才算得到用量');
+      /* 2026-10-07：主廚在申請表填了「1 平匙≈幾 g」→ 核准時新增一列 dim_unitconv（備註「自動草稿…請採購確認」）；沒填才提醒 */
+      if (convNeeded(l.unit, k.unit) && !convHas([l.name, k.name], l.unit)) {
+        if (l.conv > 0 && (!l.cbase || l.cbase === k.unit) && P.conv) convAdd(l, k.unit);
+        else warn.push('「' + l.name + '」申請單寫 ' + l.unit + '、主檔使用單位是 ' + k.unit + '：' + (l.conv > 0 && l.cbase && l.cbase !== k.unit ? '申請表填的換算是 1 ' + l.unit + '≈' + l.conv + ' ' + l.cbase + '，和主檔單位不同，' : '') + '採購系統要有單位換算（dim_unitconv）才算得到用量' + (P.conv ? '' : '（單位換算表讀不到：' + P.converr + '）'));
+      }
       return;
     }
     var cat = SKU_PREFIX[l.cat] ? l.cat : '食材', isSemi = !!semi[l.name];
     var pre = SKU_PREFIX[cat], no = (maxNo[pre] || 0) + 1; maxNo[pre] = no;
     var id = pre + ('000000' + no).slice(-(width[pre] || 3));
     var u = l.unit || 'g', buy = u, pack = 1, price = 0;
+    /* 2026-10-07：新品項用「平匙」這類單位、又填了換算 → 主檔使用單位用基準單位（g／ml），另加一列換算（採購系統：使用單位必須＝換算的基準單位） */
+    if (l.conv > 0 && l.cbase && convNeeded(l.unit, l.cbase)) {
+      if (P.conv) { u = l.cbase; buy = u; if (!convHas([l.name], l.unit)) convAdd(l, l.cbase); }
+      else warn.push('新品項「' + l.name + '」用 ' + l.unit + ' 計量（1 ' + l.unit + '≈' + l.conv + ' ' + l.cbase + '），但單位換算表讀不到（' + P.converr + '）：請採購手動加換算');
+    } else if (/勺|匙|適量|少許|些許|酌量|滴/.test(u)) warn.push('新品項「' + l.name + '」用「' + u + '」計量、沒有填換算：採購系統會把 1 ' + u + ' 當 1 個單位算，請採購補單位換算');
     if (l.pack > 1) { var cm = l.pkgSpec.match(/[包袋箱盒罐瓶桶組件套盤打]/); buy = cm ? cm[0] : '包'; pack = l.pack; price = l.pkgCost; }
     else if (l.pack === 1) price = l.pkgCost;
     var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '') + (l.vname && l.vname !== l.name ? '；廠商品名 ' + l.vname : '')
@@ -982,13 +1155,15 @@ function planPush_(rid) {
   var map = { row: [name, name, '', '', ymd_(d1), ymd_(d2), main, sub], show: [name, name, d1, d2, main, sub],
     skip: mapHave ? '對照表已經有「' + name + '」（' + normDate_(mapHave[4]) + '～' + normDate_(mapHave[5]) + '），沒有新增（重新上架請到對照表改日期）' : '' };
   if (skuRows.length && !P.sku2) warn.push('儀表板專用檔讀不到（' + P.sku2err + '）：主檔新品項只寫 BOM 本、明天 07:05 同步；這段期間請不要在採購系統主檔頁新增品項（會撞號）');
-  if (!skuRows.length && bom.skip && map.skip) warn.push('三張表都不用寫（都已經有了）');
-  return { rid: rid, name: name, campaign: campName, from: d1, to: d2, sku: { rows: skuRows, existing: existing }, bom: bom, map: map, warn: warn, P: P };
+  if (!skuRows.length && bom.skip && map.skip && !convRows.length) warn.push('三張表都不用寫（都已經有了）');
+  if (convRows.length) warn.push('新單位換算 ' + convRows.length + ' 筆會加進 dim_unitconv（備註「' + DRAFT_TAG + '…請採購確認」）：' + convRows.map(function (c) { return c[0] + ' 1 ' + c[1] + '≈' + c[3] + ' ' + c[2]; }).join('、') + '，請採購到採購系統「單位對照」確認數字');
+  return { rid: rid, name: name, campaign: campName, from: d1, to: d2, sku: { rows: skuRows, existing: existing }, bom: bom, map: map, conv: { rows: convRows }, warn: warn, P: P };
 }
 function planView_(pl) {
   return { req_id: pl.rid, name: pl.name, campaign: pl.campaign, from: pl.from, to: pl.to, warn: pl.warn, dash: !!pl.P.sku2,
     sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, vname: r.vname || '', cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
-    existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip };
+    existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip,
+    conv: (pl.conv ? pl.conv.rows : []).map(function (r) { return r.slice(0, 4).map(ptNorm_); }) };
 }
 
 /* 寫入紀錄：這張單最近一批是否「寫了、還沒還原」 */
@@ -1035,6 +1210,7 @@ function ptRemove_(tab, rec) {
   function same(r, x) {
     if (tab.key === 'map') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1];
     if (tab.key === 'bom') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1] && ptSame_(r[2], x[2]) && ptName_(r[3]) === String(x[3]);
+    if (tab.key === 'conv') return ptName_(r[0]) === x[0] && ptName_(r[1]) === x[1] && ptName_(r[2]) === x[2] && ptSame_(r[3], x[3]);
     var ci = tab.col['sku_id'], cn = tab.col['品名'];
     return ptName_(r[ci]) === String(x[ci]) && ptName_(r[cn]) === String(x[cn]);
   }
@@ -1061,9 +1237,9 @@ function backupTab_(pl, batch) {
   var sh = ss.insertSheet(nm, ss.getSheets().length);
   var out = [['批次', batch, '申請單', pl.rid, '甜點', pl.name],
     ['表', '分頁', '寫入前 A 欄最後一列', '寫入前指紋', '這次要寫的列數', '說明']];
-  ['sku', 'bom', 'map', 'sku2'].forEach(function (key) {
-    var tab = pl.P[key], n = (key === 'sku' || key === 'sku2') ? pl.sku.rows.length : key === 'bom' ? (pl.bom.skip ? 0 : pl.bom.rows.length) : (pl.map.skip ? 0 : 1);
-    if (!tab) { out.push([key, PT[key], '', '讀不到', '0', pl.P.sku2err || '']); return; }
+  ['sku', 'bom', 'map', 'sku2', 'conv'].forEach(function (key) {   /* 2026-10-07 加 conv（dim_unitconv）：還原時讀第 3～7 列 */
+    var tab = pl.P[key], n = (key === 'sku' || key === 'sku2') ? pl.sku.rows.length : key === 'bom' ? (pl.bom.skip ? 0 : pl.bom.rows.length) : key === 'conv' ? pl.conv.rows.length : (pl.map.skip ? 0 : 1);
+    if (!tab) { out.push([key, PT[key], '', '讀不到', '0', (key === 'conv' ? pl.P.converr : pl.P.sku2err) || '']); return; }
     tab.digest = ptDigest_(tab);
     out.push([key, PT[key], String(tab.lastA), tab.digest, String(n), key === 'bom' && pl.bom.skip ? pl.bom.skip : key === 'map' && pl.map.skip ? pl.map.skip : '']);
   });
@@ -1072,6 +1248,7 @@ function backupTab_(pl, batch) {
   pl.sku.rows.forEach(function (r) { out.push(['sku', JSON.stringify(r.arr.map(ptNorm_)), '', '', '', '']); });
   if (!pl.bom.skip) pl.bom.rows.forEach(function (r) { out.push(['bom', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   if (!pl.map.skip) out.push(['map', JSON.stringify(pl.map.row.map(ptNorm_)), '', '', '', '']);
+  pl.conv.rows.forEach(function (r) { out.push(['conv', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   var rg = sh.getRange(1, 1, out.length, 6);
   rg.setNumberFormat('@');
   rg.setValues(out.map(function (r) { return r.map(function (v) { return safe_(String(v)); }); }));
@@ -1090,6 +1267,7 @@ function pushToPurchase_(rid, who) {
       catch (e2) { soft.push('儀表板專用檔主檔沒寫到（' + errMsg_(e2) + '）：明天 07:05 會同步；這段期間請不要在採購系統主檔頁新增品項（會撞號）'); }
     }
     if (!pl.bom.skip) done.push(ptAppend_(pl.P.bom, pl.bom.rows));
+    if (pl.conv.rows.length && pl.P.conv) done.push(ptAppend_(pl.P.conv, pl.conv.rows));   /* 2026-10-07：新單位換算（對照表仍最後寫＝備料啟動開關） */
     if (!pl.map.skip) done.push(ptAppend_(pl.P.map, [pl.map.row]));
   } catch (e) {
     var undo = [];
@@ -1101,7 +1279,8 @@ function pushToPurchase_(rid, who) {
       backup: bk, ok: 'N', msg: (who || '') + '｜' + errMsg_(e) + (undo.length ? '｜' + undo.join('；') : '') });
     throw fail_('寫入採購系統失敗：' + errMsg_(e) + (undo.length ? '（已把這次寫的列刪回：' + undo.join('；') + '）' : '（沒有寫進任何一列）'), 'push');
   }
-  var show = { sku: pl.sku.rows.map(function (r) { return [r.sku_id, r.name, r.cat, r.vendor]; }), bom: pl.bom.rows.map(function (r) { return r.map(ptNorm_); }), map: [pl.map.show] };
+  var show = { sku: pl.sku.rows.map(function (r) { return [r.sku_id, r.name, r.cat, r.vendor]; }), bom: pl.bom.rows.map(function (r) { return r.map(ptNorm_); }), map: [pl.map.show],
+    conv: pl.conv.rows.map(function (r) { return r.slice(0, 4).map(ptNorm_); }) };
   show.sku2 = show.sku;
   done.forEach(function (d) {
     pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: d.table, rows: String(d.rows.length),
@@ -1120,11 +1299,11 @@ function rollbackPush_(rid, who) {
   var res = [], now = now_(), bkDig = {};
   try {
     var bs = ss_().getSheetByName(st.backup);
-    if (bs) bs.getRange(3, 1, 4, 4).getValues().forEach(function (r) { bkDig[String(r[0])] = String(r[3]); });
+    if (bs) bs.getRange(3, 1, 5, 4).getValues().forEach(function (r) { if (String(r[0])) bkDig[String(r[0])] = String(r[3]); });   /* 2026-10-07 起第 7 列是 conv；舊備份第 7 列是空白 */
   } catch (e) { }
-  ['map', 'bom', 'sku', 'sku2'].forEach(function (key) {
+  ['map', 'conv', 'bom', 'sku', 'sku2'].forEach(function (key) {
     var rec = st.tables[key];
-    if (key === 'sku2' && !rec) return;   /* 當初沒寫到專用檔 */
+    if ((key === 'sku2' || key === 'conv') && !rec) return;   /* 當初沒寫到專用檔／這張單沒有新單位換算 */
     var tab;
     try { tab = ptRead_(key); } catch (e) {
       if (key !== 'sku2') throw e;
@@ -1283,10 +1462,15 @@ function rowsOf_(name, ids) {
 function findByCreated_(t, created) {
   var lim = Utilities.formatDate(new Date(Date.now() - 24 * 3600e3), TZ, 'yyyy-MM-dd HH:mm:ss');
   var key = '"created_at":' + JSON.stringify(created), a = t.H.indexOf('payload_1') + 1;
-  for (var i = t.rows.length - 1; i >= 0; i--) {
-    var r = t.rows[i];
-    if (str_(r.created_at) < lim) continue;
-    if (str_(t.sh.getRange(r._row, a).getValue()).slice(0, 400).indexOf(key) >= 0) return r;
+  var cand = t.rows.filter(function (r) { return str_(r.created_at) >= lim; });
+  if (!cand.length) return null;
+  /* 2026-10-07 加速：24 小時內的列一次讀（原本每列各讀一次） */
+  var lo = cand[0]._row, hi = cand[cand.length - 1]._row;
+  cand.forEach(function (r) { if (r._row < lo) lo = r._row; if (r._row > hi) hi = r._row; });
+  var col = t.sh.getRange(lo, a, hi - lo + 1, 1).getValues();
+  for (var i = cand.length - 1; i >= 0; i--) {
+    var r = cand[i];
+    if (str_(col[r._row - lo][0]).slice(0, 400).indexOf(key) >= 0) return r;
   }
   return null;
 }
