@@ -1,6 +1,6 @@
 # dudooPOS_自動匯入.gs（只在 Google 端，未放進公開 repo）
 
-專案「一鍵追加新品」（綁 BOM 本，script ID `1PkavxV6r3GZbEbS_B5ZWGL1ovm30T55XhllAuI1aglBe_RPERdP-DJnJ`）的每日 04:50 匯入程式。
+專案「一鍵追加新品」（綁 BOM 本，script ID `1PkavxV6r3GZbEbS_B5ZWGL1ovm30T55XhllAuI1aglBe_RPERdP-DJnJ`）的每日匯入程式（2026-10-07 起 02:30，原 04:50；整條排程見 dailyRevenueReport.gs 檔頭）。
 原檔含通知信箱，所以不放公開 repo；完整改前／改後版本在經營者本機 `資料交換/輸出/gas-backup/一鍵追加新品/`。
 
 ## 2026-10-05 唯一改動（第 152 行，`dudooPOS_loginAndImportDate_` 內）
@@ -11,6 +11,6 @@
 ```
 
 `dudooGuard_apply_` 在 `gas/bom/dudooGuard.gs`；它出錯不會擋匯入（照原資料寫入並寄信）。
-回滾：刪掉這一行即可（dudooGuard.gs 留著不影響任何東西）；每日 07:30 對帳觸發器 `dudooCheck_daily` 在「觸發條件」頁刪除。
+回滾：刪掉這一行即可（dudooGuard.gs 留著不影響任何東西）；每日 05:00（原 07:30）對帳觸發器 `dudooCheck_daily` 在「觸發條件」頁刪除。
 
 2026-10-05 v2：每日對帳會自動修正（折扣重抓、整天重抓、調整列「肚肚對帳調整」），結果寫 BOM 本「肚肚對帳」分頁，POS 儀表板頂部燈號讀它。自動修正前備份到 BigQuery `pos_transactions_autobak`／`pos_discounts_autobak`。

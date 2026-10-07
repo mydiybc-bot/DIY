@@ -13,10 +13,10 @@
  *
  * 入口：
  *   dudooGuard_apply_(rows, ds, token)：dudooPOS_loginAndImportDate_ 寫進 POS資料 之前呼叫（①②③）。出錯不擋匯入。
- *   dudooCheck_daily()：每天 07:30 觸發。近 7 天逐店日＋本月／上月逐店總額 vs 業績概況，對不上就自動修（④⑤③），
+ *   dudooCheck_daily()：每天 05:00 觸發（2026-10-07 由 07:30 提早）。近 7 天逐店日＋本月／上月逐店總額 vs 業績概況，對不上就自動修（④⑤③），
  *     修完再比一次；結果寫 BOM 本「肚肚對帳」分頁（POS 儀表板頂部燈號讀這裡）。沒事不寄信，修好寄「不用處理」。
  *   aaaDudooGuardDryRun()／aaaDudooCheckDryRun()：唯讀預演，不寫入、不寄信。
- *   dudooCheck_installTrigger()：建立 07:30 觸發器（已存在就不重複建）。
+ *   dudooCheck_installTrigger()：建立 05:00 觸發器（已存在就不重複建）。
  * 每次自動修正前，BigQuery 先備份到 pos_transactions_autobak／pos_discounts_autobak（多一欄 bak_at）。
  */
 
@@ -347,7 +347,7 @@ function dudooGuard_apply_(rows, ds, token, dry) {
     var dash = dguardDashboard_(token, ds, ds);
     var p = dguardProcessDay_(rows, ds, token, dash);
     if (p.redated.length) Logger.log('[守門員] 跨日退款改記 ' + ds + '：' + p.redated.length + ' 列\n  ' + p.redated.join('\n  '));
-    if (p.skipped.length) Logger.log('[守門員] 差額過大不自動補（交給 07:30 每日對帳）：' + p.skipped.map(function (x) { return x.store + '店 ' + x.amt; }).join('、'));
+    if (p.skipped.length) Logger.log('[守門員] 差額過大不自動補（交給 05:00 每日對帳）：' + p.skipped.map(function (x) { return x.store + '店 ' + x.amt; }).join('、'));
     if (!p.removed.length && !p.adjusted.length) {
       if (!p.skipped.length) Logger.log('[守門員] ' + ds + ' 12 店銷售總額＝業績概況 ✅');
       return p.rows;
@@ -367,8 +367,8 @@ function dudooGuard_apply_(rows, ds, token, dry) {
   } catch (e) {
     dguardRedate_(rows, ds);   // 比對失敗也要照退款日規則
     Logger.log('[守門員] ⚠️ 比對失敗（照原資料匯入）：' + e);
-    if (!dry) dguardMail_('[POS守門] ' + ds + ' 比對暫時失敗（資料已照常匯入，07:30 每日對帳會自動補修，不用處理）',
-      ['肚肚匯入守門員 ' + ds, '', '錯誤：' + e, '', '資料已照常寫入；07:30 每日對帳會再比一次並自動修正。']);
+    if (!dry) dguardMail_('[POS守門] ' + ds + ' 比對暫時失敗（資料已照常匯入，05:00 每日對帳會自動補修，不用處理）',
+      ['肚肚匯入守門員 ' + ds, '', '錯誤：' + e, '', '資料已照常寫入；05:00 每日對帳會再比一次並自動修正。']);
     return rows;
   }
 }
@@ -385,7 +385,7 @@ function aaaDudooGuardDryRun() {
   Logger.log('[預演] 結束：沒有寫入試算表、沒有寄信');
 }
 
-/* ═══════════ 每日對帳＋自動修正（07:30 觸發） ═══════════ */
+/* ═══════════ 每日對帳＋自動修正（05:00 觸發） ═══════════ */
 
 function dudooCheck_daily() { return dguardCheck_(false); }
 
@@ -651,7 +651,7 @@ function dguardCheck_(dry) {
       } else {
         var fresh = still.filter(function (b) { return !seen[b.ds + '|' + b.st + '|' + (b.o.n - b.x.amount)]; });
         if (fresh.length) {
-          lines.push('有 ' + still.length + ' 店日自動修正後仍不一致，明天 07:30 會再試一次。', '連續兩天都出現同一店日，請把這封信轉給 Claude。', '');
+          lines.push('有 ' + still.length + ' 店日自動修正後仍不一致，明天 05:00 會再試一次。', '連續兩天都出現同一店日，請把這封信轉給 Claude。', '');
           still.forEach(function (b) { lines.push('  ' + b.ds + ' ' + b.st + '店：儀表板 ' + b.o.n + ' vs 肚肚 ' + b.x.amount + '（差 ' + (b.o.n - b.x.amount) + '）'); });
           if (fixed.length) { lines.push('', '已處理：'); fixed.forEach(function (s) { lines.push('  ' + s); }); }
           if (failed.length) { lines.push('', '未處理原因：'); failed.forEach(function (s) { lines.push('  ' + s); }); }
@@ -675,11 +675,11 @@ function dguardCheck_(dry) {
   }
 }
 
-/** 一次性：建立每日 07:30 觸發器（已存在就不重複建立）。 */
+/** 一次性：建立每日 05:00 觸發器（已存在就不重複建立）。 */
 function dudooCheck_installTrigger() {
   var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dudooCheck_daily'; });
   if (has) { Logger.log('dudooCheck_daily 觸發器已存在，不重複建立'); return '已存在'; }
-  ScriptApp.newTrigger('dudooCheck_daily').timeBased().everyDays(1).atHour(7).nearMinute(30).inTimezone(DGUARD.TZ).create();
-  Logger.log('✅ 已建立 dudooCheck_daily 每日 07:30 觸發器');
+  ScriptApp.newTrigger('dudooCheck_daily').timeBased().everyDays(1).atHour(5).nearMinute(0).inTimezone(DGUARD.TZ).create();
+  Logger.log('✅ 已建立 dudooCheck_daily 每日 05:00 觸發器');
   return '已建立';
 }
