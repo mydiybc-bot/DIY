@@ -821,6 +821,7 @@
     <button class="tab-btn active" data-tab="apply">📝 新品申請表</button>
     <button class="tab-btn" data-tab="semi">🧪 半成品/材料包</button>
     <button class="tab-btn" data-tab="bom">📚 BOM 管理</button>
+    <button class="tab-btn" data-tab="spoon">🥄 平匙換算</button>
   </div>
 
   <!-- ===== 食譜成本分析畫面已刪（2026-09-29）；只留隱藏容器給 RecipeMod 引擎寫狀態，不是分頁、沒有按鈕 ===== -->
@@ -851,6 +852,12 @@
   <div id="bmLoading" class="ap-muted" style="padding:20px 0">⏳ 讀取 BOM 本與採購系統主檔…</div>
   <div id="bmRoot" style="display:none"></div>
   </div>
+
+  <!-- ===== TAB: 🥄 平匙換算（SpoonMod，2026-10-08）：讀主廚的《自己做_食材量匙換算對照表》＋各甜點平匙用量快照，只讀 ===== -->
+  <div class="tab-panel" id="tab-spoon">
+  <div class="ap-panel-head"><h2 class="ap-panel-title">🥄 平匙換算 <span class="ap-sub">門市量匙：每種食材 1 平匙等於幾 g、幾 g 該寫幾平匙、哪些甜點用到</span></h2></div>
+  <div id="spRoot"></div>
+  </div>
 </div>
 
 <script>
@@ -866,6 +873,7 @@ function activateTab(tab, fromHash){
   if(tab==='apply' && window.ApplyMod) ApplyMod.ensureInit();
   if(tab==='semi' && window.SemiMod) SemiMod.ensureInit();
   if(tab==='bom' && window.BomMod) BomMod.ensureInit();   /* 2026-10-01 需求 7 */
+  if(tab==='spoon' && window.SpoonMod) SpoonMod.ensureInit();   /* 2026-10-08 平匙換算 */
   if(!fromHash){ try{ history.replaceState(null,'', '#'+tab); }catch(e){} }
 }
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>activateTab(btn.dataset.tab)));
@@ -5253,6 +5261,212 @@ function wire(){var r=root();
   r.querySelectorAll('[data-cgo]').forEach(function(a){a.onclick=function(){var id=a.getAttribute('data-cgo');S.open['d:'+id]=true;paint();var e=document.getElementById('sgD_'+id);if(e)try{e.scrollIntoView({behavior:'smooth',block:'start'})}catch(x){}}});
   var o=document.getElementById('sgOut');if(o)o.onclick=function(){meDrop();S.step=null;S.last=null;S.chg=false;S.closeHint=false;S.msg='';S.cdec={};S.ccm={};if(!S.k&&!S.camp){S.view=null;S.who='';loadInfo()}else paint()}}
 return {start:start};
+})();
+</script>
+<script>
+/* ================= SpoonMod：🥄 平匙換算（2026-10-08 經營者「把平匙換算表加入食譜系統，成為一個功能頁」）=================
+   ‧ 換算數字即時讀主廚的 Google 試算表《自己做_食材量匙換算對照表》（知道連結可檢視）：
+       「工作表1」＝每種食材 1 平匙等效克數／最小／上限；「門市定案」＝主廚確認的「幾 g → 幾平匙」
+     主廚改了試算表，這頁重新整理就跟著變。只讀，不寫任何東西。
+   ‧ 「用到的甜點」與「依甜點查」是 2026-10-07 從門市食譜後台比對的快照（SNAP）：
+       rec＝66 支「台灣秤重版備份」對照現行食譜，逐步驟 g→平匙 的改動 [甜點, 第幾步, 步驟標題, 食材, 原數量, 原單位, 平匙]
+       use＝台灣區啟用中（繁中版）用到該平匙食材的甜點
+   ‧ 換算規則（同試算表「換算器」）：門市定案有這個克數 → 用定案；否則 克數÷每平匙克數 四捨五入到 0.5 平匙；
+     低於最小平匙：列在「不足最小改秤重食材」的維持秤重，其餘用最小平匙；超過上限 → 改秤重；實際克數誤差 ≥10% 提醒 */
+window.SpoonMod=(function(){
+var SHEET='1b_O6U39crO5hvdBKeJHffXwYY41dKwG5DO5HdfyQxBA';
+var SHEET_URL='https://docs.google.com/spreadsheets/d/'+SHEET+'/edit';
+var SNAP={"date":"2026-10-07","rec":[["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕",4,"準備模具(拍 4模)","低筋麵粉",75,"g",2.5],["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕",4,"準備模具(拍 4模)","泡打粉",4,"平匙",2],["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕",7,"移動至攪拌區","砂糖",45,"g",4.5],["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕",18,"製作百香果凍1","寒天粉",2,"匙",2],["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕",22,"準備擠花袋(拍)","砂糖",15,"g",1.5],["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版",4,"準備模具","低筋麵粉",25,"g",1],["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版",4,"準備模具","泡打粉",2,"平匙",1.5],["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版",16,"融化巧克力","巧克力",10,"g",1],["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版",36,"裝飾","Oreo粉",15,"g",2],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",4,"製作可可糖","可可粉",4,"g",1],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",4,"製作可可糖","巧克力",15,"g",1.5],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",4,"製作可可糖","砂糖",10,"g",1],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",8,"準備模具","伯爵紅茶粉",5,"g",3.5],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",8,"準備模具","低筋麵粉",55,"g",2],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",8,"準備模具","泡打粉",3,"平匙",2],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",11,"移動至攪拌區","砂糖",35,"g",3.5],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",22,"融化巧克力(拍)","巧克力",20,"g",2],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",25,"準備擠花袋(拍)","巧克力",25,"g",2.5],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",31,"脫模","巧克力碎",20,"g",2],["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)",41,"製作淋面巧克力1","巧克力",35,"g",3.5],["115 11月大菜單_小狗生日蛋糕 (限當日壽星)_原版備用",4,"準備模具","泡打粉",2,"平匙",1.5],["115 11月大菜單_檸檬伯爵紅茶生乳酪 (葷)",4,"準備模具","伯爵紅茶粉",5,"g",3.5],["115 11月大菜單_檸檬伯爵紅茶生乳酪 (葷)",9,"軟化乳酪","伯爵紅茶粉",5,"g",3.5],["115 11月大菜單_檸檬伯爵紅茶生乳酪 (葷)",9,"軟化乳酪","砂糖",18,"g",2],["Emma的生巧伯爵乳酪慕斯 (葷)",4,"準備模具","Oreo粉",40,"g",5],["Emma的生巧伯爵乳酪慕斯 (葷)",8,"軟化乳酪","砂糖",15,"g",1.5],["Emma的生巧伯爵乳酪慕斯 (葷)",18,"製作巧克力甘納許","巧克力",30,"g",3],["Oreo雙層生乳酪 (葷)",4,"準備模具","Oreo粉",40,"g",5],["Oreo雙層生乳酪 (葷)",8,"軟化乳酪","砂糖",15,"g",1.5],["Oreo雙層生乳酪 (葷)",16,"製作乳酪餡3","Oreo粉",10,"g",1.5],["Oreo雙層生乳酪 (葷)",19,"準備擠花袋","巧克力",5,"g",0.5],["Yoyo的焙茶生巧克力蛋糕",4,"製作焙茶巧克力甘納許1","焙茶粉",3,"g",4.5],["Yoyo的焙茶生巧克力蛋糕",8,"準備模具","低筋麵粉",50,"g",1.5],["Yoyo的焙茶生巧克力蛋糕",8,"準備模具","泡打粉",3,"平匙",2],["Yoyo的焙茶生巧克力蛋糕",8,"準備模具","焙茶粉",3,"g",4.5],["Yoyo的焙茶生巧克力蛋糕",11,"移動至攪拌區","砂糖",35,"g",3.5],["Yoyo的焙茶生巧克力蛋糕",22,"製作巧克力甘納許","巧克力",25,"g",2.5],["《吶喊》吧！餅乾",24,"融化巧克力","巧克力",3,"g",0.5],["《戴珍珠耳環的驚魂少女》",4,"準備模具","伯爵紅茶粉",5,"g",3.5],["《戴珍珠耳環的驚魂少女》",4,"準備模具","低筋麵粉",55,"g",2],["《戴珍珠耳環的驚魂少女》",4,"準備模具","泡打粉",3,"平匙",2],["《戴珍珠耳環的驚魂少女》",7,"移動至攪拌區","砂糖",35,"g",3.5],["《戴珍珠耳環的驚魂少女》",18,"融化巧克力","巧克力",5,"g",0.5],["《戴珍珠耳環的驚魂少女》",18,"融化巧克力","巧克力",20,"g",2],["《戴珍珠耳環的驚魂少女》",21,"製作四柚果凍1","寒天粉",2,"匙",2],["動物奶油餅乾 (全素)",4,"拿取餅糰食材","低筋麵粉",85,"g",3],["動物奶油餅乾 (全素)",4,"拿取餅糰食材","可可粉",2,"g",0.5],["動物奶油餅乾 (全素)",4,"拿取餅糰食材","太白粉",30,"g",4],["動物奶油餅乾 (全素)",4,"拿取餅糰食材","糖粉",30,"g",1],["動物奶油餅乾 (可做全素)",4,"軟化奶油","低筋麵粉",95,"g",3.5],["動物奶油餅乾 (可做全素)",4,"軟化奶油","糖粉",30,"g",1],["動物奶油餅乾 (可做全素)",11,"製作餅糰3","可可粉",2,"g",0.5],["另一半",4,"製作巧克力甘納許1","巧克力",60,"g",6],["另一半",7,"準備模具","低筋麵粉",65,"g",2],["另一半",7,"準備模具","泡打粉",3,"平匙",2],["另一半",10,"移動至攪拌區","砂糖",35,"g",3.5],["另一半",21,"製作寒天糖粉","寒天粉",3,"匙",3],["另一半",21,"製作寒天糖粉","巧克力",10,"g",1],["另一半",21,"製作寒天糖粉","砂糖",10,"g",1],["另一半",36,"融化巧克力","巧克力",5,"g",0.5],["啾啾鳥芋頭酥",16,"製作裝飾油皮2","砂糖",3,"g",0.5],["啾啾鳥芋頭酥",22,"裝飾1","巧克力",5,"g",0.5],["喵喵貓奶油餅乾",4,"軟化奶油","低筋麵粉",95,"g",3.5],["喵喵貓奶油餅乾",4,"軟化奶油","糖粉",30,"g",1],["噠噠馬德蓮",7,"融化奶油","低筋麵粉",50,"g",1.5],["噠噠馬德蓮",7,"融化奶油","泡打粉",3,"平匙",2],["噠噠馬德蓮",7,"融化奶油","焙茶粉",3,"g",4.5],["噠噠馬德蓮",7,"融化奶油","砂糖",40,"g",4],["噠噠馬德蓮",17,"融化巧克力1","巧克力",40,"g",4],["噠噠馬德蓮",17,"融化巧克力1","白巧克力",3,"g",0.5],["噠噠馬德蓮",17,"融化巧克力1","白巧克力",30,"g",3],["夜總會裡的《黑貓》馬卡龍",4,"製作杏仁糖粉","杏仁粉",50,"g",4.5],["夜總會裡的《黑貓》馬卡龍",4,"製作杏仁糖粉","糖粉",100,"g",3],["大眼怪抹茶餅乾",4,"軟化奶油","低筋麵粉",90,"g",3],["大眼怪抹茶餅乾",4,"軟化奶油","抹茶粉",5,"g",1],["大眼怪抹茶餅乾",4,"軟化奶油","砂糖",30,"g",3],["大眼怪抹茶餅乾",22,"準備巧克力","巧克力",20,"g",2],["大眼怪抹茶餅乾",22,"準備巧克力","白巧克力",10,"g",1],["大眼怪抹茶餅乾",22,"準備巧克力","白巧克力",25,"g",2.5],["大眼怪抹茶餅乾(半成品版)",15,"準備巧克力","巧克力",20,"g",2],["大眼怪抹茶餅乾(半成品版)",15,"準備巧克力","白巧克力",10,"g",1],["大眼怪抹茶餅乾(半成品版)",15,"準備巧克力","白巧克力",25,"g",2.5],["失眠的《星夜》生乳酪 (葷)",4,"準備模具","Oreo粉",40,"g",5],["失眠的《星夜》生乳酪 (葷)",8,"軟化乳酪","巧克力",40,"g",4],["失眠的《星夜》生乳酪 (葷)",26,"融化巧克力","巧克力",5,"g",0.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",4,"移動至攪拌區","低筋麵粉",75,"g",2.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",4,"移動至攪拌區","可可粉",3,"g",0.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",4,"移動至攪拌區","杏仁粉",16,"g",1.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",4,"移動至攪拌區","糖粉",35,"g",1],["姿姿的小黑炭伯爵奶茶塔 (葷)",4,"移動至攪拌區","高筋麵粉",35,"g",4.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",14,"融化巧克力","巧克力",5,"g",0.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",14,"融化巧克力","眼珠糖粒",8,"g",6],["姿姿的小黑炭伯爵奶茶塔 (葷)",17,"軟化乳酪","伯爵紅茶粉",3,"g",2],["姿姿的小黑炭伯爵奶茶塔 (葷)",17,"軟化乳酪","巧克力碎",20,"g",2],["姿姿的小黑炭伯爵奶茶塔 (葷)",17,"軟化乳酪","砂糖",15,"g",1.5],["姿姿的小黑炭伯爵奶茶塔 (葷)",32,"裝飾","三色脆球",10,"g",5],["媺媺的洛可可",4,"準備模具","低筋麵粉",25,"g",1],["媺媺的洛可可",4,"準備模具","泡打粉",2,"平匙",1.5],["媺媺的洛可可",4,"準備模具","紅玉紅茶粉",5,"g",3.5],["媺媺的洛可可",7,"手持攪拌機操作","砂糖",20,"g",2],["媺媺的洛可可",14,"製作寒天糖粉","寒天粉",2,"匙",2],["媺媺的洛可可",14,"製作寒天糖粉","砂糖",10,"g",1],["媺媺的洛可可",14,"製作寒天糖粉","紅玉紅茶粉",2,"g",1.5],["媺媺的洛可可",19,"準備擠花袋","巧克力",40,"g",4],["媺媺的洛可可",19,"準備擠花袋","紅玉紅茶粉",5,"g",3.5],["寶寶&毛孩的蜂蜜地瓜蛋糕",4,"製作麵糊","低筋麵粉",90,"g",3],["小黑炭Oreo布朗尼 (全素)",5,"融化巧克力","低筋麵粉",70,"g",2.5],["小黑炭Oreo布朗尼 (全素)",5,"融化巧克力","可可粉",12,"g",2.5],["小黑炭Oreo布朗尼 (全素)",5,"融化巧克力","泡打粉",6,"平匙",4],["小黑炭Oreo布朗尼 (全素)",11,"製作裝飾巧克力餅乾1","巧克力",5,"g",0.5],["小黑炭Oreo布朗尼 (全素)",22,"布朗尼裝飾2","白巧克力",5,"g",0.5],["小黑炭Oreo布朗尼 (可做全素)",5,"製作巧克力奶油","低筋麵粉",30,"g",1],["小黑炭Oreo布朗尼 (可做全素)",5,"製作巧克力奶油","可可粉",15,"g",3],["小黑炭Oreo布朗尼 (可做全素)",5,"製作巧克力奶油","泡打粉",3,"平匙",2],["小黑炭Oreo布朗尼 (可做全素)",5,"製作巧克力奶油","砂糖",60,"g",6],["小黑炭Oreo布朗尼 (可做全素)",10,"製作裝飾巧克力餅乾1","巧克力",5,"g",0.5],["小黑炭Oreo布朗尼 (可做全素)",17,"布朗尼裝飾1","白巧克力",5,"g",0.5],["小黑炭Oreo蛋糕",8,"準備模具","低筋麵粉",55,"g",2],["小黑炭Oreo蛋糕",8,"準備模具","可可粉",10,"g",2],["小黑炭Oreo蛋糕",8,"準備模具","泡打粉",3,"平匙",2],["小黑炭Oreo蛋糕",11,"移動至攪拌區","砂糖",35,"g",3.5],["小黑炭Oreo蛋糕",22,"製作裝飾巧克力餅乾1","巧克力",10,"g",1],["小黑炭Oreo蛋糕",24,"製作巧克力甘納許3","巧克力",20,"g",2],["小黑炭Oreo蛋糕",26,"拿取裝飾鮮奶油","Oreo粉",40,"g",5],["小黑炭Oreo蛋糕",45,"裝飾","Oreo粉",10,"g",1.5],["思思的無麩質生巧巴斯克",4,"準備模具","可可粉",20,"g",4],["思思的無麩質生巧巴斯克",4,"準備模具","玉米粉",7,"g",2.5],["思思的無麩質生巧巴斯克",4,"準備模具","砂糖",40,"g",4],["思思的無麩質生巧巴斯克",19,"製作巧克力甘納許","巧克力",40,"g",4],["恐龍派對",4,"製作伯爵茶凍1","寒天粉",2,"匙",2],["恐龍派對",4,"製作伯爵茶凍1","砂糖",10,"g",1],["恐龍派對",7,"準備模具","低筋麵粉",65,"g",2],["恐龍派對",7,"準備模具","泡打粉",3,"平匙",2],["恐龍派對",11,"移動至攪拌區","砂糖",35,"g",3.5],["我的生日蛋糕 (限當日壽星)",4,"準備模具","低筋麵粉",25,"g",1],["我的生日蛋糕 (限當日壽星)",4,"準備模具","泡打粉",2,"平匙",1.5],["我的生日蛋糕 (限當日壽星)",4,"準備模具","砂糖",15,"g",1.5],["抱一下",4,"製作伯爵茶凍1","寒天粉",2,"匙",2],["抱一下",4,"製作伯爵茶凍1","砂糖",10,"g",1],["抱一下",7,"準備模具","低筋麵粉",65,"g",2],["抱一下",7,"準備模具","泡打粉",3,"平匙",2],["抱一下",11,"移動至攪拌區","砂糖",35,"g",3.5],["抱一下",42,"裝飾","Oreo粉",3,"g",0.5],["柚香焙茶蛋糕 (信義、高雄無法製作)",4,"準備模具","低筋麵粉",50,"g",1.5],["柚香焙茶蛋糕 (信義、高雄無法製作)",4,"準備模具","泡打粉",3,"平匙",2],["柚香焙茶蛋糕 (信義、高雄無法製作)",7,"移動至攪拌區","砂糖",35,"g",3.5],["柚香焙茶蛋糕 (信義、高雄無法製作)",18,"製作寒天糖粉","寒天粉",4,"匙",4],["柚香焙茶蛋糕 (信義、高雄無法製作)",18,"製作寒天糖粉","砂糖",10,"g",1],["柚香焙茶蛋糕 (信義、高雄無法製作)",24,"製作焙茶液","焙茶粉",4,"g",5.5],["永豆必點—燒餅夾油條",4,"準備模具1","低筋麵粉",65,"g",2],["永豆必點—燒餅夾油條",4,"準備模具1","泡打粉",3,"平匙",2],["永豆必點—燒餅夾油條",7,"移動至攪拌區","砂糖",35,"g",3.5],["永豆必點—燒餅夾油條",18,"製作焙茶凍1","寒天粉",2,"匙",2],["永豆必點—燒餅夾油條",18,"製作焙茶凍1","焙茶粉",2,"g",3],["永豆必點—燒餅夾油條",18,"製作焙茶凍1","砂糖",10,"g",1],["汪汪狗蛋黃酥",13,"準備食材","砂糖",3,"g",0.5],["汪汪狗蛋黃酥",20,"裝飾1","巧克力",5,"g",0.5],["汪汪狗蛋黃酥",20,"裝飾1","白巧克力",5,"g",0.5],["法式檸檬塔 (葷)",4,"移動至攪拌區","杏仁粉",20,"g",2],["法式檸檬塔 (葷)",4,"移動至攪拌區","高筋麵粉",20,"g",2.5],["法式檸檬塔 (葷)",15,"製作蜂蜜凍1","寒天粉",6,"匙",6],["法式檸檬塔 (葷)",15,"製作蜂蜜凍1","砂糖",20,"g",2],["法式檸檬塔 (葷)",22,"製作檸檬餡1","玉米粉",10,"g",3.5],["海生館散策餅乾 (全素) (信義、高雄無法製作)",4,"拿取餅糰食材","低筋麵粉",85,"g",3],["海生館散策餅乾 (全素) (信義、高雄無法製作)",4,"拿取餅糰食材","可可粉",1,"g",0.5],["海生館散策餅乾 (全素) (信義、高雄無法製作)",4,"拿取餅糰食材","太白粉",30,"g",4],["海生館散策餅乾 (全素) (信義、高雄無法製作)",4,"拿取餅糰食材","糖粉",30,"g",1],["海生館散策餅乾 (全素) (信義、高雄無法製作)",4,"拿取餅糰食材","藍色粉",4,"平匙",1],["海生館散策餅乾 (可做全素) (信義、高雄無法製作)",4,"軟化奶油","低筋麵粉",95,"g",3.5],["海生館散策餅乾 (可做全素) (信義、高雄無法製作)",4,"軟化奶油","可可粉",1,"g",0.5],["海生館散策餅乾 (可做全素) (信義、高雄無法製作)",4,"軟化奶油","糖粉",30,"g",1],["海生館散策餅乾 (可做全素) (信義、高雄無法製作)",4,"軟化奶油","藍色粉",4,"平匙",1],["焙茶柚香檸檬乳酪塔 (葷)",4,"移動至攪拌區","杏仁粉",20,"g",2],["焙茶柚香檸檬乳酪塔 (葷)",4,"移動至攪拌區","焙茶粉",3,"g",4.5],["焙茶柚香檸檬乳酪塔 (葷)",4,"移動至攪拌區","高筋麵粉",20,"g",2.5],["焙茶柚香檸檬乳酪塔 (葷)",15,"製作焙茶凍1","寒天粉",2,"匙",2],["焙茶柚香檸檬乳酪塔 (葷)",15,"製作焙茶凍1","焙茶粉",2,"g",3],["焙茶柚香檸檬乳酪塔 (葷)",15,"製作焙茶凍1","砂糖",10,"g",1],["焙茶柚香檸檬乳酪塔 (葷)",26,"準備擠花袋","焙茶粉",1,"g",1.5],["熊熊熔岩巧克力蛋糕",4,"製作巧克力甘納許","巧克力",30,"g",3],["熊熊熔岩巧克力蛋糕",5,"製作巧克力奶油","低筋麵粉",60,"g",2],["熊熊熔岩巧克力蛋糕",5,"製作巧克力奶油","可可粉",20,"g",4],["熊熊熔岩巧克力蛋糕",5,"製作巧克力奶油","巧克力",40,"g",4],["熊熊熔岩巧克力蛋糕",5,"製作巧克力奶油","砂糖",20,"g",2],["熊熊熔岩巧克力蛋糕",13,"裝飾1","巧克力",15,"g",1.5],["熊熊瑪德蓮 (蜂蜜+鐵觀音)",7,"融化奶油","低筋麵粉",75,"g",2.5],["熊熊瑪德蓮 (蜂蜜+鐵觀音)",7,"融化奶油","泡打粉",4,"平匙",2.5],["熊熊瑪德蓮 (蜂蜜+鐵觀音)",7,"融化奶油","砂糖",60,"g",6],["熊熊瑪德蓮 (蜂蜜+鐵觀音)",7,"融化奶油","鐵觀音茶粉",4,"g",2.5],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",4,"製作奶凍1","砂糖",10,"g",1],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",7,"準備模具","伯爵紅茶粉",5,"g",3.5],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",7,"準備模具","低筋麵粉",55,"g",2],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",7,"準備模具","泡打粉",3,"平匙",2],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",10,"移動至攪拌區","砂糖",35,"g",3.5],["瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)",30,"脫模","巧克力碎",10,"g",1],["經典提拉米蘇 (葷)",4,"移動至攪拌區","低筋麵粉",30,"g",1],["經典提拉米蘇 (葷)",4,"移動至攪拌區","泡打粉",3,"平匙",2],["經典提拉米蘇 (葷)",4,"移動至攪拌區","砂糖",30,"g",3],["經典提拉米蘇 (葷)",16,"軟化乳酪","砂糖",10,"g",1],["經典提拉米蘇 (葷)",23,"製作咖啡酒液","咖啡粉",3,"g",1],["編織蘋果派 (全素)",4,"拿取麵糰食材及工具","低筋麵粉",100,"g",3.5],["編織蘋果派 (全素)",4,"拿取麵糰食材及工具","杏仁粉",50,"g",4.5],["編織蘋果派 (全素)",4,"拿取麵糰食材及工具","泡打粉",3,"平匙",2],["編織蘋果派 (全素)",4,"拿取麵糰食材及工具","砂糖",5,"g",0.5],["編織蘋果派 (全素)",4,"拿取麵糰食材及工具","鹽",2,"g",2],["編織蘋果派 (全素)",11,"切蘋果","玉米粉",5,"g",1.5],["編織蘋果派 (全素)",11,"切蘋果","砂糖",50,"g",5],["編織蘋果派 (可做全素)",4,"移動至攪拌區","杏仁粉",12,"g",1],["編織蘋果派 (可做全素)",10,"切蘋果","玉米粉",5,"g",1.5],["編織蘋果派 (可做全素)",10,"切蘋果","砂糖",50,"g",5],["老奶奶檸檬蛋糕",4,"融化奶油","低筋麵粉",85,"g",3],["老奶奶檸檬蛋糕",4,"融化奶油","泡打粉",3,"平匙",2],["老奶奶檸檬蛋糕",19,"裝飾1","糖粉",95,"g",2.5],["老闆，來碗滷肉飯",4,"製作巧克力甘納許1","巧克力",60,"g",6],["老闆，來碗滷肉飯",7,"準備模具","低筋麵粉",55,"g",2],["老闆，來碗滷肉飯",7,"準備模具","泡打粉",3,"平匙",2],["老闆，來碗滷肉飯",7,"準備模具","紅玉紅茶粉",5,"g",3.5],["老闆，來碗滷肉飯",10,"移動至攪拌區","砂糖",35,"g",3.5],["脆笛可可 (限當日壽星)",4,"準備模具","低筋麵粉",25,"g",1],["脆笛可可 (限當日壽星)",4,"準備模具","可可粉",3,"g",0.5],["脆笛可可 (限當日壽星)",4,"準備模具","泡打粉",2,"平匙",1.5],["脆笛可可 (限當日壽星)",7,"手持攪拌機操作","砂糖",15,"g",1.5],["脆笛可可 (限當日壽星)",14,"融化巧克力","巧克力",5,"g",0.5],["脆笛可可 (限當日壽星)",18,"製作巧克力甘納許","巧克力",20,"g",2],["脆笛可可 (限當日壽星)",24,"脫模","巧克力碎",10,"g",1],["臭豆腐哪有臭",4,"準備模具","低筋麵粉",65,"g",2],["臭豆腐哪有臭",4,"準備模具","泡打粉",3,"平匙",2],["臭豆腐哪有臭",7,"移動至攪拌區","砂糖",35,"g",3.5],["臺灣春鹽布里歐",10,"拿取飲用水","鹽",1,"g",1],["莓果伯爵 (限當日壽星)",4,"準備模具","伯爵紅茶粉",3,"g",2],["莓果伯爵 (限當日壽星)",4,"準備模具","低筋麵粉",20,"g",0.5],["莓果伯爵 (限當日壽星)",4,"準備模具","泡打粉",2,"平匙",1.5],["莓果伯爵 (限當日壽星)",7,"手持攪拌機操作","砂糖",12,"g",1],["莓果伯爵 (限當日壽星)",29,"融化巧克力","巧克力",5,"g",0.5],["萱萱的檸檬雙重奏 (葷)",4,"製作檸檬餡1","砂糖",30,"g",3],["萱萱的檸檬雙重奏 (葷)",10,"準備模具","消化餅粉",40,"g",5],["萱萱的檸檬雙重奏 (葷)",14,"軟化乳酪","砂糖",20,"g",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",4,"原味 - 拿取麵糊食材＆工具","低筋麵粉",65,"g",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",4,"原味 - 拿取麵糊食材＆工具","泡打粉",3,"平匙",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",6,"巧克力 - 拿取麵糊食材＆工具","低筋麵粉",55,"g",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",6,"巧克力 - 拿取麵糊食材＆工具","可可粉",10,"g",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",6,"巧克力 - 拿取麵糊食材＆工具","泡打粉",3,"平匙",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",8,"抹茶 - 拿取麵糊食材＆工具","低筋麵粉",60,"g",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",8,"抹茶 - 拿取麵糊食材＆工具","抹茶粉",5,"g",1],["裝飾蛋糕 (價格依選擇內容 而有所不同)",8,"抹茶 - 拿取麵糊食材＆工具","泡打粉",3,"平匙",2],["裝飾蛋糕 (價格依選擇內容 而有所不同)",11,"移動至攪拌區","砂糖",35,"g",3.5],["貓貓雙色戀人餅乾",19,"融化巧克力","巧克力",10,"g",1],["貓貓雙色戀人餅乾",19,"融化巧克力","巧克力",10,"g",1],["貓貓雙色戀人餅乾",19,"融化巧克力","白巧克力",10,"g",1],["貓貓雙色戀人餅乾",19,"融化巧克力","白巧克力",10,"g",1],["蹦蹦兔生乳酪(葷)",9,"準備模具","消化餅粉",40,"g",5],["蹦蹦兔生乳酪(葷)",23,"融化巧克力","白巧克力",5,"g",0.5],["鐵觀音焦糖脆脆戚風",4,"準備模具1","低筋麵粉",50,"g",1.5],["鐵觀音焦糖脆脆戚風",4,"準備模具1","可可粉",3,"g",0.5],["鐵觀音焦糖脆脆戚風",4,"準備模具1","泡打粉",2,"平匙",1.5],["鐵觀音焦糖脆脆戚風",8,"移動至攪拌區","砂糖",35,"g",3.5],["鐵觀音焦糖脆脆戚風",19,"製作寒天茶粉","寒天粉",3,"匙",3],["鐵觀音焦糖脆脆戚風",19,"製作寒天茶粉","砂糖",10,"g",1],["鐵觀音焦糖脆脆戚風",19,"製作寒天茶粉","鐵觀音茶粉",3,"g",2],["鐵觀音焦糖脆脆戚風",24,"準備擠花袋","鐵觀音茶粉",3,"g",2],["鐵觀音焦糖脆脆戚風",31,"準備模具2-1","三色脆球",5,"g",2.5],["鐵觀音茶香磅蛋糕|9月群友限定",4,"製作巧克力甘納許","巧克力",55,"g",5.5],["鐵觀音茶香磅蛋糕|9月群友限定",5,"準備模具","低筋麵粉",100,"g",3.5],["鐵觀音茶香磅蛋糕|9月群友限定",5,"準備模具","泡打粉",3,"平匙",2],["鐵觀音茶香磅蛋糕|9月群友限定",5,"準備模具","砂糖",40,"g",4],["鐵觀音茶香磅蛋糕|9月群友限定",5,"準備模具","鐵觀音茶粉",5,"g",3.5],["鐵觀音茶香磅蛋糕|9月群友限定",17,"融化巧克力","白巧克力",10,"g",1],["鐵觀音達克瓦茲 (信義、高雄無法製作)",4,"準備模具","低筋麵粉",45,"g",1.5],["鐵觀音達克瓦茲 (信義、高雄無法製作)",4,"準備模具","糖粉",30,"g",1],["鐵觀音達克瓦茲 (信義、高雄無法製作)",6,"移動至攪拌區","砂糖",35,"g",3.5],["鐵觀音達克瓦茲 (信義、高雄無法製作)",21,"製作寒天糖粉","寒天粉",2,"匙",2],["鐵觀音達克瓦茲 (信義、高雄無法製作)",21,"製作寒天糖粉","砂糖",10,"g",1],["鐵觀音達克瓦茲 (信義、高雄無法製作)",21,"製作寒天糖粉","鐵觀音茶粉",2,"g",1.5],["鐵觀音達克瓦茲 (信義、高雄無法製作)",21,"製作寒天糖粉","鐵觀音茶粉",2,"g",1.5],["青檸慕斯巴斯克 (葷)",4,"準備模具","玉米粉",10,"g",3.5],["青檸慕斯巴斯克 (葷)",4,"準備模具","砂糖",30,"g",3],["青檸慕斯巴斯克 (葷)",11,"軟化乳酪2","砂糖",20,"g",2],["齁齁豬冰皮月餅",21,"裝飾1","玉米粉",1,"g",0.5]],"use":{"紅玉紅茶粉":["媺媺的洛可可","老闆，來碗滷肉飯"],"白巧克力":["115 11月大菜單_小小羊餅乾","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕(限當日壽星)_海綿蛋糕版","噠噠馬德蓮","大眼怪抹茶餅乾","大眼怪抹茶餅乾(半成品版)","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","汪汪狗蛋黃酥","老闆，來碗滷肉飯","貓貓雙色戀人餅乾","蹦蹦兔生乳酪(葷)","鐵觀音茶香磅蛋糕|9月群友限定"],"巧克力碎":["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","姿姿的小黑炭伯爵奶茶塔 (葷)","瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)","老闆，來碗滷肉飯","脆笛可可 (限當日壽星)"],"杏仁粉":["115 11月大菜單_水果卡士達派","夜總會裡的《黑貓》馬卡龍","姿姿的小黑炭伯爵奶茶塔 (葷)","法式檸檬塔 (葷)","焙茶柚香檸檬乳酪塔 (葷)","編織蘋果派 (全素)","編織蘋果派 (可做全素)"],"Oreo粉":["115 11月大菜單_Oreo巧克力 (限當日壽星)_海綿蛋糕版(要更新)","115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_抹茶小羊生乳酪(葷)","Emma的生巧伯爵乳酪慕斯 (葷)","Oreo雙層生乳酪 (葷)","失眠的《星夜》生乳酪 (葷)","奧利奧 (限當日壽星)","小黑炭Oreo蛋糕","抱一下"],"三色脆球":["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕(限當日壽星)_海綿蛋糕版","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","姿姿的小黑炭伯爵奶茶塔 (葷)","鐵觀音焦糖脆脆戚風"],"巧克力":["115 11月大菜單_Oreo巧克力 (限當日壽星)_海綿蛋糕版(要更新)","115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小小羊餅乾","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)海綿蛋糕版","Emma的生巧伯爵乳酪慕斯 (葷)","Oreo雙層生乳酪 (葷)","Yoyo的焙茶生巧克力蛋糕","《吶喊》吧！餅乾","《戴珍珠耳環的驚魂少女》","另一半","啾啾鳥芋頭酥","噠噠馬德蓮","大眼怪抹茶餅乾","大眼怪抹茶餅乾(半成品版)","失眠的《星夜》生乳酪 (葷)","奧利奧 (限當日壽星)","姿姿的小黑炭伯爵奶茶塔 (葷)","媺媺的洛可可","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕","思思的無麩質生巧巴斯克","汪汪狗蛋黃酥","熊熊熔岩巧克力蛋糕","老闆，來碗滷肉飯","脆笛可可 (限當日壽星)","莓果伯爵 (限當日壽星)","貓貓雙色戀人餅乾","鐵觀音茶香磅蛋糕|9月群友限定"],"消化餅粉":["萱萱的檸檬雙重奏 (葷)","蹦蹦兔生乳酪(葷)"],"鐵觀音茶粉":["熊熊瑪德蓮 (蜂蜜+鐵觀音)","鐵觀音焦糖脆脆戚風","鐵觀音茶香磅蛋糕|9月群友限定","鐵觀音達克瓦茲 (信義、高雄無法製作)"],"糖粉":["115 11月大菜單_小小羊餅乾","動物奶油餅乾 (全素)","動物奶油餅乾 (可做全素)","喵喵貓奶油餅乾","夜總會裡的《黑貓》馬卡龍","姿姿的小黑炭伯爵奶茶塔 (葷)","海生館散策餅乾 (全素) (信義、高雄無法製作)","海生館散策餅乾 (可做全素) (信義、高雄無法製作)","老奶奶檸檬蛋糕","貓貓雙色戀人餅乾","鐵觀音達克瓦茲 (信義、高雄無法製作)"],"鹽":["永豆必點—燒餅夾油條","編織蘋果派 (全素)","臺灣春鹽布里歐","臺灣春鹽布里歐 | 已解凍版本"],"咖啡粉":["經典提拉米蘇 (葷)"],"藍色粉":["海生館散策餅乾 (全素) (信義、高雄無法製作)","海生館散策餅乾 (可做全素) (信義、高雄無法製作)"],"伯爵紅茶粉":["115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_檸檬伯爵紅茶生乳酪 (葷)","《戴珍珠耳環的驚魂少女》","姿姿的小黑炭伯爵奶茶塔 (葷)","瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)","莓果伯爵 (限當日壽星)"],"可可粉":["115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","動物奶油餅乾 (全素)","動物奶油餅乾 (可做全素)","姿姿的小黑炭伯爵奶茶塔 (葷)","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕","思思的無麩質生巧巴斯克","海生館散策餅乾 (全素) (信義、高雄無法製作)","海生館散策餅乾 (可做全素) (信義、高雄無法製作)","熊熊熔岩巧克力蛋糕","脆笛可可 (限當日壽星)","裝飾蛋糕 (價格依選擇內容 而有所不同)","貓貓雙色戀人餅乾","鐵觀音焦糖脆脆戚風"],"砂糖":["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕","115 11月大菜單_Oreo巧克力 (限當日壽星)_海綿蛋糕版(要更新)","115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕(限當日壽星)_海綿蛋糕版","115 11月大菜單_我的生日蛋糕 (限當日壽星)海綿蛋糕版(要更新)","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_抹茶小羊生乳酪(葷)","115 11月大菜單_檸檬伯爵紅茶生乳酪 (葷)","115 11月大菜單_水果卡士達戚風蛋糕","115 11月大菜單_水果卡士達派","115 11月大菜單_池畔日常蛋糕","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)海綿蛋糕版","Emma的生巧伯爵乳酪慕斯 (葷)","Oreo雙層生乳酪 (葷)","Yoyo的焙茶生巧克力蛋糕","《戴珍珠耳環的驚魂少女》","另一半","啾啾鳥芋頭酥","噠噠馬德蓮","塑膠袋可以吃嗎","大眼怪抹茶餅乾","奧利奧 (限當日壽星)","姿姿的小黑炭伯爵奶茶塔 (葷)","媺媺的洛可可","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕","思思的無麩質生巧巴斯克","恐龍派對","我的生日蛋糕 (限當日壽星)","抱一下","柚香焙茶蛋糕 (信義、高雄無法製作)","永豆必點—燒餅夾油條","汪汪狗蛋黃酥","法式檸檬塔 (葷)","海鹽奶蓋蛋糕 | 10月群友體驗","焙茶柚香檸檬乳酪塔 (葷)","熊熊熔岩巧克力蛋糕","熊熊瑪德蓮 (蜂蜜+鐵觀音)","瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)","經典提拉米蘇 (葷)","編織蘋果派 (全素)","編織蘋果派 (可做全素)","老闆，來碗滷肉飯","脆笛可可 (限當日壽星)","臭豆腐哪有臭","莓果伯爵 (限當日壽星)","萱萱的檸檬雙重奏 (葷)","裝飾蛋糕 (價格依選擇內容 而有所不同)","鐵觀音焦糖脆脆戚風","鐵觀音茶香磅蛋糕|9月群友限定","鐵觀音達克瓦茲 (信義、高雄無法製作)","青檸慕斯巴斯克 (葷)"],"眼珠糖粒":["115 11月大菜單_小小羊餅乾","姿姿的小黑炭伯爵奶茶塔 (葷)","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕"],"焙茶粉":["Yoyo的焙茶生巧克力蛋糕","噠噠馬德蓮","柚香焙茶蛋糕 (信義、高雄無法製作)","永豆必點—燒餅夾油條","焙茶柚香檸檬乳酪塔 (葷)"],"寒天粉":["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕","115 11月大菜單_水果卡士達戚風蛋糕","115 11月大菜單_池畔日常蛋糕","《戴珍珠耳環的驚魂少女》","另一半","媺媺的洛可可","恐龍派對","抱一下","柚香焙茶蛋糕 (信義、高雄無法製作)","永豆必點—燒餅夾油條","法式檸檬塔 (葷)","焙茶柚香檸檬乳酪塔 (葷)","老闆，來碗滷肉飯","鐵觀音焦糖脆脆戚風","鐵觀音達克瓦茲 (信義、高雄無法製作)"],"太白粉":["動物奶油餅乾 (全素)","海生館散策餅乾 (全素) (信義、高雄無法製作)"],"抹茶粉":["115 11月大菜單_抹茶小羊生乳酪(葷)","大眼怪抹茶餅乾","裝飾蛋糕 (價格依選擇內容 而有所不同)"],"低筋麵粉":["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕","115 11月大菜單_Oreo巧克力 (限當日壽星)_海綿蛋糕版(要更新)","115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小小羊餅乾","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕(限當日壽星)_海綿蛋糕版","115 11月大菜單_我的生日蛋糕 (限當日壽星)海綿蛋糕版(要更新)","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_水果卡士達戚風蛋糕","115 11月大菜單_池畔日常蛋糕","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)海綿蛋糕版","Yoyo的焙茶生巧克力蛋糕","《戴珍珠耳環的驚魂少女》","動物奶油餅乾 (全素)","動物奶油餅乾 (可做全素)","另一半","喵喵貓奶油餅乾","噠噠馬德蓮","塑膠袋可以吃嗎","大眼怪抹茶餅乾","奧利奧 (限當日壽星)","姿姿的小黑炭伯爵奶茶塔 (葷)","媺媺的洛可可","寶寶&毛孩的蜂蜜地瓜蛋糕","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕","恐龍派對","我的生日蛋糕 (限當日壽星)","抱一下","柚香焙茶蛋糕 (信義、高雄無法製作)","永豆必點—燒餅夾油條","海生館散策餅乾 (全素) (信義、高雄無法製作)","海生館散策餅乾 (可做全素) (信義、高雄無法製作)","熊熊熔岩巧克力蛋糕","熊熊瑪德蓮 (蜂蜜+鐵觀音)","瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)","經典提拉米蘇 (葷)","編織蘋果派 (全素)","老奶奶檸檬蛋糕","老闆，來碗滷肉飯","脆笛可可 (限當日壽星)","臭豆腐哪有臭","莓果伯爵 (限當日壽星)","裝飾蛋糕 (價格依選擇內容 而有所不同)","貓貓雙色戀人餅乾","鐵觀音焦糖脆脆戚風","鐵觀音茶香磅蛋糕|9月群友限定","鐵觀音達克瓦茲 (信義、高雄無法製作)"],"泡打粉":["115 11月大菜單_Kiki的花籃造型百香乳酪蛋糕","115 11月大菜單_Oreo巧克力 (限當日壽星)_海綿蛋糕版(要更新)","115 11月大菜單_Oreo巧克力 (限當日壽星)_自選版","115 11月大菜單_伯爵可可芭蕾蛋糕 (葷)","115 11月大菜單_小狗生日蛋糕 (限當日壽星)_自選版","115 11月大菜單_小狗生日蛋糕(限當日壽星)_海綿蛋糕版","115 11月大菜單_我的生日蛋糕 (限當日壽星)海綿蛋糕版(要更新)","115 11月大菜單_我的生日蛋糕(限當日壽星)_自選版","115 11月大菜單_水果卡士達戚風蛋糕","115 11月大菜單_池畔日常蛋糕","115 11月大菜單_脆笛可可 (限當日壽星)_自選版","115 11月大菜單_脆笛可可 (限當日壽星)海綿蛋糕版","Cheer的蜂蜜檸檬瑪德蓮","Give a Hug｜抱一下","Oreo Brownies｜小黑炭Oreo布朗尼","Oreo Chocolate｜奧利奧 (限當日壽星)","Yoyo的焙茶生巧克力蛋糕","《戴珍珠耳環的驚魂少女》","另一半","噠噠馬德蓮","塑膠袋可以吃嗎","奧利奧 (限當日壽星)","媺媺的洛可可","小噗的生巧克力蛋糕（戚風/抹面）| 員工訓練","小黑炭Oreo布朗尼 (全素)","小黑炭Oreo布朗尼 (可做全素)","小黑炭Oreo蛋糕","布朗尼甜甜圈","恐龍派對","愛的寶貝","我的生日蛋糕 (限當日壽星)","抱一下","柚香焙茶蛋糕 (信義、高雄無法製作)","永豆必點—燒餅夾油條","海鹽奶蓋抹茶磅蛋糕","海鹽奶蓋蛋糕 | 10月群友體驗","熊愛你","熊熊瑪德蓮 (蜂蜜+鐵觀音)","瑋瑋的焦糖伯爵奶凍蛋糕 (葷) (信義、高雄無法製作)","甜心熊","甜甜圈住你","經典提拉米蘇 (葷)","編織蘋果派 (全素)","老奶奶檸檬蛋糕","老闆，來碗滷肉飯","脆笛可可 (限當日壽星)","臭豆腐哪有臭","莓果伯爵 (限當日壽星)","裝飾蛋糕 (價格依選擇內容 而有所不同)","鐵觀音焦糖脆脆戚風","鐵觀音茶香磅蛋糕|9月群友限定"],"高筋麵粉":["姿姿的小黑炭伯爵奶茶塔 (葷)","法式檸檬塔 (葷)","焙茶柚香檸檬乳酪塔 (葷)"],"玉米粉":["思思的無麩質生巧巴斯克","法式檸檬塔 (葷)","編織蘋果派 (全素)","編織蘋果派 (可做全素)","青檸慕斯巴斯克 (葷)","齁齁豬冰皮月餅"]}};
+var SP=[0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,5.5,6];
+var OLD1G={'泡打粉':1,'寒天粉':1};
+var S={inited:false,ok:false,err:'',items:[],byName:{},fin:{},noMin:{},q:'',cIng:'',cG:'',cSp:'',dq:'',dSel:'',open:{},view:'all'};
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function num(x){var m=String(x==null?'':x).match(/-?\d+(\.\d+)?/);return m?parseFloat(m[0]):null}
+function f(n){if(n==null||isNaN(n))return '';var r=Math.round(n*100)/100;return String(r)}
+function root(){return document.getElementById('spRoot')}
+var cbn=0;
+function gviz(sheet,cb){
+  var name='spCb'+(++cbn),done=false,s=document.createElement('script');
+  var t=setTimeout(function(){fin(null)},20000);
+  function fin(d){if(done)return;done=true;clearTimeout(t);try{delete window[name]}catch(e){window[name]=undefined}if(s.parentNode)s.parentNode.removeChild(s);cb(d)}
+  window[name]=function(r){fin(r&&r.status!=='error'?r:null)};
+  s.onerror=function(){fin(null)};
+  s.src='https://docs.google.com/spreadsheets/d/'+SHEET+'/gviz/tq?tqx=out:json;responseHandler:'+name+'&headers=1&sheet='+encodeURIComponent(sheet)+'&_='+Date.now();
+  document.head.appendChild(s);
+}
+function rowsOf(r){return ((r&&r.table&&r.table.rows)||[]).map(function(x){return (x.c||[]).map(function(c){return c?(c.f!=null?c.f:c.v):''})})}
+function load(){
+  var n=0,a=null,b=null;
+  root().innerHTML='<div class="sp-muted" style="padding:20px 0">⏳ 讀取主廚的《自己做_食材量匙換算對照表》…</div>';
+  gviz('工作表1',function(r){a=r;if(++n===2)built(a,b)});
+  gviz('門市定案',function(r){b=r;if(++n===2)built(a,b)});
+}
+function built(a,b){
+  if(!a){S.ok=false;S.err='讀不到換算表（Google 試算表沒有回應）。請稍後按「🔄 重新讀取」。';paint();return}
+  var items=[],by={};
+  rowsOf(a).forEach(function(c){
+    var name=String(c[1]||'').trim();if(!name||name==='食材名稱')return;
+    var per=num(c[3]),mn=num(c[4]),mx=/無/.test(String(c[5]||''))?null:num(c[5]);
+    var it={cat:String(c[0]||'').trim(),name:name,spec:String(c[2]||'').trim(),per:per&&per>0?per:null,
+      min:mn!=null?mn:0.5,max:mx,minTxt:String(c[4]||'').trim(),maxTxt:String(c[5]||'').trim(),
+      scale:String(c[6]||'').trim(),note:String(c[7]||'').trim(),ok:/true/i.test(String(c[8]))};
+    if(!by[name]){by[name]=it;items.push(it)}
+  });
+  var fin={},noMin={};
+  rowsOf(b).forEach(function(c){
+    var nm=String(c[0]||'').trim(),g=num(c[1]),sp=num(c[2]);
+    if(nm&&g!=null&&sp!=null&&!/false/i.test(String(c[3]))){(fin[nm]=fin[nm]||{})[g]={sp:sp,src:String(c[4]||'').trim(),day:String(c[5]||'').trim()}}
+    var nm2=String(c[7]||'').trim();if(nm2&&nm2!=='不足最小改秤重食材')noMin[nm2]=1;
+  });
+  S.items=items;S.byName=by;S.fin=fin;S.noMin=noMin;S.ok=true;S.err=b?'':'「門市定案」分頁讀不到，換算先用公式。';
+  if(!S.cIng){var first=items.filter(function(x){return x.per})[0];S.cIng=first?first.name:''}
+  paint();
+}
+/* 克數 → 平匙 */
+function toSpoon(name,g){
+  var it=S.byName[name];if(!it||!it.per||!(g>0))return null;
+  var fd=(S.fin[name]||{})[g];
+  if(fd)return {sp:fd.sp,g:fd.sp*it.per,how:'門市定案（主廚確認）',fin:true};
+  var raw=g/it.per,sp=Math.round(raw*2)/2;
+  if(raw<it.min){
+    if(S.noMin[name])return {keep:true,how:'不到最小 '+f(it.min)+' 平匙，主廚規定這項維持秤重'};
+    if(sp<it.min)sp=it.min;
+  }
+  if(it.max!=null&&sp>it.max)return {keep:true,how:'超過上限 '+f(it.max)+' 平匙，改用秤重'};
+  return {sp:sp,g:sp*it.per,how:'公式：'+f(g)+' g ÷ '+f(it.per)+' g'};
+}
+function snapUse(name){return (SNAP&&SNAP.use&&SNAP.use[name])||[]}
+function snapRec(){return (SNAP&&SNAP.rec)||[]}
+function changedOf(name){var o={};snapRec().forEach(function(r){if(r[3]===name)o[r[0]]=1});return Object.keys(o).sort()}
+
+/* ---------- 畫面 ---------- */
+function convHTML(){
+  var opts=S.items.filter(function(x){return x.per}).map(function(x){return '<option'+(x.name===S.cIng?' selected':'')+'>'+esc(x.name)+'</option>'}).join('');
+  var it=S.byName[S.cIng],out='',out2='';
+  var g=parseFloat(S.cG);
+  if(it&&g>0){
+    var r=toSpoon(S.cIng,g);
+    if(r&&r.keep)out='<div class="sp-res sp-warn">⚖️ <b>'+esc(S.cIng)+' '+f(g)+' g</b>：'+esc(r.how)+'</div>';
+    else if(r){var diff=r.g-g,pct=Math.abs(diff)/g;
+      out='<div class="sp-res"><b>'+esc(S.cIng)+' '+f(r.sp)+' 平匙</b>　<span class="sp-muted">≈ '+f(r.g)+' g（'+(diff>=0?'+':'')+f(diff)+' g）・'+esc(r.how)+'</span>'
+        +(pct>=0.1&&!r.fin?'<div class="sp-note">⚪ 舀起來會比原本 '+(diff>0?'多':'少')+' '+Math.round(pct*100)+'%，要不要改用秤重，請主廚判斷</div>':'')
+        +'<div class="sp-muted" style="margin-top:4px">食譜上架版寫「'+esc(S.cIng)+' '+f(r.sp)+' 平匙」；試做版寫「'+esc(S.cIng)+' '+f(r.sp)+' 平匙 ('+f(g)+'g)」</div></div>'}
+  }
+  var s=parseFloat(S.cSp);
+  if(it&&s>0)out2='<div class="sp-res"><b>'+esc(S.cIng)+' '+f(s)+' 平匙 ≈ '+f(s*it.per)+' g</b>'+((s<it.min||(it.max!=null&&s>it.max))?'<div class="sp-note">⚠ 不在 '+f(it.min)+'～'+(it.max!=null?f(it.max):'—')+' 平匙範圍內，這個量規定要秤重</div>':'')+'</div>';
+  return '<div class="sp-card"><div class="sp-h">🧮 換算器</div>'
+    +'<div class="sp-row"><label>食材 <select id="spIng">'+opts+'</select></label>'
+    +(it?'<span class="sp-muted">1 平匙 ＝ <b>'+f(it.per)+' g</b>（量匙 '+esc(it.spec||'—')+'）・最小 '+f(it.min)+' 平匙・'+(it.max!=null?'上限 '+f(it.max)+' 平匙':'上限未訂')+'</span>':'')+'</div>'
+    +'<div class="sp-two"><div><div class="sp-lbl">原本幾 g → 幾平匙</div><input id="spG" type="number" min="0" step="any" inputmode="decimal" placeholder="例：35" value="'+esc(S.cG)+'"> g'+out+'</div>'
+    +'<div><div class="sp-lbl">幾平匙 → 約幾 g</div><input id="spS" type="number" min="0" step="0.5" inputmode="decimal" placeholder="例：3.5" value="'+esc(S.cSp)+'"> 平匙'+out2+'</div></div></div>';
+}
+function tableHTML(){
+  var q=S.q.trim().toLowerCase();
+  var list=S.items.filter(function(it){
+    if(!q)return true;
+    if(it.name.toLowerCase().indexOf(q)>=0||it.cat.toLowerCase().indexOf(q)>=0)return true;
+    return snapUse(it.name).some(function(d){return d.toLowerCase().indexOf(q)>=0});
+  });
+  var withPer=list.filter(function(x){return x.per}),none=list.filter(function(x){return !x.per});
+  var h='<div class="sp-card"><div class="sp-h">📋 平匙換算表 <span class="sp-muted">共 '+S.items.filter(function(x){return x.per}).length+' 種食材已訂換算；灰色格＝低於最小或超過上限，要秤重</span></div>'
+    +'<div class="sp-row"><input id="spQ" type="search" placeholder="搜尋食材或甜點名稱（例：糖粉、老奶奶）" value="'+esc(S.q)+'" style="flex:1;min-width:220px"></div>'
+    +'<div class="sp-scroll"><table class="sp-t"><thead><tr><th class="sp-stk">食材</th><th>量匙</th><th>1 平匙</th>'
+    +SP.map(function(s){return '<th>'+f(s)+'</th>'}).join('')+'<th>門市定案（g→平匙）</th><th>用到的甜點</th><th>備註</th></tr></thead><tbody>';
+  withPer.forEach(function(it){
+    var fd=S.fin[it.name]||{},fk=Object.keys(fd).map(Number).sort(function(a,b){return a-b});
+    var use=snapUse(it.name),chg=changedOf(it.name),op=!!S.open[it.name];
+    h+='<tr><td class="sp-stk"><b>'+esc(it.name)+'</b><div class="sp-muted">'+esc(it.cat)+'</div></td><td>'+esc(it.spec)+'</td><td class="sp-num"><b>'+f(it.per)+' g</b></td>'
+      +SP.map(function(s){var bad=s<it.min||(it.max!=null&&s>it.max);return '<td class="sp-num'+(bad?' sp-off':'')+'">'+(bad?'':f(s*it.per))+'</td>'}).join('')
+      +'<td class="sp-fin">'+(fk.length?fk.map(function(g){return '<span class="sp-chip">'+f(g)+'→'+f(fd[g].sp)+'</span>'}).join(''):'<span class="sp-muted">—</span>')+'</td>'
+      +'<td class="sp-use">'+(use.length?'<button class="sp-link" data-spopen="'+esc(it.name)+'">'+use.length+' 支 '+(op?'▲':'▼')+'</button>'
+        +(op?'<div class="sp-dl">'+use.map(function(d){return '<span class="sp-d'+(chg.indexOf(d)>=0?' sp-dchg':'')+'" data-spd="'+esc(d)+'">'+esc(d)+'</span>'}).join('')+'</div>':''):'<span class="sp-muted">—</span>')+'</td>'
+      +'<td class="sp-note2">'+esc(it.note)+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  if(none.length)h+='<div class="sp-muted" style="margin-top:8px">還沒訂換算（主廚試算表上未填）：'+none.map(function(x){return esc(x.name)}).join('、')+'</div>';
+  h+='<div class="sp-muted" style="margin-top:6px">「用到的甜點」點開後，<span class="sp-d sp-dchg" style="cursor:default">綠底</span>＝已從 g 改成平匙、核對過的甜點；點甜點名稱看它每一步的平匙用量。</div></div>';
+  return h;
+}
+function dessertHTML(){
+  var rec=snapRec(),names={};rec.forEach(function(r){names[r[0]]=1});
+  var all=Object.keys(names).sort(),q=S.dq.trim().toLowerCase();
+  var list=q?all.filter(function(n){return n.toLowerCase().indexOf(q)>=0}):all;
+  var h='<div class="sp-card" id="spDes"><div class="sp-h">🍰 依甜點查 <span class="sp-muted">'+all.length+' 支甜點從 g 改成平匙的每一步</span></div>'
+    +'<div class="sp-row"><input id="spDQ" type="search" placeholder="搜尋甜點" value="'+esc(S.dq)+'" style="flex:1;min-width:200px">'
+    +'<select id="spDSel"><option value="">— 選一支甜點（'+list.length+'）—</option>'+list.map(function(n){return '<option'+(n===S.dSel?' selected':'')+'>'+esc(n)+'</option>'}).join('')+'</select></div>';
+  if(S.dSel){
+    var rs=rec.filter(function(r){return r[0]===S.dSel});
+    h+='<div class="sp-scroll"><table class="sp-t sp-t2"><thead><tr><th>第幾步</th><th>步驟</th><th>食材</th><th>原本（秤重版）</th><th>現在</th><th>現在約等於</th><th>和換算表比</th></tr></thead><tbody>'
+      +rs.map(function(r){
+        var it=S.byName[r[3]],now=it&&it.per?r[6]*it.per:null,chk='';
+        var asG=r[5]==='g'||OLD1G[r[3]];   /* 泡打粉、寒天粉 舊匙 1 匙＝1 g（門市定案也用這個口徑） */
+        if(asG&&it&&it.per){var t=toSpoon(r[3],r[4]);chk=t&&!t.keep?(t.sp===r[6]?'<span class="sp-ok">✅ 一致</span>':'<span class="sp-bad">⚠ 換算表是 '+f(t.sp)+' 平匙</span>'):'<span class="sp-muted">—</span>'}
+        else chk='<span class="sp-muted">原本就是'+esc(r[5])+'，無法核對</span>';
+        return '<tr><td class="sp-num">'+r[1]+'</td><td>'+esc(r[2])+'</td><td><b>'+esc(r[3])+'</b></td><td class="sp-num">'+f(r[4])+' '+esc(r[5])+(r[5]!=='g'&&OLD1G[r[3]]?'<div class="sp-muted">舊匙，1 匙＝1 g</div>':'')+'</td><td class="sp-num"><b>'+f(r[6])+' 平匙</b></td><td class="sp-num">'+(now!=null?'≈ '+f(now)+' g':'')+'</td><td>'+chk+'</td></tr>'}).join('')
+      +'</tbody></table></div>';
+  }
+  return h+'</div>';
+}
+function paint(){
+  var r=root();if(!r)return;
+  if(!S.ok){r.innerHTML='<div class="sp-card"><div class="sp-bad">'+esc(S.err||'讀取失敗')+'</div><button class="sp-btn2" id="spReload" type="button">🔄 重新讀取</button></div>';wire();return}
+  var ae=document.activeElement,aid=ae&&ae.id,ss=null;try{if(aid&&ae.selectionStart!=null)ss=[ae.selectionStart,ae.selectionEnd]}catch(e){}
+  var sc=r.querySelector('.sp-scroll'),sl=sc?sc.scrollLeft:0;
+  r.innerHTML=(S.err?'<div class="sp-note">'+esc(S.err)+'</div>':'')
+    +'<div class="sp-top"><span class="sp-muted">換算數字來自主廚的 <a href="'+SHEET_URL+'" target="_blank" rel="noopener">《自己做_食材量匙換算對照表》</a>（即時讀取，主廚改了這裡就跟著變）；甜點清單是 '+esc((SNAP&&SNAP.date)||'')+' 從門市食譜後台整理的</span><button class="sp-btn2" id="spReload" type="button">🔄 重新讀取</button></div>'
+    +convHTML()+tableHTML()+dessertHTML();
+  var sc2=r.querySelector('.sp-scroll');if(sc2)sc2.scrollLeft=sl;
+  if(aid){var el=document.getElementById(aid);if(el){el.focus();try{if(ss)el.setSelectionRange(ss[0],ss[1])}catch(e){}}}
+  wire();
+}
+function wire(){
+  var r=root();
+  var rl=document.getElementById('spReload');if(rl)rl.onclick=load;
+  var i=document.getElementById('spIng');if(i)i.onchange=function(){S.cIng=i.value;paint()};
+  var g=document.getElementById('spG');if(g)g.oninput=function(){S.cG=g.value;paint()};
+  var s=document.getElementById('spS');if(s)s.oninput=function(){S.cSp=s.value;paint()};
+  var q=document.getElementById('spQ');if(q)q.oninput=function(){S.q=q.value;paint()};
+  var dq=document.getElementById('spDQ');if(dq)dq.oninput=function(){S.dq=dq.value;paint()};
+  var ds=document.getElementById('spDSel');if(ds)ds.onchange=function(){S.dSel=ds.value;paint()};
+  r.querySelectorAll('[data-spopen]').forEach(function(b){b.onclick=function(){var n=b.getAttribute('data-spopen');S.open[n]=!S.open[n];paint()}});
+  r.querySelectorAll('[data-spd]').forEach(function(b){b.onclick=function(){var n=b.getAttribute('data-spd');
+    if(!snapRec().some(function(x){return x[0]===n})){b.title='這支甜點沒有從 g 改平匙的紀錄（本來就用平匙，或不在 66 支比對範圍）';return}
+    S.dSel=n;S.dq='';paint();var e=document.getElementById('spDes');if(e)try{e.scrollIntoView({behavior:'smooth',block:'start'})}catch(x){}}});
+}
+function css(){
+  if(document.getElementById('spoonCss'))return;
+  var st=document.createElement('style');st.id='spoonCss';
+  st.textContent='#tab-spoon .sp-card{background:#fff;border:1px solid #E8DFD9;border-radius:10px;padding:14px 16px;margin-bottom:14px}'
+   +'#tab-spoon .sp-h{font-weight:800;font-size:15px;color:#3E2C26;margin-bottom:10px}'
+   +'#tab-spoon .sp-muted{color:#6F4E45;font-size:12px;font-weight:400}'
+   +'#tab-spoon .sp-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#tab-spoon .sp-top .sp-btn2{margin-left:auto}'
+   +'#tab-spoon .sp-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}'
+   +'#tab-spoon .sp-two{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:720px){#tab-spoon .sp-two{grid-template-columns:1fr}}'
+   +'#tab-spoon .sp-lbl{font-size:12.5px;font-weight:700;color:#6F4E45;margin-bottom:4px}'
+   +'#tab-spoon input,#tab-spoon select{font:inherit;font-size:14px;padding:7px 10px;border:1px solid #D8C8BF;border-radius:8px;background:#fff;color:#3E2C26;max-width:100%}'
+   +'#tab-spoon input[type=number]{width:110px}'
+   +'#tab-spoon .sp-res{margin-top:8px;padding:10px 12px;border-radius:8px;background:#E6F3F1;color:#004D40;font-size:14px}'
+   +'#tab-spoon .sp-res.sp-warn{background:#FFF4E5;color:#8A4B00}'
+   +'#tab-spoon .sp-note{margin-top:6px;font-size:12.5px;color:#8A4B00}'
+   +'#tab-spoon .sp-btn2{font-size:13px;padding:7px 14px;border:1px solid #D8C8BF;background:#fff;color:#6F4E45;border-radius:9px;cursor:pointer;font-family:inherit}'
+   +'#tab-spoon .sp-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #EFE6E0;border-radius:8px}'
+   +'#tab-spoon .sp-t{border-collapse:collapse;width:100%;font-size:13px;min-width:1100px}#tab-spoon .sp-t2{min-width:720px}'
+   +'#tab-spoon .sp-t th{background:#00796B;color:#fff;font-weight:700;padding:7px 8px;text-align:center;white-space:nowrap;position:sticky;top:0}'
+   +'#tab-spoon .sp-t td{border-top:1px solid #EFE6E0;padding:6px 8px;vertical-align:top;color:#3E2C26}'
+   +'#tab-spoon .sp-t tbody tr:nth-child(even) td{background:#FBF8F6}'
+   +'#tab-spoon .sp-num{text-align:right;white-space:nowrap}#tab-spoon td.sp-off{background:#EEE !important}'
+   +'#tab-spoon .sp-stk{position:sticky;left:0;z-index:1;background:#fff;min-width:96px}#tab-spoon th.sp-stk{z-index:2;background:#00796B}'
+   +'#tab-spoon .sp-chip{display:inline-block;margin:1px 3px 1px 0;padding:1px 6px;border-radius:10px;background:#F3ECE8;font-size:12px;white-space:nowrap}'
+   +'#tab-spoon .sp-fin{min-width:160px;max-width:260px}#tab-spoon .sp-use{min-width:90px;max-width:380px}#tab-spoon .sp-note2{min-width:160px;font-size:12px;color:#6F4E45}'
+   +'#tab-spoon .sp-link{border:0;background:none;color:#00796B;font-weight:700;cursor:pointer;padding:0;font:inherit;font-size:13px}'
+   +'#tab-spoon .sp-dl{margin-top:4px}#tab-spoon .sp-d{display:inline-block;margin:2px 4px 2px 0;padding:2px 7px;border-radius:6px;background:#F3ECE8;font-size:12px;cursor:pointer}'
+   +'#tab-spoon .sp-dchg{background:#E2EFDA}'
+   +'#tab-spoon .sp-ok{color:#2E7D32;font-weight:700}#tab-spoon .sp-bad{color:#B23A2C;font-weight:700}'
+   +'#tab-spoon a{color:#00796B}';
+  document.head.appendChild(st);
+}
+function ensureInit(){if(S.inited)return;S.inited=true;css();load()}
+return {ensureInit:ensureInit,_toSpoon:toSpoon,_S:S};
 })();
 </script>
 <script>applyHashTab();</script>
