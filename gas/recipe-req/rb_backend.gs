@@ -13,6 +13,10 @@ var RB_MEDIA_PREFIX = 'https://diybcstorage.blob.core.windows.net/stepmedias/'; 
 var RB_MEDIA_MAX = 5300000;                                          /* 後台步驟圖片／影片上限（後台頁面自己的檢查值） */
 var RB_CREATE_FIELDS = ['Title', 'GroupId', 'LanguageId', 'Note', 'ItemList', 'StoreList', 'Price', 'Cost', 'InUse', 'PrepHr', 'Size', 'Content', 'Preserve', 'Public'];
 var RB_STEP_FIELDS = ['RecipeId', 'StepTitle', 'Content', 'StopClock', 'Timer', 'Image'];
+/* 2026-10-08 正式環境 bug 修正：建食譜時「食譜上架／食譜下架」送空白 → 門市平板點這支食譜會被導回分類頁（打不開）。
+   現有可播放的食譜幾乎都是 2023-01-01 00:00 → 2030-01-01 00:00；後台用格林威治時間比對，所以不要填「今天幾點」這種短期間。
+   ⚠ 2030-01-01 到期前要把所有食譜的下架日整批延長（新品上傳、🍰 匯入都用這兩個常數） */
+var RB_RECIPE_UP = '2023-01-01T00:00', RB_RECIPE_DOWN = '2030-01-01T00:00';
 
 function rbErr_(msg, code) { var e = new Error(msg); e.code = code; return e; }
 function rbChr_(n) {
@@ -248,7 +252,7 @@ function rbCreateRecipe_(sess, r) {
     '__RequestVerificationToken': meta.token,
     Title: r.title, Code: '', GroupId: meta.groupId, LanguageId: meta.langId, Note: r.note,
     ItemList: cate, StoreList: storeIds.join(','),
-    RecipeUp: '', RecipeDown: '', MenuUp: '', MenuDown: '',
+    RecipeUp: RB_RECIPE_UP, RecipeDown: RB_RECIPE_DOWN, MenuUp: '', MenuDown: '',   /* 空白＝平板打不開（2026-10-08） */
     Price: String(r.price), Cost: String(r.cost), InUse: 'false',
     PrepHr: String(r.prepHr || ''), Size: r.size || '', Content: r.desc || '', Preserve: r.preserve || '',
     Portion: '', PortionType: '', Difficulty: '', PrepMin: '', BakingHr: '', BakingMin: '', RestingHr: '', RestingMin: '',

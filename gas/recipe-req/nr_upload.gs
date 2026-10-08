@@ -17,6 +17,9 @@ var NR_VID_MAX = 5 * 1024 * 1024;     /* 經營者：影片不超過 5MB（後�
 var NR_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'video/mp4': 'mp4' };
 var NR_STORES = ['自己做海外備用', '自己做', '吳寶春自己做', '體驗中心專用'];   /* 後台台灣的分店類別（10/08 讀後台新增食譜頁） */
 var NR_ING_MAX = 40;                  /* 一次最多建幾個新品項 */
+/* 2026-10-08 正式環境 bug：建食譜時「食譜上架 RecipeUp／食譜下架 RecipeDown」送空白 → 平板 /steps/recipedetails/{id} 被後台導回分類頁（打不開）。
+   5 支食譜交叉確認：空白或不在期間內＝跳回，2023-01-01→2030-01-01＝可開（跟啟用、封面無關）；後台用格林威治時間比對（比台灣慢 8 小時）。
+   → 改送跟現有食譜一樣的期間（RB_RECIPE_UP／RB_RECIPE_DOWN 定義在 rb_backend.gs，🍰 匯入共用）。⚠ 2030-01-01 到期前要整批延長（見 recipe-cost skill 待辦） */
 var NR_ING_FIELDS = ['IngredCateGroupId', 'IngredItems[0].LanguageId', 'IngredItems[0].Name', 'IngredItems[0].Unit', 'IngredItems[0].Price',
   'IngredItems[0].Cost', 'IngredItems[0].IngredCateItemId', 'IngredItems[0].Status', 'IngredItems[0].DefaultName'];
 
@@ -251,7 +254,7 @@ function nrCreateRecipe_(sess, r) {
     '__RequestVerificationToken': meta.token,
     Title: r.title, Code: '', GroupId: meta.groupId, LanguageId: meta.langId, Note: r.note,
     ItemList: cats.join(','), StoreList: storeIds.join(','),
-    RecipeUp: '', RecipeDown: '', MenuUp: '', MenuDown: '',
+    RecipeUp: RB_RECIPE_UP, RecipeDown: RB_RECIPE_DOWN, MenuUp: '', MenuDown: '',   /* 空白＝平板打不開（2026-10-08） */
     Price: String(r.price), Cost: String(r.cost), InUse: 'false',
     PrepHr: String(r.prepHr || ''), Size: r.size || '', Content: r.desc || '', Preserve: r.preserve || '',
     Portion: '', PortionType: '', Difficulty: '', PrepMin: '', BakingHr: '', BakingMin: '', RestingHr: '', RestingMin: '',
