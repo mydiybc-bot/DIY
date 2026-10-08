@@ -514,6 +514,16 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
 #tab-semi .ap-card .ap-actions{padding:0}
 @media(max-width:640px){#tab-semi th,#tab-semi td{padding:5px 4px}#tab-semi .ap-kpi{grid-template-columns:1fr 1fr}}
 </style>
+<style id="apSimpleCss">/* 2026-10-08 精簡版送件區 */
+#tab-apply .ap-steps{display:flex;flex-direction:column;gap:10px;margin:8px 0}
+#tab-apply .ap-step{display:flex;gap:10px;align-items:flex-start;border:1px solid #E8DFD9;border-radius:10px;padding:10px 12px;background:#FFFCFA}
+#tab-apply .ap-stepn{flex:0 0 26px;height:26px;border-radius:50%;background:#00796B;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;font-size:14px}
+#tab-apply .ap-stepb{flex:1;min-width:0}
+#tab-apply .ap-stepb>b{display:block;font-size:14.5px;color:#3E2C26;margin-bottom:3px}
+#tab-apply .ap-step .ap-rbcard{border:0;padding:0;margin:4px 0 0;background:none}
+#tab-apply .ap-step .ap-rbcard>.ap-h{display:none}
+#tab-apply .ap-linkrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px}#tab-apply .ap-linkrow input{flex:1;min-width:200px}
+</style>
 <style id="bomCss">
 /* ===== 2026-10-01 📚 BOM 管理（BomMod）：樣式全部限縮在 #tab-bom ===== */
 #tab-bom .ap-h{font-size:15px;font-weight:700;margin-bottom:6px}
@@ -2840,10 +2850,10 @@ function reqCols(c){var h=AP.head,rate=rateOf(c);
   return {req_id:h.req_id||'',campaign_id:h.campaign_id,'商品暫定名稱':h.name,'商品正式名稱':h.fname,'定價':h.price,'成本':r2(c.total),'利潤率':rate===null?'':r1(100-rate),
     '規格':h.spec,'葷素':h.diet,'保存方式':h.keep,'包裝方式':h.pack,'製作時間':h.time,'預估銷售數':h.qty}}
 function reqStatusHTML(){var h=AP.head,s=AP.sub||{};
-  if(!h.req_id)return '<span class="ap-muted">這張單還沒送件。表頭選好檔期後按「📨 送件到檔期」，系統會配申請單號、編第幾支。</span>';
+  if(!h.req_id)return '<span class="ap-muted">這張單還沒存進系統。表頭選好檔期後按下面「🔗 產出申請表連結」，系統會配申請單號、編第幾支。</span>';
   return '<span>申請單號 <b>'+esc(h.req_id)+'</b>'+(s.seq?'｜第 '+esc(s.seq)+' 支':'')+(s.status?'｜狀態 <span class="ap-badge'+(LOCK_ST[s.status]?' lk':'')+'">'+esc(s.status)+'</span>':'')
     +(s.savedAt?'｜最後儲存 '+esc(s.savedAt)+(s.by?'（'+esc(s.by)+'）':''):'｜（這張是從檔案開啟的，送件時會先比對系統上的版本）')+'</span>'
-    +(AP.ext?'<div style="margin-top:4px">'+fillBadge(AP.ext.fills)+(s.role?'　<span class="ap-muted">目前以「'+esc(s.role)+'」身分載入</span>':'')+'</div>':'')}
+    }   /* 2026-10-08：各單位補填拿掉 → 不再顯示「已填：主廚✓ 出貨中心…」 */
 function updSendUI(){var e=document.getElementById('apSendMsg');if(e)e.innerHTML=SENDMSG;var l=document.getElementById('apReqLine');if(l)l.innerHTML=reqStatusHTML();
   var b=document.getElementById('apSend');if(b){b.disabled=_busy||lockedReq();b.textContent=_busy?'送件中…':'📨 送件到檔期'}}
 /* 存檔核心（送件、送簽共用）：回傳 Promise(r)；成功時更新單號／狀態／版本 */
@@ -2854,7 +2864,7 @@ function saveReqP(cr,force,onRetry){var isNew=!AP.head.req_id;
   var body={action:'saveReq',role:cr.role,password:cr.pw,req:reqCols(c),payload:payload,base_updated_at:AP.sub.savedAt||'',force:!!force,
     rq:isNew?('new-'+AP.sub.createdAt):rqToken()};
   return apiPost(body,onRetry).then(function(r){
-    if(r.ok&&!(r.data&&r.data.req_id))r={ok:false,code:'bad',msg:'申請單系統回應不完整；請按「📂 從檔期載入」確認有沒有送成功'};
+    if(r.ok&&!(r.data&&r.data.req_id))r={ok:false,code:'bad',msg:'申請單系統回應不完整；請按「📂 重新載入申請表」確認有沒有存成功'};
     if(r.ok){var d=r.data||{};AP.head.req_id=d.req_id;AP.sub.seq=d.seq;AP.sub.status=d.status;AP.sub.savedAt=d.updated_at;AP.sub.by=d.updated_by;AP.sub.campId=d.campaign_id;
       AP.base=payload;if(!AP.sub.role){AP.sub.role=cr.role}upsertFill(cr.role)}
     return r})}
@@ -2938,7 +2948,7 @@ function loadReq(cr,rid,btn){
     if(!r.ok){if(r.code==='auth')setCred(null,cr.role);alert('載入失敗：'+(r.msg||''));return}
     var d=r.data||{},q=d.req||{};
     if(!applyLoaded(d))return;
-    SENDMSG='<span class="ap-okline">已從檔期載回 <b>'+esc(q.req_id)+'</b>（'+esc(d.campaign?d.campaign['檔期名稱']:q.campaign_id)+'｜第 '+esc(q.seq)+' 支｜'+esc(q.status)+'｜以「'+esc((d.me&&d.me.role)||cr.role)+'」身分）</span>';
+    SENDMSG='<span class="ap-okline">已重新載入 <b>'+esc(q.req_id)+'</b>（'+esc(d.campaign?d.campaign['檔期名稱']:q.campaign_id)+'｜第 '+esc(q.seq)+' 支｜'+esc(q.status)+'｜以「'+esc((d.me&&d.me.role)||cr.role)+'」身分）</span>';
     updSendUI();closeModal();
     var t=document.getElementById('tab-apply');if(t)t.scrollIntoView({behavior:'smooth',block:'start'})})}
 /* ===== 2026-09-28：🔑 密碼管理（只有「管理者」）：簽核主管名單＋PIN、各身分密碼 =====
@@ -3154,6 +3164,84 @@ function unitTableHTML(){if(!loadedReq())return '';var items=outLines().map(func
       return '<td><input type="'+(isN?'number':'text')+'" data-uf="'+esc(k)+'" value="'+esc(u[k]==null?'':u[k])+'"'+(isN?' step="any" min="0"':'')+(k==='購買連結'?' placeholder="https://…"':'')+(um&&canDo('U:'+k)?'':' disabled')+'></td>'}).join('')
       +'<td class="ap-muted">'+esc(u.updated_at?String(u.updated_at).slice(5,16)+' '+(u.updated_by||''):'')+'</td></tr>'});
   return h+'</tbody></table></div></div>'}
+/* ===== 2026-10-08 精簡版送件區 =====
+   ① 🔗 產出申請表連結：先存這支（saveReqP；已核准的不存）→ 讀檔期的整檔通行碼（getCampaign camp_key）→ 連結 #sign=檔期編號&k=…&view=1
+      打開＝這個檔期全部甜點的申請表（唯讀，SignMod 整檔頁唯讀模式）；主廚貼到 104 表單送簽
+   ② 📦 簽核通過，上傳更新採購系統：pushFlow（帶 approved104：草稿／退回／送簽中 先改「已核准」再寫採購；沒鎖的先存一次）
+   ③ 🍰 上傳更新自己做食譜系統：rbCardHTML（已核准之後才出現按鈕）
+   📂 重新載入申請表：reloadDialog（listReqs：曾經送件過的全部申請單，下拉選一張載回） */
+var LINK_KEY='rcp:camplink:';
+function campLinkOf(cid){if(!cid)return '';try{return localStorage.getItem(LINK_KEY+cid)||''}catch(e){return ''}}
+function campLinkUrl(cid,k){return location.origin+location.pathname+'#sign='+encodeURIComponent(cid)+'&k='+encodeURIComponent(k)+'&view=1'}
+function simpleCardHTML(){var h=AP.head,s=AP.sub||{},st=s.status||'',rid=h.req_id,appr=!!RBST[st],link=campLinkOf(h.campaign_id);
+  if(unitMode())return '<div class="ap-note">這張是用「'+esc(s.role)+'」身分載入的。請按「📂 重新載入申請表」用主廚密碼重新載入。</div>';
+  var x='<div class="ap-steps">';
+  x+='<div class="ap-step"><div class="ap-stepn">1</div><div class="ap-stepb"><b>產出申請表連結</b>'
+    +'<div class="ap-muted">先把這支存進系統，再給你一個連結：打開就看得到「'+esc(h.campaign_name||'這個檔期')+'」全部甜點的申請表（只能看、不能改）。把連結貼到 104 表單送簽。內容改了再按一次＝更新，連結不變。</div>'
+    +'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apLink" type="button">🔗 產出申請表連結</button></div>'
+    +(link?'<div class="ap-linkrow"><input type="text" readonly id="apLinkTxt" value="'+esc(link)+'"><button class="ap-btn2 ap-mini" id="apLinkCopy" type="button">複製連結</button><a class="ap-btn2 ap-mini" href="'+esc(link)+'" target="_blank" rel="noopener">打開看看 ↗</a></div>':'')
+    +'</div></div>';
+  x+='<div class="ap-step"><div class="ap-stepn">2</div><div class="ap-stepb"><b>簽核通過，上傳更新採購系統</b>';
+  if(!rid)x+='<div class="ap-muted">先做 ①，這支存進系統之後才能上傳。</div>';
+  else if(st==='已寫入採購'){var pw=pushInfo();
+    x+='<div class="ap-okline">✅ 已上傳採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+pushDoneHTML(pw)
+      +'<div class="ap-muted">下一步（採購）：到採購系統「主檔」頁 →「🆕 待確認」補單價、單位換算、適用店。各店在採購系統「🆕 檔期新品」看得到這支新品。<a href="dashboard-purchase.html" target="_blank" rel="noopener">打開採購系統 ↗</a></div>'
+      +'<details style="margin-top:4px"><summary class="ap-muted" style="cursor:pointer">寫錯要還原？（管理者）</summary><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apRbBtn" type="button">↩ 還原採購寫入（管理者）</button></div></details>'}
+  else{var lf=st==='已核准（採購寫入失敗）'?pushLastFail(pushInfo()):null;
+    if(st==='已核准（採購寫入失敗）')x+='<div class="ap-rejbox"><b>✕ 上次上傳沒有成功</b>'+(lf?'<div>'+esc(lf.msg)+' <span class="ap-muted">'+esc(lf.ts)+'</span></div>':'')+'<div class="ap-muted">排除問題後再按一次（同一張不會重複寫）。</div></div>';
+    else x+='<div class="ap-muted">'+(appr?'這張單已核准，還沒上傳採購系統。':'104 表單上的簽核全部通過後按這裡：這支會改成「已核准」，並把用料、新品項寫進採購系統（寫之前會自動備份，寫錯可以由管理者還原）。')+'</div>';
+    x+='<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apPushBtn" type="button">📦 簽核通過，上傳更新採購系統</button><button class="ap-btn2 ap-mini" id="apPvBtn" type="button">🔍 先看會寫什麼</button></div>'+pushPvHTML()}
+  x+='</div></div>';
+  x+='<div class="ap-step"><div class="ap-stepn">3</div><div class="ap-stepb"><b>上傳更新自己做食譜系統</b>'
+    +(appr?rbCardHTML():'<div class="ap-muted">'+(rid?'先做 ②（簽核通過）之後才能上傳。':'先做 ①、②。')+'把這支甜點在門市平板的食譜後台建成正式食譜（停用狀態，由負責食譜的夥伴檢查後啟用）。</div>')
+    +'</div></div>';
+  return x+'</div>'}
+function linkFlow(force){if(_busy)return;var h=AP.head,cid=h.campaign_id;
+  if(!cid){alert('請先在表頭「檔期」選這支新品要上的檔期（清單沒有就按「＋ 新增檔期」）。');var sl=document.getElementById('apCampSel');if(sl){sl.scrollIntoView({behavior:'smooth',block:'center'});sl.focus()}return}
+  var save=!lockedReq(),tk=null;
+  credRun('主廚','產出申請表連結要主廚密碼。',function(cr,onR){_busy=true;var t0=Date.now(),note='';
+      var show=function(){SENDMSG='<span class="ap-muted">'+(save?'存檔並產出連結中…':'產出連結中…')+'已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note+'（Google 慢的時候要 10～30 秒；同一張不會重複存）</span>';updSendUI()};
+      show();clearInterval(tk);tk=setInterval(show,1000);
+      var onR2=function(k){note='，連線不穩自動重試第 '+k+' 次';if(onR)onR(k)};
+      return (save?saveReqP(cr,force,onR2):Promise.resolve({ok:true})).then(function(r){
+        if(!r.ok)return r;
+        return apiPost({action:'getCampaign',role:cr.role,password:cr.pw,campaign_id:cid,lite:true},onR2).then(function(g){if(g.ok)g.saved=r;return g})})},
+    function(cr,r){clearInterval(tk);_busy=false;
+      if(r&&r.ok){var k=(r.data||{}).camp_key||'',d=(r.saved&&r.saved.data)||{};
+        if(!k){SENDMSG='<span class="ap-bad">✕ 系統沒有給連結（要用主廚或管理者身分）</span>';updSendUI();return}
+        try{localStorage.setItem(LINK_KEY+cid,campLinkUrl(cid,k))}catch(e){}
+        SENDMSG='<span class="ap-okline">✓ '+(save?'已存檔'+(d.req_id?'：<b>'+esc(d.req_id)+'</b>｜第 '+esc(d.seq)+' 支':'')+'；':'')+'申請表連結在上面「①」，按「複製連結」貼到 104 表單</span>';
+        OUT=null;saveDraft();render();campLoad();return}
+      r=r||{};
+      if(r.code==='auth'){setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg)+'，請再按一次重新輸入密碼</span>';updSendUI();return}
+      if(r.code==='conflict'){SENDMSG='';updSendUI();if(confirm('⚠ '+r.msg+'\n\n要用你畫面上的版本覆蓋嗎？（按取消＝這次不存；可先用「📂 重新載入申請表」看最新版）'))linkFlow(true);return}
+      if(r.code==='locked'&&r.data&&r.data.status){AP.sub.status=r.data.status;saveDraft();render()}
+      SENDMSG='<span class="ap-bad">✕ 沒有成功：'+esc(r.msg||'未知錯誤')+'</span>';updSendUI()})}
+function copyLink(){var e=document.getElementById('apLinkTxt');if(!e)return;copyText(e.value,'已複製申請表連結，貼到 104 表單就好')}
+/* 📂 重新載入申請表：曾經送件過的全部申請單，下拉選一張（依檔期分組）→ 載回 */
+function reloadDialog(){var c=getCred('主廚')||getCred('管理者');if(c){openReload(c);return}
+  askCred(null,'重新載入申請表要主廚（或管理者）密碼。',function(cr,res){openReload(cr,(res&&res.ok&&res.act==='listReqs')?res:null)},
+    function(cr,onR){return apiPost({action:'listReqs',role:cr.role,password:cr.pw},onR)},true)}
+function openReload(cr,pre){
+  var m=modal('<div class="ap-h">📂 重新載入申請表</div><div class="ap-muted">選一張曾經存進系統的申請表載回來，會取代目前畫面上的內容（本機草稿也一起取代；畫面上的如果還要，先按最上方「💾 存成檔案」）。已核准的單載回後只能看。</div>'
+    +'<label>申請表</label><select id="apRlSel"><option value="">讀取清單中…</option></select><div id="apRlInfo" class="ap-muted" style="margin-top:6px"></div>'
+    +'<div class="ap-actions"><button class="ap-btn" id="apRlGo" type="button" disabled>載回</button><button class="ap-btn2" id="apRlNo" type="button">關閉</button></div>');
+  m.querySelector('#apRlNo').onclick=closeModal;
+  var sel=m.querySelector('#apRlSel'),info=m.querySelector('#apRlInfo'),go=m.querySelector('#apRlGo'),L=[];
+  function fill(r){if(!r.ok){if(r.code==='auth')setCred(null,cr.role);sel.innerHTML='<option value="">— 讀不到清單 —</option>';info.innerHTML='<span class="ap-bad">'+esc(r.msg||'')+'</span>';return}
+    L=((r.data||{}).reqs)||[];if(!L.length){sel.innerHTML='<option value="">— 系統上還沒有任何申請表 —</option>';return}
+    var G={},order=[];L.forEach(function(q){var k=q.campaign_id||'';if(!G[k]){G[k]={name:q.campaign||'（沒有檔期）',from:q.camp_from||'',arch:q.camp_state==='封存',list:[]};order.push(k)}G[k].list.push(q)});
+    order.sort(function(a,b){return String(G[b].from).localeCompare(String(G[a].from))});
+    sel.innerHTML='<option value="">— 請選一張（共 '+L.length+' 張）—</option>'+order.map(function(k){var g=G[k];
+      g.list.sort(function(a,b){return (parseInt(a.seq,10)||0)-(parseInt(b.seq,10)||0)});
+      return '<optgroup label="'+esc(g.name+(g.from?'（'+g.from+' 起）':'')+(g.arch?'（已封存）':''))+'">'+g.list.map(function(q){
+        return '<option value="'+esc(q.req_id)+'"'+(q.req_id===AP.head.req_id?' selected':'')+'>'+esc((q.seq?'第 '+q.seq+' 支 ':'')+(q.name||'（未命名）')+'｜'+(q.status||'草稿')+'｜'+String(q.updated_at||'').slice(0,16))+'</option>'}).join('')+'</optgroup>'}).join('');
+    upd()}
+  function upd(){var q=L.filter(function(x){return x.req_id===sel.value})[0];go.disabled=!q;
+    info.innerHTML=q?esc(q.req_id+'｜'+(q.campaign||'')+'｜狀態 '+(q.status||'草稿')+'｜最後更新 '+q.updated_at+(q.updated_by?'（'+q.updated_by+'）':'')+(q.price!==''&&q.price!=null?'｜定價 '+q.price:'')):''}
+  sel.onchange=upd;
+  go.onclick=function(){if(sel.value)loadReq(cr,sel.value,go)};
+  (pre?Promise.resolve(pre):apiPost({action:'listReqs',role:cr.role,password:cr.pw},function(k){info.textContent='連線不穩，自動重試中（第 '+k+' 次）…'})).then(fill)}
 function sendActionsHTML(){
   if(unitMode())return '<div class="ap-actions"><button class="ap-btn" id="apRoleSave"'+(lockedReq()?' disabled':'')+'>💾 儲存「'+esc(AP.sub.role)+'」填的欄位</button><button class="ap-btn2" id="apLoadCamp">📂 從檔期載入</button>'
     +'<span class="ap-muted">只會存你負責的欄位，主廚和其他單位填的內容不受影響。各單位都填好後，由主廚送簽。</span></div>';
@@ -3447,13 +3535,18 @@ function pushPreviewFlow(){var rid=AP.head.req_id;if(!rid)return;var role=((AP.s
       PUSHPV={rid:rid,loading:false,err:'',plan:(r.data||{}).plan||null};renderSoon()})})}
 function pushFlow(){if(_busy)return;var rid=AP.head.req_id,h=AP.head;if(!rid)return;
   var nm=String(h.fname||'').trim()||String(h.name||'').trim()||'（未命名）';
+  var appr0=!!RBST[(AP.sub||{}).status||''];   /* 2026-10-08：簽核改在 104 表單；還沒核准的先請主廚確認 104 已全部通過 */
+  if(!appr0&&!confirm('確認 104 表單上這支「'+nm+'」的簽核已經全部通過？\n\n按確定＝這張單改成「已核准」，接著寫進採購系統。'))return;
   if(!confirm('把 '+rid+' '+nm+' 寫入採購系統？\n\n會新增：產品名稱對照表 1 列、BOM 表（用料全部）、主檔新品項、新單位換算（有填的話）。\n已經有的不會重複寫、既有品項一格都不動。'))return;
   if(!confirm('再確認一次：寫入採購系統（寫之前會自動備份，寫錯可以由管理者還原）。確定？'))return;
   var role=((AP.sub||{}).role==='管理者')?'管理者':'主廚';
   withCred(role,'寫入採購系統要「'+role+'」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">寫入採購系統中…（約 10～40 秒，請不要關頁）</span>';updSendUI();
     var onR=function(k){SENDMSG='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次；同一張不會重複寫）…</span>';updSendUI()};
     var tk=rqToken();
-    apiPost({action:'pushPurchase',role:cr.role,password:cr.pw,req_id:rid,rq:tk},onR).then(function(r){
+    (lockedReq()?Promise.resolve({ok:true}):saveReqP(cr,false,onR)).then(function(sv){   /* 2026-10-08：還沒鎖的先存一次，寫進採購的是畫面上最新的內容 */
+      if(!sv.ok){_busy=false;if(sv.code==='auth')setCred(null,cr.role);
+        SENDMSG='<span class="ap-bad">✕ 上傳前先存檔沒有成功：'+esc(sv.msg||'未知錯誤')+(sv.code==='conflict'?'（系統上的版本比畫面新，請先「📂 重新載入申請表」）':'')+'</span>';updSendUI();return null}
+      return apiPost({action:'pushPurchase',role:cr.role,password:cr.pw,req_id:rid,rq:tk,approved104:true},onR)}).then(function(r){if(!r)return;
       if(!r.ok&&RETRY_CODES[r.code]){SENDMSG='<span class="ap-muted">回覆沒收到，確認系統上的狀態…</span>';updSendUI();
         return fetchReq(cr,rid,onR).then(function(g){_busy=false;
           if(g.ok&&g.data&&g.data.req&&g.data.req.status==='已寫入採購'&&applyLoaded(g.data)){SENDMSG='<span class="ap-okline">✓ 已寫入採購系統（剛才回覆沒收到，系統上已經寫好了）</span>';updSendUI();return}
@@ -3762,7 +3855,7 @@ function applyRoleLock(root){if(!unitMode()||lockedReq())return;
     el.disabled=true})}
 /* 送簽中／已核准：整張唯讀，只留查看、複製、下載、開新單 */
 function applyLock(root){if(!lockedReq())return;
-  var keep={apGo:1,apClr:1,apLoadCamp:1,apSemiAll:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
+  var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apSemiAll:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-copy')||el.hasAttribute('data-copy104')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     if(el.closest&&el.closest('#apCampCard'))return;   /* 🗂 整檔送簽核卡管整個檔期（畫面上這支鎖住時，別支照樣可以送） */
@@ -3802,20 +3895,18 @@ function paint(){var root=document.getElementById('apRoot');
   /* 表二（撐到視窗最寬） */
   s+=table2HTML();
   /* B 階段：檔期作業＋各單位補充（從檔期載入後才出現） */
-  s+=campOpsHTML()+unitTableHTML();
+  /* 2026-10-08 經營者：各單位補填區（檔期作業、品項補充）從畫面拿掉（函式保留） */
   /* 頁尾 */
   s+=footHTML();
   /* 產出 */
-  s+='<div class="ap-card"><div class="ap-h">📤 送件與產出申請單</div>';
+  /* 2026-10-08 經營者「下方功能太複雜」：只留 ①產出申請表連結 ②簽核通過→上傳採購系統 ③上傳自己做食譜系統；簽核由主廚用 104 表單自己送。
+     原本的送件／送簽卡、整檔送簽卡、104 公告、意見交流不再畫（函式保留） */
+  s+='<div class="ap-card"><div class="ap-h">📤 申請表</div>';
   s+='<div class="ap-reqline" id="apReqLine">'+reqStatusHTML()+'</div>';
-  s+=sendActionsHTML();
-  s+='<div class="ap-muted" style="margin:6px 0 2px">核准後，各店在採購系統「🆕 檔期新品」就看得到這支新品：要用的新品項、貼紙名稱、每份用量、各店建議第一批叫多少（不用再另外發新品通知表）。<a href="dashboard-purchase.html" target="_blank" rel="noopener">打開採購系統 ↗</a></div>';
+  s+=simpleCardHTML();
   s+='<div id="apSendMsg" style="margin:8px 0 10px">'+SENDMSG+'</div>';
-  s+=campSignCardHTML();   /* 2026-10-07 晚：🗂 整檔送簽核 */
-  s+=signCardHTML();
-  s+=cmtCardHTML();   /* 2026-10-07：💬 意見交流（各單位載入時也看得到、可以留言） */
   if(ERRS.length)s+='<div class="ap-note"><b>尚未填寫（可先儲存，之後由負責的人補）：</b><div class="ap-muted">'+ERRS.map(esc).join('｜')+'</div></div>';
-  s+='<div class="ap-actions"><button class="ap-btn" id="apGo">產出申請單</button><button class="ap-btn2" id="apClr">清空整張</button><span class="ap-muted">「產出申請單」只是整理成文字讓你複製；「清空整張」只清這台電腦的畫面，已送件的單還在檔期裡。草稿自動存在這台電腦；要交給別人接手，按最上方「💾 存成檔案」，對方用「📂 開啟檔案」接著填。</span></div>';
+  s+='<div class="ap-actions"><button class="ap-btn2" id="apLoadCamp" type="button">📂 重新載入申請表</button><button class="ap-btn2" id="apGo">產出申請單</button><button class="ap-btn2" id="apClr">清空整張</button><span class="ap-muted">「產出申請單」只是整理成文字讓你複製；「清空整張」只清這台電腦的畫面，已送件的單還在檔期裡。草稿自動存在這台電腦；要交給別人接手，按最上方「💾 存成檔案」，對方用「📂 開啟檔案」接著填。</span></div>';
   if(OUT){s+='<div class="ap-out" id="apOut" style="margin-top:10px"><div class="ap-ok">✓ 申請單已產出（'+esc(reqNo())+'）。</div>'
    +'<div class="ap-actions"><button class="ap-btn" data-copy="summary">📋 複製申請單摘要</button></div>'
    +'<details style="margin:4px 0"><summary class="ap-muted" style="cursor:pointer">進階：手動複製到試算表的格式（平常用不到，核准後系統會自動寫進採購系統）</summary>'
@@ -3934,7 +4025,9 @@ function wire(){var root=document.getElementById('apRoot');
   /* 2026-09-28 A 階段：檔期／送件／從檔期載入 */
   wireCamp();
   var sd=document.getElementById('apSend');if(sd)sd.onclick=function(){sendReq(false)};
-  var lc=document.getElementById('apLoadCamp');if(lc)lc.onclick=loadDialog;
+  var lc=document.getElementById('apLoadCamp');if(lc)lc.onclick=reloadDialog;   /* 2026-10-08：📂 重新載入申請表 */
+  var lk=document.getElementById('apLink');if(lk)lk.onclick=function(){linkFlow(false)};
+  var lkc=document.getElementById('apLinkCopy');if(lkc)lkc.onclick=copyLink;
   /* 2026-09-29 B 階段：各單位補充、檔期作業、儲存、送簽 */
   root.querySelectorAll('tr[data-urow]').forEach(function(tr){var nm=tr.getAttribute('data-urow');
     tr.querySelectorAll('[data-uf]').forEach(function(el){var k=el.getAttribute('data-uf');
@@ -4996,7 +5089,7 @@ function keepOn(){var c=document.getElementById('sgKeep');return c?!!c.checked:t
 function parseHash(){var h=(location.hash||'').replace(/^#sign=/,''),parts=h.split('&'),o={rid:'',who:'',k:''};
   try{o.rid=decodeURIComponent(parts[0]||'').trim()}catch(e){o.rid=String(parts[0]||'').trim()}
   parts.slice(1).forEach(function(kv){var i=kv.indexOf('=');if(i<=0)return;var key=kv.slice(0,i),v;try{v=decodeURIComponent(kv.slice(i+1))}catch(e){v=kv.slice(i+1)}
-    if(key==='who')o.who=v;else if(key==='k')o.k=String(v).trim()});return o}
+    if(key==='who')o.who=v;else if(key==='k')o.k=String(v).trim();else if(key==='view')o.view=(v==='1')});return o}
 function signers(){if(S.camp&&!S.view){var u=[];cReqs().forEach(function(D){cNames(D).forEach(function(n){if(u.indexOf(n)<0)u.push(n)})});return u}   /* 整檔頁：所有支的簽核人 */
   var q=(S.view&&S.view.req)||{};return String(q.signers||'').split(/[,，、;；\s]+/).filter(Boolean)}
 function people(){return (S.camp?(S.cv&&S.cv.people):(S.view&&S.view.people))||null}
@@ -5005,7 +5098,8 @@ function onR(k){S.msg='連線不穩，自動重試中（第 '+k+' 次）…';pai
 function start(){var h=parseHash();if(S.started===location.hash)return;S.started=location.hash;
   S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.notify=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.chg=false;S.closeHint=false;S.open={};
   S.camp=/^C-/.test(S.rid);S.cv=null;S.cdec={};S.ccm={};S.cmts={};S.pfx='';
-  document.body.classList.add('sign-mode');document.title=(S.camp?'新品整檔簽核 ':'新品申請單 ')+(S.rid||'');
+  S.ro=!!(S.camp&&h.view);   /* 2026-10-08：&view=1＝唯讀申請表（主廚貼到 104 表單；簽核在 104 做，這頁不顯示你是誰／留言／同意退回） */
+  document.body.classList.add('sign-mode');document.title=(S.ro?'新品申請表 ':(S.camp?'新品整檔簽核 ':'新品申請單 '))+(S.rid||'');
   if(!A()){root().innerHTML='<div class="sg-card sg-bad">簽核頁載入失敗，請重新整理。</div>';return}
   if(S.camp){if(S.k)openCamp();else{S.msg='✕ 這個連結不完整（少了通行碼），請跟主廚要 Email 或 104 公告裡的連結';paint()}return}
   if(S.k)openKey();else loadInfo()}
@@ -5014,6 +5108,7 @@ function openCamp(quiet){if(!quiet){S.msg='讀取整個檔期的申請單中…'
   A().post({action:'signOpenCamp',campaign_id:S.rid,k:S.k},onR).then(function(r){
     if(!r.ok){S.msg='✕ '+(r.msg||'讀不到這個檔期');paint();return}
     S.cv=r.data;S.msg=quiet?'✓ 已更新':'';
+    if(S.ro){paint();return}
     if(!S.me){var m=meGet();if(m&&personOf(m.name))S.me=m;else if(S.who&&personOf(S.who)&&!S.step)S.step={name:S.who,mode:personOf(S.who).hasPin?'pin':'set'}}
     paint()})}
 /* 新連結（帶 k）：直接看 */
@@ -5193,7 +5288,7 @@ function detailHTML(camp){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload|
     return '<tr'+(me?' class="sg-me"':'')+'><td>'+esc(o.seq)+'</td><td>'+esc(o.name||'（未命名）')+(me?' <b>（這張）</b>':'')+'</td><td>'+esc(o.price===''||o.price==null?'—':o.price)+'</td><td>'+(o.cost===''||o.cost==null?'—':money(o.cost))+'</td><td>'+esc(o.status)+'</td></tr>'}).join('')+'</table></div>');
   var names=signers(),nAg=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,nBk=names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='退回'})}).length;
   var bm=names.some(function(n){return cBatch(n)!==cBatch(names[0])});   /* 簽核人分了不只一批 → 每人前面標第幾批 */
-  x+=sec('prog','✍️ 簽核進度',names.length?nAg+'／'+names.length+' 位同意'+(nBk?'｜'+nBk+' 位退回':''):'還沒送簽','<div class="sg-prog">'+(names.length?names.slice().sort(function(a,b){return cBatch(a)-cBatch(b)}).map(function(n){var o=lv.filter(function(r){return r.signer===n})[0];
+  if(!S.ro)x+=sec('prog','✍️ 簽核進度',names.length?nAg+'／'+names.length+' 位同意'+(nBk?'｜'+nBk+' 位退回':''):'還沒送簽','<div class="sg-prog">'+(names.length?names.slice().sort(function(a,b){return cBatch(a)-cBatch(b)}).map(function(n){var o=lv.filter(function(r){return r.signer===n})[0];
     return '<div>'+(bm?'<span class="sg-bt">第 '+cBatch(n)+' 批</span>':'')+(o?(o.decision==='同意'?'<span class="sg-ok">✓ 同意</span>':'<span class="sg-bad">✕ 退回</span>'):'<span class="sg-muted">⏳ 未簽</span>')+' <b>'+esc(n)+'</b>'+(S.me&&n===S.me.name?'（你）':'')
       +(o&&o.ts?' <span class="sg-muted">'+esc(o.ts)+'</span>':'')+(o&&o.comment?'<div class="sg-muted">「'+esc(o.comment)+'」</div>':'')+'</div>'}).join(''):'<div class="sg-muted">主廚還沒送簽（還沒指定簽核人）。可以先看內容、留言。</div>')+'</div>'
     +(voided().length?'<div class="sg-muted" style="margin-top:6px">先前送簽的紀錄（已作廢）'+voided().length+' 筆，見意見交流</div>':''));
@@ -5243,13 +5338,13 @@ function cListHTML(){var R=cReqs();if(!R.length)return '<div class="sg-card sg-m
     +R.map(function(D){var q=D.req||{},j=cPay(D),hd=j.head||{},nn=(j.lines||[]).filter(function(l){return l.is_new}).length,s=cSt(D),my=cMyTxt(s);
       return '<tr><td>'+esc(q.seq)+'</td><td><a href="javascript:void 0" data-cgo="'+esc(q.req_id)+'">'+esc(cNm(D))+'</a></td><td>'+esc(hd.price||q['定價']||'—')+'</td><td>'+(hd.cost_rate!=null?esc(hd.cost_rate)+'%':'—')+'</td><td>'+(nn?nn+' 項':'—')+'</td><td>'+esc(cStTxt(D))+'</td>'
         +(S.me?'<td>'+(my==='待你簽'?'<b class="sg-new">待你簽</b>':esc(my||'—'))+'</td>':'')+'</tr>'}).join('')+'</table></div>'
-    +'<div class="sg-muted" style="margin-top:6px">點甜點名稱（或下面每一支的標題）看完整內容：用料、新增食材/器模具、半成品、意見交流。</div></div>'}
+    +'<div class="sg-muted" style="margin-top:6px">點甜點名稱（或下面每一支的標題）看完整內容：用料、新增食材/器模具、半成品'+(S.ro?'':'、意見交流')+'。</div></div>'}
 function cDessHTML(D){var q=D.req||{},rid=q.req_id,key='d:'+rid,open=!!S.open[key],s=cSt(D),my=cMyTxt(s),cs=D.comments||[],nw=Math.max(0,cs.length-seenGet(rid)),body='';
   if(open){var kv0=S.view,kr=S.rid,kp=S.pfx;
     S.view={req:q,campaign:cCamp(),units:D.units||[],signoffs:D.signoffs||[],comments:cs,people:(S.cv&&S.cv.people)||[]};S.rid=rid;S.pfx=rid+':';
-    try{body=kpiHTML(q,cPay(D).head||{})+detailHTML(true)+cCmtHTML(D)}finally{S.view=kv0;S.rid=kr;S.pfx=kp}}
+    try{body=kpiHTML(q,cPay(D).head||{})+detailHTML(true)+(S.ro?'':cCmtHTML(D))}finally{S.view=kv0;S.rid=kr;S.pfx=kp}}
   return '<details class="sg-card sg-sec sg-dess" data-sec="'+esc(key)+'" id="sgD_'+esc(rid)+'"'+(open?' open':'')+'><summary><span class="sg-h2">'+(q.seq?'第 '+esc(q.seq)+' 支　':'')+esc(cNm(D))+'</span>'
-    +'<span class="sg-meta">'+esc(cStTxt(D))+(my?'｜'+(my==='待你簽'?'<b class="sg-new">待你簽</b>':esc(my)):'')+(cs.length?'｜💬 '+cs.length+(nw?' <b class="sg-new">🆕'+nw+'</b>':''):'')+'</span><span class="sg-arrow"></span></summary>'
+    +'<span class="sg-meta">'+esc(cStTxt(D))+(my?'｜'+(my==='待你簽'?'<b class="sg-new">待你簽</b>':esc(my)):'')+(cs.length&&!S.ro?'｜💬 '+cs.length+(nw?' <b class="sg-new">🆕'+nw+'</b>':''):'')+'</span><span class="sg-arrow"></span></summary>'
     +'<div class="sg-secb">'+body+'</div></details>'}
 /* 每一支自己的意見交流（在 detailHTML 的同一個上下文裡畫：S.pfx／S.rid＝這一支） */
 function cCmtHTML(D){var rid=D.req.req_id,cs=D.comments||[],lc=cs[cs.length-1],nw=Math.max(0,cs.length-seenGet(rid)),k=S.pfx+'cmt';
@@ -5331,6 +5426,12 @@ function cSendCmt(rid){if(S.busy)return;var D=cFind(rid),ta=document.querySelect
     if(!r.ok){authLost(r);S.msg='✕ '+(r.msg||'沒有送出');paint();return}
     if(D)D.comments=(r.data&&r.data.comments)||D.comments;S.cmts[rid]='';S.msg='✓ 已送出「'+cNm(D)+'」的留言，大家都看得到';paint()})}
 function campPaint(){var R=cReqs(),c=cCamp();
+  if(S.ro){var hr='<div class="sg-card sg-top"><div class="sg-h">📋 新品申請表</div><div class="sg-muted">'+esc(c['檔期名稱']||S.rid||'（連結沒有檔期）')
+      +(S.cv?'　<button type="button" class="sg-btn2" id="sgRefresh" style="min-height:30px;padding:0 10px;font-size:13px">🔄 看最新</button>':'')+'</div>'
+      +(S.cv?'<div class="sg-muted" style="margin-top:6px">這個檔期的 '+R.length+' 支新甜點，點甜點名稱看完整內容（只能看）。簽核請在 104 表單完成。</div>':'')+'</div>';
+    if(S.msg)hr+='<div class="sg-card '+(/^✕/.test(S.msg)?'sg-badbox':(/^✓/.test(S.msg)?'sg-okbox':'sg-muted'))+'">'+esc(S.msg)+'</div>';
+    if(S.cv)hr+=cInfoHTML()+cListHTML()+R.map(cDessHTML).join('');
+    root().innerHTML=hr;wire();return}
   var h='<div class="sg-card sg-top"><div class="sg-h">✍️ 新品整檔簽核</div><div class="sg-muted">'+esc(c['檔期名稱']||S.rid||'（連結沒有檔期）')
     +(S.cv?'　<button type="button" class="sg-btn2" id="sgRefresh" style="min-height:30px;padding:0 10px;font-size:13px">🔄 看最新</button>':'')+'</div>'
     +(S.cv?'<div class="sg-muted" style="margin-top:6px">一次看完這個檔期的 '+R.length+' 支新甜點：點甜點看細節；簽核在最下面「你的決定」。</div>':'')+'</div>';

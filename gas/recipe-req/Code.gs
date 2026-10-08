@@ -18,7 +18,9 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v12.1';   /* v12.1＝2026-10-08 簽核連結錯誤訊息改「Email 或 104 公告裡的連結」。v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
+var VERSION = 'recipe-req-v13';   /* v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
+   ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
+   v12.1＝v12.1＝2026-10-08 簽核連結錯誤訊息改「Email 或 104 公告裡的連結」。v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
    有一支被退回、或核准 → 寄給主廚（dim_role「主廚」列的 email）；寄送紀錄 fact_notify；🔑 密碼管理可填 Email、寄測試信（adminSetRoleEmail／adminTestMail）。見下方「自動寄 Email」段
    v11＝2026-10-07 晚 經營者裁示：①整檔一次送簽、一次簽完、單支可退回（submitSignCamp／signOpenCamp／signCamp，連結 #sign=檔期編號&k=）②簽核人固定批次（dim_signer.batch；前一批全部同意才輪下一批）③新器具／模具「每店要幾個」→ 核准時寫成各店標配（dim_store_par，BOM 本＋專用檔，還原一起刪）④提供方式＝出貨中心出貨 → 主檔廠商寫「出貨中心」⑤newItemsPub 多回第一批配貨日、檔期作業時間 */
 var TZ = 'Asia/Taipei';
@@ -249,6 +251,8 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   signOpen: signOpen_, signSetPin: signSetPin_, commentAdd: commentAdd_,
   /* 2026-10-07 晚：整檔一次送簽／一次簽完 */
   submitSignCamp: submitSignCamp_, signOpenCamp: signOpenCamp_, signCamp: signCamp_,
+  /* 2026-10-08 v13：重新載入申請表（全部申請單清單） */
+  listReqs: listReqs_,
   /* 2026-10-08：🔑 密碼管理填主廚通知 Email、寄測試信 */
   adminSetRoleEmail: adminSetRoleEmail_, adminTestMail: adminTestMail_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
@@ -269,7 +273,7 @@ var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 →
    30 個動作＝12 讀＋18 寫），改白名單是為了日後新增動作忘了登記 WRITES 時預設仍加鎖（審查時改的）。
    adminList 例外：回覆含各身分密碼，成功也要留一筆稽核 */
 var READS = { whoami: 1, getCampaign: 1, getReq: 1, listSigners: 1, signView: 1, pushPreview: 1, bomMeta: 1, bomGet: 1, mapGet: 1, bomLog: 1, bomMetaMap: 1, adminList: 1,
-  rbStatus: 1, rbPreview: 1, signOpen: 1, signOpenCamp: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
+  rbStatus: 1, rbPreview: 1, signOpen: 1, signOpenCamp: 1, listReqs: 1 };   /* rbPreview 只讀（會登入後台、讀頁面，不寫試算表也不寫後台） */
 var AUDIT_READS = { adminList: 1 };
 /* 2026-10-06：自己管鎖的動作——匯入自己做食譜系統要連後台、一次 30 多秒，不能佔住全系統的鎖（別人送件會卡住）；
    同一張單不重複跑由 rbImport_ 自己用 CacheService 擋，寫紀錄分頁時才短暫拿鎖 */
@@ -721,6 +725,21 @@ function getCampaign_(p, auth) {
       camp_key: (auth.kind === 'role' && (auth.role === ADMIN || can_(auth, 'P:*'))) ? signKey_('camp:' + cid) : '' },   /* 2026-10-07 晚：整檔簽核連結（只給主廚／管理者） */
     msg: reqs.length + ' 支' + (lite ? '（清單）' : '')
   };
+}
+
+/* 2026-10-08 v13：「重新載入申請表」——曾經送件過的全部申請單（不含內容；最新的在前），主廚／管理者 */
+function listReqs_(p, auth) {
+  if (!canPush_(auth)) throw fail_('只有主廚或管理者可以看全部申請單', 'perm');
+  var ct = load_('fact_campaign'), cm = {};
+  ct.rows.forEach(function (r) { var k = str_(r.campaign_id); if (k) cm[k] = { name: str_(r['檔期名稱']), from: str_(r['起']), state: str_(r.status) }; });
+  var t = load_('fact_recipe_req', true);
+  var list = t.rows.filter(function (r) { return str_(r.req_id); }).map(function (r) {
+    var c = cm[str_(r.campaign_id)] || {};
+    return { req_id: str_(r.req_id), campaign_id: str_(r.campaign_id), campaign: c.name || '', camp_from: c.from || '', camp_state: c.state || '', seq: str_(r.seq),
+      name: str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim(), price: r['定價'] === undefined ? '' : r['定價'], status: str_(r.status),
+      updated_at: str_(r.updated_at), updated_by: str_(r.updated_by) };
+  }).sort(function (a, b) { return a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0; });
+  return { id: '', data: { reqs: list }, msg: list.length + ' 張' };
 }
 
 function getReq_(p, auth) {
@@ -1696,6 +1715,12 @@ function pushPurchase_(p, auth) {
   var rid = str_(p.req_id).trim();
   if (!rid) throw fail_('缺申請單號');
   var st = reqStatus_(rid);
+  /* v13：主廚確認 104 表單已簽核通過 → 先改成「已核准」（簽核不在本系統做了） */
+  if (!PUSHABLE[st] && st !== PUSH_OK && p.approved104) {
+    setStatus_(rid, '已核准');
+    log_(auth.role, 'approve104', rid, true, '主廚確認 104 簽核通過（原狀態：' + (st || '草稿') + '）');
+    st = '已核准';
+  }
   if (!PUSHABLE[st]) throw fail_('這張單目前是「' + st + '」，' + (st === PUSH_OK ? '已經寫入過了' : '要全部主管同意（已核准）才能寫入採購系統'), 'locked', { status: st });
   try {
     var v = pushToPurchase_(rid, auth.role);
