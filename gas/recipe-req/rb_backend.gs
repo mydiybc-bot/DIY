@@ -311,3 +311,138 @@ function rbSanitize_(html) {
     .replace(/(href|src)\s*=\s*("|')\s*(javascript|vbscript):[^"']*\2/gi, '$1=$2#$2')
     .replace(/href\s*=\s*("|')\s*data:[^"']*\1/gi, 'href=$1#$1');
 }
+
+/* ===== 2026-10-08 ♻️ 覆蓋上傳（📤 新食譜上傳）：讀／改既有的食譜與步驟 =====
+   經營者 10/08：「主廚改完再次上傳時直接覆蓋同一支，如果中途斷線，應該要能再次上傳直到成功為止」。
+   後台頁面（10/08 讀真頁面）：
+     ‧ /Recipes/Edit/{id}：multipart 表單；類別／分店類別是畫面上的 span.item[data-item]，送出前頁面腳本才把它們寫進 ItemList／StoreList（逗號）；
+       InUse／Public 是 checkbox＋同名 hidden false；封面圖 TitleImage 等是 hidden（沒附新檔就照原值送回）。
+     ‧ /Steps/Edit/{stepId}：RecipeId、StepId、Order、StepMedia（目前的圖片影片路徑，沒附新檔要原樣送回）、Image（新檔）、StepTitle、Content、
+       StopClock、Timer、deletedIngred（要拿掉的既有食材列編號，逗號）、Ingredients[i].*（新加的食材）。
+     ‧ /Steps/DeletePost：id＝步驟編號（頁面的「刪除」鈕就是送這個，沒有驗證碼）。 */
+/* 表單現值：[[name, value], …]（照頁面順序；file 欄不帶；checkbox／radio 只帶勾起來的；select 帶選中的；同名欄位照實保留多個） */
+function rbFormFields_(f) {
+  var out = [], re = /<(input|textarea|select)\b[^>]*>/gi, m;
+  while ((m = re.exec(f))) {
+    var tag = m[0], kind = m[1].toLowerCase(), name = rbAttr_(tag, 'name');
+    if (kind === 'input') {
+      if (!name) continue;
+      var type = (rbAttr_(tag, 'type') || 'text').toLowerCase();
+      if (/^(file|submit|button|image|reset)$/.test(type)) continue;
+      if ((type === 'checkbox' || type === 'radio') && !/\schecked\b/i.test(tag)) continue;
+      out.push([name, (type === 'checkbox' || type === 'radio') ? (rbAttr_(tag, 'value') || 'on') : rbAttr_(tag, 'value')]);
+    } else if (kind === 'textarea') {
+      var end = f.indexOf('</textarea>', re.lastIndex);
+      if (name) out.push([name, rbDecode_(f.slice(re.lastIndex, end < 0 ? re.lastIndex : end).replace(/^\r?\n/, ''))]);
+      if (end >= 0) re.lastIndex = end;
+    } else {
+      var send = f.indexOf('</select>', re.lastIndex), body = f.slice(re.lastIndex, send < 0 ? re.lastIndex : send), ore = /<option\b[^>]*>/gi, om, first = null, sel = null;
+      while ((om = ore.exec(body))) { var v = rbAttr_(om[0], 'value'); if (first === null) first = v; if (sel === null && /\sselected\b/i.test(om[0])) sel = v; }
+      if (name && (sel !== null || first !== null)) out.push([name, sel !== null ? sel : first]);
+      if (send >= 0) re.lastIndex = send;
+    }
+  }
+  return out;
+}
+function rbFieldGet_(fields, name) { for (var i = 0; i < fields.length; i++) if (fields[i][0] === name) return fields[i][1]; return null; }
+function rbEncode_(pairs) { return pairs.map(function (p) { return encodeURIComponent(p[0]) + '=' + encodeURIComponent(p[1] == null ? '' : String(p[1])); }).join('&'); }
+function rbGone_(r) { return r.code === 404 || ((r.code === 302 || r.code === 301) && !rbIsLogin_(r)); }
+var RB_EDIT_FIELDS = ['RecipeId', 'Title', 'GroupId', 'LanguageId', 'Note', 'ItemList', 'StoreList', 'RecipeUp', 'RecipeDown', 'Price', 'Cost', 'InUse', 'PrepHr', 'Size', 'Content', 'Preserve', 'Public'];
+var RB_STEP_EDIT_FIELDS = ['RecipeId', 'StepId', 'Order', 'StepMedia', 'Image', 'StepTitle', 'Content', 'StopClock', 'Timer', 'deletedIngred'];
+/* 「編輯食譜」頁：表單現值＋目前的類別／分店類別 */
+function rbRecipeEditPage_(sess, bid) {
+  var r = rbAuthedGet_(sess, '/Recipes/Edit/' + encodeURIComponent(bid));
+  if (rbGone_(r)) throw rbErr_('後台找不到這支食譜（可能已經被刪掉）', 'rbgone');
+  if (r.code !== 200) throw rbErr_('食譜後台「編輯食譜」頁打不開（HTTP ' + r.code + '）', 'rbnet');
+  var f = rbFormHtml_(r.text, /^\/Recipes\/Edit\//i);
+  if (!f) throw rbErr_('食譜後台「編輯食譜」頁找不到表單（頁面可能改版）', 'rbpage');
+  var miss = RB_EDIT_FIELDS.filter(function (n) { return !rbHasField_(f, n); });
+  if (miss.length) throw rbErr_('食譜後台「編輯食譜」頁少了欄位 ' + miss.join('、') + '（頁面可能改版，這次先不送）', 'rbpage');
+  var fields = rbFormFields_(f);
+  if (rbFieldGet_(fields, 'RecipeId') !== bid) throw rbErr_('食譜後台「編輯食譜」頁的食譜編號對不上（頁面可能改版）', 'rbpage');
+  var t = r.text, a = t.indexOf('id="cateG"'), b = t.indexOf('id="storeType"'), c = t.indexOf('name="RecipeUp"');
+  if (a < 0 || b < a || c < b) throw rbErr_('食譜後台「編輯食譜」頁讀不到類別／分店類別（頁面可能改版）', 'rbpage');
+  var items = function (from, to) {
+    var seg = t.slice(from, to), out = [], re = /<span\s+class=['"]item['"]\s+data-item=['"]([^'"]+)['"]\s*>([^<]*)/gi, m;
+    while ((m = re.exec(seg))) out.push({ id: m[1], name: rbTrim_(rbDecode_(m[2])) });
+    return out;
+  };
+  return { token: rbToken_(f), fields: fields, cats: items(a, b), stores: items(b, c), inUse: rbFieldGet_(fields, 'InUse') === 'true', pub: rbFieldGet_(fields, 'Public') === 'true' };
+}
+/* 改基本資料：其他欄位（啟用、公開、封面圖、流水碼…）照頁面現值原樣送回。r＝{title, note, cats（類別編號）, storeIds, price, cost, prepHr, size, desc, preserve} */
+function rbUpdateRecipe_(sess, bid, pg, r) {
+  var set = { Title: r.title, Note: r.note, ItemList: (r.cats || []).join(','), StoreList: (r.storeIds || []).join(','), Price: String(r.price), Cost: String(r.cost),
+    PrepHr: String(r.prepHr || ''), Size: r.size || '', Content: r.desc || '', Preserve: r.preserve || '' };
+  var done = {}, pairs = pg.fields.map(function (p) {
+    var k = p[0], v = p[1];
+    if (Object.prototype.hasOwnProperty.call(set, k)) { if (done[k]) return null; done[k] = 1; v = set[k]; }
+    else if (k === 'RecipeUp' && !v) v = RB_RECIPE_UP;          /* 空白＝平板打不開（2026-10-08）：補上跟新建一樣的期間 */
+    else if (k === 'RecipeDown' && !v) v = RB_RECIPE_DOWN;
+    return [k, v];
+  }).filter(Boolean);
+  var res = rbReq_(sess, 'post', '/Recipes/Edit/' + encodeURIComponent(bid), { payload: rbEncode_(pairs) });
+  if (rbIsLogin_(res)) throw rbErr_('食譜後台登入逾時', 'rbrelogin');
+  if (res.code === 302 || res.code === 301) return true;
+  if (res.code === 200) throw rbErr_('食譜後台沒有接受修改食譜：' + (rbFormErrors_(res.text) || '表單有欄位不合格'), 'rbreject');
+  throw rbErr_('食譜後台修改食譜回覆異常（HTTP ' + res.code + '）', 'rbunknown');
+}
+/* 「編輯步驟」頁：現值＋目前掛的食材列編號 */
+function rbStepEditParse_(r, sid) {
+  if (rbGone_(r)) throw rbErr_('後台找不到這個步驟（可能已經被刪掉）', 'rbgone');
+  if (r.code !== 200) throw rbErr_('食譜後台「編輯步驟」頁打不開（HTTP ' + r.code + '）', 'rbnet');
+  var f = rbFormHtml_(r.text, /^\/Steps\/Edit\//i);
+  if (!f) throw rbErr_('食譜後台「編輯步驟」頁找不到表單（頁面可能改版）', 'rbpage');
+  var miss = RB_STEP_EDIT_FIELDS.filter(function (n) { return !rbHasField_(f, n); });
+  if (miss.length) throw rbErr_('食譜後台「編輯步驟」頁少了欄位 ' + miss.join('、') + '（頁面可能改版，這次先不送）', 'rbpage');
+  var fields = rbFormFields_(f), g = function (n) { var v = rbFieldGet_(fields, n); return v == null ? '' : v; };
+  if (g('StepId') !== sid) throw rbErr_('食譜後台「編輯步驟」頁的步驟編號對不上（頁面可能改版）', 'rbpage');
+  var ings = [], re = /<a\b[^>]*class="[^"]*deleteExistIngred[^"]*"[^>]*>/gi, m;
+  while ((m = re.exec(r.text))) { var id = rbAttr_(m[0], 'data-ingredid'); if (id) ings.push(id); }
+  var media = g('StepMedia');
+  return { token: rbToken_(f), rid: g('RecipeId'), sid: sid, order: g('Order'), media: media, title: g('StepTitle'), stop: g('StopClock') === 'true', timer: g('Timer'), ings: ings,
+    mediaUrl: media ? RB_MEDIA_PREFIX + media.split('?')[0] : '' };
+}
+function rbStepEditPage_(sess, sid) { return rbStepEditParse_(rbAuthedGet_(sess, '/Steps/Edit/' + encodeURIComponent(sid)), sid); }
+/* 一次讀很多個「編輯步驟」頁（UrlFetchApp.fetchAll，同時送）；逾時被導回登入頁 → 重登一次再讀 */
+function rbStepEditPages_(sess, sids) {
+  var go = function () {
+    var reqs = sids.map(function (sid) { return { url: RB_BASE + '/Steps/Edit/' + encodeURIComponent(sid), method: 'get', muteHttpExceptions: true, followRedirects: false, headers: { 'User-Agent': RB_UA, Cookie: rbJarStr_(sess.jar) } }; });
+    var out = [];
+    for (var i = 0; i < reqs.length; i += 20) {
+      var rs = UrlFetchApp.fetchAll(reqs.slice(i, i + 20));
+      rs.forEach(function (x) { var h = x.getAllHeaders(); out.push({ code: x.getResponseCode(), loc: String(h.Location || h.location || ''), text: x.getContentText() }); });
+    }
+    return out;
+  };
+  var rs = go();
+  if (rs.some(rbIsLogin_)) { rbDropSession_(); sess.jar = rbFreshSession_().jar; rs = go(); }
+  return rs.map(function (r, i) { return rbStepEditParse_(r, sids[i]); });
+}
+/* 改一個步驟（就地改：標題、內容、食材全部換成新的；圖片影片：有新檔換新檔、keep＝留原本的、都沒有＝拿掉；計時器照原本的）。
+   s＝{title, html, ings:[{id, amount, unit, cont}], media:Blob|null, keep}。重送一樣的內容結果相同（可安全重做） */
+function rbEditStep_(sess, pg, s) {
+  var payload = {
+    '__RequestVerificationToken': pg.token, RecipeId: pg.rid, StepId: pg.sid, Order: pg.order,
+    StepMedia: (s.media || s.keep) ? pg.media : '', StepTitle: s.title, Content: s.html,
+    StopClock: pg.stop ? 'true' : 'false', Timer: pg.timer || '', deletedIngred: pg.ings.length ? pg.ings.join(',') + ',' : ''
+  };
+  (s.ings || []).forEach(function (g, i) {
+    payload['Ingredients[' + i + '].IngredSourceId'] = g.id;
+    payload['Ingredients[' + i + '].Amount'] = String(g.amount);
+    payload['Ingredients[' + i + '].Unit'] = g.unit;
+    payload['Ingredients[' + i + '].Container'] = g.cont || '';
+  });
+  if (s.media) payload.Image = s.media;
+  var res = rbReq_(sess, 'post', '/Steps/Edit/' + encodeURIComponent(pg.sid), { payload: payload });
+  if (rbIsLogin_(res)) throw rbErr_('食譜後台登入逾時', 'rbrelogin');
+  if (res.code === 302 || res.code === 301) return true;
+  if (res.code === 200) throw rbErr_('食譜後台沒有接受修改步驟「' + s.title + '」：' + (rbFormErrors_(res.text) || '表單有欄位不合格'), 'rbreject');
+  throw rbErr_('食譜後台修改步驟「' + s.title + '」回覆異常（HTTP ' + res.code + '）', 'rbunknown');
+}
+/* 刪一個步驟（只給覆蓋上傳用：新檔步驟比後台少時，刪掉多出來的那幾步） */
+function rbDeleteStep_(sess, sid) {
+  var res = rbReq_(sess, 'post', '/Steps/DeletePost', { payload: { id: sid } });
+  if (rbIsLogin_(res)) throw rbErr_('食譜後台登入逾時', 'rbrelogin');
+  if (res.code >= 200 && res.code < 400) return true;
+  throw rbErr_('食譜後台刪除步驟回覆異常（HTTP ' + res.code + '）', 'rbunknown');
+}

@@ -11,7 +11,9 @@
      nrIngCreate（寫後台食材管理）：使用者確認過的新品項逐一建立；建之前先看後台有沒有同名同單位（有就不重建）；建完重讀清單確認
      nrImport（分段）：建食譜（停用、不公開）＋逐步建步驟（食材工具、容器、圖片／影片）；中斷可接續，已建的不重建
      nrList（只讀）：最近 15 次上傳（給「繼續上傳」用）
-   ⚠ 只新增，不改、不刪後台任何既有資料。 */
+   ⚠ 新上傳只新增，不改、不刪後台任何既有資料。
+   2026-10-08 晚 加：nrImport 帶 over＝覆蓋上傳（同一支後台食譜就地改，見 nrRunOver_）；nrOverPeek（只讀，覆蓋前看後台現況）；
+   nrLink（新品申請核准後「接上試做版」，只寫紀錄）。覆蓋上傳會改、會刪「那一支」食譜的步驟（使用者選定要覆蓋的），不碰其他食譜。 */
 var NR_IMG_MAX = 300 * 1024;          /* 經營者：圖片不超過 300KB（前端先壓到 300,000 bytes 以下，這裡是最後把關） */
 var NR_VID_MAX = 5 * 1024 * 1024;     /* 經營者：影片不超過 5MB（後台自己的上限是 5,300,000 bytes） */
 var NR_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'video/mp4': 'mp4' };
@@ -288,7 +290,7 @@ function nrMediaBlob_(md, j) {
 
 /* ---------- 上傳（分段） ---------- */
 function nrNewId_() { return 'UP-' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 4); }
-function nrNewJob_(uid, p, auth) {
+function nrNewJob_(uid, p, auth, over) {   /* over＝覆蓋上傳 {target, bid, old:[{sid,title}]}（2026-10-08） */
   var rc = rbCleanRecipe_(p.recipe), o = p.opts || {};
   var title = rbTrim_(o.title).slice(0, 100);
   if (!title) throw fail_('食譜名稱是空的', 'input');
@@ -308,6 +310,8 @@ function nrNewJob_(uid, p, auth) {
       var x = mi[i] || {};
       info = { name: rbTrim_(x.name).slice(0, 80), size: Number(x.size) || 0, type: String(x.type || '').slice(0, 30) };
       if (!NR_TYPES[info.type]) throw fail_('第 ' + (i + 1) + ' 步的檔案格式不支援（' + info.type + '）', 'input');
+    } else if (u === 'keep') {   /* 覆蓋上傳：沿用後台這個位置原本的圖片影片 */
+      if (!over || i >= over.old.length) throw fail_('第 ' + (i + 1) + ' 步沒有原本的圖片／影片可以沿用', 'input');
     } else if (u && u.indexOf(RB_MEDIA_PREFIX) !== 0) throw fail_('第 ' + (i + 1) + ' 步的圖片／影片不是公版素材', 'input');
     return { t: s.t, h: s.h, ing: s.ing, m: u, mi: info };
   });
@@ -315,7 +319,9 @@ function nrNewJob_(uid, p, auth) {
   var job = { imp_id: imp, rid: uid, kind: 'upload', title: title, cats: cats, stores: stores, price: price, cost: cost, prepHr: hr,
     size: rbTrim_(o.size).slice(0, 100), preserve: String(o.preserve || '').slice(0, 2000), desc: String(o.desc || '').slice(0, 3000),
     file: rc.file, docName: rc.name, by: auth.role, steps: steps };
-  rbLog_(uid, imp, 'start', '', '', 'Y', title + '｜' + steps.length + ' 步', auth, JSON.stringify(job));
+  if (over) { job.kind = 'overwrite'; job.target = over.target; job.target_bid = over.bid; job.old = over.old; }
+  /* 覆蓋上傳：start 列的 backend_id 先記要覆蓋的那支（nrBidOpen_ 靠它擋同一支同時兩個覆蓋） */
+  rbLog_(uid, imp, 'start', over ? over.bid : '', '', 'Y', title + '｜' + steps.length + ' 步', auth, JSON.stringify(job));
   job.backend_id = '';
   return job;
 }
@@ -329,7 +335,8 @@ function nrNote_(job, mm) {
   });
   if (miss.length) L.push('沒掛上的食材工具（請食譜負責夥伴補上）：', miss.join('\n'));
   if (notes.length) L.push('食譜檔的附註沒帶進後台（後台只記數量和單位）：', notes.join('\n'));
-  L.push('上傳時是「停用」：檢查調整好再到這裡勾「啟用」。');
+  L.push(job.kind === 'overwrite' ? '這次是「覆蓋上傳」（覆蓋 ' + job.target + '）：啟用狀態維持原本的；確認沒問題後由主廚在這裡勾「啟用」。'
+    : '上傳時是「停用」：檢查調整好再到這裡勾「啟用」。');
   return L.join('\n').slice(0, 4000);
 }
 function nrImport_(p, auth) {
@@ -343,12 +350,13 @@ function nrImport_(p, auth) {
   var lockK = 'nrimp:' + (uid || 'new:' + String(p.rq || ''));
   if (cache.get(lockK)) throw fail_('這支食譜正在上傳中（可能另一個畫面也按了），請等 1 分鐘再按「繼續上傳」', 'busy');
   cache.put(lockK, '1', 120);
+  var bidK = '';
   try {
     var job;
     if (uid) {
       var st = rbState_(uid), im = p.imp_id ? st.imps[str_(p.imp_id)] : (st.open || st.done);
       if (!im) {
-        if (!p.up_id && p.recipe) { job = nrNewJob_(uid, p, auth); }   /* 回條有記、但 start 還沒寫成 → 重新開始 */
+        if (!p.up_id && p.recipe) { job = nrMakeJob_(uid, p, auth); }   /* 回條有記、但 start 還沒寫成 → 重新開始 */
         else throw fail_('找不到上傳紀錄 ' + uid, 'notfound');
       } else {
         if (im.abandoned) throw fail_('這次上傳已作廢，請重新上傳', 'state');
@@ -359,11 +367,49 @@ function nrImport_(p, auth) {
       if (!p.recipe) throw fail_('沒有收到食譜內容', 'input');
       uid = nrNewId_();
       if (rqk) cache.put(rqk, uid, 21600);
-      job = nrNewJob_(uid, p, auth);
+      job = nrMakeJob_(uid, p, auth);
     }
-    var res = nrRun_(uid, job, auth, t0, p.media || null, (p.skip_media === 0 || p.skip_media > 0) ? Number(p.skip_media) : -1);
-    return { id: uid, data: res, msg: res.done ? '上傳完成 ' + res.total + ' 步' : '上傳到第 ' + res.next + '／' + res.total + ' 步' };
-  } finally { cache.remove(lockK); }
+    var skip = (p.skip_media === 0 || p.skip_media > 0) ? Number(p.skip_media) : -1, res;
+    if (job.kind === 'overwrite') {   /* 同一支後台食譜同時只能有一個覆蓋在跑（兩個畫面、兩個人） */
+      bidK = 'nrbid:' + job.target_bid;
+      var holder = cache.get(bidK);
+      if (holder && holder !== uid) throw fail_('後台這支食譜正在被另一個覆蓋上傳改（' + holder + '），請等它做完', 'busy');
+      cache.put(bidK, uid, 120);
+      res = nrRunOver_(uid, job, auth, t0, p.media || null, skip);
+    } else res = nrRun_(uid, job, auth, t0, p.media || null, skip);
+    return { id: uid, data: res, msg: (job.kind === 'overwrite' ? '覆蓋' : '上傳') + (res.done ? '完成 ' + res.total + ' 步' : '到第 ' + res.next + '／' + res.total + ' 步') };
+  } finally { cache.remove(lockK); if (bidK) cache.remove(bidK); }
+}
+/* 新上傳 or 覆蓋上傳（p.over＝要覆蓋的上傳編號 UP-…） */
+function nrMakeJob_(uid, p, auth) {
+  if (!p.over) return nrNewJob_(uid, p, auth);
+  var tg = nrOverTarget_(str_(p.over).trim()), open = nrBidOpen_(tg.bid, uid);
+  if (open) throw fail_('後台這支食譜還有一次沒做完的上傳（' + open + '）：請先在「📋 最近上傳」把它「▶ 繼續」做完，再覆蓋', 'state');
+  var sess = rbSession_(), old = rbStepIndex_(sess, tg.bid).map(function (x) { return { sid: x.sid, title: x.title }; });
+  rbRecipeEditPage_(sess, tg.bid);   /* 先確認後台這支還在、頁面認得 */
+  rbSaveSession_(sess);
+  return nrNewJob_(uid, p, auth, { target: tg.up_id, bid: tg.bid, old: old });
+}
+/* 要覆蓋的上傳：一定要是做完的（有後台食譜編號） */
+function nrOverTarget_(tid) {
+  if (!/^UP-\d{8}-\d{6}-[0-9a-f]{4}$/.test(tid)) throw fail_('要覆蓋的上傳編號不對', 'input');
+  var st = rbState_(tid), im = st.done;
+  if (!im || !im.backend_id) throw fail_('「' + tid + '」還沒上傳完成，不能覆蓋（請先「▶ 繼續」做完）', 'state');
+  return { up_id: tid, bid: im.backend_id, title: im.title, total: im.total };
+}
+/* 這支後台食譜有沒有「沒做完、沒作廢」的上傳（新上傳建好食譜後沒做完、或覆蓋上傳沒做完）；回那次的上傳編號 */
+function nrBidOpen_(bid, except) {
+  var sh = ss_().getSheetByName('fact_recipe_import');
+  if (!sh || sh.getLastRow() < 2) return '';
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, RB_LOG_N).getValues(), imps = {};
+  v.forEach(function (r) {
+    var rid = str_(r[1]); if (rid.indexOf('UP-') !== 0 || rid === except) return;
+    var k = str_(r[2]), a = str_(r[3]), o = imps[k] || (imps[k] = { rid: rid, hit: false, end: false });
+    if (str_(r[4]) === bid) o.hit = true;
+    if (a === 'done' || a === 'abandon') o.end = true;
+  });
+  for (var k in imps) if (imps[k].hit && !imps[k].end) return imps[k].rid;
+  return '';
 }
 function nrRun_(uid, job, auth, t0, media, skip) {
   var sess = rbSession_(), N = job.steps.length;
@@ -439,6 +485,146 @@ function nrRun_(uid, job, auth, t0, media, skip) {
   return ext({ done: done, next: k2, need: nd, needInfo: nd >= 0 ? (job.steps[nd].mi || null) : null });
 }
 
+/* ---------- ♻️ 覆蓋上傳（2026-10-08 經營者：「直接覆蓋，如果中途斷線，應該要能再次上傳直到成功為止」） ----------
+   流程：主廚先上傳試做版（停用）→ 魔導師試做 → 新品申請核准 → 有改就用新檔覆蓋同一支 → 主廚自己到後台勾「啟用」。
+   做法（同一支後台食譜，不新建）：
+     0 基本資料：讀「編輯食譜」頁現值，只換名稱、類別、分店類別、售價、成本、製作時間、尺寸、產品特色、保存方式、備註；啟用／公開／封面照原樣。
+     1 步驟照位置改：第 j 步 → 開始時記下的後台第 j 步（job.old[j]）就地改（標題、內容、食材全換）；圖片影片：新檔／公版換掉，keep＝留原本的，空白＝拿掉；計時器照原本的。
+     2 新檔比後台多 → 後面的照新上傳一樣補建；新檔比後台少 → 全部改完後刪掉多出來的那幾步（只刪開始時記下的舊步驟）。
+   斷線重來：改寫可以重做（結果一樣）；補建用後台步驟數判斷，不重複建；刪除只刪還在的。每次先核對後台步驟清單跟記下的一致，不一致（有人在後台動過）就停下。 */
+function nrRunOver_(uid, job, auth, t0, media, skip) {
+  var sess = rbSession_(), N = job.steps.length, old = job.old || [], M = old.length, P = Math.min(M, N), bid = job.target_bid;
+  var relogin = function () { rbDropSession_(); sess = rbFreshSession_(); };
+  var base = { up_id: uid, imp_id: job.imp_id, total: N, backend_id: bid, link: rbLink_(bid), over: true };
+  var ext = function (o) { for (var k in base) o[k] = base[k]; return o; };
+  var st = rbState_(uid), im = st.imps[job.imp_id], k = 0;
+  ((im && im.rows) || []).forEach(function (r) { if (r.action === 'steps') { var m = String(r.step).match(/(\d+)$/); if (m) k = Math.max(k, +m[1]); } });
+  var stop = function (msg, code, next) { rbLog_(uid, job.imp_id, 'fail', bid, '', 'N', msg, auth); throw fail_(msg, code, ext({ next: next, need: -1 })); };
+  /* 後台步驟清單要跟開始時記下的一致：前 P 步是原本那幾步；後面是補建的（標題要對）或還沒刪的舊步驟 */
+  var badAt = function (idx) {
+    for (var i = 0; i < P; i++) if (!idx[i] || idx[i].sid !== old[i].sid) return i + 1;
+    var oldRest = old.slice(P).map(function (x) { return x.sid; });
+    for (var j = P; j < idx.length; j++) {
+      if (N > M) { if (j >= N || rbTitleNorm_(idx[j].title) !== rbTitleNorm_(job.steps[j].t)) return j + 1; }
+      else if (oldRest.indexOf(idx[j].sid) < 0) return j + 1;
+    }
+    return 0;
+  };
+  var sp = null, getSp = function () { if (!sp) sp = rbStepPage_(sess, bid); return sp; };
+  if (!job.backend_id) {   /* 0 基本資料（還沒做過；做過＝紀錄有 recipe 列） */
+    try {
+      var pg = rbRecipeEditPage_(sess, bid), mm = job.steps.map(function (s) { return nrMatchStep_(getSp().ings, s); });
+      var oldNote = rbFieldGet_(pg.fields, 'Note') || '', note = nrNote_(job, mm);
+      if (oldNote && !/^【(新食譜上傳|食譜系統匯入)】/.test(oldNote)) note = (note + '\n—— 原本的備註 ——\n' + oldNote).slice(0, 4000);   /* 夥伴自己寫的備註留著 */
+      var meta = rbCreateMeta_(rbAuthedGet_(sess, '/Recipes/Create').text);
+      var storeIds = job.stores.map(function (n) { var o = meta.stores.filter(function (x) { return x.name === n; })[0]; return o ? o.id : ''; }).filter(String);
+      var cats = job.cats.filter(function (id) { return meta.cates.some(function (c) { return c.id === id; }); });
+      var r = { title: job.title, note: note, cats: cats, storeIds: storeIds, price: job.price, cost: job.cost, prepHr: job.prepHr, size: job.size, desc: job.desc, preserve: job.preserve };
+      try { rbUpdateRecipe_(sess, bid, pg, r); }
+      catch (e) { if (e && e.code === 'rbrelogin') { relogin(); pg = rbRecipeEditPage_(sess, bid); rbUpdateRecipe_(sess, bid, pg, r); } else throw e; }
+    } catch (e2) {
+      if (e2 && e2.extra) throw e2;
+      stop('更新後台食譜基本資料沒有成功：' + errMsg_(e2), (e2 && e2.code) || 'rbnet', k);
+    }
+    rbLog_(uid, job.imp_id, 'recipe', bid, '', 'Y', '覆蓋 ' + job.target + '：基本資料已更新（啟用狀態不變）', auth);
+    job.backend_id = bid;
+  }
+  var idx = rbStepIndex_(sess, bid), b0 = badAt(idx);
+  if (b0) stop('後台這支食譜的步驟跟開始覆蓋時不一樣（第 ' + b0 + ' 步，可能有人在後台改過），先停下來。請食譜負責夥伴檢查後台，或通知 Claude', 'mismatch', k);
+  var j = k;
+  if (N > M && idx.length > M) j = Math.max(j, idx.length);   /* 已經在補建：照後台步驟數接著建（不重複建） */
+  var made = [], stopErr = null, need = -1;
+  for (; j < N; j++) {
+    if (Date.now() - t0 > RB_BUDGET_MS) break;
+    var s = job.steps[j], m = nrMatchStep_(getSp().ings, s), md = null, mwarn = '', keep = false;
+    if (s.m === 'up') {
+      if (media && media.i === j) {
+        try { md = nrMediaBlob_(media, j); media = null; }
+        catch (em) { stopErr = em; break; }
+      }
+      else if (skip === j) { mwarn = '這步原本要放上傳的' + ((s.mi && /^video/.test(s.mi.type)) ? '影片' : '圖片') + '《' + ((s.mi && s.mi.name) || '') + '》，覆蓋時略過了'; keep = j < M; if (keep) mwarn += '（留著原本的）'; }
+      else { need = j; break; }
+    } else if (s.m === 'keep') keep = true;
+    else if (s.m) { try { md = rbFetchMedia_(s.m); } catch (e) { mwarn = errMsg_(e) + (j < M ? '（留著原本的）' : ''); keep = j < M; } }
+    var one = { title: s.t, html: rbSanitize_(s.h), ings: m.ok, media: md ? md.blob : null, keep: keep };
+    try {
+      if (j < M) {
+        var pg2 = rbStepEditPage_(sess, old[j].sid);
+        if (pg2.rid !== bid) throw rbErr_('後台第 ' + (j + 1) + ' 步不是這支食譜的（頁面可能改版）', 'mismatch');
+        try { rbEditStep_(sess, pg2, one); }
+        catch (e) { if (e && e.code === 'rbrelogin') { relogin(); pg2 = rbStepEditPage_(sess, old[j].sid); rbEditStep_(sess, pg2, one); } else throw e; }
+      } else {
+        try { rbCreateStep_(sess, bid, getSp().token, one); }
+        catch (e) { if (e && e.code === 'rbrelogin') { relogin(); sp = null; rbCreateStep_(sess, bid, getSp().token, one); } else throw e; }
+      }
+    } catch (e3) { stopErr = e3; break; }
+    made.push({ n: j + 1, t: s.t, ing: m.ok.length, media: md ? (md.type.indexOf('video') === 0 ? '影片' : '圖片') : (keep ? '原本的' : ''), mwarn: mwarn, miss: m.miss, notes: m.notes, how: j < M ? 'edit' : 'new' });
+  }
+  var idx2 = rbStepIndex_(sess, bid), b2 = badAt(idx2);
+  /* 進度：改寫的照做到哪；補建的照後台步驟數（回覆掉了也算得準） */
+  var k2 = (N > M && j >= M) ? Math.max(Math.min(idx2.length, N), M) : k + made.length;
+  if (k2 > N) k2 = N;
+  if (!b2) for (var i = 0; i < Math.min(k2, P); i++) if (rbTitleNorm_(idx2[i].title) !== rbTitleNorm_(job.steps[i].t)) { b2 = i + 1; break; }
+  if (k2 > k) rbLog_(uid, job.imp_id, 'steps', bid, (k + 1) + '-' + k2, 'Y', '覆蓋第 ' + (k + 1) + '～' + k2 + ' 步（改寫 ' + made.filter(function (x) { return x.how === 'edit'; }).length + '、補建 ' + made.filter(function (x) { return x.how === 'new'; }).length + '）', auth, JSON.stringify(made));
+  rbSaveSession_(sess);
+  if (b2) stop('覆蓋後核對後台步驟清單不一致（第 ' + b2 + ' 步），先停下來；請食譜負責夥伴檢查後台，或通知 Claude', 'mismatch', k2);
+  if (stopErr && k2 < N) {
+    rbLog_(uid, job.imp_id, 'fail', bid, String(k2 + 1), 'N', '第 ' + (k2 + 1) + ' 步：' + errMsg_(stopErr), auth);
+    var isMd = stopErr && stopErr.code === 'media';
+    throw fail_('第 ' + (k2 + 1) + ' 步沒有覆蓋成：' + errMsg_(stopErr), (stopErr && stopErr.code) || 'rbnet', ext({ next: k2, need: isMd ? k2 : -1, needInfo: isMd ? (job.steps[k2].mi || null) : null }));
+  }
+  var idxF = idx2;
+  if (k2 >= N && idx2.length > N && Date.now() - t0 < RB_BUDGET_MS) {   /* 3 新檔比較少：刪掉多出來的舊步驟（只刪開始時記下、現在還在的） */
+    var extra = idx2.slice(N), del = 0, delErr = null;
+    for (var x = 0; x < extra.length; x++) {
+      if (Date.now() - t0 > RB_BUDGET_MS) break;
+      try {
+        try { rbDeleteStep_(sess, extra[x].sid); }
+        catch (e) { if (e && e.code === 'rbrelogin') { relogin(); rbDeleteStep_(sess, extra[x].sid); } else throw e; }
+        del++;
+      } catch (e4) { delErr = e4; break; }
+    }
+    idxF = rbStepIndex_(sess, bid);
+    var b3 = badAt(idxF);
+    if (del) rbLog_(uid, job.imp_id, 'del', bid, (N + 1) + '-' + M, b3 ? 'N' : 'Y', '刪掉多出來的舊步驟 ' + del + ' 個（後台剩 ' + idxF.length + ' 步）', auth);
+    rbSaveSession_(sess);
+    if (b3) stop('刪掉多的步驟後核對不一致（第 ' + b3 + ' 步），先停下來；請食譜負責夥伴檢查後台，或通知 Claude', 'mismatch', k2);
+    if (delErr && idxF.length > N) stop('刪掉多出來的舊步驟沒有成功：' + errMsg_(delErr), (delErr && delErr.code) || 'rbnet', k2);
+  }
+  var done = k2 >= N && idxF.length === N;
+  if (done) rbLog_(uid, job.imp_id, 'done', bid, String(N), 'Y', '覆蓋完成：' + N + ' 步（原本 ' + M + ' 步）', auth);
+  var nd = (!done && need >= 0 && need === k2) ? need : -1;
+  return ext({ done: done, next: k2, need: nd, needInfo: nd >= 0 ? (job.steps[nd].mi || null) : null });
+}
+
+/* ---------- ♻️ 覆蓋前先看後台現況（只讀）：基本資料＋每一步的標題、圖片影片、計時器（給畫面預填與「沿用原本的」縮圖） ---------- */
+function nrOverPeek_(p, auth) {
+  nrNeed_(auth);
+  var tg = nrOverTarget_(str_(p.up_id).trim()), sess = rbSession_();
+  var pg = rbRecipeEditPage_(sess, tg.bid), g = function (n) { var v = rbFieldGet_(pg.fields, n); return v == null ? '' : v; };
+  var idx = rbStepIndex_(sess, tg.bid), pages = idx.length ? rbStepEditPages_(sess, idx.map(function (x) { return x.sid; })) : [];
+  rbSaveSession_(sess);
+  return { id: tg.up_id, data: {
+    up_id: tg.up_id, backend_id: tg.bid, link: rbLink_(tg.bid), open: nrBidOpen_(tg.bid, ''),
+    title: g('Title'), price: g('Price'), cost: g('Cost'), prepHr: g('PrepHr'), size: g('Size'), desc: g('Content'), preserve: g('Preserve'),
+    cats: pg.cats, stores: pg.stores.map(function (x) { return x.name; }), inUse: pg.inUse, pub: pg.pub,
+    steps: pages.map(function (s, i) { return { n: i + 1, sid: s.sid, title: s.title || idx[i].title, media: s.mediaUrl, timer: s.timer || '', ing: s.ings.length }; })
+  } };
+}
+
+/* ---------- 🔗 新品申請核准後「接上試做版」（2026-10-08；取代 🍰 另建一支）：只在紀錄分頁記下這張申請單對應後台哪一支，不動後台 ---------- */
+function nrLink_(p, auth) {
+  var rid = str_(p.req_id).trim();
+  rbCheck_(auth, rid);
+  var tg = nrOverTarget_(str_(p.up_id).trim()), open = nrBidOpen_(tg.bid, '');
+  if (open) throw fail_('這支試做版還有一次上傳沒做完（' + open + '）：請先到「📤 新食譜上傳」把它做完', 'state');
+  var imp = 'LINK-' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 4);
+  rbLog_(rid, imp, 'start', tg.bid, '', 'Y', tg.title + '｜' + tg.total + ' 步', auth, JSON.stringify({ kind: 'link', up_id: tg.up_id, backend_id: tg.bid }));
+  rbLog_(rid, imp, 'recipe', tg.bid, '', 'Y', '接上試做版 ' + tg.up_id, auth);
+  rbLog_(rid, imp, 'done', tg.bid, String(tg.total), 'Y', '接上試做版 ' + tg.up_id + '（' + tg.title + '）', auth);
+  return { id: rid, data: rbInfo_(rid), msg: '接上試做版 ' + tg.up_id + '｜後台 ' + tg.bid };
+}
+
 /* ---------- 最近的上傳（只讀；給「繼續上傳」） ---------- */
 function nrList_(p, auth) {
   nrNeed_(auth);
@@ -451,7 +637,8 @@ function nrList_(p, auth) {
     var o = {}; for (var j = 0; j < RB_LOG_N; j++) o[H[j]] = str_(r[j]);
     var u = out[rid];
     if (!u) { u = out[rid] = { up_id: rid, imp_id: '', title: '', total: 0, made: 0, backend_id: '', done: false, abandoned: false, ts: o.ts, by: o.by, fail: '' }; order.push(rid); }
-    if (o.action === 'start') { u.imp_id = o.imp_id; var mm = String(o.msg).match(/^(.*)｜(\d+) 步$/); if (mm) { u.title = mm[1]; u.total = +mm[2]; } }
+    if (o.action === 'start') { u.imp_id = o.imp_id; var mm = String(o.msg).match(/^(.*)｜(\d+) 步$/); if (mm) { u.title = mm[1]; u.total = +mm[2]; }
+      if (o.backend_id) { u.over = true; u.backend_id = o.backend_id; } }   /* 覆蓋上傳：start 列就記了要覆蓋的那支 */
     if (o.action === 'recipe' && o.backend_id) u.backend_id = o.backend_id;
     if (o.action === 'steps') { var sm = String(o.step).match(/(\d+)$/); if (sm) u.made = Math.max(u.made, +sm[1]); u.fail = ''; }
     if (o.action === 'fail') u.fail = o.msg + '（' + o.ts + '）';
@@ -467,5 +654,8 @@ ACTIONS.nrPreview = function (p, a) { return nrPreview_(p, a); };
 ACTIONS.nrIngCreate = function (p, a) { return nrIngCreate_(p, a); };
 ACTIONS.nrImport = function (p, a) { return nrImport_(p, a); };
 ACTIONS.nrList = function (p, a) { return nrList_(p, a); };
-READS.nrPreview = 1; READS.nrList = 1;                 /* 只讀：不排全系統的鎖 */
+ACTIONS.nrOverPeek = function (p, a) { return nrOverPeek_(p, a); };   /* 2026-10-08 ♻️ 覆蓋上傳 */
+ACTIONS.nrLink = function (p, a) { return nrLink_(p, a); };           /* 2026-10-08 🔗 新品申請接上試做版 */
+READS.nrPreview = 1; READS.nrList = 1; READS.nrOverPeek = 1;    /* 只讀：不排全系統的鎖 */
+WRITES.nrLink = 1;                                     /* 只寫紀錄分頁三列：走全系統的鎖＋回條防重複 */
 SELFLOCK.nrIngCreate = 1; SELFLOCK.nrImport = 1;       /* 要連後台、一次 30 多秒：自己用 CacheService 擋重複，不佔全系統的鎖 */
