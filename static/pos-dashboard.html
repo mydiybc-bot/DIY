@@ -272,6 +272,11 @@ a{color:var(--accent-light);text-decoration:none}
   .csv-btn{font-size:12.5px;font-weight:700;padding:4px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;white-space:nowrap}
   .csv-btn:hover{background:var(--border)}
   .unknown-cat-warn{background:#FFF6E0;border:1px solid #EEDCA8;color:#7A5A12;border-radius:10px;padding:10px 14px;margin:0 0 14px;font-size:13px;line-height:1.6;font-weight:600}
+details.xhelp{margin:6px 0;font-size:13px;color:#555}
+details.xhelp>summary{cursor:pointer;color:#1565C0;font-weight:600;list-style:none;display:inline-block}
+details.xhelp>summary::-webkit-details-marker{display:none}
+details.xhelp[open]>summary{margin-bottom:4px}
+details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;padding:8px 10px;line-height:1.6}
 </style>
 <script>
 /* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
@@ -480,17 +485,21 @@ a{color:var(--accent-light);text-decoration:none}
 <div class="dsb-wrap">
   <div class="dsb dsb-auto">
     <b>🟢 自動更新・每日</b>
-    <span>肚肚 POS → BigQuery（每日自癒對帳）→ GAS 預聚合快取</span>
+    <span>每天清晨自動從肚肚 POS 抓前一天的銷售資料，不用手動更新；畫面只到昨天。</span>
     <span id="cacheBadge" style="font-size:12px;font-weight:700;color:#6F4E45"></span>
     <span id="dudooBadge" style="font-size:12px;font-weight:700;color:#6F4E45"></span>
     <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 更新方式</button>
     <div class="dsb-sop" id="dsbSop">
       <ol>
-        <li>先看頁首「資料有效期間 / 最後更新」是否為昨日</li>
-        <li>異常 → 查 Apps Script 專案「POS_折扣聚合」的 executions</li>
-        <li>仍異常 → 查 bq-sync 每日對帳信（BigQuery 與 Sheet 差異）</li>
-        <li>「肚肚對帳」燈號：每天清晨 05:00 自動比對近 7 天逐日、本月與上月逐店的營業額／銷售總額／折扣，對不上會自動修正並再比一次。跟肚肚核對時，日期結束日請選昨天（儀表板只到昨天）</li>
+        <li>先看頁首「資料至」和「最後更新」是不是昨天；是，就代表資料正常。</li>
+        <li>不是昨天、或數字明顯怪怪的 → 請通知總部檢查。</li>
+        <li>「肚肚對帳」燈號：每天清晨 05:00 自動拿近 7 天每一天、本月和上月各店的營業額／銷售總額／折扣去跟肚肚比，對不上會自動修正再比一次。要自己跟肚肚核對時，肚肚的結束日請選昨天（這裡只到昨天）。</li>
       </ol>
+      <details class="xhelp"><summary>ⓘ 給總部：異常時查哪裡</summary><div>
+        資料流程：肚肚 POS → BigQuery（每日自動對帳修正）→ Apps Script 整理好給這頁讀。<br>
+        ① 先查 Apps Script 專案「POS_折扣聚合」的執行紀錄（executions）。<br>
+        ② 還是不對 → 查 bq-sync 每日對帳信（BigQuery 與 Sheet 的差異）。
+      </div></details>
     </div>
   </div>
 </div>
@@ -774,7 +783,7 @@ function App(){
       if(c && c.data && Array.isArray(c.data.monthly) && c.data.monthly.length){
         hasCache = true;
         applyData(c.data);
-        setBadge('⚡ 快取顯示（' + fmtT(c.t) + '取得）· 背景更新中…', '#B45309');
+        setBadge('⚡ 先顯示這台電腦 ' + fmtT(c.t) + ' 存的資料，正在抓最新的…', '#B45309');
       }
     };
     /* 舊版 localStorage 暫存：這次照用，並搬進 IndexedDB 後刪除 */
@@ -784,28 +793,28 @@ function App(){
     if(legacy){ useCache(legacy); if(hasCache) idbPut(legacy); }
     let cacheRead = Promise.resolve();   /* 【v32】頁首那發若很快就失敗，等暫存讀完再決定「報錯」或「顯示暫存」（見下方 pre.take） */
     if(!hasCache){
-      setLoading(true); setBadge('連線中…（首次較慢）', '#B45309');
+      setLoading(true); setBadge('讀取中…（第一次開會比較慢）', '#B45309');
       cacheRead = idbGet().then(useCache);
     }
 
     const cbName = '_gasCb_' + Date.now();
     const timeout = setTimeout(()=>{
       delete window[cbName];
-      if(!hasCache){ setError('API 逾時，請重新整理頁面'); setLoading(false); }
-      else { setBadge('⚠ 背景更新逾時，顯示的是快取資料', '#C4412F'); }
+      if(!hasCache){ setError('資料讀取超過 2 分鐘沒有回應，請重新整理頁面'); setLoading(false); }
+      else { setBadge('⚠ 最新資料抓太久沒回應，畫面是之前存的資料（可重新整理再試）', '#C4412F'); }
     }, 120000);
     window[cbName] = (d)=>{
       clearTimeout(timeout);
       delete window[cbName];
       try{
-        if(!d || !Array.isArray(d.monthly) || !d.monthly.length) throw new Error('回傳資料為空');
+        if(!d || !Array.isArray(d.monthly) || !d.monthly.length) throw new Error('讀到的資料是空的，請按「重試」');
         gotFresh = true;
         applyData(d);
         try{ if(JSON.stringify(d).length <= POS_CACHE_MAX) idbPut({ t: Date.now(), data: d }); }catch(_){}
         setBadge('✓ 已更新 ' + fmtT(Date.now()), '#2E7D32');
       }catch(e){
         if(!hasCache){ setError(e.message); setLoading(false); }
-        else { setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F'); }
+        else { setBadge('⚠ 最新資料沒抓到，畫面是之前存的資料（可重新整理再試）', '#C4412F'); }
       }
     };
     /* 2026-07-30 冷啟動韌性：GAS 冷啟動期間會回 5xx 觸發 onerror（非逾時），
@@ -815,10 +824,10 @@ function App(){
       clearTimeout(timeout);
       delete window[cbName];
       if(!hasCache){
-        setError('API 載入失敗（已自動重試一次），請按重試或稍後再試');
+        setError('資料讀不到（已自動再試一次），請按「重試」或稍後再開');
         setLoading(false);
       } else {
-        setBadge('⚠ 背景更新失敗，顯示的是快取資料', '#C4412F');
+        setBadge('⚠ 最新資料沒抓到，畫面是之前存的資料（可重新整理再試）', '#C4412F');
       }
     };
     const mountScript = ()=>{
@@ -1242,7 +1251,7 @@ function App(){
     <div className="loading-overlay">
       <div className="spinner"/>
       <div className="loading-text">正在載入儀表板資料…</div>
-      <div className="loading-sub">從 Google Sheets 取得預聚合摘要</div>
+      <div className="loading-sub">第一次開會比較久，請稍等</div>
     </div>
   );
   if(error) return (
@@ -1410,29 +1419,38 @@ function App(){
           <div className="kpi-card">
             <div className="kpi-label">限定甜點銷售佔比</div>
             <div className="kpi-value" style={{color:'#8B6A63'}}>{fmt.pct(kpis.limitedRevenueRatio)}</div>
-            <div className="kpi-sub">限定甜點 {fmt.currency(kpis.limitedRevenue)}｜牌價基準</div>
+            <div className="kpi-sub">限定甜點 {fmt.currency(kpis.limitedRevenue)}｜用牌價算</div>
             {renderYoY(kpis.limitedRevenueRatio, yoy&&yoy.ly&&yoy.ly.limitedRevenueRatio, 'ppt', fmt.pct)}
           </div>
         </div>
 
         {/* 口徑說明條（v25）：全站一致，避免員工在不同圖之間看到兩個數字 */}
         <div style={{margin:'0 0 14px',padding:'8px 14px',background:'#FFF7F5',border:'1px solid #F0D9D5',borderRadius:8,fontSize:12,color:'#6F4E45',lineHeight:1.7}}>
-          <b>口徑說明</b>｜<b>客單價</b> = 淨營收（已扣折扣）÷ 來客數，全站一致。
-          <b>來客數</b> = DIY 甜點份數 + 陪同入場費數（一個 DIY 產品 = 一位客人）。
-          <span style={{color:'#A0786E'}}>品項分析、銷售結構顯示的是<b>銷售額</b>（品項牌價 × 數量），用來比品項貢獻度，<b>不是營業額</b>——折扣打在訂單層，切不到單一品項。季節&活動則為品項實收（折扣後真實金額），見該分頁說明。</span>
+          <b>這個儀表板看什麼</b>｜各店的營業額、來客數、客單價怎麼變。先在上面選期間和區域／分店，上面 6 張卡就是這段時間的合計；卡片下方「去年」是去年同一段時間，▲ 比去年高、▼ 比去年低。想知道原因，再切下面的分頁往下看。
+          <br/><b>客單價</b>＝淨營收（已扣折扣）÷ 來客數，全站只有這一種算法。品項分析、銷售結構的<b>銷售額</b>＝牌價 × 數量，<b>不是營業額</b>。
+          <details className="xhelp"><summary>ⓘ 這些數字怎麼算</summary><div>
+            ・<b>淨營收</b>：已扣掉折扣的營業額。<br/>
+            ・<b>來客數</b>＝DIY 甜點份數＋陪同入場費數（做一個 DIY 產品＝一位客人）。<br/>
+            ・<b>客單價</b>＝淨營收 ÷ 來客數，全站一致。<br/>
+            ・<b>銷售額</b>（品項分析、銷售結構）＝品項牌價 × 數量，用來比哪個品項貢獻多。它不是營業額：折扣是整張單一起打的，分不到單一品項。<br/>
+            ・<b>季節&活動</b>的金額是品項實收（折扣後的真實金額），細節見該分頁說明。<br/>
+            ・<b>陪同率、限定甜點銷售佔比</b>跟去年比的是「ppt（百分點）」：例如 15% 變 17% 就是 +2ppt。<br/>
+            ・<b>去年同期</b>：今年資料只到某一天時，去年最後一個月也只算到同一天，天數一樣才公平（上方「比較期間」會寫出實際日期）。
+          </div></details>
         </div>
 
         {/* v31 折扣缺漏警示：折扣整天沒匯入時，那幾天淨營收會比肚肚高 */}
         {discGaps.length > 0 && (
           <div className="unknown-cat-warn" style={{background:'#FDECEA',borderColor:'#F2C4BE',color:'#8B2D1F'}}>
-            ⚠️ 折扣資料缺漏：{discGaps.map(g => fmtDay(g.date) + '（' + g.sales + ' 店有營收、折扣全為 0，當日淨營收 $' + Math.round(g.net).toLocaleString() + '）').join('、')}
-            ｜這幾天的折扣沒有匯入，淨營收會比肚肚高。請通知管理員補折扣資料（bq-sync-pipeline：Make Clone 補跑）。
+            ⚠️ 折扣資料缺漏：{discGaps.map(g => fmtDay(g.date) + '（' + g.sales + ' 店有營收、折扣卻全是 0，當日淨營收 $' + Math.round(g.net).toLocaleString() + '）').join('、')}
+            ｜這幾天的折扣資料沒進來，所以這幾天的淨營收會比肚肚高。請通知總部補上折扣資料。
+            <details className="xhelp"><summary>ⓘ 給總部：怎麼補</summary><div>bq-sync-pipeline：Make Clone 補跑。</div></details>
           </div>
         )}
         {/* TABS */}
         {rawData && Array.isArray(rawData.unknownCategories) && rawData.unknownCategories.length > 0 && (
           <div className="unknown-cat-warn">
-            ⚠️ 偵測到 {rawData.unknownCategories.length} 個白名單外主類別（未計入甜點數／來客數口徑）：
+            ⚠️ 有 {rawData.unknownCategories.length} 個商品主類別還沒設定「算不算甜點」，目前沒有算進甜點數和來客數：
             {rawData.unknownCategories.map(u => u.mainCategory + '（' + (u.qty||0) + ' 件／$' + Number(u.revenue||0).toLocaleString() + '）').join('、')}
             ｜請回報總部補上甜點分類
           </div>
@@ -1555,6 +1573,12 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
 
   return (
     <div className="charts-grid cols-2">
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：每個月的營收、來客數、客單價怎麼變。<br/>
+        <b>先看</b>第一張「每月營收趨勢」：實線是今年、虛線是去年同月，點上的 % 是比去年多或少。<br/>
+        <b>營收掉了</b>，往下對照「來客數」和「客單價」是哪個掉：來客數掉 → 到「分店比較」看是哪幾家店；客單價掉 → 到「客單價分析」和「折扣分析」找原因。想看各店的線，按第一張圖右上的「各店比較」。
+      </div>
       {/* 1. Revenue line */}
       <div className="chart-card full-width">
         <div className="chart-title">
@@ -1621,7 +1645,7 @@ function TabRevenue({monthlyTotals, monthlyByStore, monthlyByCat, storesInData, 
       {/* 3. Revenue structure stacked area */}
       <div className="chart-card">
         <div className="chart-title">銷售結構（按主類別）</div>
-        <div className="chart-subtitle">堆疊面積圖｜品項牌價 × 數量，非營業額（折扣打在訂單層，切不到品類）</div>
+        <div className="chart-subtitle">品項牌價 × 數量（銷售額），不是營業額：折扣是整張單一起打的，分不到品類</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={areaData.data}>
@@ -1786,6 +1810,12 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
 
   return (
     <div className="charts-grid cols-2">
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：所選期間各店並排比，店依淨營收由高到低排。<br/>
+        <b>先看</b>第一張找出營收最低的幾家店，再看第二、三張的橘線（客單價），分辨是客人少、還是每位客人花得少。<br/>
+        最後一張「各店陪同率趨勢」的月份是固定的，不跟上方月份篩選走。要把數字帶走，按第一張圖右上的「⬇ 匯出 CSV」。
+      </div>
       {/* 1. 各店:營收 vs 來客數 */}
       <div className="chart-card">
         <div className="chart-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
@@ -1852,7 +1882,7 @@ function TabStoreCompare({storeTotals, monthlyByStore, monthlyByStoreNoDate, sto
       {/* 4. 各店陪同率趨勢(月份固定:去年同期再往前 2 個月至今)*/}
       <div className="chart-card">
         <div className="chart-title">各店陪同率趨勢</div>
-        <div className="chart-subtitle">月份範圍：去年同期再往前 2 個月～本月（不受上方月份篩選影響）</div>
+        <div className="chart-subtitle">月份固定從去年同月再往前 2 個月看到本月，不受上方月份篩選影響（區域、分店篩選仍有效）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={companionTrend.data}>
@@ -1909,12 +1939,12 @@ function fetchProductMonthly(){
     const timeout = setTimeout(()=>{
       if(done) return; done = true;
       delete window[cb];
-      reject(new Error('品項資料逾時（120 秒），請按重新載入'));
+      reject(new Error('品項資料讀取超過 2 分鐘沒回應，請按「重新載入」'));
     }, 120000);
     window[cb] = (d)=>{
       if(done) return; done = true;
       clearTimeout(timeout); delete window[cb];
-      if(!d || !Array.isArray(d.rows) || !d.rows.length) reject(new Error('品項資料回傳為空'));
+      if(!d || !Array.isArray(d.rows) || !d.rows.length) reject(new Error('讀到的品項資料是空的，請按「重新載入」'));
       else resolve(d);
     };
     let retried = false;
@@ -1926,7 +1956,7 @@ function fetchProductMonthly(){
         if(!retried){ retried = true; setTimeout(mount, 3000); return; }  /* 冷啟動：靜默重試一次 */
         if(done) return; done = true;
         clearTimeout(timeout); delete window[cb];
-        reject(new Error('品項資料載入失敗（已自動重試一次）'));
+        reject(new Error('品項資料讀不到（已自動再試一次），請按「重新載入」'));
       };
       document.body.appendChild(s);
     };
@@ -2078,7 +2108,7 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
       <div className="chart-card full-width" style={{textAlign:'center',padding:'48px 20px'}}>
         <div className="spinner" style={{margin:'0 auto 14px'}}/>
         <div style={{fontSize:14,color:'#6F4E45',fontWeight:700}}>正在載入品項明細…</div>
-        <div style={{fontSize:12,color:'#A0786E',marginTop:6}}>月 × 品項聚合（約 1,600 列），首次較慢，其他分頁不受影響</div>
+        <div style={{fontSize:12,color:'#A0786E',marginTop:6}}>第一次開比較慢，可以先切到其他分頁，不受影響</div>
       </div>
     </div>
   );
@@ -2096,42 +2126,49 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
   return (
     <div className="charts-grid cols-2">
 
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：哪些品項賣得最多、某個檔期整檔賣了多少。這頁只有全公司合計，不分店。<br/>
+        <b>先看</b>「TOP 20 暢銷品項」，按「依銷售額／依銷售量」切換排法。<br/>
+        <b>查檔期</b>：在「次類別（檔期）」打檔期名稱（例：草莓季）；如果跳出跨年提示，按「看整檔（忽略期間）」就是整檔的成績。要帶走全部品項，按「⬇ 匯出 CSV」。
+      </div>
+
       {/* ---------- 口徑標註（不可省略，會造成誤判） ---------- */}
       <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8}}>
         <div style={{fontSize:12,color:'#92400e',lineHeight:1.7}}>
-          ※ 本頁<b>銷售額＝牌價 × 數量，非營業額</b>（折扣為訂單層事件，無法切至品項層）。營業額請看營收趨勢／分店比較分頁。
+          ※ 這頁的<b>銷售額＝牌價 × 數量，不是營業額</b>（折扣是整張單一起打的，分不到單一品項）。要看營業額，請到「營收趨勢」或「分店比較」。
         </div>
       </div>
 
       {/* ---------- 提示帶 ---------- */}
       {pmUnknownCats.length > 0 && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:8,fontSize:12,color:'#991B1B',lineHeight:1.7}}>
-          ⚠️ 偵測到 {pmUnknownCats.length} 個白名單外主類別（「僅 DIY 甜點」模式會看不到它們）：
+          ⚠️ 有 {pmUnknownCats.length} 個商品主類別還沒設定「算不算甜點」（選「僅 DIY 甜點」時看不到它們）：
           {pmUnknownCats.map(u=>u.cat===''?'（空白）':u.cat).join('、')}
           ｜請回報總部判定是否算甜點
         </div>
       )}
       {storeFilterActive && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:8,fontSize:12,color:'#1E40AF',lineHeight:1.7}}>
-          ℹ️ <b>品項分析為全公司合計，不分店</b>——資料源無店別維度，上方的區域／分店篩選對本頁不生效。
+          ℹ️ <b>品項分析為全公司合計，不分店</b>——品項資料沒有分店別，上方選的區域／分店對這頁沒有作用。
         </div>
       )}
       {coverageWarn && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:8,fontSize:12,color:'#9A3412',lineHeight:1.7}}>
-          ⚠️ 品項明細僅涵蓋 <b>{coverageMin}</b> 起，所選期間較早的部分沒有品項資料。
+          ⚠️ 品項明細從 <b>{coverageMin}</b> 才開始有，所選期間更早的月份這頁看不到。
         </div>
       )}
       {subActive && !ignoreYm && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:8,fontSize:12,color:'#92400e',lineHeight:1.7}}>
-          ⚠️ <b>檔期可能跨年，目前僅顯示所選期間內的部分。</b>
-          次類別採「跨年往前掛」命名（例：<b>2026 草莓季</b>有一段銷售落在 <b>2025-12</b>），
-          用期間篩「2026 全年」會少算檔期頭段。
+          ⚠️ <b>檔期可能跨年，現在只算所選期間內的部分。</b>
+          檔期如果從前一年 12 月就開賣，名稱會用隔年的年份（例：<b>2026 草莓季</b>有一段銷售在 <b>2025-12</b>），
+          只選「2026 全年」會漏掉開頭那段。要看整檔，按右邊的按鈕。
           <button className="csv-btn" style={{marginLeft:8}} onClick={()=>setWholeCampaign(true)}>看整檔（忽略期間）</button>
         </div>
       )}
       {ignoreYm && (
         <div style={{gridColumn:'1/-1',padding:'8px 14px',background:'#ECFDF5',border:'1px solid #A7F3D0',borderRadius:8,fontSize:12,color:'#065F46',lineHeight:1.7}}>
-          ✅ <b>檔期整檔模式</b>：已忽略上方期間，顯示次類別含「{subQuery.trim()}」的<b>全部期間</b>資料（回答「這檔整檔賣了多少」）。
+          ✅ <b>檔期整檔模式</b>：不看上方期間，列出次類別含「{subQuery.trim()}」的<b>所有月份</b>，就是這檔整檔賣了多少。
           <button className="csv-btn" style={{marginLeft:8}} onClick={()=>setWholeCampaign(false)}>改回依期間</button>
         </div>
       )}
@@ -2156,7 +2193,7 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
           <div>
             <label style={{display:'block',fontSize:12,color:'#6F4E45',fontWeight:700,marginBottom:4}}>次類別（檔期）</label>
             <input list="pmSubList" value={subQuery} onChange={e=>setSubQuery(e.target.value)}
-                   placeholder="留空＝不限；輸入「草莓季」跨年份全撈"
+                   placeholder="留空＝不限；打「草莓季」會找出每一年的草莓季"
                    style={{fontSize:12,padding:'6px 8px',minWidth:230}}/>
             <datalist id="pmSubList">
               {subOptions.map(s=><option key={s} value={s}/>)}
@@ -2178,10 +2215,10 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
           </div>
         </div>
         <div style={{marginTop:8,fontSize:12,color:'#6F4E45',lineHeight:1.7}}>
-          範圍：<b>{periodTxt}</b>｜{dessertOnly?'僅 DIY 甜點（＝後端計人白名單 DESSERT_CATEGORIES，不含陪同入場費／加價購／冰淇淋／特約廠商／活動）':'全品項（含陪同入場費、加價購等非商品項目）'}
+          範圍：<b>{periodTxt}</b>｜{dessertOnly?'僅 DIY 甜點（跟來客數用同一份甜點清單，不含陪同入場費／加價購／冰淇淋／特約廠商／活動）':'全品項（含陪同入場費、加價購這類不是甜點的項目）'}
           ｜品項數 <b>{fmt.number(ranked.length)}</b>｜銷售額合計 <b>{fmt.currency(totals.r)}</b>｜份數合計 <b>{fmt.number(totals.q)}</b>
           <div style={{color:'#A0786E',marginTop:3}}>
-            次類別「無」＝常態品項。比對次類別時會自動忽略空白（「2025 草莓季」＝「2025草莓季」），顯示仍用原始名稱。
+            次類別「無」＝一般常態品項。打檔期名稱時有沒有空格都找得到（「2025 草莓季」＝「2025草莓季」）。
           </div>
         </div>
       </div>
@@ -2256,7 +2293,7 @@ function TabProductAnalysis({dateStart, dateEnd, storeFilterActive}){
                 </tr>
               ))}
               {!tableData.length && (
-                <tr><td colSpan={7} style={{textAlign:'center',color:'#A0786E',padding:'18px 0'}}>目前條件下沒有品項資料</td></tr>
+                <tr><td colSpan={7} style={{textAlign:'center',color:'#A0786E',padding:'18px 0'}}>沒有符合條件的品項。可以清空搜尋，或把主類別改回「全部」、次類別清空再看。</td></tr>
               )}
             </tbody>
           </table>
@@ -2296,10 +2333,16 @@ function TabAvgSpend({priceBands, storeTotals, monthlyByStore, storesInData, ove
 
   return (
     <div className="charts-grid cols-2">
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：各店平均每位客人花多少（客單價）。<br/>
+        <b>先看</b>「各店客單價」：紅色虛線是全店平均，低於虛線的店，每位客人花得比較少。<br/>
+        <b>再看</b>下方「各店客單價月趨勢」找出是哪幾個月掉下來，再到「折扣分析」看那段時間折扣是不是給得比較多。
+      </div>
       {/* 1. Price band histogram */}
       <div className="chart-card">
         <div className="chart-title">甜點單價分布</div>
-        <div className="chart-subtitle">5 個價格帶｜依品項牌價分組，與客單價口徑不同</div>
+        <div className="chart-subtitle">把甜點依牌價分成 5 個價位，看各價位的數量；跟客單價是不同算法。這張是全公司、全期間，不受上方篩選影響</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={priceBands}>
@@ -2458,7 +2501,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
   const stickyTh = { ...thBase, textAlign: 'left', position: 'sticky', left: 0, background: '#fef3e2', zIndex: 2 };
   const stickyTd = { ...tdBase, textAlign: 'left', position: 'sticky', left: 0, background: '#fff', zIndex: 1 };
   const noteStyle = { fontSize: 12, color: '#6F4E45', marginTop: 6 };
-  const noData = <div style={{ fontSize: 12, color: '#9ca3af' }}>此檔期無分店×週次明細</div>;
+  const noData = <div style={{ fontSize: 12, color: '#9ca3af' }}>這個檔期沒有分店 × 週次的明細</div>;
 
   const pills = [
     { k: 'items', label: '品項明細' },
@@ -2482,7 +2525,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
       {/* ① 品項明細（v4 原有表格，原樣搬入） */}
       {view === 'items' && (
         items.length === 0 ? (
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>無品項明細資料</div>
+          <div style={{ fontSize: 12, color: '#9ca3af' }}>這個檔期沒有品項明細</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: 'white', borderRadius: 6 }}>
             <thead>
@@ -2546,7 +2589,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
               </tbody>
             </table>
           </div>
-          <div style={noteStyle}>數量口徑＝SUM(數量)，含退貨負數；本表與「品項明細」數量完全一致。</div>
+          <div style={noteStyle}>數量是直接加總（退貨算負數），跟「品項明細」的數量完全一樣。</div>
         </div>
       ))}
 
@@ -2554,7 +2597,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
       {view === 'weekly' && (!hasCube || !wk ? noData : (
         <div>
           <div style={{ fontSize: 12, color: '#92400e', marginBottom: 6 }}>
-            點任一店展開「品項 × 週」備料明細；週為週一～週日。
+            點任一家店，展開這家店「品項 × 週」的備料明細；一週＝週一到週日。
           </div>
           <div style={{ overflowX: 'auto', background: 'white', borderRadius: 6 }}>
             <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
@@ -2638,7 +2681,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
                                 </tbody>
                               </table>
                             </div>
-                            <div style={noteStyle}>只列該店有銷量的品項；可依去年同檔期同週水位預估下一週食材與器具。</div>
+                            <div style={noteStyle}>只列這家店有賣出的品項。備料時，可以參考去年同一檔期、同一週賣了多少，估下一週要準備的食材和器具。</div>
                           </td>
                         </tr>
                       )}
@@ -2656,7 +2699,7 @@ function CampaignDetailViews({ campaign, storeNameByCode }) {
             </table>
           </div>
           {wk.hidden > 0 && (
-            <div style={noteStyle}>已隱藏 {wk.hidden} 個頭尾離群週（占檔期總量 &lt;0.3% 的雜訊交易日）；合計為顯示週加總。</div>
+            <div style={noteStyle}>已隱藏頭尾 {wk.hidden} 週的零星銷量（每週不到整檔的 0.3%，多半是檔期前後的零星交易）；合計只加顯示出來的週。</div>
           )}
         </div>
       ))}
@@ -2736,11 +2779,15 @@ function TabSeasonal({ data }) {
           🎂 限定甜點檔期分析
         </h2>
         <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
-          自動辨識所有「YYYY 活動名」次類別（節日 + 主題活動），共 {campaigns.length} 個檔期 · 與去年同檔期比較
+          系統自動找出所有限定檔期（節日＋主題活動），共 {campaigns.length} 個；YoY＝跟去年同一檔期比。這頁看全公司、全期間，不受上方月份和分店篩選影響。
         </p>
+        <div style={{marginTop:6,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+          <b>先看</b>「最近活動」大卡：這一檔的限定甜點營收、比去年多或少，下面是各店排行。點「其他檔期」的小卡，可以換看別的檔期。<br/>
+          <b>要備料或比品項</b>：到最下面「全活動年度排行榜」點一個活動，再切「品項明細／品項 × 分店／分店 × 週次（備料）」。
+        </div>
         {/* v2 fix-2: 補 3 折扣免責聲明（選項 A，不動 GAS） */}
         <div style={{marginTop:10,padding:'8px 12px',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,fontSize:12,color:'#92400e'}}>
-          ※ 季節活動金額＝品項「實收總額」加總（<b>已扣單品折扣的真實金額</b>）。與肚肚後台「商品分析」對不上屬正常：<b>肚肚顯示的是牌價×數量、未扣真實折扣</b>；數量口徑兩邊完全一致。
+          ※ 這頁的金額是品項「實收總額」加總（<b>已扣單品折扣的真實金額</b>）。跟肚肚後台「商品分析」金額對不上是正常的：<b>肚肚顯示的是牌價 × 數量、沒扣真實折扣</b>；數量兩邊完全一致。
         </div>
       </div>
 
@@ -2774,7 +2821,7 @@ function TabSeasonal({ data }) {
                   {fmtMoney(displayCampaign.revenue)}
                 </div>
                 <div style={{ fontSize: 12, color: '#92400e', marginTop: 4 }}>
-                  ※ 金額＝品項實收（折扣後真實金額）・肚肚商品分析為牌價未扣折扣，故金額不同、數量一致
+                  ※ 金額是實收（已扣折扣），跟肚肚金額不同是正常的，說明見本頁上方
                 </div>
                 <div style={{ marginTop: 8, fontSize: 14, color: '#78716c' }}>
                   YoY <span style={{
@@ -2882,7 +2929,7 @@ function TabSeasonal({ data }) {
         <h3 style={{ fontSize: 17, fontWeight: 600, color: '#1f2937', marginBottom: 12 }}>
           🏆 全活動年度排行榜
           <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8, fontWeight: 400 }}>
-            依限定甜點營收降序 · 點活動展開 品項明細／品項×分店／各店週次備料
+            依限定甜點營收由高到低 · 點任一活動，展開看品項明細／品項 × 分店／各店每週備料
           </span>
         </h3>
 
@@ -3113,6 +3160,12 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
 
   return (
     <div className="charts-grid cols-2">
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：給了多少優惠、哪些方案最花錢、哪些可以收掉。<br/>
+        <b>先看</b>「行銷折扣率」（讓利佔原價的比例）和下方「行銷折扣率・月趨勢」有沒有在往上爬。<br/>
+        <b>再看</b>「行銷折扣方案排行」找最花錢的方案（滑鼠停在長條上，手機點一下，可看使用次數和平均每次讓多少）；「淘汰候選」列出很久沒用或幾乎沒人用的方案，可以考慮收掉。
+      </div>
       {/* KPI */}
       <div className="kpi-grid" style={{gridColumn:'1/-1',marginBottom:8}}>
         <div className="kpi-card">
@@ -3128,17 +3181,17 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
         <div className="kpi-card">
           <div className="kpi-label">行銷方案數</div>
           <div className="kpi-value">{programRank.length}</div>
-          <div className="kpi-sub">收斂後標準方案</div>
+          <div className="kpi-sub">同一方案的不同寫法已合併</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">非行銷折扣</div>
           <div className="kpi-value" style={{color:'#f59e0b'}}>{fmt.currency(catTotals['非行銷折扣']||0)}</div>
-          <div className="kpi-sub">含訂金等，不應算讓利</div>
+          <div className="kpi-sub">例如訂金，這些不算讓利</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">加購餅乾讓利</div>
           <div className="kpi-value" style={{color:'#06b6d4'}}>{fmt.currency(cookieTotal)}</div>
-          <div className="kpi-sub">陪同轉化，已計入行銷折扣</div>
+          <div className="kpi-sub">推陪同客加購的讓利，已算在行銷折扣裡</div>
         </div>
       </div>
 
@@ -3162,11 +3215,11 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
         {/* 圖例白話註解：讓使用者一眼看懂四大類（刻意不寫死金額，隨期間/分店篩選變動仍正確） */}
         <div style={{marginTop:6,fontSize:12,color:'#6F4E45',lineHeight:1.6}}>
           <div style={{marginBottom:5}}>
-            ↑ 這條 = 肚肚<b>原始折扣資料的全部</b>拆解；<b style={{color:'#C4412F'}}>只有「行銷折扣」是真讓利</b>，其餘兩塊都不該算折扣：
+            ↑ 這條是肚肚<b>全部折扣資料</b>拆開來看；<b style={{color:'#C4412F'}}>只有「行銷折扣」是真的讓利</b>，其他兩塊都不該算折扣：
           </div>
-          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>行銷折扣</b>：真正的行銷讓利（券／優惠）—— <b>只有這塊算進上方「行銷折扣率」</b>。含<b>加購餅乾</b>＝把陪同客轉化為消費者的推銷讓利（2026-07 起重分類，原列「加價購」）</div>
-          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['非行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>非行銷折扣</b>：訂金／補償／手動調整，<b>不算讓利</b>（多為預收款記錯欄）</div>
-          <div><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['其他'],marginRight:6,verticalAlign:'middle'}}></span><b>其他</b>：分類規則沒對到的零星券，金額通常極小</div>
+          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>行銷折扣</b>：真正的行銷讓利（券／優惠），<b>只有這塊算進上方「行銷折扣率」</b>。也包含<b>加購餅乾</b>：推陪同客加購餅乾的讓利（2026-07 起改算在這裡，原本列在「加價購」）</div>
+          <div style={{marginBottom:2}}><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['非行銷折扣'],marginRight:6,verticalAlign:'middle'}}></span><b>非行銷折扣</b>：訂金／補償／手動調整，<b>不算讓利</b>（多半是預收的訂金記到了折扣欄）</div>
+          <div><span style={{display:'inline-block',width:9,height:9,borderRadius:2,background:CAT_COLORS['其他'],marginRight:6,verticalAlign:'middle'}}></span><b>其他</b>：還沒分到類的零星券，金額通常很小</div>
         </div>
       </div>
 
@@ -3180,8 +3233,8 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
         </div>
         <div className="chart-subtitle">{
           rankMode==='uses'
-          ? '同一組讓利前 15 大方案，改依「使用次數」排序（這張券總共被刷了幾次）'
-          : '前 15 大方案（手打變體已收斂）。4人同行$500 已扣除 $500券佔位營收=真實讓利。游標懸停看次數／平均讓利；「N折」方案自動反推原價與實付'
+          ? '同樣這 15 個方案，改依「使用次數」排（這張券總共被用了幾次）'
+          : '前 15 大方案（同一方案的不同寫法已合併）。「4人同行$500」已扣掉 $500券 佔位金額，是真實讓利。滑鼠停在長條上（手機點一下）看使用次數、平均每次讓多少；「N折」方案還會算出原價和客人實付。'
         }</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={480}>
@@ -3200,7 +3253,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* 方案年度對比 */}
       <div className="chart-card">
         <div className="chart-title">方案年度對比</div>
-        <div className="chart-subtitle">前 10 方案 {yearCompare.yrs.join(' vs ')}（看成長/萎縮）</div>
+        <div className="chart-subtitle">前 10 大方案 {yearCompare.yrs.join(' vs ')} 的讓利金額，看哪些變多、哪些變少</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={360}>
             <BarChart data={yearCompare.data} layout="vertical" margin={{left:10,right:20}}>
@@ -3237,7 +3290,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* 淘汰候選 */}
       <div className="chart-card">
         <div className="chart-title">淘汰候選</div>
-        <div className="chart-subtitle">🔴 末月距今 ≥3 月（停用）或使用 ≤5 次</div>
+        <div className="chart-subtitle">🔴＝最後使用月份比期間內最新月份早 3 個月以上（可能已停用）；沒有 🔴 的＝期間內只用了 5 次以下</div>
         <div className="chart-body" style={{maxHeight:360,overflowY:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead><tr style={{textAlign:'left',color:'#B89E97'}}>
@@ -3253,7 +3306,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
                   <td style={{padding:'4px 6px'}}>{p.lastYM}</td>
                 </tr>
               ))}
-              {retireCandidates.length===0 && (<tr><td colSpan={4} style={{padding:'8px',color:'#B89E97'}}>無候選（所有方案皆活躍）</td></tr>)}
+              {retireCandidates.length===0 && (<tr><td colSpan={4} style={{padding:'8px',color:'#B89E97'}}>沒有要淘汰的方案：期間內每個方案都還在用，而且用超過 5 次</td></tr>)}
             </tbody>
           </table>
         </div>
@@ -3262,7 +3315,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* 非行銷折扣明細 */}
       <div className="chart-card">
         <div className="chart-title">非行銷折扣明細</div>
-        <div className="chart-subtitle">這些不該算行銷讓利；訂金更是預收款記錯欄</div>
+        <div className="chart-subtitle">這些不算行銷讓利；訂金其實是預收款，只是記在折扣欄</div>
         <div className="chart-body" style={{maxHeight:360,overflowY:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead><tr style={{textAlign:'left',color:'#B89E97'}}>
@@ -3275,7 +3328,7 @@ function TabDiscount({rawData, dateStart, dateEnd, selRegion, selStores}){
                   <td style={{padding:'4px 6px',textAlign:'right'}}>{fmt.currency(p.discount)}</td>
                 </tr>
               ))}
-              {nonMkt.length===0 && (<tr><td colSpan={2} style={{padding:'8px',color:'#B89E97'}}>無</td></tr>)}
+              {nonMkt.length===0 && (<tr><td colSpan={2} style={{padding:'8px',color:'#B89E97'}}>期間內沒有非行銷折扣</td></tr>)}
             </tbody>
           </table>
         </div>
@@ -3391,7 +3444,7 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
           <div style={{fontSize:'2rem',marginBottom:12}}>🎂</div>
           <div className="chart-title" style={{justifyContent:'center'}}>生日壽星分析・資料準備中</div>
           <div className="chart-subtitle" style={{marginTop:8}}>
-            後端 birthdayCake 聚合尚未部署，部署完成後本頁將自動顯示。
+            壽星資料還沒準備好（後台還沒提供這份統計），準備好後這頁會自動出現，不用做任何事。
           </div>
         </div>
       </div>
@@ -3400,6 +3453,12 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
 
   return (
     <div className="charts-grid cols-2">
+      {/* 分頁導讀（說明文字） */}
+      <div style={{gridColumn:'1/-1',padding:'10px 14px',background:'#FFFFFF',border:'1px dashed #F0D9D5',borderRadius:10,fontSize:13,color:'#6F4E45',lineHeight:1.7}}>
+        <b>這頁看什麼</b>：壽星來店選了哪種蛋糕，以及現場推升級的成效。<br/>
+        <b>先看</b>「升級率」：壽星裡有多少人加價購或改選 69 折甜點，愈高代表現場推得愈好。<br/>
+        <b>再看</b>「分店・升級率」找出偏低的店；最下面「加價購品項・年度對比」看哪幾款在退燒、該不該換新（這張不受上方篩選影響）。
+      </div>
       {/* KPI row */}
       <div className="kpi-grid" style={{gridColumn:'1/-1',marginBottom:8}}>
         <div className="kpi-card">
@@ -3435,7 +3494,7 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
         <div className="kpi-card">
           <div className="kpi-label">69折換款營收（推估）</div>
           <div className="kpi-value" style={{color:BD_SWAP}}>{fmt.currency(Math.round(kpi.swapRev))}</div>
-          <div className="kpi-sub">讓利 × 69/31 反推實付</div>
+          <div className="kpi-sub">用讓利金額推算：69 折實付＝讓利 × 69/31</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">壽星營收合計</div>
@@ -3445,14 +3504,14 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
         <div className="kpi-card">
           <div className="kpi-label">壽星平均消費</div>
           <div className="kpi-value">{fmt.currency(Math.round(kpi.perHead))}</div>
-          <div className="kpi-sub">壽星蛋糕營收 ÷ 到店總數（含免費兌換者）｜口徑與上方全店客單價不同</div>
+          <div className="kpi-sub">壽星蛋糕營收 ÷ 壽星到店總數（含免費兌換的人）｜跟上方的「客單價」是不同算法</div>
         </div>
       </div>
 
       {/* Chart 1: 月趨勢（數量） */}
       <div className="chart-card full-width">
         <div className="chart-title">月趨勢・兌換數量</div>
-        <div className="chart-subtitle">免費 vs 加價購 vs 69折換款（69折以折扣使用次數計）</div>
+        <div className="chart-subtitle">免費 vs 加價購 vs 69折換款（69折換款用折扣使用次數算）</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={monthlyTrend}>
@@ -3472,7 +3531,7 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* Chart 2: 分店堆疊（數量） */}
       <div className="chart-card">
         <div className="chart-title">分店・兌換數量</div>
-        <div className="chart-subtitle">免費＋加價購＋69折換款 堆疊，依總量降冪</div>
+        <div className="chart-subtitle">免費＋加價購＋69折換款疊起來，總數多的店排前面</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={storeData} layout="vertical">
@@ -3492,7 +3551,7 @@ function TabBirthday({rawData, dateStart, dateEnd, selRegion, selStores}){
       {/* Chart 3: 分店加購率 */}
       <div className="chart-card">
         <div className="chart-title">分店・升級率</div>
-        <div className="chart-subtitle">（加價購＋69折換款）÷ 總數（%），看現場推升級的成效・軸自 50% 起跳放大差異</div>
+        <div className="chart-subtitle">（加價購＋69折換款）÷ 總數，看現場推升級的成效。橫軸從 50% 開始，差異比較看得出來；低於 50% 的店會貼在最左邊</div>
         <div className="chart-body">
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...storeData].sort((a,b)=>b.upgradeRate-a.upgradeRate)} layout="vertical">
