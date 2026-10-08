@@ -18,7 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v12';   /* v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
+var VERSION = 'recipe-req-v12.1';   /* v12.1＝2026-10-08 簽核連結錯誤訊息改「Email 或 104 公告裡的連結」。v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
    有一支被退回、或核准 → 寄給主廚（dim_role「主廚」列的 email）；寄送紀錄 fact_notify；🔑 密碼管理可填 Email、寄測試信（adminSetRoleEmail／adminTestMail）。見下方「自動寄 Email」段
    v11＝2026-10-07 晚 經營者裁示：①整檔一次送簽、一次簽完、單支可退回（submitSignCamp／signOpenCamp／signCamp，連結 #sign=檔期編號&k=）②簽核人固定批次（dim_signer.batch；前一批全部同意才輪下一批）③新器具／模具「每店要幾個」→ 核准時寫成各店標配（dim_store_par，BOM 本＋專用檔，還原一起刪）④提供方式＝出貨中心出貨 → 主檔廠商寫「出貨中心」⑤newItemsPub 多回第一批配貨日、檔期作業時間 */
 var TZ = 'Asia/Taipei';
@@ -394,11 +394,11 @@ function keyAuth_(p) {
   var cid = str_(p.campaign_id).trim();
   if (cid && !str_(p.req_id).trim()) {   /* 2026-10-07 晚：整檔簽核連結（#sign=檔期編號&k=）——k 用「camp:」前綴，和單張的 k 分開 */
     var kc = str_(p.k).trim();
-    if (!kc || kc !== signKey_('camp:' + cid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 104 公告裡的連結', 'key');
+    if (!kc || kc !== signKey_('camp:' + cid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 Email 或 104 公告裡的連結', 'key');
     return { kind: 'key', name: '', role: '', rules: [], camp: cid };
   }
   var rid = str_(p.req_id).trim(), k = str_(p.k).trim();
-  if (!rid || !k || k !== signKey_(rid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 104 公告裡的連結', 'key');
+  if (!rid || !k || k !== signKey_(rid)) throw fail_('簽核連結不完整或打錯了，請跟主廚要 Email 或 104 公告裡的連結', 'key');
   return { kind: 'key', name: '', role: '', rules: [] };
 }
 
@@ -424,7 +424,7 @@ function auth_(p) {
     var fails = parseInt(cache.get(ck) || '0', 10) || 0;
     if (fails >= PIN_MAX) throw fail_('「' + name + '」PIN 錯太多次，請 15 分鐘後再試（其他人不受影響）', 'pinlock');
     var s = authRows_('dim_signer').filter(function (r) { return str_(r.name).trim() === name && signerOn_(r.enabled); })[0];
-    if (s && !str_(s.pin).trim()) throw fail_('「' + name + '」還沒有設定 PIN：請點主廚在 104 公告裡的簽核連結，選自己的名字設定 PIN', 'nopin');
+    if (s && !str_(s.pin).trim()) throw fail_('「' + name + '」還沒有設定 PIN：請點 Email 或 104 公告裡的簽核連結，選自己的名字設定 PIN', 'nopin');
     if (!s || !pin || str_(s.pin).trim() !== pin) { cache.put(ck, String(fails + 1), PIN_LOCK_SEC); throw fail_('簽核人或 PIN 不對', 'auth'); }
     if (fails) cache.remove(ck);
     return { kind: 'signer', name: name, role: str_(s.role).trim(), rules: [] };
