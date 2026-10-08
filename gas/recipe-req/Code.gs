@@ -18,7 +18,9 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v11';   /* v11＝2026-10-07 晚 經營者裁示：①整檔一次送簽、一次簽完、單支可退回（submitSignCamp／signOpenCamp／signCamp，連結 #sign=檔期編號&k=）②簽核人固定批次（dim_signer.batch；前一批全部同意才輪下一批）③新器具／模具「每店要幾個」→ 核准時寫成各店標配（dim_store_par，BOM 本＋專用檔，還原一起刪）④提供方式＝出貨中心出貨 → 主檔廠商寫「出貨中心」⑤newItemsPub 多回第一批配貨日、檔期作業時間 */
+var VERSION = 'recipe-req-v12';   /* v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
+   有一支被退回、或核准 → 寄給主廚（dim_role「主廚」列的 email）；寄送紀錄 fact_notify；🔑 密碼管理可填 Email、寄測試信（adminSetRoleEmail／adminTestMail）。見下方「自動寄 Email」段
+   v11＝2026-10-07 晚 經營者裁示：①整檔一次送簽、一次簽完、單支可退回（submitSignCamp／signOpenCamp／signCamp，連結 #sign=檔期編號&k=）②簽核人固定批次（dim_signer.batch；前一批全部同意才輪下一批）③新器具／模具「每店要幾個」→ 核准時寫成各店標配（dim_store_par，BOM 本＋專用檔，還原一起刪）④提供方式＝出貨中心出貨 → 主檔廠商寫「出貨中心」⑤newItemsPub 多回第一批配貨日、檔期作業時間 */
 var TZ = 'Asia/Taipei';
 var SEG_MAX = 45000, SEG_N = 4;       /* payload 每格上限、格數 */
 var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
@@ -32,14 +34,15 @@ var TABS = {
     '保存方式', '包裝方式', '製作時間', '預估銷售數', 'status', 'signers', 'payload_1', 'payload_2', 'payload_3', 'payload_4',
     'created_at', 'updated_at', 'updated_by'],
   fact_req_unit: ['req_id', '品項', '容器', '購買連結', '供應商覆寫', '出貨中心預估出貨量', '品項備註', 'updated_at', 'updated_by'],
-  dim_role: ['role', 'password', 'fields'],
-  dim_signer: ['name', 'role', 'pin', 'enabled', 'batch'],   /* batch：2026-10-07 晚新增（簽核批次 1～9，空白＝第 1 批；migrate_ ⑩ 自動補表頭） */
+  dim_role: ['role', 'password', 'fields', 'email'],   /* email：2026-10-08 新增（通知用，目前只有「主廚」那一列會收到：被退回、核准；可填多個，逗號分隔；migrate_ ⑪ 自動補表頭） */
+  dim_signer: ['name', 'role', 'pin', 'enabled', 'batch', 'email'],   /* batch：2026-10-07 晚新增（簽核批次 1～9，空白＝第 1 批；migrate_ ⑩ 自動補表頭）；email：2026-10-08 新增（輪到他簽核時寄通知；migrate_ ⑪） */
   fact_signoff: ['req_id', 'signer', 'decision', 'comment', 'ts'],
   log: ['ts', 'role', 'action', 'id', 'ok', 'msg'],
   fact_req_fill: ['req_id', 'role', 'updated_at'],   /* B 階段新增：每張單每個身分最後一次存檔時間（「已填」徽章）；舊試算表由 migrate_ 自動補建 */
   fact_push: ['ts', 'req_id', 'batch', 'action', 'table', 'rows', 'detail', 'backup', 'ok', 'msg'],   /* C 階段新增：寫入／還原採購系統的逐表紀錄 */
   fact_recipe_import: ['ts', 'req_id', 'imp_id', 'action', 'backend_id', 'step', 'ok', 'msg', 'by', 'd1', 'd2', 'd3', 'd4'],   /* 2026-10-06 新增：匯入自己做食譜系統的紀錄（start 列 d1～d4＝這次要匯入的完整內容，中斷可接續） */
-  fact_req_comment: ['ts', 'req_id', 'who', 'who_kind', 'text']   /* 2026-10-07 新增：申請單「💬 意見交流」（簽核人、主廚、各單位留言；大家都看得到；送出後不能刪） */
+  fact_req_comment: ['ts', 'req_id', 'who', 'who_kind', 'text'],   /* 2026-10-07 新增：申請單「💬 意見交流」（簽核人、主廚、各單位留言；大家都看得到；送出後不能刪） */
+  fact_notify: ['ts', 'kind', 'key', 'req_id', 'to_name', 'to_email', 'ok', 'msg']   /* 2026-10-08 新增：自動寄 Email 的紀錄（每張單每位收件人一列；查誰收到了沒、為什麼沒寄） */
 };
 /* 數字欄（其餘一律純文字，避免「01」「2026-10-01」被試算表自動轉成數字或日期） */
 var NUM_COLS = { '定價': 1, '成本': 1, '利潤率': 1, '預估銷售數': 1, '出貨中心預估出貨量': 1 };
@@ -124,7 +127,7 @@ function randPw_(len) {
    ① 2026-09-28「管理者」身分（🔑 密碼管理用）：舊試算表沒有這一列 → 補上；密碼 10 碼隨機，只在 dim_role 分頁
    ② 2026-09-29 B 階段：補建 fact_req_fill 分頁（只新增分頁，不動既有分頁）
    ③ 2026-09-29 C 階段：補建 fact_push 分頁 */
-var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH'];
+var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH', 'MIG_EMAIL'];
 /* 2026-10-07 加速：每次請求的指令碼屬性只讀一次（原本 migrate_ 逐一讀 6 個、ss_ 再讀 1 個；一個約 50～100 毫秒） */
 var _props = null;
 function props_() { if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {}; return _props; }
@@ -177,13 +180,26 @@ function migrate_() {
       setProp_('MIG_CMT', '1');
     }
     if (P.getProperty('MIG_BATCH') !== '1') {   /* ⑩ 2026-10-07 晚：dim_signer 最後補一欄「batch」（簽核批次；只加表頭，既有資料一格不動；空白＝第 1 批） */
-      var gs = ss_().getSheetByName('dim_signer'), GH = TABS.dim_signer, gn = GH.length;
+      var gs = ss_().getSheetByName('dim_signer'), GH = TABS.dim_signer, gn = GH.indexOf('batch') + 1;   /* 2026-10-08：用欄名找位置（之後又加了 email 欄，不能再用最後一欄） */
       if (gs.getMaxColumns() < gn) gs.insertColumnsAfter(gs.getMaxColumns(), gn - gs.getMaxColumns());
       var gc = gs.getRange(1, gn);
       if (String(gc.getValue()).trim() === '') gc.setValue(GH[gn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
       if (String(gc.getValue()).trim() !== GH[gn - 1]) throw new Error('dim_signer 第 ' + gn + ' 欄表頭不對');
       authCacheClear_();
       setProp_('MIG_BATCH', '1');
+    }
+    if (P.getProperty('MIG_EMAIL') !== '1') {   /* ⑪ 2026-10-08：dim_role 第 4 欄、dim_signer 第 6 欄補表頭「email」（自動寄通知用；只加表頭，既有資料一格不動）＋補建 fact_notify 分頁 */
+      ['dim_role', 'dim_signer'].forEach(function (nm) {
+        var es = ss_().getSheetByName(nm), EH = TABS[nm], en = EH.indexOf('email') + 1;
+        if (es.getMaxColumns() < en) es.insertColumnsAfter(es.getMaxColumns(), en - es.getMaxColumns());
+        var ec = es.getRange(1, en);
+        if (String(ec.getValue()).trim() === '') ec.setValue(EH[en - 1]).setFontWeight('bold').setBackground('#E0F2F1');
+        if (String(ec.getValue()).trim() !== EH[en - 1]) throw new Error(nm + ' 第 ' + en + ' 欄表頭不對');
+        es.getRange(2, en, Math.max(1, es.getMaxRows() - 1), 1).setNumberFormat('@');
+      });
+      ensureTab_(ss_(), 'fact_notify');
+      authCacheClear_();
+      setProp_('MIG_EMAIL', '1');
     }
     if (!P.getProperty('SIGN_SECRET')) setProp_('SIGN_SECRET', Utilities.getUuid() + Utilities.getUuid());   /* ⑧ 簽核連結通行碼的密鑰（只在伺服器；在鎖裡產生，不會兩個請求各產一組） */
     var seed = P.getProperty('SIGNER_SEED');
@@ -233,17 +249,20 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   signOpen: signOpen_, signSetPin: signSetPin_, commentAdd: commentAdd_,
   /* 2026-10-07 晚：整檔一次送簽／一次簽完 */
   submitSignCamp: submitSignCamp_, signOpenCamp: signOpenCamp_, signCamp: signCamp_,
+  /* 2026-10-08：🔑 密碼管理填主廚通知 Email、寄測試信 */
+  adminSetRoleEmail: adminSetRoleEmail_, adminTestMail: adminTestMail_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
   rbStatus: function (p, a) { return rbStatus_(p, a); }, rbSetCred: function (p, a) { return rbSetCred_(p, a); },
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
-  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取 */
+  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
+  adminSetRoleEmail: 1, adminTestMail: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
 var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1 };   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
 /* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
 var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1 };
 /* 寫完要讓身分表暫存失效的動作 */
-var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1 };
+var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1, adminSetRoleEmail: 1 };
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
 /* v7（2026-10-04 效能第 2 批）：只讀動作**明確列在 READS**（都已逐一確認沒有任何寫入）→ 不排 LockService、成功不寫 log 分頁（失敗照寫，留除錯線索）。
    沒列在 READS 的動作一律走下面原本的加鎖路徑。與「不在 WRITES 就當只讀」的寫法行為等價（WRITES 在 BOM 段落尾端補了 bomSave 等 6 個，
@@ -262,6 +281,7 @@ function doPost(e) {
   var p;
   try { p = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (err) { return out_({ ok: false, msg: '送來的資料不是 JSON' }); }
   var act = String(p.action || ''), who = p.signer ? ('簽核:' + String(p.signer)) : String(p.role || ''), res;
+  _nq = []; _nctx = null;   /* 2026-10-08：這次請求要寄的通知（寫完、放開鎖之後才寄） */
   migrate_();
   var fn = ACTIONS[act];
   if (!fn) { res = { ok: false, act: act, msg: '不支援的動作：' + act }; log_(who, act, '', false, res.msg); return out_(res); }
@@ -325,6 +345,17 @@ function doPost(e) {
     if (BOM_TOUCH[act]) bomCacheClear_();
     if (CAMP_TOUCH[act]) campCacheClear_();
     if (AUTH_TOUCH[act]) authCacheClear_();
+  }
+  /* 2026-10-08：送簽／簽核成功 → 放開鎖之後才寄 Email（寄信 1 封約 0.5～1 秒，不佔住全系統的鎖）；寄給誰、誰沒填 Email 附在回覆裡給畫面顯示 */
+  if (_nq.length) {
+    if (res && res.ok) {
+      var nr = flushNotify_();
+      if (nr) {
+        res.data = res.data || {}; res.data.notify = nr;
+        if (rqKey) { try { CacheService.getScriptCache().put(rqKey, JSON.stringify(res), RQ_SEC); } catch (ce2) { } }
+      }
+    }
+    _nq = [];
   }
   return out_(res);
 }
@@ -430,9 +461,9 @@ function needAdmin_(auth) { if (!auth || auth.kind !== 'role' || auth.role !== A
 function adminList_(p, auth) {
   needAdmin_(auth);
   var roles = load_('dim_role').rows.filter(function (x) { return str_(x.role).trim(); })
-    .map(function (x) { return { role: str_(x.role).trim(), password: str_(x.password), fields: str_(x.fields) }; });
+    .map(function (x) { return { role: str_(x.role).trim(), password: str_(x.password), fields: str_(x.fields), email: str_(x.email).trim() }; });
   var signers = load_('dim_signer').rows.filter(function (x) { return str_(x.name).trim(); })
-    .map(function (x) { return { name: str_(x.name).trim(), role: str_(x.role), pin: str_(x.pin), enabled: signerOn_(x.enabled) ? 'Y' : 'N', batch: str_(x.batch).trim() }; });
+    .map(function (x) { return { name: str_(x.name).trim(), role: str_(x.role), pin: str_(x.pin), enabled: signerOn_(x.enabled) ? 'Y' : 'N', batch: str_(x.batch).trim(), email: str_(x.email).trim() }; });
   return { id: '', data: { roles: roles, signers: signers }, msg: '身分 ' + roles.length + '、簽核主管 ' + signers.length };
 }
 function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核人 PIN 登入用，不能混用） */
@@ -442,6 +473,7 @@ function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核
   if (!name) throw fail_('請填簽核主管姓名');
   if (bt && !/^[1-9]$/.test(bt)) throw fail_('批次請填 1～9（空白＝第 1 批）');
   var keepBatch = g.batch === undefined || g.batch === null;   /* 舊版網頁（沒有批次欄）存檔：批次照舊，不清掉 */
+  var keepEmail = g.email === undefined || g.email === null, em = keepEmail ? '' : emailList_(g.email, true).join(', ');   /* 2026-10-08：同上，舊版網頁沒有 Email 欄 → 照舊 */
   if (/[,，、;；\s]/.test(name)) throw fail_('姓名不能有逗號、頓號、分號或空白');   /* signers 欄用這些符號分隔 */
   if (pin && !/^\d{4,8}$/.test(pin)) throw fail_('PIN 要 4～8 位數字（留空＝本人第一次簽核時自己設定）');
   var t = load_('dim_signer');
@@ -449,9 +481,10 @@ function adminSaveSigner_(p, auth) {   /* 資料放 p.entry（p.signer 是簽核
   if (orig && !row) throw fail_('找不到簽核主管「' + orig + '」', 'notfound');
   if (t.rows.some(function (r) { return r !== row && str_(r.name).trim() === name; })) throw fail_('已經有叫「' + name + '」的簽核主管', 'dup');
   if (keepBatch) bt = row ? str_(row.batch).trim() : '';
-  put_(t, row ? row._row : nextRow_(t), { name: name, role: title, pin: pin, enabled: en, batch: bt });
+  if (keepEmail) em = row ? str_(row.email).trim() : '';
+  put_(t, row ? row._row : nextRow_(t), { name: name, role: title, pin: pin, enabled: en, batch: bt, email: em });
   return {
-    id: name, data: { name: name, role: title, enabled: en, batch: bt, created: !row },
+    id: name, data: { name: name, role: title, enabled: en, batch: bt, email: em, created: !row },
     msg: (row ? '更新' : '新增') + '簽核主管 ' + name + (orig && orig !== name ? '（原名 ' + orig + '）' : '') + (en === 'N' ? '（停用）' : '')
   };
 }
@@ -481,6 +514,25 @@ function adminSetPassword_(p, auth) {
   obj.password = pw;
   put_(t, row._row, obj);
   return { id: role, data: { role: role }, msg: '更改密碼 ' + role };
+}
+/* 2026-10-08：各身分的通知 Email（目前只有「主廚」會收到：有一支被退回、或核准）；只寫 email 這一格 */
+function adminSetRoleEmail_(p, auth) {
+  needAdmin_(auth);
+  var role = str_(p.target_role).trim(), em = emailList_(p.email, true).join(', ');
+  var t = load_('dim_role'), row = t.rows.filter(function (r) { return str_(r.role).trim() === role; })[0];
+  if (!row) throw fail_('找不到身分「' + role + '」', 'notfound');
+  putCols_(t, row._row, { email: em }, function (h) { return h === 'email'; });
+  return { id: role, data: { role: role, email: em }, msg: '通知 Email ' + role + (em ? '' : '（清空）') };
+}
+/* 2026-10-08：寄一封測試信（確認 Email 打對、信不會被擋）；在 WRITES 裡＝回覆掉了重送不會多寄 */
+function adminTestMail_(p, auth) {
+  needAdmin_(auth);
+  var to = emailList_(p.email, true), nm = str_(p.name).trim().slice(0, 40);
+  if (!to.length) throw fail_('請先填 Email');
+  if (MailApp.getRemainingDailyQuota() < to.length) throw fail_('今天 Gmail 寄信額度用完了（一天 100 封），明天再試', 'quota');
+  var txt = (nm ? nm + ' 你好：\n\n' : '') + '這是「自己做 食譜系統」的測試信。\n之後新品申請輪到你簽核時，系統會寄通知到這個信箱，信裡附簽核連結，點開就能簽。\n\n收到這封就代表設定成功，不用回信。\n自己做 食譜系統';
+  MailApp.sendEmail({ to: to.join(','), subject: '【食譜系統】測試信：之後輪到你簽核時會寄到這個信箱', body: txt, htmlBody: mailHtml_(txt, '', ''), name: NOTIFY_FROM });
+  return { id: nm || '測試信', data: { to: to.length }, msg: '測試信 → ' + (nm || '') + '（' + to.length + ' 個信箱）' };
 }
 
 /* ================= 檔期 ================= */
@@ -726,7 +778,7 @@ function listSigners_(p, auth) {
 /* 啟用中的簽核人（只回姓名、職稱／部門、有沒有設 PIN，不含 PIN） */
 function peopleOf_() {
   return authRows_('dim_signer').filter(function (r) { return str_(r.name).trim() && signerOn_(r.enabled); })
-    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim(), hasPin: !!str_(r.pin).trim(), batch: batchOf_(r.batch) }; });
+    .map(function (r) { return { name: str_(r.name).trim(), role: str_(r.role).trim(), hasPin: !!str_(r.pin).trim(), batch: batchOf_(r.batch), hasEmail: emailList_(r.email).length > 0 }; });
 }
 /* 2026-10-07 晚：簽核批次（1～9；空白或亂填＝1）。前一批（數字小的）全部同意，下一批才能簽 */
 function batchOf_(v) { var n = parseInt(str_(v).trim(), 10); return n >= 1 && n <= 9 ? n : 1; }
@@ -893,6 +945,7 @@ function submitSign_(p, auth) {
   var voided = voidSignoffs_(rid), now = now_();
   putCols_(t, row._row, { status: '送簽中', signers: names.join('、'), updated_at: now, updated_by: auth.role },
     function (h) { return h === 'status' || h === 'signers' || h === 'updated_at' || h === 'updated_by'; });
+  nqTurn_(row, names, {}, now, '', 'submit');   /* 2026-10-08：寄 Email 給第 1 批 */
   return { id: rid, data: { status: '送簽中', signers: names, updated_at: now, updated_by: auth.role, voided: voided, saved: saved, sign_key: signKey_(rid) },
     msg: (saved ? '存檔＋' : '') + '送簽給 ' + names.join('、') + (voided ? '｜上一輪簽核 ' + voided + ' 筆標記作廢' : '') };
 }
@@ -949,6 +1002,7 @@ function sign_(p, auth) {
     throw fail_('還沒輪到你：第 ' + turn0 + ' 批（' + wait0.join('、') + '）全部同意後才能簽', 'notyet', { turn: turn0, wait: wait0 });
   }
   var mine = so.rows.filter(function (r) { return str_(r.req_id) === rid && str_(r.signer).trim() === auth.name && isLive_(r.decision); })[0];
+  var turnBefore = turnOf_(names, agreed0, bmap);   /* 2026-10-08：簽之前輪到第幾批（自動寄 Email 用；agreed0 含自己先前的同意） */
   var rec = { req_id: rid, signer: auth.name, decision: dec, comment: cm, ts: now_() };
   var rowNo = mine ? mine._row : nextRow_(so);
   put_(so, rowNo, rec);
@@ -964,6 +1018,11 @@ function sign_(p, auth) {
     catch (e) { push = { ok: false, msg: errMsg_(e) }; status = e && e.code === 'dup' ? PUSH_OK : PUSH_FAIL; }
     putCols_(t, row._row, { status: status }, function (h) { return h === 'status'; });
   }
+  /* 2026-10-08 自動寄 Email：前一批全部同意 → 下一批；退回、核准 → 主廚 */
+  var agSet = {}; agreed.forEach(function (n) { agSet[n] = 1; });
+  if (dec === '同意' && status === st && turnOf_(names, agSet, bmap) > turnBefore) nqTurn_(row, names, agSet, str_(row.updated_at), (_nctx && _nctx.camp) || '', 'next');
+  if (status !== st) _nq.push({ kind: dec === '退回' ? 'reject' : 'done', rid: rid, cid: str_(row.campaign_id), dessert: dessertOf_(row), round: str_(row.updated_at),
+    by: auth.name, comment: dec === '退回' ? cm : '', status: status, push: push && push.ok === false ? push.msg : '' });
   return { id: rid, data: { status: status, decision: dec, signers: names, agreed: agreed, signoffs: live.map(function (r) { return plain_(so.H, r); }), push: push },
     msg: auth.name + ' ' + dec + '（' + agreed.length + '/' + names.length + ' 同意）' + (status !== st ? '→' + status : '') + (push ? '｜' + (push.ok === false ? push.msg : pushMsg_(push)) : '') };
 }
@@ -1012,6 +1071,7 @@ function submitSignCamp_(p, auth) {
     voided += voidSignoffs_(str_(row.req_id));
     putCols_(t, row._row, { status: '送簽中', signers: names.join('、'), updated_at: now, updated_by: auth.role },
       function (h) { return h === 'status' || h === 'signers' || h === 'updated_at' || h === 'updated_by'; });
+    nqTurn_(row, names, {}, now, cid, 'submit');   /* 2026-10-08：寄 Email 給第 1 批（同一個人只收一封，列出這次送的每一支） */
   });
   return { id: cid, data: { campaign_id: cid, req_ids: rows.map(function (r) { return str_(r.req_id); }), status: '送簽中', signers: names, updated_at: now, voided: voided,
       camp_key: signKey_('camp:' + cid), saved: saved },
@@ -1039,12 +1099,14 @@ function signCamp_(p, auth) {
   var cid = str_(p.campaign_id).trim(), list = (p.decisions || []).slice(0, 30), out = [];
   if (!list.length) throw fail_('沒有要簽的甜點');
   var t = load_('fact_recipe_req', true);
+  _nctx = { camp: cid };   /* 2026-10-08：整檔簽核 → 通知下一批時給整檔連結、同一個人只寄一封 */
   list.forEach(function (d) {
     var rid = str_(d && d.req_id).trim(), row = reqRow_(t, rid);
     if (!row || (cid && str_(row.campaign_id) !== cid)) { out.push({ req_id: rid, ok: false, code: 'notfound', msg: '不是這個檔期的單' }); return; }
     try { var r = sign_({ req_id: rid, decision: d.decision, comment: d.comment }, auth) || {}; out.push({ req_id: rid, ok: true, data: r.data, msg: r.msg }); }
     catch (e) { out.push({ req_id: rid, ok: false, code: (e && e.code) || '', msg: errMsg_(e), data: e && e.extra }); }
   });
+  _nctx = null;
   var okN = out.filter(function (x) { return x.ok; }).length;
   return { id: cid, data: { results: out }, msg: auth.name + ' 整檔簽核 ' + okN + '／' + out.length + ' 支' + (okN < out.length ? '｜沒成功：' + out.filter(function (x) { return !x.ok; }).map(function (x) { return x.req_id + ' ' + x.msg; }).join('；') : '') };
 }
@@ -1060,6 +1122,129 @@ function signInfo_(rid) {
   safeRows_('fact_signoff', ids).forEach(function (r) { if (isLive_(r.decision)) done[str_(r.signer).trim()] = 1; });
   return { req_id: rid, status: str_(row.status), signers: signersOf_(row), decided: Object.keys(done) };
 }
+
+/* ================= 自動寄 Email（2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」）=================
+   ‧ 簽核人：dim_signer.email（🔑 密碼管理填）。主廚送簽（單張／整檔）→ 寄給第 1 批；前一批全部同意 → 寄給下一批（只寄還沒同意的人）。
+     信裡附簽核連結（單張 #sign=R-…&k=、整檔 #sign=C-…&k=，再帶 &who=本人），點開就能看、簽
+   ‧ 主廚：dim_role「主廚」那一列的 email（可填多個，逗號分隔）。有一支被退回（附誰、原因）、或核准（附有沒有寫進採購系統）→ 寄給主廚
+   ‧ 送簽／簽核的寫入做完、放開鎖之後才寄（doPost 尾端 flushNotify_）：寄信 1 封約 0.5～1 秒，不佔住全系統的鎖；寄信失敗不影響簽核本身
+   ‧ 同一個人同一次只收一封（整檔簽核時列出這次輪到他的每一支）；每張單每位收件人記一列在 fact_notify（查誰收到了沒）
+   ‧ 不會重寄：同一次按鈕的重送沿用上次結果（回條 rq，不再執行）；再按一次同意、輪次沒變就不寄（sign_ 比較簽之前／之後輪到第幾批）
+   ‧ 沒填 Email 的人不寄，回覆裡列出來（畫面提醒主廚改用 104 通知）；Gmail 一般帳號一天最多寄 100 封
+   ‧ 需要 Gmail 寄信權限（appsscript.json script.send_mail）：第一次要經營者授權（編輯器執行 notifyAuthorize） */
+var NOTIFY_URL = 'https://diybc-training.onrender.com/static/dashboard-recipe.html';
+var NOTIFY_FROM = '自己做 食譜系統';
+var CHEF_ROLE = '主廚';
+var _nq = [], _nctx = null;   /* 這次請求要寄的通知；_nctx.camp＝整檔簽核中（給整檔連結） */
+var EMAIL_RE = /^[^@\s,，;；<>"']+@[^@\s,，;；<>"']+\.[A-Za-z]{2,}$/;
+/* 文字 → Email 陣列（逗號、分號、空白分隔，最多 3 個）；strict＝有打錯的就擋（管理者存檔時用），否則略過打錯的 */
+function emailList_(v, strict) {
+  var out = [], bad = [];
+  str_(v).split(/[,，、;；\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).forEach(function (x) {
+    if (EMAIL_RE.test(x)) { if (out.indexOf(x) < 0) out.push(x); } else bad.push(x);
+  });
+  if (strict && bad.length) throw fail_('Email 格式不對：' + bad.join('、'));
+  if (strict && out.length > 3) throw fail_('Email 最多填 3 個');
+  return out.slice(0, 3);
+}
+function dessertOf_(row) { return str_(row['商品正式名稱']).trim() || str_(row['商品暫定名稱']).trim() || str_(row.req_id); }
+/* 現在輪到第幾批＝還沒同意的人裡最小的批次；全部都同意＝0 */
+function turnOf_(names, agreed, bmap) {
+  var pend = names.filter(function (n) { return !agreed[n]; });
+  return pend.length ? Math.min.apply(null, pend.map(function (n) { return bmap[n] || 1; })) : 0;
+}
+/* 排一封「輪到你簽核」：寄給現在輪到的那一批裡還沒同意的人 */
+function nqTurn_(row, names, agreed, round, camp, why) {
+  var bmap = batchMap_(), b = turnOf_(names, agreed, bmap);
+  if (!b) return;
+  var people = names.filter(function (n) { return !agreed[n] && (bmap[n] || 1) === b; });
+  if (people.length) _nq.push({ kind: 'turn', why: why, rid: str_(row.req_id), cid: str_(row.campaign_id), dessert: dessertOf_(row), round: str_(round), batch: b, people: people, camp: camp || '' });
+}
+function h_(s) { return str_(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+/* 純文字信 → 簡單的 HTML（連結做成按鈕） */
+function mailHtml_(txt, link, btn) {
+  var body = h_(txt).replace(/\n/g, '<br>');
+  if (link) body = body.replace(h_(link), '<a href="' + h_(link) + '" style="display:inline-block;margin:6px 0;padding:10px 18px;background:#00796B;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">' + h_(btn || '打開') + '</a>');
+  return '<div style="font-family:-apple-system,BlinkMacSystemFont,\'PingFang TC\',\'Microsoft JhengHei\',sans-serif;font-size:15px;line-height:1.7;color:#222;max-width:560px">' + body + '</div>';
+}
+function signUrl_(id, isCamp, who) {
+  return NOTIFY_URL + '#sign=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(signKey_(isCamp ? 'camp:' + id : id)) + (who ? '&who=' + encodeURIComponent(who) : '');
+}
+function mailTurn_(g, camps) {
+  var cn = camps[g.cid] || '', ds = g.items.map(function (e) { return e.dessert; }), first = g.items.every(function (e) { return e.why === 'submit'; });
+  var link = g.camp ? signUrl_(g.camp, true, g.name) : signUrl_(g.rid, false, g.name);
+  var txt = g.name + ' 你好：\n\n' + (first ? '主廚送出' + (cn ? '「' + cn + '」' : '') + '的新品申請，請你簽核' : (cn ? '「' + cn + '」' : '') + '新品申請的前一批簽核人已經全部同意，現在輪到你簽核') + '（你是第 ' + g.batch + ' 批）：\n'
+    + ds.map(function (d) { return '・' + d; }).join('\n') + '\n\n點這裡看內容、簽核：\n' + link + '\n\n'
+    + '第一次簽核要先設定 4～8 位數字的 PIN（自己設，記住就好）。\n這封是系統自動寄出的通知，不用回信。\n' + NOTIFY_FROM;
+  return { subject: '【食譜系統】輪到你簽核：' + (cn ? cn + ' ' : '') + (ds.length > 1 ? ds.length + ' 支新品' : ds[0]), text: txt, html: mailHtml_(txt, link, '打開簽核頁') };
+}
+function mailChef_(g, camps) {
+  var rj = g.items.filter(function (e) { return e.kind === 'reject'; }), dn = g.items.filter(function (e) { return e.kind === 'done'; });
+  var cn = camps[(g.items[0] || {}).cid] || '', link = NOTIFY_URL + '#apply', lines = [];
+  rj.forEach(function (e) { lines.push('✕ 退回：' + e.dessert + '（' + e.by + '：' + (e.comment || '沒有寫原因') + '）'); });
+  dn.forEach(function (e) { lines.push('✓ 已核准：' + e.dessert + '（' + (e.status === PUSH_OK ? '已寫入採購系統' : '寫入採購系統失敗' + (e.push ? '：' + e.push : '') + '，請到新品申請表按「📦 寫入採購系統」重試') + '）'); });
+  var head = [rj.length ? rj.length + ' 支被退回' : '', dn.length ? dn.length + ' 支已核准' : ''].filter(Boolean).join('、');
+  var txt = '主廚你好：\n\n' + (cn ? '「' + cn + '」' : '') + '新品申請的簽核結果：\n' + lines.join('\n') + '\n\n'
+    + (rj.length ? '被退回的請到新品申請表「📂 從檔期載入」修改後重新送簽。\n' : '') + '新品申請表：\n' + link + '\n\n這封是系統自動寄出的通知，不用回信。\n' + NOTIFY_FROM;
+  return { subject: '【食譜系統】' + (cn ? cn + ' ' : '') + head + (dn.length === 1 && !rj.length ? '：' + dn[0].dessert : '') + (rj.length === 1 && !dn.length ? '：' + rj[0].dessert : ''), text: txt, html: mailHtml_(txt, link, '打開新品申請表') };
+}
+/* doPost 尾端呼叫：把 _nq 依收件人合併成一封封信寄出；回 { sent:[名字], noemail:[名字], fail:[說明] }（不含 Email 地址） */
+function flushNotify_() {
+  var q = _nq; _nq = [];
+  if (!q.length) return null;
+  var out = { sent: [], noemail: [], fail: [] }, logs = [];
+  try {
+    var em = {}, chef = [];
+    authRows_('dim_signer').forEach(function (r) { var n = str_(r.name).trim(); if (n && signerOn_(r.enabled)) em[n] = emailList_(r.email); });
+    authRows_('dim_role').forEach(function (r) { if (str_(r.role).trim() === CHEF_ROLE) chef = emailList_(r.email); });
+    var camps = {}; load_('fact_campaign').rows.forEach(function (c) { camps[str_(c.campaign_id)] = str_(c['檔期名稱']).trim(); });
+    var done = {};   /* 同一次請求裡同一件事只排一次 */
+    var groups = {}, order = [];
+    var add = function (gk, base, e, key) { if (!groups[gk]) { groups[gk] = base; base.items = []; base.keys = []; order.push(gk); } groups[gk].items.push(e); groups[gk].keys.push(key); };
+    q.forEach(function (e) {
+      if (e.kind === 'turn') e.people.forEach(function (n) {
+        var key = 'turn|' + e.rid + '|' + e.round + '|' + e.batch + '|' + n;
+        if (done[key]) return; done[key] = 1;
+        add('T|' + n + '|' + (e.camp ? 'C:' + e.camp : 'R:' + e.rid), { kind: 'turn', name: n, camp: e.camp, cid: e.cid, rid: e.rid, batch: e.batch }, e, key);
+      });
+      else {
+        var key2 = e.kind + '|' + e.rid + '|' + e.round + '|' + e.status;
+        if (done[key2]) return; done[key2] = 1;
+        add('CHEF', { kind: 'chef', name: CHEF_ROLE }, e, key2);
+      }
+    });
+    var quota = order.length ? MailApp.getRemainingDailyQuota() : 0;
+    order.forEach(function (gk) {
+      var g = groups[gk], to = g.kind === 'turn' ? (em[g.name] || []) : chef, ts = now_();
+      var rec = function (ok, msg) { g.items.forEach(function (e, i) { logs.push([ts, g.kind === 'turn' ? 'turn' : e.kind, g.keys[i], e.rid, g.name, to.join(', '), ok ? 'Y' : 'N', msg]); }); };
+      if (!to.length) { if (out.noemail.indexOf(g.name) < 0) out.noemail.push(g.name); rec(false, '沒有 Email'); return; }
+      if (quota < to.length) { out.fail.push(g.name + '：今天 Gmail 寄信額度用完了'); rec(false, '寄信額度用完'); return; }
+      try {
+        var m = g.kind === 'turn' ? mailTurn_(g, camps) : mailChef_(g, camps);
+        MailApp.sendEmail({ to: to.join(','), subject: m.subject, body: m.text, htmlBody: m.html, name: NOTIFY_FROM });
+        quota -= to.length;
+        if (out.sent.indexOf(g.name) < 0) out.sent.push(g.name); rec(true, m.subject);
+      } catch (e1) { out.fail.push(g.name + '：' + errMsg_(e1)); rec(false, errMsg_(e1)); }
+    });
+  } catch (e2) { out.fail.push('通知沒有寄出：' + errMsg_(e2)); }
+  notifyLog_(logs);
+  return out;
+}
+/* 寄送紀錄寫進 fact_notify（短暫拿鎖；拿不到就不記——不影響已寄出的信） */
+function notifyLog_(rows) {
+  if (!rows.length) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return;
+  try {
+    var sh = ss_().getSheetByName('fact_notify');
+    if (!sh) return;
+    var r = sh.getLastRow() + 1;
+    if (r + rows.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), Math.max(200, rows.length));
+    sh.getRange(r, 1, rows.length, 8).setNumberFormat('@').setValues(rows.map(function (x) { return x.map(function (v) { return safe_(str_(v).slice(0, 500)); }); }));
+  } catch (e) { } finally { lock.releaseLock(); }
+}
+/* 編輯器執行一次：讓 Google 跳出「用你的 Gmail 寄信」授權（只查今天還能寄幾封，不寄信） */
+function notifyAuthorize() { var n = MailApp.getRemainingDailyQuota(); Logger.log('Gmail 寄信權限 OK，今天還能寄 ' + n + ' 封'); return n; }
 
 /* ================= C 階段：核准 → 寫入採購系統 BOM 本（2026-09-29） =================
    全部同意（sign_）的同一次請求內寫三張表，寫 BOM 本（對照表隔天 07:05 由 mirrorTabs_ 鏡像到儀表板專用檔；BOM表 採購系統直接讀 BOM 本）
@@ -1607,8 +1792,14 @@ function load_(name, skipPayload) {
   var H = TABS[name], last = sh.getLastRow(), rows = [];
   if (last > 1) {
     var cols = H.map(function (h, j) { return (skipPayload && h.indexOf('payload_') === 0) ? -1 : j; });
-    var runs = runs_(cols.filter(function (j) { return j >= 0; }));
-    var parts = runs.map(function (rn) { return { a: rn[0], v: sh.getRange(2, rn[0] + 1, last - 1, rn[1] - rn[0] + 1).getValues() }; });
+    var rd = function (rn) { return { a: rn[0], v: sh.getRange(2, rn[0] + 1, last - 1, rn[1] - rn[0] + 1).getValues() }; };
+    var parts;
+    try { parts = runs_(cols.filter(function (j) { return j >= 0; })).map(rd); }
+    catch (eR) {   /* 2026-10-08：分頁比程式少了最後幾欄（新欄位的遷移還沒做完）→ 只讀現有的欄，缺的欄當空白（不讓整個系統讀不到身分表） */
+      var mc = sh.getMaxColumns();
+      if (mc >= H.length) throw eR;
+      parts = runs_(cols.filter(function (j) { return j >= 0 && j < mc; })).map(rd);
+    }
     for (var i = 0; i < last - 1; i++) {
       var o = { _row: i + 2 };
       parts.forEach(function (pt) { pt.v[i].forEach(function (val, k) { o[H[pt.a + k]] = val; }); });
