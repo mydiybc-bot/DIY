@@ -18,7 +18,9 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v13';   /* v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
+var VERSION = 'recipe-req-v14';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+   新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
+   v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
    v12.1＝v12.1＝2026-10-08 簽核連結錯誤訊息改「Email 或 104 公告裡的連結」。v12＝2026-10-08 經營者：「前一個人簽完、輪到我簽，我要怎麼知道？每天去看太煩」→ 輪到誰簽核就自動寄 Email 給誰（dim_signer.email）；
    有一支被退回、或核准 → 寄給主廚（dim_role「主廚」列的 email）；寄送紀錄 fact_notify；🔑 密碼管理可填 Email、寄測試信（adminSetRoleEmail／adminTestMail）。見下方「自動寄 Email」段
@@ -253,6 +255,8 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   submitSignCamp: submitSignCamp_, signOpenCamp: signOpenCamp_, signCamp: signCamp_,
   /* 2026-10-08 v13：重新載入申請表（全部申請單清單） */
   listReqs: listReqs_,
+  /* 2026-10-08 v14：申請表連結上，簽核的同仁改「新品研發工作申請單」 */
+  formPatch: formPatch_,
   /* 2026-10-08：🔑 密碼管理填主廚通知 Email、寄測試信 */
   adminSetRoleEmail: adminSetRoleEmail_, adminTestMail: adminTestMail_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
@@ -260,11 +264,11 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
   patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
-  adminSetRoleEmail: 1, adminTestMail: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
+  adminSetRoleEmail: 1, adminTestMail: 1, formPatch: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
-var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1 };   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
+var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1 };   /* formPatch＝整檔連結上改表頭（2026-10-08 v14） */   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
 /* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
-var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1 };
+var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1, formPatch: 1 };
 /* 寫完要讓身分表暫存失效的動作 */
 var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1, adminSetRoleEmail: 1 };
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
@@ -740,6 +744,31 @@ function listReqs_(p, auth) {
       updated_at: str_(r.updated_at), updated_by: str_(r.updated_by) };
   }).sort(function (a, b) { return a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0; });
   return { id: '', data: { reqs: list }, msg: list.length + ' 張' };
+}
+
+/* 2026-10-08 v14：申請表連結（整檔通行碼）上，簽核的同仁只能改「📋 新品研發工作申請單」這些表頭欄；檔期、用料、新品項等只有主廚能改 */
+var FORM_HEAD_RULES = 'P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther';
+function formPatch_(p, auth) {
+  if (!auth || auth.kind !== 'key' || !auth.camp) throw fail_('要用申請表連結', 'perm');
+  var who = str_(p.who).trim().slice(0, 20);
+  if (!who) throw fail_('請填你的名字（記錄是誰改的）');
+  var rid = str_(p.rid).trim();
+  var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
+  if (!row || str_(row.campaign_id) !== auth.camp) throw fail_('這張申請表不在這個連結的檔期裡', 'perm');
+  var ph = (p.patch && p.patch.head) || {};
+  var r = patchReq_({ req_id: rid, patch: { head: ph } }, { kind: 'role', role: '104簽核：' + who, name: who, rules: parseRules_(FORM_HEAD_RULES), fields: FORM_HEAD_RULES });
+  var d = r.data || {};
+  if (d.changed && d.changed.length && d.payload) {   /* 申請單表上的名稱、定價等欄跟著改（檔期清單、重新載入清單看得到新名稱） */
+    try {
+      var h = (JSON.parse(d.payload) || {}).head || {}, t2 = load_('fact_recipe_req', true), row2 = reqRow_(t2, rid);
+      var price = parseFloat(h.price), cost = parseFloat(h.cost);
+      var cols = { '商品暫定名稱': str_(h.name), '商品正式名稱': str_(h.fname), '定價': h.price === undefined ? '' : h.price, '規格': str_(h.spec), '葷素': str_(h.diet),
+        '保存方式': str_(h.keep), '製作時間': str_(h.time), '預估銷售數': h.qty === undefined ? '' : h.qty,
+        '利潤率': (price > 0 && !isNaN(cost)) ? Math.round((price - cost) / price * 1000) / 10 : '' };
+      if (row2) putCols_(t2, row2._row, cols, function (hh) { return cols.hasOwnProperty(hh); });
+    } catch (e) { }
+  }
+  return { id: rid, data: d, msg: who + ' 改表頭：' + r.msg };
 }
 
 function getReq_(p, auth) {
