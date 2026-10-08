@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📤 新食譜上傳</title>
+<!-- 2026-10-08 新頁：新食譜上傳自己做食譜系統（經營者：「建立一個新儀表板－新食譜上傳自己做食譜系統，讓我可以上傳新甜點的食譜，
+     完整上傳到自己做的食譜系統後台；狀態預設停用、台灣、中文、吳寶春自己做；類別不確定就讓使用者確認；有新食材、耗材、器具和模具，
+     先提示使用者確認要上傳的詳細資料，再一併建立；再加上圖片和影片的空白欄位（圖片不超過 300KB、影片不超過 5MB，超過就壓縮或退回）」）
+     後端＝食譜系統申請單 API（同 dashboard-recipe.html 的 REQ_API）新動作 nrPreview／nrIngCreate／nrImport／nrList（gas/recipe-req/nr_upload.gs），
+     後台連線、比對規則、紀錄分頁與新品申請表的「🍰 匯入自己做食譜系統」共用（rb_backend.gs／rb_import.gs、fact_recipe_import）。
+     讀食譜檔（.doc／.docx）的程式照抄 dashboard-recipe.html（readRecipeFile／rcUnzip／docxToHtml／parseSteps／rcClean），兩邊讀到的結果一樣。
+     閘門 DASH_ID=recipe（跟食譜系統同一組密碼）；每個動作再帶「主廚」或「管理者」身分密碼。 -->
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FBF8F5;color:#2A2320;font-size:14px;line-height:1.5}
+  /* 頁首（青綠系，與食譜系統同色帶） */
+  .mt-header{background:linear-gradient(100deg,#00796B,#4DB6AC);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:12.5px;opacity:.9}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-home:hover{background:rgba(255,255,255,.32)}
+  .mt-main{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#EFF7EF;border-color:#C9E3CA;color:#2F5D33}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#4A3A30;font-size:13px}
+  .dsb-sop.open{display:block}
+  .dsb-sop ol{margin:0;padding-left:20px}
+  .dsb-sop li{margin:3px 0}
+  @media(max-width:600px){.dsb-info{margin-left:0}}
+  /* 卡片 */
+  .ru-card{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:14px 16px;margin:0 0 14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .ru-card.off{opacity:.55;pointer-events:none}
+  .ru-h{font-size:16px;font-weight:800;color:#00695C;margin:0 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ru-h .n{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#00796B;color:#fff;font-size:13px}
+  .ru-muted{color:#7A6A60;font-size:13px}
+  .ru-ok{color:#2E7D32;font-weight:700}
+  .ru-bad{color:#C62828;font-weight:700}
+  .ru-warn{background:#FFF6E0;border:1px solid #F0D58A;color:#7A5A00;border-radius:8px;padding:7px 10px;margin:6px 0;font-size:13px}
+  .ru-err{background:#FDECEA;border:1px solid #F3B8B2;color:#9B2C22;border-radius:8px;padding:7px 10px;margin:6px 0;font-size:13px}
+  .ru-okbox{background:#EAF6EC;border:1px solid #BFE0C4;color:#25602C;border-radius:8px;padding:7px 10px;margin:6px 0;font-size:13px}
+  .ru-row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:6px 0}
+  .ru-grid{display:grid;grid-template-columns:130px 1fr;gap:8px 12px;align-items:start}
+  .ru-grid>label{font-weight:700;color:#4A3A30;padding-top:6px;font-size:13px}
+  @media(max-width:640px){.ru-grid{grid-template-columns:1fr}.ru-grid>label{padding-top:0}}
+  input[type=text],input[type=number],input[type=password],select,textarea{font-family:inherit;font-size:14px;padding:6px 8px;border:1px solid #D8C8BE;border-radius:7px;background:#fff;color:#2A2320;max-width:100%}
+  textarea{width:100%;min-height:96px;resize:vertical}
+  input[type=text].w100{width:100%}
+  input[type=number]{width:110px}
+  .ru-btn{display:inline-block;border:none;border-radius:8px;background:#00796B;color:#fff;font-family:inherit;font-size:14px;font-weight:700;padding:8px 16px;cursor:pointer;text-decoration:none}
+  .ru-btn:hover{background:#00695C}
+  .ru-btn:disabled{background:#B9C9C6;cursor:not-allowed}
+  .ru-btn.big{font-size:15px;padding:10px 20px}
+  .ru-btn2{display:inline-block;border:1px solid #B9A89E;border-radius:8px;background:#fff;color:#4A3A30;font-family:inherit;font-size:13px;font-weight:700;padding:6px 12px;cursor:pointer;text-decoration:none}
+  .ru-btn2:hover{background:#F5EEE9}
+  .ru-btn2:disabled{opacity:.5;cursor:not-allowed}
+  .ru-chip{display:inline-flex;align-items:center;gap:4px;background:#E0F2F1;color:#00574F;border:1px solid #9FD3CC;border-radius:14px;padding:2px 10px;font-size:13px;margin:2px 4px 2px 0}
+  .ru-chip button{border:none;background:none;color:#00574F;cursor:pointer;font-size:13px;padding:0 0 0 2px}
+  .ru-chip.sug{background:#FFF6E0;border-color:#F0D58A;color:#7A5A00;cursor:pointer}
+  .ru-tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .ru-tbl th{background:#F3EDE8;color:#4A3A30;text-align:left;padding:6px 8px;border-bottom:1px solid #E0D3CA;white-space:nowrap}
+  .ru-tbl td{padding:7px 8px;border-bottom:1px solid #EFE6E0;vertical-align:top}
+  .ru-tbl td.n{color:#7A6A60;white-space:nowrap}
+  .ru-tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .ru-miss{color:#C62828;font-size:12px}
+  .ru-note{color:#7A5A00;font-size:12px}
+  .ru-sub{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 10px;margin-top:6px}
+  .ru-sub label{display:block;font-size:12px;color:#7A6A60}
+  .ru-sub input,.ru-sub select{width:100%}
+  .ru-acts{display:flex;flex-wrap:wrap;gap:4px 12px;margin:2px 0}
+  .ru-acts label{font-size:13px;cursor:pointer;white-space:nowrap}
+  .ru-media .thumb{max-height:64px;max-width:120px;border-radius:6px;border:1px solid #E0D3CA;display:block;margin-top:4px}
+  .ru-media input[type=file]{font-size:12px;max-width:230px}
+  .ru-prog{height:12px;background:#EDE5DF;border-radius:6px;overflow:hidden;margin:8px 0 4px}
+  .ru-prog>div{height:100%;background:linear-gradient(90deg,#00796B,#4DB6AC);transition:width .4s}
+  .ru-list li{margin:4px 0}
+  .ru-blk li{margin:2px 0}
+  .ru-stores label{margin-right:14px;white-space:nowrap;cursor:pointer}
+  .ru-kv{display:grid;grid-template-columns:110px 1fr;gap:3px 10px;font-size:13px}
+  .ru-kv>div:nth-child(odd){color:#7A6A60}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = jsonp('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(jsonp(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify };
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'recipe';
+  var DASH_NAME = '食譜系統';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+<script>
+(function(){
+  document.addEventListener('toggle',function(e){var d=e.target;if(d&&d.id==='uhelp'&&document.body)document.body.classList.toggle('uhelp-on',!!d.open);},true);
+  /* 「最後更新」那一行（#dsbFresh 由各頁檔尾小程式產生；訂位頁是 #dsbTimes）搬到「📖 使用說明」那一列，收起時也看得到（1006 #7：每頁都要看得到最後更新） */
+  function pull(){var u=document.getElementById('uhelp');if(!u)return;var sm=u.querySelector('summary');if(!sm)return;
+    ['dsbFresh','dsbTimes'].forEach(function(id){var el=document.getElementById(id);if(el&&el.parentNode!==sm){el.style.display='inline';el.style.flexBasis='auto';el.style.marginLeft='10px';el.style.fontSize='12px';sm.appendChild(el);}});}
+  function boot(){var u=document.getElementById('uhelp');if(!u)return;pull();try{new MutationObserver(pull).observe(u,{childList:true,subtree:true});}catch(_){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();
+</script>
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>📤 新食譜上傳</h1>
+  <span class="mt-sub">把新甜點的食譜檔，完整建到「自己做食譜系統」（門市平板的食譜後台）</span>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 上傳後是「停用」</b>
+    <span>建在台灣／繁體中文；分店類別預設「吳寶春自己做」；負責食譜的夥伴到後台檢查調整、勾「啟用」後，客人的平板才看得到</span>
+    <span id="dsbFresh">🕒 後台最後讀取：還沒檢查</span>
+    <button class="dsb-info" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <b>這頁做什麼</b>：新甜點的食譜檔（公司格式的 .doc 或 .docx）一次建到門市食譜後台：基本資料、每一步的說明、食材工具、容器、圖片／影片。
+      <ol>
+        <li>① 選身分（主廚或管理者）輸入密碼</li>
+        <li>② 選食譜檔：系統讀出名稱、步驟、食材工具</li>
+        <li>③ 填基本資料：售價、成本、分店類別（預設吳寶春自己做）；按「🔍 檢查」後選類別——系統猜得到會先幫你選好（請確認），猜不到就一定要你選，或勾「先不選」</li>
+        <li>④ 後台沒有的品項（新食材、耗材、器具、模具）會列出來：每一項選「建新品項」（確認名稱、單位、取放區、售價、成本）、「改用後台既有的」或「這次不掛」；按「建立新品項」才會寫進後台食材管理</li>
+        <li>⑤ 每一步可以放一張圖片或一支影片：圖片超過 300KB 自動壓縮；影片超過 5MB 按「壓縮」（影片多長就要壓多久），壓不下來會退回請你先剪短</li>
+        <li>⑥ 全部沒問題，「📤 確認上傳」會亮：按下去約 1～5 分鐘（有影片會更久），中途不要關掉畫面；斷掉了可以在「📋 最近上傳」按「▶ 繼續」，已建的不會重複建</li>
+      </ol>
+      <div style="margin-top:6px">⚠ 這頁只會「新增」：不改、不刪後台任何既有的食譜和食材。上傳錯了請負責食譜的夥伴在後台刪除。</div>
+    </div>
+  </div>
+  </div></details>
+
+  <!-- ① 身分 -->
+  <div class="ru-card" id="cardWho"></div>
+  <!-- ② 食譜檔 -->
+  <div class="ru-card" id="cardFile"></div>
+  <!-- ③ 基本資料＋檢查 -->
+  <div class="ru-card" id="cardInfo"></div>
+  <!-- ④ 後台沒有的品項 -->
+  <div class="ru-card" id="cardMiss" style="display:none"></div>
+  <!-- ⑤ 步驟與圖片／影片 -->
+  <div class="ru-card" id="cardSteps"></div>
+  <!-- ⑥ 上傳 -->
+  <div class="ru-card" id="cardGo"></div>
+  <!-- 📋 最近上傳 -->
+  <div class="ru-card" id="cardList"></div>
+</div>
+<script>
+/* ===== 📤 新食譜上傳（2026-10-08）=====
+   後端：食譜系統申請單 API（gas/recipe-req/nr_upload.gs）nrPreview（只讀）／nrIngCreate（建後台新品項）／nrImport（分段建食譜＋步驟）／nrList（只讀）
+   每個請求都帶身分密碼（主廚或管理者；只記在這個分頁 sessionStorage rup:cred，關掉分頁要重登）。
+   圖片：超過 300KB（或不是 JPG／PNG／GIF）→ 瀏覽器內縮成 JPG（長邊 1600→480、品質 0.86→0.5，直到 ≤300,000 bytes），壓不下來退回。
+   影片：MP4 且 ≤5MB 直接用；超過或不是 MP4 → 按「壓縮」用瀏覽器內建錄影（MediaRecorder）重錄成 MP4（影片多長就要錄多久），錄完仍超過或瀏覽器不支援 → 退回。
+   上傳時伺服器跑到「這一步要放使用者的檔」就停下回 need，這個畫面再把那一步的檔案（base64）送上去；檔案不經過任何暫存。 */
+var REQ_API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+var CRED_KEY='rup:cred';
+var IMG_MAX=300000, VID_MAX=5*1024*1024, VID_TARGET=4.6e6;
+var STORES=['吳寶春自己做','自己做','自己做海外備用','體驗中心專用'];
+var SOFT={net:1,bad:1,busy:1,timeout:1,rbnet:1,rbunknown:1};
+var S={cred:null,rc:null,file:'',fileErr:'',info:null,pv:null,pvAt:'',busy:'',msg:{},dec:{},catSug:[],media:[],job:null,list:null,listMsg:'',ingRes:null};
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function wait(ms){return new Promise(function(res){setTimeout(res,ms)})}
+function rqToken(){return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)}
+function kn(s){return String(s==null?'':s).replace(/[\u00a0\s]+/g,' ').trim().replace(/（/g,'(').replace(/）/g,')').replace(/\s+/g,'')}   /* 同伺服器 rbNorm_＋去空白：比對用 */
+function ikey(name,unit){return kn(name)+'|'+kn(unit)}
+function fmtSize(n){return n>=1048576?(Math.round(n/104857.6)/10)+'MB':Math.max(1,Math.round(n/1024))+'KB'}
+function hhmm(){var d=new Date();return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)}
+
+/* ---- 讀食譜檔：以下照抄 dashboard-recipe.html（2026-10-07 版：.doc／.html／.docx；改那邊要一起改這裡） ---- */
+var DOCX_TIP='改用食譜後台「匯出」下載的原始 .doc';
+var RC_ZONES=['洞洞牆區','洞洞牆下方或蛋櫃區','冰箱區','模具區','烘烤區','飲料區','請向店員拿取'];
+function rcUnzip(buf,want){var u8=new Uint8Array(buf),dv=new DataView(buf),n=u8.length,eo=-1,out={},jobs=[],td=new TextDecoder('utf-8');
+  for(var i=n-22;i>=Math.max(0,n-65557);i--){if(dv.getUint32(i,true)===0x06054b50){eo=i;break}}
+  if(eo<0)return Promise.reject(new Error('zip'));
+  var cnt=dv.getUint16(eo+10,true),off=dv.getUint32(eo+16,true);
+  for(var k=0;k<cnt&&off+46<=n;k++){
+    if(dv.getUint32(off,true)!==0x02014b50)break;
+    var meth=dv.getUint16(off+10,true),csz=dv.getUint32(off+20,true),nl=dv.getUint16(off+28,true),xl=dv.getUint16(off+30,true),cl=dv.getUint16(off+32,true),lo=dv.getUint32(off+42,true);
+    var name=td.decode(u8.subarray(off+46,off+46+nl));
+    if(want.indexOf(name)>=0&&lo+30<=n&&dv.getUint32(lo,true)===0x04034b50){
+      var st=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
+      jobs.push((function(name,meth,data){
+        if(meth===0){out[name]=td.decode(data);return Promise.resolve()}
+        if(meth!==8||typeof DecompressionStream==='undefined')return Promise.reject(new Error(meth!==8?'zipmethod':'nodecomp'));
+        return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer().then(function(ab){out[name]=td.decode(new Uint8Array(ab))})})(name,meth,u8.subarray(st,st+csz)))}
+    off+=46+nl+xl+cl}
+  return Promise.all(jobs).then(function(){return out})}
+function docxToHtml(xml,rels){
+  var W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',RN='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  var d=new DOMParser().parseFromString(String(xml||''),'application/xml'),link={};
+  if(d.getElementsByTagName('parsererror').length)return '';
+  try{Array.prototype.forEach.call(new DOMParser().parseFromString(rels||'<Relationships/>','application/xml').getElementsByTagName('Relationship'),function(r){link[r.getAttribute('Id')]=r.getAttribute('Target')||''})}catch(e){}
+  function kid(el,ln){if(!el)return null;for(var c=el.firstChild;c;c=c.nextSibling)if(c.nodeType===1&&c.localName===ln)return c;return null}
+  function av(el,a){return el?(el.getAttributeNS(W,a||'val')||el.getAttribute('w:'+(a||'val'))||''):''}
+  function on(el){return !!el&&!/^(0|false|none)$/i.test(av(el)||'1')}
+  function yel(pr){var s=kid(pr,'shd');return /^yellow$/i.test(av(kid(pr,'highlight')))||(!!s&&/^FFFF00$/i.test(av(s,'fill')))}
+  function runHtml(r){var pr=kid(r,'rPr'),h='';
+    for(var c=r.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;var ln=c.localName;
+      if(ln==='t')h+=esc(c.textContent);else if(ln==='br'||ln==='cr')h+='<br>';else if(ln==='tab')h+='&nbsp;&nbsp;';
+      else if(ln==='drawing'||ln==='pict'||ln==='object'){var bl=c.getElementsByTagNameNS('*','blip')[0],im=c.getElementsByTagNameNS('*','imagedata')[0];
+        var id=bl?(bl.getAttributeNS(RN,'link')||bl.getAttributeNS(RN,'embed')):(im?im.getAttributeNS(RN,'id'):''),src=link[id]||'';
+        if(/^https?:\/\//i.test(src))h+='<img src="'+esc(src)+'" style="max-width: 100%;">'}}
+    if(!h||!pr)return h;
+    var sz=+av(kid(pr,'sz'))||0,col=av(kid(pr,'color'));
+    if(sz)h='<span style="font-size: '+Math.round(sz*2/3)+'px;">'+h+'</span>';   /* sz＝半點；px＝sz÷2×4/3 */
+    if(/^[0-9A-F]{6}$/i.test(col)&&col.toUpperCase()!=='000000')h='<font color="#'+col.toLowerCase()+'">'+h+'</font>';
+    if(on(kid(pr,'u')))h='<u>'+h+'</u>';
+    if(on(kid(pr,'b')))h='<b>'+h+'</b>';
+    return h}
+  var name='',info={},steps=[],cur=null,mode='',zone='';
+  Array.prototype.forEach.call(d.getElementsByTagNameNS(W,'p'),function(p){
+    var ppr=kid(p,'pPr'),html='',txt='',ry=false,center=av(kid(ppr,'jc'))==='center';
+    Array.prototype.forEach.call(p.getElementsByTagNameNS(W,'r'),function(r){html+=runHtml(r);if(yel(kid(r,'rPr')))ry=true;
+      for(var c=r.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;if(c.localName==='t')txt+=c.textContent;else if(c.localName==='br'||c.localName==='cr')txt+='\n';else if(c.localName==='tab')txt+=' '}});
+    var t=txt.replace(/\s+/g,' ').trim();
+    if(/^步驟標題[：:]/.test(t)||((yel(ppr)||(ry&&t.length<=40))&&t&&!/^(步驟內容|食材工具)[：:]?$/.test(t))){cur={t:t.replace(/^步驟標題[：:]\s*/,''),h:[],ing:[]};steps.push(cur);mode='';return}
+    if(!cur){var m=t.match(/^(製作時間|尺寸|產品特色|保存方式)[：:]/);
+      if(m){var v=txt.replace(/^[\s\S]*?[：:]\s*/,'');if(m[1]==='產品特色'||m[1]==='保存方式')v=v.replace(/[ \t]+(?=[●🎁［（])/g,'\n');info[m[1]]=v.trim();return}
+      if(!name&&t)name=t;return}
+    if(/^步驟內容[：:]?$/.test(t)){mode='content';return}
+    if(/^食材工具[：:]?$/.test(t)){mode='ing';zone='';return}
+    if(mode==='ing'){if(!t)return;if(RC_ZONES.indexOf(t)>=0){zone=t;return}
+      var mm=t.match(/^(.*?)\s*(彩色塑膠碗|白色瓷碗)$/);
+      cur.ing.push({t:mm?mm[1]:t,z:zone,c:mm?(mm[2]==='彩色塑膠碗'?'container1':'container2'):'',l:mm?mm[2]:''});return}
+    if(mode==='content'&&html)cur.h.push(center?'<div style="text-align: center;">'+html+'</div>':'<p>'+html+'</p>')});
+  if(!steps.length)return '';
+  var H='<html><head><meta charset="utf-8"><title>Export HTML To Doc</title></head><body><div class="container" id="exportContent"><h3 style="text-align:center" id="name">'+esc(name)+'</h3>';
+  ['製作時間','尺寸','產品特色','保存方式'].forEach(function(k){H+='<div><span style="font-weight:bold">'+k+'：</span>'+esc(info[k]||'')+'</div>'});
+  steps.forEach(function(s){
+    H+='<div style="background:yellow;font-size:24px;"><span style="font-weight:bold">步驟標題：</span>'+esc(s.t)+'</div><div><span style="font-weight:bold">步驟內容：</span></div><div>'+s.h.join('')+'</div>';
+    if(s.ing.length)H+='<div><span style="font-weight:bold">食材工具：</span></div><div class="ingred-wrapper">'
+      +s.ing.map(function(g){return '<div class="ingred" data-container="'+g.c+'" data-cate="'+esc(g.z)+'">'+esc(g.t)+(g.l?'<span> '+esc(g.l)+'</span>':'')+'</div>'}).join('')+'</div>';
+    H+='<br>'});
+  return H+'</div></body></html>'}
+/* 讀一個食譜檔 → {html}（.doc／.html／.docx 都還原成匯出 .doc 的 HTML）或 {err:'看不懂的原因'} */
+function readRecipeFile(f){
+  return new Promise(function(res){var rd=new FileReader();rd.onload=function(){res(rd.result)};rd.onerror=function(){res(null)};rd.readAsArrayBuffer(f)}).then(function(buf){
+    if(!buf)return {err:'讀不到這個檔案'};
+    var u8=new Uint8Array(buf);
+    if(u8[0]===0xD0&&u8[1]===0xCF&&u8[2]===0x11&&u8[3]===0xE0)return {err:'是 Word 97～2003 舊格式，讀不到：請在 Word 改存成 .docx，或'+DOCX_TIP};
+    if(!(u8[0]===0x50&&u8[1]===0x4B))return {html:new TextDecoder('utf-8').decode(u8)};
+    if(typeof DecompressionStream==='undefined')return {err:'是 .docx，但這台電腦的瀏覽器太舊打不開：請更新瀏覽器，或'+DOCX_TIP};
+    return rcUnzip(buf,['word/document.xml','word/_rels/document.xml.rels']).then(function(z){
+      if(!z['word/document.xml'])return {err:'不是 Word 的 .docx：請'+DOCX_TIP};
+      var h=docxToHtml(z['word/document.xml'],z['word/_rels/document.xml.rels']);
+      return h?{html:h,docx:true}:{err:'是 .docx，但看不到公司食譜格式的步驟（黃底「步驟標題：」）'}},
+      function(){return {err:'是壓縮檔但打不開：請'+DOCX_TIP}})})}
+var RC_ING_RE=/^(.+?)\s+([0-9]+(?:\.[0-9]+)?)\s*([^\s()（）0-9][^\s()（）]*)(?:\s*[（(]\s*([^）)]*?)\s*[）)])?\s*$/;
+function rcOk(r){return !!(r&&typeof r==='object'&&Array.isArray(r.steps)&&r.steps.length&&r.steps.every(function(s){return s&&typeof s.t==='string'&&typeof s.h==='string'&&Array.isArray(s.ing)}))}
+/* 步驟內容安全處理（在不會執行的文件裡做）：拿掉可執行標籤、on* 屬性、javascript: 連結；紅字、置中、字級等樣式保留 */
+function rcClean(h){var d;try{d=new DOMParser().parseFromString('<div id="rcx">'+String(h||'')+'</div>','text/html')}catch(e){return ''}
+  var w=d.getElementById('rcx');if(!w)return '';
+  w.querySelectorAll('script,style,iframe,object,embed,form,input,button,textarea,select,link,meta,base,template').forEach(function(x){x.parentNode.removeChild(x)});
+  w.querySelectorAll('*').forEach(function(x){Array.prototype.slice.call(x.attributes).forEach(function(a){
+    if(/^on/i.test(a.name)||((a.name==='href'||a.name==='src')&&/^\s*(javascript|vbscript):/i.test(a.value))||(a.name==='href'&&/^\s*data:/i.test(a.value)))x.removeAttribute(a.name)})});
+  return w.innerHTML.trim()}
+/* 解析食譜檔的步驟：<h3 id="name">、「製作時間／尺寸／產品特色／保存方式」、黃底 div＝步驟標題、「步驟內容：」＋內容、「食材工具：」＋.ingred（data-cate 分區、data-container 容器） */
+function parseSteps(html,fname){var doc;try{doc=new DOMParser().parseFromString(String(html||''),'text/html')}catch(e){return null}
+  var ys=Array.prototype.filter.call(doc.querySelectorAll('div[style]'),function(el){return /background\s*:\s*yellow/i.test(el.getAttribute('style')||'')});
+  if(!ys.length)return null;
+  var root=ys[0].parentNode,nm=doc.getElementById('name');
+  var name=nm?nm.textContent.replace(/\s+/g,' ').trim():'';
+  var info={time:'',size:'',desc:'',preserve:''},KEYS={'製作時間':'time','尺寸':'size','產品特色':'desc','保存方式':'preserve'};
+  var steps=[],cur=null,mode='',first=true;
+  Array.prototype.forEach.call(root.children,function(el){
+    if(/background\s*:\s*yellow/i.test(el.getAttribute('style')||'')){cur={t:el.textContent.replace(/\s+/g,' ').replace(/^步驟標題[：:]\s*/,'').trim(),h:'',ing:[]};steps.push(cur);mode='';first=true;return}
+    var tx=el.textContent.replace(/ /g,' ').trim();
+    if(!cur){var b=el.querySelector('span');var lab=b?b.textContent.replace(/[：:]\s*$/,'').trim():'';
+      if(KEYS[lab]){var c=el.cloneNode(true),sp=c.querySelector('span');if(sp)sp.parentNode.removeChild(sp);info[KEYS[lab]]=c.textContent.replace(/^\s+|\s+$/g,'')}
+      return}
+    if(el.tagName==='BR')return;
+    if(/^步驟內容[：:]?$/.test(tx)&&el.querySelectorAll('img,video').length===0&&el.children.length<=1){mode='content';return}
+    if(/^食材工具[：:]?$/.test(tx)&&el.children.length<=1){mode='ing';return}
+    if(el.classList.contains('ingred-wrapper')||el.querySelector('.ingred')){
+      el.querySelectorAll('.ingred').forEach(function(g){var c=g.cloneNode(true);c.querySelectorAll('span').forEach(function(x){x.parentNode.removeChild(x)});
+        var t=c.textContent.replace(/ /g,' ').replace(/\s+/g,' ').trim(),m=t.match(RC_ING_RE);if(!m)return;
+        var ct=g.getAttribute('data-container')||'';
+        cur.ing.push([m[1].trim(),parseFloat(m[2]),m[3],g.getAttribute('data-cate')||'',(ct==='container1'||ct==='container2')?ct:'',(m[4]||'').trim()])});
+      mode='';return}
+    if(mode==='content'){cur.h+=first?el.innerHTML:el.outerHTML;first=false}});
+  steps=steps.filter(function(s){return s.t});
+  if(!steps.length)return null;
+  steps.forEach(function(s){s.h=rcClean(s.h)});
+  return {name:name,file:String(fname||''),info:info,steps:steps}}
+
+
+/* ---------- 連線 ---------- */
+function postOnce(body,ms){ms=ms||90000;var ctl=window.AbortController?new AbortController():null,to=ctl?setTimeout(function(){ctl.abort()},ms):null;
+  return fetch(REQ_API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:ctl?ctl.signal:undefined})
+    .then(function(r){return r.text()})
+    .then(function(t){var j;try{j=JSON.parse(t)}catch(e){return {ok:false,code:'bad',msg:'系統回應看不懂（Google 連線不穩或系統更新中）'}}
+        if(!j||typeof j!=='object'||(j.act&&j.act!==body.action)||(!j.act&&j.ok))return {ok:false,code:'bad',msg:'系統回應不完整（Google 連線不穩）'};
+        return j},
+      function(e){var ab=e&&e.name==='AbortError';return {ok:false,code:ab?'timeout':'net',msg:ab?'系統 '+Math.round(ms/1000)+' 秒沒有回應':'連不上系統（網路中斷或系統更新中）'}})
+    .then(function(r){if(to)clearTimeout(to);return r})}
+/* 只讀動作：連線類失敗自動重試 2 次 */
+function postRead(body,ms,onRetry){var n=0;
+  function go(){n++;return postOnce(body,ms).then(function(r){if(!r.ok&&{net:1,bad:1,timeout:1}[r.code]&&n<3){if(onRetry)onRetry(n+1);return wait(1500*n).then(go)}return r})}
+  return go()}
+/* 驗密碼（只讀）：Google 偶爾把單一請求卡很久 → 6 秒沒回補送一份，先回的算 */
+function postHedge(body){return new Promise(function(res){var done=false,live=0,fired=0,last=null;
+  function fire(){fired++;live++;postOnce(body,45000).then(function(r){live--;if(done)return;
+    if(r.ok||!{net:1,bad:1,timeout:1}[r.code]){done=true;res(r);return}
+    last=r;if(!live){if(fired<2)fire();else{done=true;res(last)}}})}
+  fire();setTimeout(function(){if(!done&&fired<2)fire()},6000)})}
+function cred(){return {role:S.cred.role,password:S.cred.pw}}
+function getCred(){try{var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
+function setCred(o){try{if(o)sessionStorage.setItem(CRED_KEY,JSON.stringify(o));else sessionStorage.removeItem(CRED_KEY)}catch(e){}}
+function authFail(r){if(r&&(r.code==='auth'||r.code==='perm')){S.cred=null;setCred(null);renderWho();renderGo();return true}return false}
+function hint(code){return {rbnocred:'請管理者到食譜系統「新品申請表 → 🔑 密碼管理」設定「自己做食譜系統登入帳號」。',rbbad:'後台帳號或密碼不對（或帳號被鎖）：請管理者到食譜系統「🔑 密碼管理」重新設定。',
+  rbpage:'後台頁面可能改版了，系統先不送出任何東西；請通知 Claude。',mismatch:'請負責食譜的夥伴先到後台看這支食譜。',auth:'密碼不對或已更換：請在 ① 重新登入。',perm:'這個身分不能上傳食譜：要「主廚」或「管理者」。'}[code]||''}
+
+/* ---------- ① 身分 ---------- */
+function renderWho(){var c=$('cardWho'),h='<div class="ru-h"><span class="n">1</span>身分</div>';
+  if(S.cred)h+='<div class="ru-row"><span class="ru-ok">✓ 已登入：'+esc(S.cred.role)+'</span><button class="ru-btn2" id="wOut" type="button">登出</button><span class="ru-muted">（只記在這個分頁，關掉分頁要重新輸入）</span></div>';
+  else h+='<div class="ru-row"><select id="wRole"><option>主廚</option><option>管理者</option></select>'
+    +'<input type="password" id="wPw" placeholder="身分密碼" autocomplete="new-password" data-lpignore="true" data-1p-ignore style="width:180px">'
+    +'<button class="ru-btn" id="wGo" type="button"'+(S.busy==='who'?' disabled':'')+'>'+(S.busy==='who'?'驗證中…':'登入')+'</button></div>'
+    +'<div class="ru-muted">跟食譜系統「新品申請表」同一組身分密碼（主廚或管理者）。</div>';
+  if(S.msg.who)h+=S.msg.who;
+  c.innerHTML=h;
+  if($('wOut'))$('wOut').onclick=function(){S.cred=null;setCred(null);S.list=null;S.msg.who='';renderAll()};
+  if($('wGo')){var go=function(){var role=$('wRole').value,pw=$('wPw').value.trim();if(!pw||S.busy)return;
+      S.busy='who';S.msg.who='';renderWho();
+      postHedge({action:'whoami',role:role,password:pw}).then(function(r){S.busy='';
+        if(!r.ok){S.msg.who='<div class="ru-err">✕ '+esc(r.msg||'登入失敗')+'</div>';renderWho();return}
+        var d=r.data||{};
+        if(d.role!=='管理者'&&!/(^|[,，、;；\s])P:\*/.test(String(d.fields||''))){S.msg.who='<div class="ru-err">✕ 「'+esc(role)+'」不能上傳食譜：要「主廚」或「管理者」</div>';renderWho();return}
+        S.cred={role:role,pw:pw};setCred(S.cred);S.msg.who='';renderAll();loadList()})};
+    $('wGo').onclick=go;$('wPw').onkeydown=function(e){if(e.key==='Enter')go()}}}
+
+/* ---------- ② 食譜檔 ---------- */
+function renderFile(){var c=$('cardFile'),rc=S.rc,h='<div class="ru-h"><span class="n">2</span>食譜檔</div>';
+  h+='<div class="ru-row"><input type="file" id="fFile" accept=".doc,.docx,.html,.htm"'+(S.job&&S.job.busy?' disabled':'')+'><span class="ru-muted">公司格式的食譜：後台「匯出」的 .doc、Claude 產出的 .doc，或 Word 存的 .docx</span></div>';
+  if(S.fileErr)h+='<div class="ru-err">✕ '+esc(S.fileErr)+'</div>';
+  if(rc){var nIng=0;rc.steps.forEach(function(s){nIng+=s.ing.length});
+    h+='<div class="ru-okbox">✓ 《'+esc(S.file)+'》'+(rc.name?'：<b>'+esc(rc.name)+'</b>':'')+'｜'+rc.steps.length+' 個步驟｜食材工具 '+nIng+' 項</div>'}
+  c.innerHTML=h;
+  $('fFile').onchange=function(){var f=this.files&&this.files[0];if(!f)return;
+    if(S.media.some(function(m){return m&&m.kind==='up'})&&!confirm('換食譜檔會清掉已選的圖片／影片，確定要換？'))return;
+    S.fileErr='';
+    readRecipeFile(f).then(function(res){
+      if(res.err){S.fileErr='「'+f.name+'」'+res.err;renderFile();return}
+      var r=parseSteps(res.html||'',f.name);
+      if(!r){S.fileErr='「'+f.name+'」看不到步驟（黃底的「步驟標題」），不是公司格式的食譜檔？';renderFile();return}
+      var sz=JSON.stringify(r).length;
+      if(sz>170000){S.fileErr='「'+f.name+'」的步驟內容太大（'+sz+' 字，上限 170,000 字），請精簡步驟說明或拿掉內嵌圖片';renderFile();return}
+      S.media.forEach(dropMedia);
+      S.rc=r;S.file=f.name;S.pv=null;S.dec={};S.catSug=[];S.ingRes=null;S.job=null;S.msg={who:S.msg.who};
+      S.media=r.steps.map(function(){return {kind:'none'}});
+      var tm=(String(r.info.time||'').match(/(\d+(?:\.\d+)?)/)||[])[1]||'';
+      S.info={title:(r.name||f.name.replace(/\.(docx?|html?)$/i,'')).slice(0,100),price:'',cost:'',prepHr:tm,size:r.info.size||'',desc:r.info.desc||'',preserve:r.info.preserve||'',
+        stores:['吳寶春自己做'],cats:[],catNone:false,catAuto:''};
+      renderAll()})}}
+
+/* ---------- ③ 基本資料＋檢查 ---------- */
+function catName(id){var c=((S.pv&&S.pv.categories)||[]).filter(function(x){return x.id===id})[0];return c?c.name:id}
+function catHTML(){var I=S.info,pv=S.pv;
+  if(!pv)return '<div class="ru-muted">按下面「🔍 檢查」讀到後台的類別清單後才能選。</div>';
+  var h='<div>'+I.cats.map(function(id){return '<span class="ru-chip">'+esc(catName(id))+'<button type="button" data-catdel="'+esc(id)+'" title="拿掉">✕</button></span>'}).join('')
+    +(I.catAuto&&I.cats.indexOf(I.catAuto)>=0?'<span class="ru-note">↑ 系統依名稱建議的，請確認對不對</span>':'')+'</div>';
+  h+='<div class="ru-row"><select id="fCat"><option value="">選類別…</option>'+pv.categories.filter(function(c){return I.cats.indexOf(c.id)<0}).map(function(c){return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>'}).join('')+'</select>'
+    +'<button class="ru-btn2" id="fCatAdd" type="button">＋ 加入</button>'
+    +'<label class="ru-muted"><input type="checkbox" id="fCatNone"'+(I.catNone?' checked':'')+'> 先不選，由負責食譜的夥伴選</label></div>';
+  var sug=S.catSug.filter(function(id){return I.cats.indexOf(id)<0});
+  if(sug.length)h+='<div class="ru-muted">可能是：'+sug.map(function(id){return '<span class="ru-chip sug" data-catadd="'+esc(id)+'">＋ '+esc(catName(id))+'</span>'}).join('')+'（點一下加入）</div>';
+  if(!I.cats.length&&!I.catNone)h+='<div class="ru-note">⚠ 類別還沒選：選一個（可以多選），或勾「先不選」</div>';
+  return h}
+function renderInfo(){var c=$('cardInfo'),I=S.info,pv=S.pv;
+  c.classList.toggle('off',!S.rc);
+  var h='<div class="ru-h"><span class="n">3</span>基本資料</div>';
+  if(!I){c.innerHTML=h+'<div class="ru-muted">先在 ② 選食譜檔。</div>';return}
+  var dis=(S.job&&S.job.busy)?' disabled':'';
+  h+='<div class="ru-grid">'
+    +'<label>食譜名稱</label><div><input type="text" class="w100" id="fTitle" maxlength="100" value="'+esc(I.title)+'"'+dis+'></div>'
+    +'<label>地區／語言</label><div>台灣／繁體中文 <span class="ru-muted">（固定）</span></div>'
+    +'<label>狀態</label><div>停用、不公開 <span class="ru-muted">（固定；負責食譜的夥伴檢查後在後台勾「啟用」）</span></div>'
+    +'<label>分店類別</label><div class="ru-stores">'+STORES.map(function(s){return '<label><input type="checkbox" data-store="'+esc(s)+'"'+(I.stores.indexOf(s)>=0?' checked':'')+dis+'> '+esc(s)+'</label>'}).join('')+'</div>'
+    +'<label>售價／成本</label><div class="ru-row" style="margin:0">售價 <input type="number" id="fPrice" min="0" step="1" value="'+esc(I.price)+'"'+dis+'> 元 <span class="ru-muted">（必填）</span>　成本 <input type="number" id="fCost" min="0" step="0.01" value="'+esc(I.cost)+'"'+dis+'> 元</div>'
+    +'<label>製作時間／尺寸</label><div class="ru-row" style="margin:0"><input type="number" id="fHr" min="0" step="0.5" value="'+esc(I.prepHr)+'"'+dis+'> 小時　尺寸 <input type="text" id="fSize" maxlength="100" value="'+esc(I.size)+'" style="width:220px"'+dis+'></div>'
+    +'<label>產品特色</label><div><textarea id="fDesc" maxlength="3000"'+dis+'>'+esc(I.desc)+'</textarea></div>'
+    +'<label>保存方式</label><div><textarea id="fPres" maxlength="2000"'+dis+'>'+esc(I.preserve)+'</textarea></div>'
+    +'<label>類別</label><div id="fCatBox">'+catHTML()+'</div>'
+    +'</div>';
+  h+='<div class="ru-row" style="margin-top:10px"><button class="ru-btn" id="fCheck" type="button"'+((!S.cred||S.busy||(S.job&&S.job.busy))?' disabled':'')+'>'+(S.busy==='check'?'檢查中…（約 15～60 秒）':(pv?'🔍 重新檢查':'🔍 檢查（登入後台比對，不會寫入）'))+'</button>'
+    +(!S.cred?'<span class="ru-muted">先在 ① 登入</span>':'')+'</div>';
+  if(S.msg.check)h+=S.msg.check;
+  if(pv){(pv.warn||[]).forEach(function(w){h+='<div class="ru-warn">⚠ '+esc(w)+'</div>'});
+    if((pv.dup||[]).length)h+='<div class="ru-warn">⚠ 後台已經有同名的食譜：'+pv.dup.map(function(x){return esc(x.title)+'（'+esc(x.lang||'')+(x.status?'，'+esc(x.status):'')+'）'}).join('、')+'。照樣上傳會多一支；確定是新的再上傳。</div>'}
+  c.innerHTML=h;
+  var bind=function(id,k){var e=$(id);if(e)e.oninput=function(){I[k]=e.value;renderGo()}};
+  bind('fTitle','title');bind('fPrice','price');bind('fCost','cost');bind('fHr','prepHr');bind('fSize','size');bind('fDesc','desc');bind('fPres','preserve');
+  c.querySelectorAll('[data-store]').forEach(function(e){e.onchange=function(){var s=e.getAttribute('data-store');I.stores=I.stores.filter(function(x){return x!==s});if(e.checked)I.stores.push(s);renderGo()}});
+  bindCat();
+  $('fCheck').onclick=doCheck}
+function bindCat(){var I=S.info,box=$('fCatBox');if(!box)return;
+  var re=function(){box.innerHTML=catHTML();bindCat();renderGo()};
+  box.querySelectorAll('[data-catdel]').forEach(function(b){b.onclick=function(){var id=b.getAttribute('data-catdel');I.cats=I.cats.filter(function(x){return x!==id});re()}});
+  box.querySelectorAll('[data-catadd]').forEach(function(b){b.onclick=function(){var id=b.getAttribute('data-catadd');if(I.cats.indexOf(id)<0&&I.cats.length<5)I.cats.push(id);I.catNone=false;re()}});
+  if($('fCatAdd'))$('fCatAdd').onclick=function(){var v=$('fCat').value;if(!v)return;if(I.cats.length>=5){alert('類別最多選 5 個');return}I.cats.push(v);I.catNone=false;re()};
+  if($('fCatNone'))$('fCatNone').onchange=function(){I.catNone=this.checked;if(I.catNone)I.cats=[];re()}}
+/* 類別建議：依名稱關鍵字，只建議後台真的有的類別；剛好一個 → 先幫忙選好（標示「請確認」）；多個或沒有 → 一定要使用者選 */
+var CAT_RULES=[[/麵包|吐司|貝果|可頌|佛卡夏|餐包|手撕包|歐包|肉桂捲|司康/,['麵包']],[/塔|派|tart|pie/i,['塔派']],
+  [/餅乾|曲奇|馬卡龍|瓦片|酥餅|雪球|脆餅|費南雪|瑪德蓮|達克瓦茲/,['點心&餅乾','餅乾&馬卡龍']],
+  [/蛋糕|戚風|海綿|蛋糕捲|千層|布朗尼|磅蛋糕|生乳捲|捲$/,['蛋糕']],[/乳酪|起司|奶蓋/,['乳酪&奶蓋']],[/冰淇淋|雪糕|冰棒/,['冰淇淋專用']],[/翻糖/,['翻糖&麵包']],[/手捏/,['手捏包']]];
+function suggestCats(){var pv=S.pv,I=S.info;if(!pv||!I)return;var t=I.title||'',ids=[];
+  CAT_RULES.forEach(function(r){if(!r[0].test(t))return;r[1].forEach(function(n){pv.categories.forEach(function(c){if(c.name===n&&ids.indexOf(c.id)<0)ids.push(c.id)})})});
+  S.catSug=ids;
+  if(!I.cats.length&&!I.catNone&&ids.length===1){I.cats=[ids[0]];I.catAuto=ids[0]}}
+function doCheck(){if(!S.cred||!S.rc||S.busy)return;S.busy='check';S.msg.check='';renderInfo();renderGo();
+  postRead({action:'nrPreview',role:S.cred.role,password:S.cred.pw,recipe:S.rc,title:S.info.title},150000,function(k){S.msg.check='<div class="ru-muted">連線不穩，自動重試中（第 '+k+' 次）…</div>';renderInfo()})
+  .then(function(r){S.busy='';
+    if(!r.ok){authFail(r);S.msg.check='<div class="ru-err">✕ '+esc(r.msg||'檢查失敗')+(hint(r.code)?'<div>'+esc(hint(r.code))+'</div>':'')+'</div>';renderAll();return}
+    S.pv=r.data||{};S.pvAt=hhmm();
+    var miss=S.pv.missing||[],zones=S.pv.zones||[];
+    miss.forEach(function(m){if(S.dec[m.key])return;
+      S.dec[m.key]={act:m.kind==='name'?'create':'',name:m.name,unit:m.unit,zone:zones.indexOf(m.zone)>=0?m.zone:'',price:'0',cost:'0',note:'',map:'',factor:'1'}});
+    suggestCats();
+    var ok=0,all=0;(S.pv.steps||[]).forEach(function(s){ok+=s.ok;all+=s.ing_n});
+    S.msg.check='<div class="ru-okbox">✓ 檢查完成（'+S.pvAt+'）：食材工具對到後台 '+ok+'／'+all+' 項'+(miss.length?'，<b>'+miss.length+' 項後台沒有</b>（見 ④）':'，全部對到')+'</div>';
+    var f=$('dsbFresh');if(f)f.textContent='🕒 後台最後讀取：'+S.pvAt;
+    renderAll()})}
+
+/* ---------- ④ 後台沒有的品項 ---------- */
+function missCands(m){var out=[],seen={},d=S.dec[m.key]||{};
+  if(d.made){var k0=d.made.name+'\u241F'+d.made.unit;seen[k0]=1;out.push({v:k0,t:d.made.name+'（'+d.made.unit+'）— 剛建的新品項'})}
+  (m.units||[]).forEach(function(u){var k=m.name+'\u241F'+u;if(!seen[k]){seen[k]=1;out.push({v:k,t:m.name+'（'+u+'）— 同名、單位不同'})}});
+  (m.similar||[]).forEach(function(x){var k=x.name+'\u241F'+x.unit;if(!seen[k]){seen[k]=1;out.push({v:k,t:x.name+'（'+x.unit+'）'+(x.cate?'｜'+x.cate:'')})}});
+  return out}
+function decOk(m){var d=S.dec[m.key]||{};
+  if(d.act==='skip')return '';
+  if(d.act==='map'){if(!d.map)return '還沒選要改用哪一個';if(!(Number(d.factor)>0))return '數量倍率要大於 0';return ''}
+  if(d.act==='create')return '還沒建立（按下面「建立新品項」）';
+  return '還沒選處理方式'}
+function createRowErr(d){if(!String(d.name||'').trim())return '名稱是空的';if(!String(d.unit||'').trim())return '單位是空的';if(!d.zone)return '請選取放區';
+  if(!(String(d.price).trim()===''||Number(d.price)>=0))return '售價要 0 以上';if(!(String(d.cost).trim()===''||Number(d.cost)>=0))return '成本要 0 以上';return ''}
+function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
+  if(!pv||(!miss.length&&!S.ingRes)){c.style.display='none';c.innerHTML='';return}
+  c.style.display='';var zones=pv.zones||[],dis=(S.busy||(S.job&&S.job.busy))?' disabled':'';
+  var h='<div class="ru-h"><span class="n">4</span>後台沒有的品項（'+miss.length+' 項）</div>';
+  if(S.ingRes)h+=S.ingRes;
+  if(!miss.length){c.innerHTML=h+'<div class="ru-okbox">✓ 食譜裡的食材工具後台都有了。</div>';return}
+  h+='<div class="ru-muted">食譜檔裡有、但後台食材清單找不到（或單位不同）的食材、耗材、器具、模具。每一項選一種處理方式；「建新品項」要確認名稱、單位、取放區、售價、成本，按下面的按鈕才會真的建到後台（編號由後台自動給；只填繁體中文、啟用）。</div>';
+  h+='<div class="ru-tblwrap"><table class="ru-tbl"><thead><tr><th>食譜寫的</th><th>用在</th><th>處理方式</th></tr></thead><tbody>';
+  miss.forEach(function(m,i){var d=S.dec[m.key],cands=missCands(m);
+    h+='<tr><td><b>'+esc(m.name)+'</b> '+esc(m.unit)+(m.zone?'<div class="ru-muted">'+esc(m.zone)+'</div>':'')
+      +(m.kind==='unit'?'<div class="ru-note">後台有「'+esc(m.name)+'」，但單位是 '+esc((m.units||[]).join('／'))+'</div>':'<div class="ru-miss">後台食材清單沒有</div>')
+      +(m.note?'<div class="ru-muted">附註：'+esc(m.note)+'</div>':'')+'</td>'
+      +'<td class="n">第 '+m.steps.join('、')+' 步</td><td><div class="ru-acts">'
+      +'<label><input type="radio" name="mact'+i+'" value="create" data-mk="'+esc(m.key)+'"'+(d.act==='create'?' checked':'')+dis+'> 建新品項</label>'
+      +'<label><input type="radio" name="mact'+i+'" value="map" data-mk="'+esc(m.key)+'"'+(d.act==='map'?' checked':'')+(cands.length?'':' disabled')+dis+'> 改用後台既有的'+(cands.length?'':'（沒有相近的）')+'</label>'
+      +'<label><input type="radio" name="mact'+i+'" value="skip" data-mk="'+esc(m.key)+'"'+(d.act==='skip'?' checked':'')+dis+'> 這次不掛</label></div>';
+    if(d.act==='create'){var er=createRowErr(d);
+      h+='<div class="ru-sub" data-sub="'+esc(m.key)+'">'
+        +'<div><label>名稱</label><input type="text" data-f="name" maxlength="60" value="'+esc(d.name)+'"'+dis+'></div>'
+        +'<div><label>單位</label><input type="text" data-f="unit" maxlength="20" value="'+esc(d.unit)+'"'+dis+'></div>'
+        +'<div><label>取放區</label><select data-f="zone"'+dis+'><option value="">選取放區…</option>'+zones.map(function(z){return '<option'+(d.zone===z?' selected':'')+'>'+esc(z)+'</option>'}).join('')+'</select></div>'
+        +'<div><label>售價（每單位）</label><input type="number" data-f="price" min="0" step="0.01" value="'+esc(d.price)+'"'+dis+'></div>'
+        +'<div><label>成本（每單位）</label><input type="number" data-f="cost" min="0" step="0.01" value="'+esc(d.cost)+'"'+dis+'></div>'
+        +'<div><label>說明（可空白）</label><input type="text" data-f="note" maxlength="200" value="'+esc(d.note)+'"'+dis+'></div></div>'
+        +(er?'<div class="ru-note" data-er="'+esc(m.key)+'">⚠ '+esc(er)+'</div>':'<div class="ru-note" data-er="'+esc(m.key)+'"></div>')}
+    else if(d.act==='map'){
+      h+='<div class="ru-sub"><div style="grid-column:span 2"><label>改用後台的</label><select data-map="'+esc(m.key)+'"'+dis+'><option value="">選一個…</option>'+cands.map(function(o){return '<option value="'+esc(o.v)+'"'+(d.map===o.v?' selected':'')+'>'+esc(o.t)+'</option>'}).join('')+'</select></div>'
+        +'<div><label>數量 ×（倍率）</label><input type="number" data-factor="'+esc(m.key)+'" min="0" step="0.01" value="'+esc(d.factor)+'"'+dis+'></div></div>'
+        +(d.made?'<div class="ru-note">剛建的新品項名稱或單位跟食譜寫的不同，已自動改用它'+(kn(d.made.unit)!==kn(m.unit)?'；單位不同（食譜 '+esc(m.unit)+' → 後台 '+esc(d.made.unit)+'），請確認倍率':'')+'</div>':'')
+        +'<div class="ru-muted">單位不同時要換算：例如食譜寫「3 平匙」、後台是 g、1 平匙＝5 g，倍率就填 5（上傳時 3×5＝15 g）。單位一樣填 1。</div>'}
+    else if(d.act==='skip')h+='<div class="ru-muted">上傳後寫在後台這支食譜的「備註」，請負責食譜的夥伴補上。</div>';
+    h+='</td></tr>'});
+  h+='</tbody></table></div>';
+  var nC=miss.filter(function(m){return S.dec[m.key].act==='create'}).length,bad=miss.filter(function(m){var d=S.dec[m.key];return d.act==='create'&&createRowErr(d)}).length;
+  h+='<div class="ru-row" style="margin-top:10px"><button class="ru-btn" id="mCreate" type="button"'+((!nC||bad||S.busy||(S.job&&S.job.busy))?' disabled':'')+'>'+(S.busy==='ing'?'建立中…（約 10～60 秒）':'✅ 建立「建新品項」的 '+nC+' 項到後台食材管理')+'</button>'
+    +(bad?'<span class="ru-note">有 '+bad+' 項資料沒填完整</span>':'')+'</div>';
+  if(S.msg.ing)h+=S.msg.ing;
+  c.innerHTML=h;
+  c.querySelectorAll('input[type=radio][data-mk]').forEach(function(e){e.onchange=function(){S.dec[e.getAttribute('data-mk')].act=e.value;renderMiss();renderGo()}});
+  c.querySelectorAll('[data-sub]').forEach(function(box){var k=box.getAttribute('data-sub');box.querySelectorAll('[data-f]').forEach(function(e){
+    var on=function(){S.dec[k][e.getAttribute('data-f')]=e.value;var er=createRowErr(S.dec[k]),el=c.querySelector('[data-er="'+k.replace(/["\\]/g,'\\$&')+'"]');if(el)el.textContent=er?'⚠ '+er:'';
+      var nb=miss.filter(function(m){var d=S.dec[m.key];return d.act==='create'&&createRowErr(d)}).length;var b=$('mCreate');if(b&&S.busy!=='ing')b.disabled=!nC||!!nb||!!S.busy;renderGo()};
+    e.oninput=on;e.onchange=on})});
+  c.querySelectorAll('[data-map]').forEach(function(e){e.onchange=function(){S.dec[e.getAttribute('data-map')].map=e.value;renderGo()}});
+  c.querySelectorAll('[data-factor]').forEach(function(e){e.oninput=function(){S.dec[e.getAttribute('data-factor')].factor=e.value;renderGo()}});
+  if($('mCreate'))$('mCreate').onclick=createIngs}
+function createIngs(){var miss=(S.pv&&S.pv.missing)||[];if(S.busy||!S.cred)return;
+  var src=miss.filter(function(m){return S.dec[m.key].act==='create'});
+  var items=src.map(function(m){var d=S.dec[m.key];
+    return {name:String(d.name).trim(),unit:String(d.unit).trim(),zone:d.zone,price:String(d.price).trim()||'0',cost:String(d.cost).trim()||'0',note:String(d.note||'').trim()}});
+  if(!items.length)return;
+  var lines=items.map(function(o,i){return (i+1)+'. '+o.name+'｜單位 '+o.unit+'｜'+o.zone+'｜售價 '+o.price+'｜成本 '+o.cost+(o.note?'｜'+o.note:'')}).join('\n');
+  if(!confirm('在自己做食譜系統「食材管理」新增下面 '+items.length+' 個品項（繁體中文、啟用；編號由後台自動給）：\n\n'+lines+'\n\n資料都對嗎？'))return;
+  if(!confirm('再確認一次：建立 '+items.length+' 個新品項到後台。建好後只能請負責食譜的夥伴在後台修改或刪除。'))return;
+  S.busy='ing';S.msg.ing='';renderMiss();renderInfo();renderGo();var n=0;
+  function go(){n++;return postOnce({action:'nrIngCreate',role:S.cred.role,password:S.cred.pw,items:items},150000).then(function(r){
+    if(!r.ok&&SOFT[r.code]&&n<3){S.msg.ing='<div class="ru-muted">'+esc(r.msg||'連線不穩')+'；5 秒後再試一次（已建的不會重複建）…</div>';renderMiss();return wait(5000).then(go)}
+    return r})}
+  go().then(function(r){S.busy='';
+    if(!r.ok){authFail(r);var its=(r.data&&r.data.items)||[];S.msg.ing='<div class="ru-err">✕ '+esc(r.msg||'建立失敗')+(hint(r.code)?'<div>'+esc(hint(r.code))+'</div>':'')+'</div>'+ingTable(its);renderAll();return}
+    var d=r.data||{},its=d.items||[];
+    /* 名稱或單位改過的新品項：食譜那一行自動改用剛建的（建好、或後台本來就有） */
+    its.forEach(function(x,j){var m=src[j];if(!m||(x.st!=='created'&&x.st!=='exists'))return;
+      if(ikey(x.name,x.unit)!==m.key){var dd=S.dec[m.key];dd.act='map';dd.made={name:x.name,unit:x.unit};dd.map=x.name+'\u241F'+x.unit;dd.factor='1'}});
+    S.ingRes='<div class="'+(d.left?'ru-warn':'ru-okbox')+'">'+(d.left?'⚠ ':'✓ ')+'新品項：建好 '+d.made+' 項'+(its.filter(function(x){return x.st==='exists'}).length?'、後台本來就有 '+its.filter(function(x){return x.st==='exists'}).length+' 項（沒重建）':'')+(d.left?'、<b>還有 '+d.left+' 項沒完成</b>（見下表，可再按一次）':'')+'</div>'+ingTable(its);
+    S.msg.ing='';doCheck()})}
+function ingTable(its){if(!its||!its.length)return '';var ST={created:'✅ 建好了',exists:'☑ 後台本來就有',later:'⏳ 時間不夠，再按一次',missing:'⚠ 回覆成功但清單找不到',unsure:'⚠ 不確定',sent:'…'};
+  return '<div class="ru-tblwrap"><table class="ru-tbl"><thead><tr><th>品項</th><th>取放區</th><th>結果</th></tr></thead><tbody>'+its.map(function(x){return '<tr><td>'+esc(x.name)+'（'+esc(x.unit)+'）</td><td>'+esc(x.zone||'')+'</td><td>'+esc(ST[x.st]||x.st)+(x.msg?'<div class="ru-muted">'+esc(x.msg)+'</div>':'')+'</td></tr>'}).join('')+'</tbody></table></div>'}
+
+/* ---------- ⑤ 步驟與圖片／影片 ---------- */
+function dropMedia(m){if(m&&m.url0){try{URL.revokeObjectURL(m.url0)}catch(e){}}}
+function mediaCell(i,noTpl){var m=S.media[i]||{kind:'none'},pvs=!noTpl&&S.pv&&S.pv.steps&&S.pv.steps[i],dis=(S.job&&S.job.busy)?' disabled':'',h='<div class="ru-media">';
+  h+='<input type="file" data-mi="'+i+'" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/*,video/mp4,video/quicktime,video/*"'+dis+'>';
+  if(m.kind==='up'){
+    if(m.status==='work')h+='<div class="ru-muted">⏳ '+esc(m.msg||'處理中…')+'</div>';
+    else if(m.status==='ok')h+=(m.isVid?'<video class="thumb" src="'+esc(m.url0)+'" muted playsinline controls preload="metadata"></video>':'<img class="thumb" src="'+esc(m.url0)+'" alt="">')
+      +'<div class="ru-ok" style="font-size:12px">✓ '+(m.isVid?'影片':'圖片')+' '+fmtSize(m.blob.size)+(m.blob.size!==m.origSize?'（原 '+fmtSize(m.origSize)+'，已壓縮）':'')+'</div>';
+    else if(m.status==='needc')h+='<div class="ru-note">'+esc(m.msg)+'</div><button class="ru-btn2" type="button" data-mc="'+i+'"'+dis+'>🗜 壓縮成 5MB 以內（約 '+esc(m.secs||'?')+' 秒）</button>';
+    else if(m.status==='err')h+='<div class="ru-miss">✕ '+esc(m.msg)+'</div>';
+    h+=' <button class="ru-btn2" type="button" data-mx="'+i+'"'+dis+'>移除</button>'}
+  else if(pvs&&pvs.media&&pvs.media.length){
+    h+='<div class="ru-muted" style="margin-top:4px">或用公版素材：<select data-mt="'+i+'"'+dis+'><option value="">不用</option>'+pvs.media.map(function(o){return '<option value="'+esc(o.url)+'"'+(m.kind==='tpl'&&m.url===o.url?' selected':'')+'>'+esc(o.type+'｜'+(o.id||'')+'｜'+o.recipes+' 支食譜用過｜'+o.mb+'MB')+'</option>'}).join('')+'</select></div>'
+      +(m.kind==='tpl'?'<div><a href="'+esc(m.url)+'" target="_blank" rel="noopener">打開公版原檔（會下載）</a></div>':'')}
+  return h+'</div>'}
+function renderSteps(){var c=$('cardSteps'),rc=S.rc,pv=S.pv;c.classList.toggle('off',!rc);
+  var h='<div class="ru-h"><span class="n">5</span>步驟與圖片／影片'+(rc?'（'+rc.steps.length+' 步）':'')+'</div>';
+  if(!rc){c.innerHTML=h+'<div class="ru-muted">先在 ② 選食譜檔。</div>';return}
+  h+='<div class="ru-muted">每一步可以放一張圖片或一支影片（不放也可以）。圖片 JPG／PNG／GIF，超過 300KB 會自動壓縮成 JPG；影片 MP4，超過 5MB（或不是 MP4）要按「壓縮」，壓縮時請停在這個畫面；壓不下來會退回，請先把影片剪短。</div>';
+  h+='<div class="ru-tblwrap"><table class="ru-tbl"><thead><tr><th>#</th><th>步驟標題</th><th>食材工具</th><th>圖片／影片</th></tr></thead><tbody>';
+  rc.steps.forEach(function(s,i){var ps=pv&&pv.steps&&pv.steps[i];
+    h+='<tr><td class="n">'+(i+1)+'</td><td>'+esc(s.t)+'</td><td>'+(ps?(ps.ing_n?esc(ps.ok)+'／'+esc(ps.ing_n)+' 對到':'—')+(ps.miss.length?'<div class="ru-miss">對不上：'+ps.miss.map(esc).join('、')+'</div>':'')+(ps.notes.length?'<div class="ru-note">附註不帶：'+ps.notes.map(esc).join('、')+'</div>':'')
+      :(s.ing.length?s.ing.length+' 項<div class="ru-muted">按「🔍 檢查」後比對</div>':'—'))+'</td><td>'+mediaCell(i)+'</td></tr>'});
+  h+='</tbody></table></div>';
+  c.innerHTML=h;bindMedia(c)}
+function bindMedia(c){
+  c.querySelectorAll('input[type=file][data-mi]').forEach(function(e){e.onchange=function(){var f=e.files&&e.files[0];if(f)onMediaFile(+e.getAttribute('data-mi'),f)}});
+  c.querySelectorAll('[data-mx]').forEach(function(b){b.onclick=function(){var i=+b.getAttribute('data-mx');dropMedia(S.media[i]);S.media[i]={kind:'none'};mediaChanged(i)}});
+  c.querySelectorAll('[data-mc]').forEach(function(b){b.onclick=function(){compressAt(+b.getAttribute('data-mc'))}});
+  c.querySelectorAll('[data-mt]').forEach(function(e){e.onchange=function(){var i=+e.getAttribute('data-mt');S.media[i]=e.value?{kind:'tpl',url:e.value}:{kind:'none'};mediaChanged(i)}})}
+function mediaChanged(i){renderSteps();renderGo()}
+function isVidFile(f){return /^video\//.test(f.type||'')||/\.(mp4|mov|m4v|webm|avi)$/i.test(f.name||'')}
+function isImgFile(f){return /^image\//.test(f.type||'')||/\.(jpe?g|png|gif|heic|heif|webp|bmp)$/i.test(f.name||'')}
+function onMediaFile(i,f){dropMedia(S.media[i]);var vid=isVidFile(f),img=!vid&&isImgFile(f),t=f.type||'';
+  var m=S.media[i]={kind:'up',file:f,name:f.name,origSize:f.size,isVid:vid,status:'work',msg:'讀取中…'};mediaChanged(i);
+  var ok=function(blob,type,name){if(S.media[i]!==m)return;m.blob=blob;m.type=type;m.name=name;m.status='ok';m.url0=URL.createObjectURL(blob);mediaChanged(i)};
+  var bad=function(msg){if(S.media[i]!==m)return;m.status='err';m.msg=msg;mediaChanged(i)};
+  if(img){
+    if((t==='image/jpeg'||t==='image/png'||t==='image/gif')&&f.size<=IMG_MAX){ok(f,t,f.name);return}
+    if(t==='image/gif'){bad('GIF 超過 300KB（'+fmtSize(f.size)+'），動圖沒辦法自動壓縮；請換小一點的檔，或改用 MP4 影片');return}
+    m.msg='圖片 '+fmtSize(f.size)+'，壓縮中…';mediaChanged(i);
+    shrinkImage(f).then(function(b){ok(b,'image/jpeg',String(f.name).replace(/\.[^.]+$/,'')+'.jpg')},function(e){bad(String(e&&e.message||e))});return}
+  if(vid){
+    if(t==='video/mp4'&&f.size<=VID_MAX){ok(f,'video/mp4',f.name);return}
+    probeVideo(f).then(function(D){if(S.media[i]!==m)return;m.dur=D;m.secs=Math.ceil(D);m.status='needc';
+        m.msg=(t==='video/mp4'?'影片 '+fmtSize(f.size)+' 超過 5MB':'影片是 '+(t||'未知格式')+'（'+fmtSize(f.size)+'），後台只收 MP4')+'，要壓縮後才能上傳';mediaChanged(i)},
+      function(e){bad(String(e&&e.message||e))});return}
+  bad('不是圖片或影片（'+(t||f.name)+'）')}
+function compressAt(i){var m=S.media[i];if(!m||m.status!=='needc')return;
+  m.status='work';m.msg='壓縮中 0%（影片多長就要多久；請停在這個畫面）';mediaChanged(i);
+  var prog=function(p){if(S.media[i]!==m)return;m.msg='壓縮中 '+Math.round(p*100)+'%（請停在這個畫面）';var cell=document.querySelector('[data-mi="'+i+'"]');if(cell&&cell.parentNode){var d=cell.parentNode.querySelector('.ru-muted');if(d)d.textContent='⏳ '+m.msg}};
+  compressVideo(m.file,1,prog).then(function(b){if(b.size<=VID_MAX)return b;return compressVideo(m.file,0.65,prog)}).then(function(b){if(S.media[i]!==m)return;
+      if(b.size>VID_MAX){m.status='err';m.msg='壓縮後還是 '+fmtSize(b.size)+'，超過 5MB：請先把影片剪短再上傳（退回）';mediaChanged(i);return}
+      m.blob=b;m.type='video/mp4';m.name=String(m.name).replace(/\.[^.]+$/,'')+'.mp4';m.status='ok';m.url0=URL.createObjectURL(b);mediaChanged(i)},
+    function(e){if(S.media[i]!==m)return;m.status='err';m.msg=String(e&&e.message||e);mediaChanged(i)})}
+
+/* 圖片：解碼 → 白底畫到畫布 → JPG；長邊 1600→480、品質 0.86→0.5，直到 ≤300,000 bytes */
+function decodeImg(f){return (window.createImageBitmap?createImageBitmap(f):Promise.reject()).then(null,function(){return new Promise(function(res,rej){var u=URL.createObjectURL(f),im=new Image();
+  im.onload=function(){res(im)};im.onerror=function(){URL.revokeObjectURL(u);rej(new Error('這台瀏覽器讀不了這張圖（'+(f.type||f.name)+'）；iPhone 的 HEIC 請先轉成 JPG'))};im.src=u})})}
+function toBlob(cv,q){return new Promise(function(res){cv.toBlob(function(b){res(b)},'image/jpeg',q)})}
+function shrinkImage(f){return decodeImg(f).then(function(bm){var W=bm.width,H=bm.height,L=Math.max(W,H);if(!W||!H)throw new Error('圖片尺寸讀不到');
+  var sides=[1600,1280,1024,800,640,480].filter(function(s){return s<L});sides.unshift(Math.min(L,1600));
+  var qs=[0.86,0.78,0.7,0.6,0.5],si=0,qi=0,cv=document.createElement('canvas'),ctx=cv.getContext('2d');
+  function draw(side){var s=Math.min(1,side/L);cv.width=Math.max(1,Math.round(W*s));cv.height=Math.max(1,Math.round(H*s));ctx.fillStyle='#fff';ctx.fillRect(0,0,cv.width,cv.height);ctx.drawImage(bm,0,0,cv.width,cv.height)}
+  draw(sides[0]);
+  function step(){return toBlob(cv,qs[qi]).then(function(b){if(b&&b.size<=IMG_MAX)return b;
+    if(++qi>=qs.length){qi=0;if(++si>=sides.length)throw new Error('壓不到 300KB 以內，請換一張圖（退回）');draw(sides[si])}
+    return step()})}
+  return step()})}
+/* 影片：先讀長度；壓縮＝邊播放邊用瀏覽器內建錄影重錄成 MP4（畫面縮到長邊 960／720、位元率依長度算到約 4.6MB） */
+function vidMime(){if(!window.MediaRecorder||!MediaRecorder.isTypeSupported)return '';
+  var c=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1.42E01E','video/mp4;codecs=avc1','video/mp4'];
+  for(var i=0;i<c.length;i++)if(MediaRecorder.isTypeSupported(c[i]))return c[i];return ''}
+function probeVideo(f){return new Promise(function(res,rej){var u=URL.createObjectURL(f),v=document.createElement('video');v.preload='metadata';v.muted=true;
+  v.onloadedmetadata=function(){var D=v.duration;URL.revokeObjectURL(u);if(!isFinite(D)||D<=0){rej(new Error('讀不到影片長度，請改用 MP4'));return}
+    if(!vidMime()){rej(new Error('影片超過 5MB 或不是 MP4，這台瀏覽器不能自動壓縮成 MP4；請用新版 Chrome／Safari，或先用手機、剪輯軟體壓到 5MB 以內的 MP4（退回）'));return}
+    if((VID_TARGET*8/D-64000)<180000){rej(new Error('影片 '+Math.round(D)+' 秒太長，壓到 5MB 以內畫質會太差；請先剪短（建議 60 秒以內）再上傳（退回）'));return}
+    res(D)};
+  v.onerror=function(){URL.revokeObjectURL(u);rej(new Error('這台瀏覽器讀不了這支影片（可能是 iPhone 的 HEVC 格式）；請先轉成 MP4（H.264）再上傳（退回）'))};v.src=u})}
+function compressVideo(f,scale,onProg){return new Promise(function(res,rej){var mime=vidMime();if(!mime){rej(new Error('這台瀏覽器不能壓縮影片'));return}
+  var u=URL.createObjectURL(f),v=document.createElement('video'),ac=null,rec=null,chunks=[],over=false;
+  v.preload='auto';v.playsInline=true;v.src=u;
+  function end(err,blob){if(over)return;over=true;try{v.pause()}catch(e){}try{if(ac)ac.close()}catch(e){}URL.revokeObjectURL(u);if(err)rej(err);else res(blob)}
+  v.onerror=function(){end(new Error('影片讀取失敗，請改用 MP4（H.264）'))};
+  v.onloadedmetadata=function(){var D=v.duration,W=v.videoWidth,H=v.videoHeight;if(!W||!H){end(new Error('讀不到影片畫面尺寸'));return}
+    var aBps=64000,vBps=Math.max(150000,Math.floor((VID_TARGET*8/D-aBps)*0.9*scale)),side=vBps>1200000?960:720,L=Math.max(W,H),s=Math.min(1,side/L);
+    var cv=document.createElement('canvas');cv.width=Math.round(W*s/2)*2;cv.height=Math.round(H*s/2)*2;var ctx=cv.getContext('2d');
+    var st=cv.captureStream(30);
+    try{var AC=window.AudioContext||window.webkitAudioContext;if(AC){ac=new AC();var src=ac.createMediaElementSource(v),dst=ac.createMediaStreamDestination();src.connect(dst);dst.stream.getAudioTracks().forEach(function(t){st.addTrack(t)})}}catch(e){ac=null}
+    try{rec=new MediaRecorder(st,{mimeType:mime,videoBitsPerSecond:vBps,audioBitsPerSecond:aBps})}catch(e){end(new Error('這台瀏覽器不能壓縮影片（'+e.message+'）'));return}
+    rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+    rec.onstop=function(){end(null,new Blob(chunks,{type:'video/mp4'}))};
+    var draw=function(){if(over)return;try{ctx.drawImage(v,0,0,cv.width,cv.height)}catch(e){}if(onProg&&D)onProg(Math.min(1,v.currentTime/D));
+      if(!v.ended&&!v.paused){if(v.requestVideoFrameCallback)v.requestVideoFrameCallback(draw);else requestAnimationFrame(draw)}};
+    v.onended=function(){setTimeout(function(){try{if(rec.state!=='inactive')rec.stop()}catch(e){end(e)}},150)};
+    var start=function(){rec.start(1000);draw()};
+    if(ac&&ac.state==='suspended')ac.resume();
+    v.play().then(start,function(){v.muted=true;v.play().then(start,function(e){end(new Error('影片沒辦法播放來壓縮（'+(e&&e.message||e)+'）'))})})}})}
+function toB64(blob){return new Promise(function(res,rej){var r=new FileReader();r.onload=function(){var s=String(r.result||''),k=s.indexOf(',');res(k>=0?s.slice(k+1):'')};r.onerror=function(){rej(new Error('讀檔失敗'))};r.readAsDataURL(blob)})}
+
+/* ---------- ⑥ 確認上傳 ---------- */
+function blockers(){var b=[],I=S.info;
+  if(!S.cred)b.push('在 ① 登入（主廚或管理者）');
+  if(!S.rc){b.push('在 ② 選食譜檔');return b}
+  if(!String(I.title||'').trim())b.push('③ 食譜名稱是空的');
+  if(String(I.price).trim()===''||!(Number(I.price)>=0))b.push('③ 請填售價（0 以上的數字）');
+  if(String(I.cost).trim()!==''&&!(Number(I.cost)>=0))b.push('③ 成本要 0 以上的數字');
+  if(String(I.prepHr).trim()!==''&&!/^\d{1,2}(\.\d{1,2})?$/.test(String(I.prepHr).trim()))b.push('③ 製作時間（小時）要填數字');
+  if(!I.stores.length)b.push('③ 分店類別至少勾一個');
+  if(!S.pv){b.push('③ 按「🔍 檢查」');return b}
+  if(!I.cats.length&&!I.catNone)b.push('③ 選類別（或勾「先不選」）');
+  var miss=S.pv.missing||[],cnt={};miss.forEach(function(m){var e=decOk(m);if(e)cnt[e]=(cnt[e]||0)+1});
+  Object.keys(cnt).forEach(function(e){b.push('④ 有 '+cnt[e]+' 項：'+e)});
+  var w=0,e2=0;S.media.forEach(function(m){if(m&&m.kind==='up'){if(m.status==='work')w++;else if(m.status!=='ok')e2++}});
+  if(w)b.push('⑤ 有 '+w+' 個圖片／影片還在處理');if(e2)b.push('⑤ 有 '+e2+' 個圖片／影片要處理（壓縮、換檔或移除）');
+  return b}
+function mediaCount(){var c={img:0,vid:0,tpl:0};S.media.forEach(function(m){if(!m)return;if(m.kind==='up'&&m.status==='ok')c[m.isVid?'vid':'img']++;if(m.kind==='tpl')c.tpl++});return c}
+function renderGo(){var c=$('cardGo'),J=S.job,h='<div class="ru-h"><span class="n">6</span>確認上傳</div>';
+  if(J&&(J.busy||J.done||J.prog||J.err||J.need!=null))h+=jobHTML();
+  if(!J||(!J.busy&&!J.done&&!J.up_id)){   /* 還沒開始、或第一次送出就被擋（後台什麼都沒建）→ 顯示檢查清單和上傳鈕 */
+    var b=blockers();
+    if(b.length)h+='<div class="ru-warn"><b>還差這些才能上傳：</b><ul class="ru-blk" style="margin:4px 0 0;padding-left:20px">'+b.map(function(x){return '<li>'+esc(x)+'</li>'}).join('')+'</ul></div>';
+    else{var I=S.info,mc=mediaCount(),miss=S.pv.missing||[],sk=miss.filter(function(m){return S.dec[m.key].act==='skip'}).length,mp=miss.filter(function(m){return S.dec[m.key].act==='map'}).length;
+      h+='<div class="ru-okbox">✓ 都準備好了，確認下面內容後按「📤 確認上傳」。</div><div class="ru-kv">'
+        +'<div>食譜名稱</div><div><b>'+esc(I.title)+'</b></div><div>地區／語言</div><div>台灣／繁體中文｜停用、不公開</div>'
+        +'<div>分店類別</div><div>'+esc(I.stores.join('、'))+'</div><div>類別</div><div>'+(I.cats.length?esc(I.cats.map(catName).join('、')):'先不選')+'</div>'
+        +'<div>售價／成本</div><div>'+esc(I.price)+' 元／'+esc(I.cost||0)+' 元</div><div>步驟</div><div>'+S.rc.steps.length+' 步｜上傳圖片 '+mc.img+'、影片 '+mc.vid+'、公版素材 '+mc.tpl+'</div>'
+        +'<div>食材工具</div><div>'+(mp?'改用後台既有 '+mp+' 項；':'')+(sk?'不掛 '+sk+' 項（寫在後台備註）':'全部會掛上')+'</div></div>'}
+    h+='<div class="ru-row" style="margin-top:10px"><button class="ru-btn big" id="gGo" type="button"'+(b.length||S.busy?' disabled':'')+'>📤 確認上傳到自己做食譜系統</button></div>'}
+  c.innerHTML=h;
+  if($('gGo'))$('gGo').onclick=startUpload;
+  if($('gResume'))$('gResume').onclick=function(){if(!S.job)return;S.job.err='';S.job.fails=0;runLoop(nextBody({}),0)};
+  if($('gSkip'))$('gSkip').onclick=function(){var J=S.job;if(!J||J.need==null)return;var i=J.need;
+    if(!confirm('第 '+(i+1)+' 步不放這個圖片／影片，繼續上傳？（之後可以請負責食譜的夥伴在後台補）'))return;J.err='';J.need=null;J.fails=0;runLoop(nextBody({skip_media:i}),0)};
+  if($('gSend'))$('gSend').onclick=function(){var J=S.job;if(!J||J.need==null)return;var i=J.need,m=S.media[i];if(!m||m.kind!=='up'||m.status!=='ok')return;J.err='';J.fails=0;J.need=null;
+    sendMedia(i)};
+  bindMedia(c)}
+function jobHTML(){var J=S.job,g=J.prog,h='';
+  if(J.title)h+='<div><b>'+esc(J.title)+'</b>'+(J.up_id?' <span class="ru-muted">'+esc(J.up_id)+'</span>':'')+'</div>';
+  if(g&&g.total){var pct=Math.max(0,Math.min(100,Math.round(100*(g.next||0)/g.total)));h+='<div class="ru-prog"><div style="width:'+pct+'%"></div></div><div class="ru-muted">已建 '+esc(g.next||0)+'／'+esc(g.total)+' 步</div>'}
+  if(J.msg)h+='<div>'+J.msg+'</div>';
+  if(J.done)h+='<div class="ru-okbox">✅ 上傳完成：'+esc(g?g.total:'')+' 步都建好了（停用中）。請負責食譜的夥伴到後台檢查調整（類別、圖片影片、步驟文字、食材），確認後勾「啟用」。</div>'
+    +'<div class="ru-row">'+(J.link?'<a class="ru-btn" href="'+esc(J.link)+'" target="_blank" rel="noopener">開後台這支食譜 ↗</a>':'')+'<button class="ru-btn2" type="button" onclick="location.reload()">上傳下一支</button></div>';
+  else if(J.busy)h+='<div class="ru-muted">上傳中…請不要關掉這個畫面（中斷了也可以在「📋 最近上傳」按「▶ 繼續」，已建的不會重複建）</div>';
+  else{
+    if(J.err)h+='<div class="ru-err">✕ '+J.err+'</div>';
+    if(J.need!=null){var i=J.need,m=S.media[i],info=J.needInfo||{},st=J.fresh&&S.rc?S.rc.steps[i]:null;
+      h+='<div class="ru-warn"><b>第 '+(i+1)+' 步'+(st?'「'+esc(st.t)+'」':'')+'要放'+(info.name?'《'+esc(info.name)+'》':'上傳的圖片／影片')+'</b>：'
+        +(m&&m.kind==='up'&&m.status==='ok'?'檔案準備好了，按「▶ 送出這個檔並繼續」。':'這個畫面沒有這個檔（或檔案不合格）：請重新選檔，或略過。')+'<div style="margin-top:6px">'+mediaCell(i,true)+'</div>'
+        +'<div class="ru-row"><button class="ru-btn" id="gSend" type="button"'+(m&&m.kind==='up'&&m.status==='ok'?'':' disabled')+'>▶ 送出這個檔並繼續</button><button class="ru-btn2" id="gSkip" type="button">略過這個檔，繼續</button></div></div>'}
+    else if(J.up_id)h+='<div class="ru-row">'+(J.link?'<a class="ru-btn2" href="'+esc(J.link)+'" target="_blank" rel="noopener">開後台這支食譜 ↗</a>':'')+'<button class="ru-btn" id="gResume" type="button">▶ 繼續上傳</button></div>'}
+  return h}
+function mappedRecipe(){var rc=JSON.parse(JSON.stringify(S.rc)),miss=(S.pv&&S.pv.missing)||[],act={};
+  miss.forEach(function(m){var d=S.dec[m.key];if(d&&d.act==='map'&&d.map)act[m.key]=d});
+  rc.steps.forEach(function(s){s.ing.forEach(function(g){var d=act[ikey(g[0],g[2])];if(!d)return;var p=d.map.split('\u241F'),f=Number(d.factor)||1;
+    g[0]=p[0];g[2]=p[1];if(f!==1)g[1]=Math.round(g[1]*f*100)/100})});
+  return rc}
+function startUpload(){var b=blockers();if(b.length||S.busy||(S.job&&S.job.busy))return;var I=S.info,mc=mediaCount();
+  if(!confirm('在自己做食譜系統（門市食譜後台）建一支新的食譜？\n\n名稱：'+I.title+'\n分店類別：'+I.stores.join('、')+'\n類別：'+(I.cats.length?I.cats.map(catName).join('、'):'先不選')+'\n售價／成本：'+I.price+'／'+(I.cost||0)+' 元\n步驟：'+S.rc.steps.length+' 步（上傳圖片 '+mc.img+'、影片 '+mc.vid+'、公版 '+mc.tpl+'）\n狀態：停用、不公開（台灣／繁體中文）'))return;
+  if(!confirm('再確認一次：開始上傳。約 1～5 分鐘（有影片會更久），中途請不要關掉這個畫面。'))return;
+  var media=S.media.map(function(m){return m&&m.kind==='up'&&m.status==='ok'?'up':(m&&m.kind==='tpl'?m.url:'')});
+  var mi=S.media.map(function(m){return m&&m.kind==='up'&&m.status==='ok'?{name:m.name,size:m.blob.size,type:m.type}:null});
+  S.job={busy:true,fresh:true,title:I.title,prog:{next:0,total:S.rc.steps.length},fails:0,msg:'',err:'',need:null};
+  var body={action:'nrImport',role:S.cred.role,password:S.cred.pw,rq:rqToken(),recipe:mappedRecipe(),
+    opts:{title:String(I.title).trim(),cats:I.cats.slice(),stores:I.stores.slice(),price:String(I.price).trim(),cost:String(I.cost).trim(),prepHr:String(I.prepHr).trim(),
+      size:I.size,desc:I.desc,preserve:I.preserve,media:media,mediaInfo:mi}};
+  S.job.msg='<span class="ru-muted">第一段要先登入後台、建食譜，約 20～60 秒…</span>';renderAll();runLoop(body,0)}
+function nextBody(extra){var b={action:'nrImport',role:S.cred.role,password:S.cred.pw,up_id:S.job.up_id,imp_id:S.job.imp_id};for(var k in extra)b[k]=extra[k];return b}
+function sendMedia(i){var m=S.media[i],J=S.job;J.busy=true;J.msg='<span class="ru-muted">送出第 '+(i+1)+' 步的'+(m.isVid?'影片':'圖片')+'（'+fmtSize(m.blob.size)+'）…</span>';renderAll();
+  toB64(m.blob).then(function(b64){runLoop(nextBody({media:{i:i,type:m.type,name:m.name,b64:b64}}),0)},function(e){J.busy=false;J.err=esc(e.message||e);J.need=i;renderAll()})}
+function runLoop(body,n){var J=S.job;if(!S.cred){J.busy=false;J.err='請先在 ① 重新登入';renderAll();return}
+  J.busy=true;J.need=null;body.role=S.cred.role;body.password=S.cred.pw;renderGo();renderFile();
+  postOnce(body,body.media?300000:180000).then(function(r){var d=r.data||{};
+    if(d.up_id)J.up_id=d.up_id;if(d.imp_id)J.imp_id=d.imp_id;if(d.total)J.prog={next:d.next||0,total:d.total};if(d.link)J.link=d.link;
+    if(r.ok&&d.done){J.busy=false;J.done=true;J.msg='';renderAll();loadList();return}
+    if(r.ok){J.fails=0;
+      if(d.need>=0){var m=S.media[d.need];J.needInfo=d.needInfo||null;
+        if(J.fresh&&m&&m.kind==='up'&&m.status==='ok'&&m.blob){sendMedia(d.need);return}
+        J.busy=false;J.need=d.need;J.msg='';renderAll();return}
+      J.msg='<span class="ru-muted">上傳中：已建 '+esc(d.next)+'／'+esc(d.total)+' 步…</span>';renderGo();
+      if(n>=150){J.busy=false;J.err='呼叫次數太多，先停下；請按「▶ 繼續上傳」';renderAll();return}
+      return runLoop(nextBody({}),n+1)}
+    if(r.code==='media'&&d.need>=0){J.busy=false;J.need=d.need;J.needInfo=d.needInfo||null;J.err=esc(r.msg||'檔案不合格');var m2=S.media[d.need];if(m2&&m2.kind==='up'){m2.status='err';m2.msg=r.msg||'檔案不合格'}renderAll();loadList();return}
+    if(SOFT[r.code]&&n<150&&(J.fails=(J.fails||0)+1)<=(r.code==='busy'?12:5)){J.msg='<span class="ru-muted">'+esc(r.msg||'連線不穩')+'；5 秒後自動接著做（已建的不會重複建）…</span>';renderGo();
+      return wait(5000).then(function(){runLoop(body,n+1)})}
+    J.busy=false;authFail(r);J.msg='';J.err=esc(r.msg||'上傳沒有完成')+(hint(r.code)?'<div>'+esc(hint(r.code))+'</div>':'')+(J.up_id?'<div class="ru-muted">已建的會留著；排除問題後按「▶ 繼續上傳」接著做。</div>':'');renderAll();loadList()})}
+window.addEventListener('beforeunload',function(e){if((S.job&&S.job.busy)||S.media.some(function(m){return m&&m.status==='work'})){e.preventDefault();e.returnValue='';}});
+
+/* ---------- 📋 最近上傳 ---------- */
+function loadList(){if(!S.cred)return;S.listMsg='<span class="ru-muted">讀取中…</span>';renderList();
+  postRead({action:'nrList',role:S.cred.role,password:S.cred.pw},60000).then(function(r){
+    if(!r.ok){authFail(r);S.listMsg='<span class="ru-bad">✕ '+esc(r.msg||'讀不到')+'</span>';renderList();return}
+    S.list=r.data||[];S.listMsg='';renderList()})}
+function renderList(){var c=$('cardList'),h='<div class="ru-h">📋 最近上傳'+(S.cred?'<button class="ru-btn2" id="lRe" type="button">🔄 重新整理</button>':'')+'</div>';
+  if(!S.cred){c.innerHTML=h+'<div class="ru-muted">登入後顯示最近 15 次上傳（沒做完的可以按「▶ 繼續」）。</div>';return}
+  if(S.listMsg)h+='<div>'+S.listMsg+'</div>';
+  var L=S.list||[];
+  if(S.list&&!L.length)h+='<div class="ru-muted">還沒有上傳紀錄。</div>';
+  if(L.length){var busy=S.job&&S.job.busy;
+    h+='<div class="ru-tblwrap"><table class="ru-tbl"><thead><tr><th>時間</th><th>食譜名稱</th><th>誰</th><th>進度</th><th></th></tr></thead><tbody>'
+      +L.map(function(u,i){var st=u.done?'<span class="ru-ok">✅ 完成</span>':(u.abandoned?'<span class="ru-muted">作廢</span>':'<span class="ru-note">⏳ '+esc(u.made)+'／'+esc(u.total)+' 步</span>'+(u.fail?'<div class="ru-miss">'+esc(u.fail)+'</div>':''));
+        return '<tr><td class="n">'+esc(u.done_ts||u.ts)+'</td><td>'+esc(u.title)+'<div class="ru-muted">'+esc(u.up_id)+'</div></td><td>'+esc(u.by)+'</td><td>'+st+'</td><td style="white-space:nowrap">'
+          +(u.link?'<a class="ru-btn2" href="'+esc(u.link)+'" target="_blank" rel="noopener">開後台 ↗</a> ':'')
+          +(!u.done&&!u.abandoned?'<button class="ru-btn2" type="button" data-lres="'+i+'"'+(busy?' disabled':'')+'>▶ 繼續</button>':'')+'</td></tr>'}).join('')+'</tbody></table></div>'}
+  c.innerHTML=h;
+  if($('lRe'))$('lRe').onclick=loadList;
+  c.querySelectorAll('[data-lres]').forEach(function(b){b.onclick=function(){var u=L[+b.getAttribute('data-lres')];if(!u||(S.job&&S.job.busy))return;
+    var fresh=!!(S.job&&S.job.fresh&&S.job.up_id===u.up_id);
+    if(!confirm('繼續上傳「'+u.title+'」（'+u.up_id+'）？已建的步驟不會重複建。'+(!fresh&&S.rc?'\n\n（這個畫面目前的食譜檔和選好的圖片影片會先清掉）':'')))return;
+    S.job={busy:true,fresh:fresh,title:u.title,up_id:u.up_id,imp_id:u.imp_id,prog:{next:u.made,total:u.total},link:u.link,fails:0,msg:'',err:'',need:null};
+    if(!fresh){S.media.forEach(dropMedia);S.media=[];S.rc=null;S.file='';S.info=null;S.pv=null;S.dec={};S.ingRes=null;S.msg={who:S.msg.who}}
+    renderAll();window.scrollTo(0,$('cardGo').offsetTop-10);runLoop(nextBody({}),0)}})}
+
+function renderAll(){renderWho();renderFile();renderInfo();renderMiss();renderSteps();renderGo();renderList()}
+S.cred=getCred();
+renderAll();
+if(S.cred)loadList();
+</script>
+
+</body>
+</html>
