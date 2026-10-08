@@ -1,5 +1,8 @@
 // ================================================================
-// EventLayer.gs — 節慶事件層 v1.10（2026-10-07）
+// EventLayer.gs — 節慶事件層 v1.11（2026-10-08）
+// v1.11：★ 舊流程申請的檔期也能給預估銷售數（經營者 2026-10-08：「自己做的台灣味」走舊流程，沒有新品申請表）
+//   食譜系統_申請單試算表新分頁「預估銷售數_舊流程」（甜點名稱｜預估銷售數｜品牌別｜檔期｜來源），evReadPlan_ 讀完申請單後補讀；
+//   同一支甜點申請單有就用申請單（新流程優先）。分頁不存在＝與 v1.10 完全相同。aaaSetupPlanManual() 建分頁並填 2026 台灣味 4 支。
 // v1.10：★ 開賣前 28 天起先算「預計首批量」（經營者 2026-10-07 晚裁定：首批量提早到開賣前 28 天顯示、第 14 天才進訂貨單）
 //   ① 檔期在「開賣前 28～15 天」（today < 開賣−LEADIN_DAYS 且 ≥ 開賣−PREVIEW_DAYS）：照原本開賣前的同一套算法算首批量，
 //      但寫進新表 agg_newitem_pv（欄位與 agg_newitem 相同），鏡像到專用檔；只有採購系統「🆕 檔期新品」頁讀它、標「預計」。
@@ -192,6 +195,7 @@ function aaaEvCurvePreview() { return evCurvePreview_(); }
 var EV_BOM_ID = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';
 /* ★ v1.9：新品申請表（食譜系統_申請單，私有、同擁有者）——只讀 */
 var EV_REQ_ID = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';
+var EV_PLAN_MANUAL_TAB = '預估銷售數_舊流程';   /* ★ v1.11 */
 var EV_PLAN_OK = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 var EV_BRAND_STORES = { '自己做': [1,2,3,4,5,6,7,8,9,10], '吳寶春自己做': [11,12], '自己做＆吳寶春自己做': [1,2,3,4,5,6,7,8,9,10,11,12] };
 function evReadPlan_(log) {
@@ -219,6 +223,18 @@ function evReadPlan_(log) {
       if (out[nm] && out[nm].up > up) return;
       out[nm] = { qty: q, brand: c.brand || '', req: String(r[R.idx['req_id']]).trim(), camp: c.name || '', up: up };
     });
+    /* ★ v1.11：舊流程檔期的預估銷售數（申請單沒有的甜點才用） */
+    var mh = ss.getSheetByName(EV_PLAN_MANUAL_TAB), nm2 = 0;
+    if (!mh) { try { aaaSetupPlanManual(); mh = ss.getSheetByName(EV_PLAN_MANUAL_TAB); log.push('📋 已建立「' + EV_PLAN_MANUAL_TAB + '」分頁（第一次）'); } catch (e2) { log.push('⚠️ 建立「' + EV_PLAN_MANUAL_TAB + '」失敗：' + e2); } }
+    if (mh && mh.getLastRow() >= 2) {
+      var M = tab(mh, ['甜點名稱', '預估銷售數', '品牌別']);
+      M.rows.forEach(function (r) {
+        var nm = String(r[M.idx['甜點名稱']] || '').trim(), q = Number(r[M.idx['預估銷售數']]) || 0;
+        if (!nm || !(q > 0) || out[nm]) return;
+        out[nm] = { qty: q, brand: String(r[M.idx['品牌別']] || '').trim(), req: '舊流程申請表', camp: '', up: '' }; nm2++;
+      });
+    }
+    if (nm2) log.push('📋 舊流程預估銷售數（' + EV_PLAN_MANUAL_TAB + '）：' + nm2 + ' 支');
     n = Object.keys(out).length;
     log.push('📋 新品申請表預估銷售數：已核准 ' + n + ' 支' + (n ? '（' + Object.keys(out).slice(0, 10).map(function (k) { return k + ' ' + out[k].qty + ' 份'; }).join('、') + '）' : ''));
   } catch (e) { log.push('⚠️ 讀新品申請表預估銷售數失敗（本次照原算法）：' + e); return {}; }
@@ -1288,4 +1304,23 @@ function evPeakWeek_(P, dayTotal) {
   var coef = (best.s / EV_CFG.PEAK_WIN) / avg;
   coef = Math.max(1, Math.min(EV_CFG.MAX_COEF, coef));
   return { start: days[best.i].d, end: days[best.i + EV_CFG.PEAK_WIN - 1].d, coef: Math.round(coef * 100) / 100 };
+}
+
+/* ★ v1.11：建「預估銷售數_舊流程」分頁並填入 2026 自己做的台灣味（來源：舊流程「11月檔期」申請表 1q61HRYL…，經營者 2026-10-08 提供）。
+   已有同名甜點的列不重填；可重跑。之後舊流程檔期要給預估，直接在這張分頁加一列即可（預估銷售數＝整個檔期、全部門市合計份數）。 */
+function aaaSetupPlanManual() {
+  var ss = SpreadsheetApp.openById(EV_REQ_ID), sh = ss.getSheetByName(EV_PLAN_MANUAL_TAB);
+  var H = ['甜點名稱', '預估銷售數', '品牌別', '檔期', '來源'];
+  if (!sh) { sh = ss.insertSheet(EV_PLAN_MANUAL_TAB); sh.getRange(1, 1, 1, H.length).setValues([H]).setFontWeight('bold'); sh.setFrozenRows(1); }
+  var rows = [
+    ['臭豆腐哪有臭', 225, '自己做＆吳寶春自己做', '2026 自己做的台灣味', '舊流程 11月檔期 申請表 01'],
+    ['塑膠袋可以吃嗎', 280, '自己做＆吳寶春自己做', '2026 自己做的台灣味', '舊流程 11月檔期 申請表 02'],
+    ['老闆，來碗滷肉飯', 450, '自己做＆吳寶春自己做', '2026 自己做的台灣味', '舊流程 11月檔期 申請表 03（暫定名 滷肉飯便當）'],
+    ['永豆必點—燒餅夾油條', 170, '自己做＆吳寶春自己做', '2026 自己做的台灣味', '舊流程 11月檔期 申請表 04（暫定名 燒餅夾油條）']
+  ];
+  var have = {}; if (sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { have[String(r[0]).trim()] = 1; });
+  var add = rows.filter(function (r) { return !have[r[0]]; });
+  if (add.length) { sh.getRange(sh.getLastRow() + 1, 1, add.length, H.length).setValues(add); sh.getRange(2, 2, sh.getLastRow() - 1, 1).setNumberFormat('0'); }
+  Logger.log('預估銷售數_舊流程：新增 ' + add.length + ' 列，共 ' + (sh.getLastRow() - 1) + ' 列');
+  return add.length;
 }
