@@ -240,6 +240,41 @@ a{color:var(--accent-light);text-decoration:none}
 .app-footer{text-align:center;padding:16px;color:var(--text-muted);font-size:.75rem;border-top:1px solid var(--border);margin-top:24px}
 
 /* Responsive */
+/* 2026-10-08 每日營收看板（DailyRevenueBoard） */
+.drb-card{min-height:0}
+.drb-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.drb-tag{display:inline-block;margin-left:8px;font-size:.7rem;font-weight:700;color:#fff;background:var(--success);border-radius:99px;padding:1px 8px;vertical-align:middle}
+.drb-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.drb-nav select{background:var(--bg-card);border:1px solid var(--border);color:var(--text-primary);padding:6px 10px;border-radius:8px;font-size:.85rem}
+.drb-nav .quick-btn:disabled{opacity:.4;cursor:default;background:var(--bg-card);color:var(--text-secondary);border-color:var(--border)}
+.drb-strip{display:flex;gap:6px;overflow-x:auto;padding:2px 2px 6px}
+.drb-chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:1px;min-width:62px;padding:6px 6px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);cursor:pointer;font-family:inherit;line-height:1.25}
+.drb-chip.wkend{background:var(--bg-secondary)}
+.drb-chip:hover{border-color:var(--accent)}
+.drb-chip.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.drb-chip-d{font-size:.72rem;color:var(--text-secondary);font-weight:600}
+.drb-chip-t{font-size:.82rem;color:var(--text-primary);font-weight:700}
+.drb-chip-p{font-size:.7rem;font-weight:700}
+.drb-legend{font-size:.72rem;color:var(--text-muted);margin:2px 0 10px}
+.drb-warn{font-size:.8rem;color:var(--danger);background:rgba(196,65,47,.08);border-radius:8px;padding:6px 10px;margin-bottom:10px}
+.drb-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px}
+.drb-btitle{font-size:1rem;font-weight:800;color:var(--text-primary)}
+.drb-bsub{font-size:.75rem;color:var(--text-muted);margin:2px 0 8px}
+.drb-scroll{overflow-x:auto}
+.drb-table{width:100%;border-collapse:collapse;font-size:.85rem;font-variant-numeric:tabular-nums}
+.drb-table th{color:var(--text-secondary);font-weight:700;font-size:.78rem;padding:6px 8px;border-bottom:2px solid var(--border);text-align:right;white-space:nowrap}
+.drb-table th:first-child,.drb-table td:first-child{text-align:left}
+.drb-table td{padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap;color:var(--text-primary)}
+.drb-table tbody tr:hover td{background:var(--bg-hover)}
+.drb-table tfoot td{font-weight:800;border-top:2px solid var(--text-secondary);border-bottom:none;background:var(--bg-secondary)}
+.drb-num{text-align:right}
+.drb-dim{color:var(--text-secondary)!important}
+.drb-up{color:var(--success)!important;font-weight:700}
+.drb-down{color:var(--danger)!important;font-weight:700}
+.drb-flat{color:var(--text-muted)!important}
+.drb-help{margin-top:10px;font-size:.8rem;color:var(--text-secondary);line-height:1.6;background:var(--bg-secondary);border-radius:8px;padding:8px 12px}
+@media(max-width:900px){.drb-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.drb-card{padding:12px 10px}.drb-table{font-size:.72rem}.drb-table th{font-size:.68rem}.drb-table th,.drb-table td{padding:5px 3px}.drb-chip{min-width:56px}}
 @media(max-width:768px){
   html{font-size:12px}
   .header-inner{flex-direction:column;align-items:flex-start}
@@ -694,6 +729,173 @@ function fetchDailyByStore(){
   });
   DBS_PROMISE.catch(()=>{ DBS_PROMISE = null; });
   return DBS_PROMISE;
+}
+
+/* ---------- 2026-10-08 每日營收看板 DailyRevenueBoard（昨日營收＋本月累計，可選近 30 天）----------
+   經營者要求：把每日營收早報（GAS dailyRevenueReport，一鍵追加新品專案）的兩張表放到首頁，並能看近 30 天每一天。
+   資料源＝頁面本來就載入的 daily_by_store（revenue_net 取自 BigQuery v_daily_net，與早報同口徑）
+   → 不多發任何請求、不動 GAS、不拖慢載入；日明細還沒到時只有這塊顯示「載入中」。
+   去年同日＝去年同月同日（2/29→2/28）；去年同星期＝往前 364 天；本月累計＝當月 1 日～所選日，去年同期＝去年同月 1 日～去年同日。
+   固定列全 12 店（不受下方篩選影響），店名短名與早報相同。 */
+const DRB_STORES = [
+  ['台中精明店','台中精明'],['台中草悟道店','台中草悟道'],['台北南京店','台北南京'],['台北士林店','台北士林'],
+  ['台南Focus店','台南Focus'],['新竹文化店','新竹文化'],['新北板橋店','新北板橋'],['新北新店店','新北新店'],
+  ['桃園中壢店','桃園中壢'],['桃園藝文店','桃園藝文'],['吳寶春自己做台北信義A13店','吳寶春信義A13'],['吳寶春自己做高雄SKM Park店','吳寶春高雄SKM']
+];
+const DRB_WD = ['日','一','二','三','四','五','六'];
+function drbAdd(ds, n){ const p=ds.split('-'); return new Date(Date.UTC(+p[0],+p[1]-1,+p[2]+n)).toISOString().slice(0,10); }
+function drbWd(ds){ const p=ds.split('-'); return DRB_WD[new Date(Date.UTC(+p[0],+p[1]-1,+p[2])).getUTCDay()]; }
+function drbLY(ds){ let md=ds.slice(5); if(md==='02-29') md='02-28'; return (+ds.slice(0,4)-1)+'-'+md; }
+function drbShort(ds){ return ds.slice(5).replace('-','/')+'（'+drbWd(ds)+'）'; }
+function drbPct(cur, base){ return base>0 ? (cur-base)/base*100 : null; }
+function DrbPct({v}){
+  if(v===null || v===undefined) return <td className="drb-num drb-flat">—</td>;
+  const cls = v>0.05 ? 'drb-up' : (v<-0.05 ? 'drb-down' : 'drb-flat');
+  return <td className={'drb-num '+cls}>{(v>0?'+':'')+v.toFixed(1)+'%'}</td>;
+}
+
+function DailyRevenueBoard({dbs, dbsErr}){
+  const [sel, setSel] = useState(null);   /* null＝跟著最新一天 */
+  const stripRef = useRef(null);
+
+  const idx = useMemo(()=>{
+    if(!Array.isArray(dbs) || !dbs.length) return null;
+    const map = {}, dates = {};
+    for(const r of dbs){
+      if(!r || !r.date || !r.store) continue;
+      map[r.date+'|'+r.store] = (map[r.date+'|'+r.store]||0) + (Number(r.revenue_net)||0);
+      dates[r.date] = true;
+    }
+    const all = Object.keys(dates).sort();
+    return { map, days: all.slice(-30) };
+  },[dbs]);
+
+  const val = (st, d)=> idx.map[d+'|'+st] || 0;
+  const has = (st, d)=> (d+'|'+st) in idx.map;
+  const sumRange = (st, from, to)=>{ let s=0, d=from; while(d<=to){ s+=val(st,d); d=drbAdd(d,1); } return s; };
+  const dayTotal = d => DRB_STORES.reduce((s,[st])=>s+val(st,d),0);
+
+  const strip = useMemo(()=>{
+    if(!idx) return [];
+    return idx.days.map(d=>{ const t=dayTotal(d), b=dayTotal(drbAdd(d,-364)); return { d, t, p: drbPct(t,b) }; });
+  },[idx]);
+
+  const day = idx ? ((sel && idx.days.indexOf(sel)>=0) ? sel : idx.days[idx.days.length-1]) : null;
+
+  useEffect(()=>{   /* 日期列捲到所選那天（等版面排好再捲；手機寬度也適用） */
+    const run = ()=>{
+      const box = stripRef.current; if(!box || !day) return;
+      const el = box.querySelector('[data-d="'+day+'"]'); if(!el) return;
+      const br = box.getBoundingClientRect(), er = el.getBoundingClientRect();
+      if(er.right > br.right - 4) box.scrollLeft += er.right - br.right + 8;
+      else if(er.left < br.left + 4) box.scrollLeft -= br.left - er.left + 8;
+    };
+    const t = requestAnimationFrame(()=>requestAnimationFrame(run));
+    return ()=>cancelAnimationFrame(t);
+  },[day, idx]);
+
+  if(!idx){
+    return (
+      <div className="chart-card full-width drb-card" style={{marginBottom:16}}>
+        <div className="chart-title">📊 每日營收</div>
+        <div className="chart-subtitle" style={{marginBottom:0}}>{dbsErr ? '每日資料暫時載入失敗，請重新整理再試一次。' : '每日資料載入中…（不影響下方圖表）'}</div>
+      </div>
+    );
+  }
+
+  const ly = drbLY(day), lyWd = drbAdd(day,-364), m1 = day.slice(0,8)+'01', lyM1 = ly.slice(0,8)+'01';
+  const rows = DRB_STORES.map(([st, nm])=>({
+    nm, miss: !has(st, day),
+    y: val(st,day), ly: val(st,ly), wd: val(st,lyWd),
+    mtd: sumRange(st,m1,day), lyMtd: sumRange(st,lyM1,ly)
+  }));
+  const tot = rows.reduce((a,r)=>({ y:a.y+r.y, ly:a.ly+r.ly, wd:a.wd+r.wd, mtd:a.mtd+r.mtd, lyMtd:a.lyMtd+r.lyMtd }),{y:0,ly:0,wd:0,mtd:0,lyMtd:0});
+  const missing = rows.filter(r=>r.miss).map(r=>r.nm);
+  const i = idx.days.indexOf(day);
+  const go = k => { const j=i+k; if(j>=0 && j<idx.days.length) setSel(idx.days[j]); };
+  const isLatest = i===idx.days.length-1;
+  const n = v => fmt.number(Math.round(v));
+  const yd = (()=>{ const t=new Date(Date.now()-86400000); return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); })();
+  const dayWord = day===yd ? '昨日營收' : '當日營收';
+
+  return (
+    <div className="chart-card full-width drb-card" style={{marginBottom:16}}>
+      <div className="drb-head">
+        <div>
+          <div className="chart-title">📊 每日營收　{drbShort(day)}{isLatest && <span className="drb-tag">最新</span>}</div>
+          <div className="chart-subtitle" style={{marginBottom:0}}>全 12 店淨營收（已扣折扣），可選最近 {idx.days.length} 天；不受下方篩選影響</div>
+        </div>
+        <div className="drb-nav">
+          <button className="quick-btn" disabled={i<=0} onClick={()=>go(-1)}>◀ 前一天</button>
+          <select value={day} onChange={e=>setSel(e.target.value)}>
+            {idx.days.slice().reverse().map(d=><option key={d} value={d}>{d.slice(0,4)+'/'+drbShort(d)}</option>)}
+          </select>
+          <button className="quick-btn" disabled={isLatest} onClick={()=>go(1)}>後一天 ▶</button>
+        </div>
+      </div>
+
+      <div className="drb-strip" ref={stripRef}>
+        {strip.map(s=>(
+          <button key={s.d} data-d={s.d} className={'drb-chip'+(s.d===day?' active':'')+(drbWd(s.d)==='六'||drbWd(s.d)==='日'?' wkend':'')} onClick={()=>setSel(s.d)}>
+            <span className="drb-chip-d">{s.d.slice(5).replace('-','/')} {drbWd(s.d)}</span>
+            <span className="drb-chip-t">{(s.t/10000).toFixed(1)}萬</span>
+            <span className={'drb-chip-p '+(s.p===null?'drb-flat':(s.p>0.05?'drb-up':(s.p<-0.05?'drb-down':'drb-flat')))}>{s.p===null?'—':(s.p>0?'+':'')+s.p.toFixed(0)+'%'}</span>
+          </button>
+        ))}
+      </div>
+      <div className="drb-legend">每格：當天 12 店合計｜小字％＝比去年同星期｜點一下看那天明細</div>
+
+      {missing.length>0 && <div className="drb-warn">⚠ {missing.join('、')} 這天還沒有資料（可能尚在補資料，或當天沒營業），以 0 計入合計。</div>}
+
+      <div className="drb-grid">
+        <div className="drb-block">
+          <div className="drb-btitle">{dayWord}　{drbShort(day)}</div>
+          <div className="drb-bsub">去年同日 {drbShort(ly)}／去年同星期 {drbShort(lyWd)}</div>
+          <div className="drb-scroll">
+            <table className="drb-table">
+              <thead><tr><th>門市</th><th>{day===yd?'昨日':'當日'}</th><th>去年同日</th><th>增減</th><th>去年同星期</th><th>增減</th></tr></thead>
+              <tbody>
+                {rows.map(r=>(
+                  <tr key={r.nm}>
+                    <td>{r.nm}</td>
+                    <td className="drb-num">{r.miss ? '—' : n(r.y)}</td>
+                    <td className="drb-num drb-dim">{n(r.ly)}</td>
+                    <DrbPct v={r.miss ? null : drbPct(r.y, r.ly)}/>
+                    <td className="drb-num drb-dim">{n(r.wd)}</td>
+                    <DrbPct v={r.miss ? null : drbPct(r.y, r.wd)}/>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr><td>合計</td><td className="drb-num">{n(tot.y)}</td><td className="drb-num">{n(tot.ly)}</td><DrbPct v={drbPct(tot.y,tot.ly)}/><td className="drb-num">{n(tot.wd)}</td><DrbPct v={drbPct(tot.y,tot.wd)}/></tr></tfoot>
+            </table>
+          </div>
+        </div>
+        <div className="drb-block">
+          <div className="drb-btitle">本月累計　{parseInt(day.slice(5,7),10)}/1～{parseInt(day.slice(5,7),10)}/{parseInt(day.slice(8),10)}</div>
+          <div className="drb-bsub">去年同期 {lyM1.replace(/-/g,'/')}～{ly.replace(/-/g,'/')}</div>
+          <div className="drb-scroll">
+            <table className="drb-table">
+              <thead><tr><th>門市</th><th>本月累計</th><th>去年同期</th><th>增減</th></tr></thead>
+              <tbody>
+                {rows.map(r=>(
+                  <tr key={r.nm}>
+                    <td>{r.nm}</td>
+                    <td className="drb-num">{n(r.mtd)}</td>
+                    <td className="drb-num drb-dim">{n(r.lyMtd)}</td>
+                    <DrbPct v={drbPct(r.mtd, r.lyMtd)}/>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr><td>合計</td><td className="drb-num">{n(tot.mtd)}</td><td className="drb-num">{n(tot.lyMtd)}</td><DrbPct v={drbPct(tot.mtd,tot.lyMtd)}/></tr></tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="tabhelp drb-help">
+        這張表跟每天早上的「每日營收早報」信同一個資料來源：淨營收＝已扣折扣。去年同日＝去年同一個日期；去年同星期＝往前 52 週（364 天）的同一個星期幾，週末對週末比較公平。本月累計＝這個月 1 日到所選那天，去年同期也算到同一天。資料每天早上 POS 匯入後更新（約 6～8 點）。
+      </div>
+    </div>
+  );
 }
 
 /* ---------- CUSTOM TOOLTIP ---------- */
@@ -1355,6 +1557,9 @@ function App(){
       </header>
 
       <div className="main-content">
+        {/* 2026-10-08 每日營收看板（昨日營收＋本月累計，近 30 天可選；用已載入的日明細，不多發請求） */}
+        <DailyRevenueBoard dbs={dbs} dbsErr={dbsErr}/>
+
         {/* FILTERS */}
         <div className="filters-bar">
           <div className="filter-group">
