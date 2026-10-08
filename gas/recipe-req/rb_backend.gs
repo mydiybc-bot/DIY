@@ -107,7 +107,7 @@ function rbSaveSession_(s) {
 function rbDropSession_() { rbProps_().deleteProperty('RB_COOKIE'); }
 function rbFreshSession_() {
   var P = rbProps_();
-  if (P.getProperty('RB_BAD') === '1') throw rbErr_('食譜後台帳號密碼上次被拒絕，請管理者到「🔑 密碼管理」重新設定後再匯入', 'rbbad');
+  if (P.getProperty('RB_BAD') === '1') throw rbErr_('食譜後台帳號密碼上次被拒絕，請管理者到「🔑 密碼管理」重新設定後再試', 'rbbad');   /* 2026-10-08：📤 上傳／覆蓋也會碰到，不只匯入 */
   var email = P.getProperty('RB_EMAIL'), pass = P.getProperty('RB_PASSWORD');
   if (!email || !pass) throw rbErr_('還沒有設定食譜後台帳號：請管理者到「🔑 密碼管理」→「🍰 自己做食譜系統登入帳號」設定', 'rbnocred');
   var s;
