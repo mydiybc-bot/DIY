@@ -3258,10 +3258,11 @@ function simpleCardHTML(){var h=AP.head,s=AP.sub||{},st=s.status||'',rid=h.req_i
   else if(st==='已寫入採購'){var pw=pushInfo();
     x+='<div class="ap-okline">✅ 已上傳採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+pushDoneHTML(pw)
       +'<div class="ap-muted">下一步（採購）：到採購系統「主檔」頁 →「🆕 待確認」補單價、單位換算、適用店。各店在採購系統「🆕 檔期新品」看得到這支新品。<a href="dashboard-purchase.html" target="_blank" rel="noopener">打開採購系統 ↗</a></div>'
+      +(semiTodo().length?'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2 ap-mini" id="apSemiRe" type="button">🧪 再寫一次半成品配方</button><span class="ap-muted">上傳時已一起寫；沒寫成功或改過配方時再按</span></div>':'')
       +'<details style="margin-top:4px"><summary class="ap-muted" style="cursor:pointer">寫錯要還原？（管理者）</summary><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apRbBtn" type="button">↩ 還原採購寫入（管理者）</button></div></details>'}
   else{var lf=st==='已核准（採購寫入失敗）'?pushLastFail(pushInfo()):null;
     if(st==='已核准（採購寫入失敗）')x+='<div class="ap-rejbox"><b>✕ 上次上傳沒有成功</b>'+(lf?'<div>'+esc(lf.msg)+' <span class="ap-muted">'+esc(lf.ts)+'</span></div>':'')+'<div class="ap-muted">排除問題後再按一次（同一張不會重複寫）。</div></div>';
-    else x+='<div class="ap-muted">'+(appr?'這張單已核准，還沒上傳採購系統。':'104 表單上的簽核全部通過後按這裡：這支會改成「已核准」，並把用料、新品項寫進採購系統（寫之前會自動備份，寫錯可以由管理者還原）。')+'</div>';
+    else x+='<div class="ap-muted">'+(appr?'這張單已核准，還沒上傳採購系統。':'104 表單上的簽核全部通過後按這裡：這支會改成「已核准」，並把用料、新品項、半成品配方寫進採購系統（寫之前會自動備份，寫錯可以由管理者還原）。')+'</div>';
     x+='<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apPushBtn" type="button">📦 簽核通過，上傳更新採購系統</button><button class="ap-btn2 ap-mini" id="apPvBtn" type="button">🔍 先看會寫什麼</button></div>'+pushPvHTML()}
   x+='</div></div>';
   x+='<div class="ap-step"><div class="ap-stepn">3</div><div class="ap-stepb"><b>上傳更新自己做食譜系統</b>'
@@ -3628,7 +3629,21 @@ function pushFlow(){if(_busy)return;var rid=AP.head.req_id,h=AP.head;if(!rid)ret
         if(!r.ok){if(r.code==='auth')setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg||'寫入失敗')+'</span>';updSendUI();return}
         var v=(r.data&&r.data.push)||{},w=v.written||[];
         SENDMSG='<span class="ap-okline">✓ 已寫入採購系統：'+esc(w.length?w.filter(function(d){return d.table!=='sku2'}).map(function(d){return d.name+' '+d.n+' 列'}).join('、'):'三張表都已經有了，沒有寫新的列')+'</span>'
-          +((v.warn||[]).length?'<div class="ap-pushwarn">⚠ '+v.warn.map(esc).join('<br>⚠ ')+'</div>':'')+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');updSendUI()})})})}
+          +((v.warn||[]).length?'<div class="ap-pushwarn">⚠ '+v.warn.map(esc).join('<br>⚠ ')+'</div>':'')+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');updSendUI();
+        semiPushFlow(true)})})})}
+/* 2026-10-08 經營者：半成品／材料包配方跟著 ②「簽核通過，上傳更新採購系統」一起寫進採購系統 dim_semi（走 🧪 分頁同一套 SemiMod：讀回核對、主檔沒有的原料自動建草稿、新器具設各店標配）；
+   出貨中心製作的不寫；和採購系統現有配方完全相同的略過；簽核欄寫「104 簽核通過（主廚確認）」 */
+function semiTodo(){return (AP.semis||[]).filter(function(x){return semiName(x)&&x.maker!=='出貨中心'})}
+function semiPushFlow(after){var list=semiTodo();if(!list.length)return;
+  if(!window.SemiMod||!SemiMod.autoSave){SENDMSG+='<div class="ap-bad">✕ 半成品配方沒有寫入：半成品模組沒有載入，請重新整理後按「🧪 再寫一次半成品配方」</div>';updSendUI();return}
+  var base=SENDMSG;SENDMSG=base+'<div class="ap-muted">🧪 寫入半成品配方中（'+list.length+' 項，每項寫完會讀回核對，約 5～20 秒）…</div>';updSendUI();
+  SemiMod.autoSave(list,semiDessert(),'104 簽核通過（主廚確認）').then(function(o){var x='';
+    if(o.done.length)x+='<div class="ap-okline">🧪 半成品配方已寫入並讀回確認：'+esc(o.done.join('、'))+'</div>';
+    if(o.same.length)x+='<div class="ap-muted">🧪 和採購系統現有配方相同，略過：'+esc(o.same.join('、'))+'</div>';
+    if(o.skip.length)x+='<div class="ap-pushwarn">⚠ 半成品沒有寫入：'+esc(o.skip.join('；'))+'</div>';
+    if(o.fail.length)x+='<div class="ap-bad">✕ 半成品配方讀回對不上（可能沒寫進去）：'+esc(o.fail.join('、'))+'，請按「🧪 再寫一次半成品配方」</div>';
+    SENDMSG=base+x;updSendUI()})}
+
 function rollbackFlow(){if(_busy)return;var rid=AP.head.req_id;if(!rid)return;
   if(!confirm('還原 '+rid+' 的採購系統寫入？\n\n會刪掉這張單當初寫進 產品名稱對照表／BOM 表／主檔／單位換算 的列（內容相符的才刪）。\n如果採購已經在主檔補了單價，那些也會一起刪掉。'))return;
   if(!confirm('再確認一次：刪除採購系統裡這張單寫入的列。確定？'))return;
@@ -3928,7 +3943,7 @@ function applyRoleLock(root){if(!unitMode()||lockedReq())return;
     el.disabled=true})}
 /* 送簽中／已核准：整張唯讀，只留查看、複製、下載、開新單 */
 function applyLock(root){if(!lockedReq())return;
-  var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apLmChef:1,apSemiAll:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
+  var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apLmChef:1,apSemiAll:1,apSemiRe:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-lmgo')||el.hasAttribute('data-copy')||el.hasAttribute('data-copy104')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     if(el.closest&&el.closest('#apCampCard'))return;   /* 🗂 整檔送簽核卡管整個檔期（畫面上這支鎖住時，別支照樣可以送） */
@@ -3961,7 +3976,7 @@ function paint(){var root=document.getElementById('apRoot');
   s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好後按最下方「送到「🧪 半成品/材料包」簽核儲存」，主管簽核後在那裡儲存</div>';
   AP.semis.forEach(function(sm,si){s+=semiHTML(sm,si)});
   if(!AP.semis.length)s+='<div class="ap-muted" style="padding:8px 12px">目前沒有半成品；沒有就留空。</div>';
-  if(AP.semis.some(function(x){return semiName(x)&&x.maker!=='出貨中心'}))s+='<div class="ap-actions" style="padding:8px 12px;justify-content:flex-end"><span class="ap-muted">填好了？下一步 →</span><button class="ap-btn" id="apSemiAll" title="把上面門市製作的半成品全部帶到「🧪 半成品/材料包」，主管簽核後在那裡儲存">送到「🧪 半成品/材料包」簽核儲存</button></div>';
+  /* 2026-10-08 經營者：半成品配方跟著申請表一起存，簽核通過後由 ②「上傳更新採購系統」一起寫進採購系統 → 拿掉「送到半成品分頁」按鈕 */
   s+='</div>';
   /* 表一 */
   s+=table1HTML(c);
@@ -3992,7 +4007,7 @@ function paint(){var root=document.getElementById('apRoot');
    +'<div class="ap-muted" style="margin-top:4px">「新增食材/器模具表」：含 🆕 列＋你手動加到新增表的列；貼到申請單範本 A18 格，一次貼整塊（每列 19 格，E／J 合併欄留空）。「dim_sku 新品項列」只有 🆕。</div></details>'
    +'<pre>'+esc(OUT.summary)+'</pre></div>'}
   s+='</div>';
-  s+='<div class="ap-card"><div class="ap-h">🧪 半成品要寫進採購系統？</div><div id="apNameChk" style="margin-bottom:6px">'+nameChkInner()+'</div><div class="ap-muted">在上方「🧪 半成品/材料包製作」最下面按「送到「🧪 半成品/材料包」簽核儲存」，會帶到「🧪 半成品/材料包」分頁的「待儲存」；主管簽核同意後，在那裡勾「以上配方已經主管簽核同意」、填簽核人，按「💾 全部儲存」。半成品配方要在那裡存好，採購系統才會拆成原料。</div></div>';
+  /* 2026-10-08 經營者：拿掉「🧪 半成品要寫進採購系統？」說明卡（申請表產出連結時半成品已一起存；② 上傳採購時一起寫配方） */
   s+='</div></div>';   /* /ap-area-full /ap-grid */
   root.innerHTML=s;
   wire();
@@ -4103,6 +4118,7 @@ function wire(){var root=document.getElementById('apRoot');
   var lc=document.getElementById('apLoadCamp');if(lc)lc.onclick=reloadDialog;   /* 2026-10-08：📂 重新載入申請表 */
   var lk=document.getElementById('apLink');if(lk)lk.onclick=function(){linkFlow(false)};
   lmWire();   /* 2026-10-08 申請表連結模式 */
+  var sre=document.getElementById('apSemiRe');if(sre)sre.onclick=function(){if(_busy)return;if(confirm('把這張申請表的半成品配方再寫一次到採購系統？（和現有配方相同的會略過）'))semiPushFlow(false)};
   var lkc=document.getElementById('apLinkCopy');if(lkc)lkc.onclick=copyLink;
   /* 2026-09-29 B 階段：各單位補充、檔期作業、儲存、送簽 */
   root.querySelectorAll('tr[data-urow]').forEach(function(tr){var nm=tr.getAttribute('data-urow');
@@ -4775,7 +4791,25 @@ function ensureInit(){if(S.inited){if(S.ready)render();return}S.inited=true;
   if(R&&R.ensureInit)R.ensureInit();
   (function wait(n){if(R&&R.ready){loadAll();return}if(n>240){var ld=document.getElementById('smLoading');if(ld)ld.textContent='讀不到主檔，請重新整理';return}setTimeout(function(){wait(n+1)},250)})(0)}
 
-return {ensureInit:ensureInit,openFromApply:openFromApply,queueFromApply:queueFromApply,
+/* 2026-10-08：新品申請表 ② 上傳採購時一起寫半成品配方（不切換分頁、不開確認框；簽核人＝signer）。回傳 {done,same,skip,fail}（品名清單） */
+function autoSave(list,dessert,signer){return new Promise(function(res){
+  function go(){var out={done:[],same:[],skip:[],fail:[]},eds=[];
+    if(!canWrite()){(list||[]).forEach(function(sm){var nm=trim(sm.link||sm.name);if(nm)out.fail.push(nm+'（半成品登記系統還沒準備好）')});res(out);return}
+    (list||[]).forEach(function(sm){var nm=trim(sm.link||sm.name);if(!nm)return;
+      if(sm.maker==='出貨中心'){out.skip.push(nm+'（出貨中心製作，不用登記）');return}
+      var ed=fromApplySemi(sm,dessert),pr=problems(ed);
+      if(pr.length){out.skip.push(nm+'（缺：'+pr.join('、')+'）');return}
+      var d=diffOf(ed);if(d&&!d.length){out.same.push(nm);return}
+      eds.push(ed)});
+    if(!eds.length){res(out);return}
+    S.busy=true;var tools=[];
+    (function next(i){if(i>=eds.length){S.busy=false;loadData().then(function(){render();if(tools.length)setPars(tools);res(out)},function(){render();res(out)});return}
+      var ed=eds[i],pl=payloadOf(ed,signer);
+      sendAndVerify(pl,checkOf(ed,pl)).then(function(ok){if(ok){out.done.push(trim(ed.name));newToolsOf(ed).forEach(function(t){tools.push(t)})}else out.fail.push(trim(ed.name));next(i+1)})})(0)}
+  if(S.ready){go();return}
+  S.pendingOpen=go;ensureInit()})}
+
+return {ensureInit:ensureInit,openFromApply:openFromApply,queueFromApply:queueFromApply,autoSave:autoSave,
   downloadTemplate:function(){downloadTemplate(null)},
   /* 給新品申請表「📥 載入半成品/材料包」用：回傳草稿（申請表格式） */
   parseForApply:function(file,dessert){return Promise.all([needXLSX(),readFile(file)]).then(function(a){var r=parseWorkbook(a[0],a[1],dessert||null);
