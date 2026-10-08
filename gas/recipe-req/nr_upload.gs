@@ -84,21 +84,39 @@ function nrMatchStep_(ings, s) {
   });
   return { ok: ok, miss: miss, notes: notes, items: items };
 }
-/* 相近名稱：互相包含，或去掉括號後相同；最多 6 個（給「改用後台既有品項」選） */
+/* 相近名稱（給「改用後台既有品項」選，最多 6 個）：
+   ① 相近字（why=variant，2026-10-08 經營者：「把榴蓮榴槤這種相近字也提示出來」）＝把異體字／繁簡字換成同一個字後名稱一樣，例：榴蓮＝榴槤、臺＝台、黄油＝黃油
+   ② 互相包含（why=contain）：去掉括號後一個包含另一個，例：伯爵茶粉／伯爵紅茶粉
+   ③ 只差一個字（why=near）：名稱 3 個字以上、換字後長度相同只差 1 個字，例：巧克力豆／巧克力球
+   照 ①②③、長度差排序 */
+var NR_VAR_PAIRS = '槤蓮臺台面麵菓果團糰蕃番姜薑鬆松盃杯盌碗裏裡著着峯峰' +   /* 異體字：前一個字換成後一個字 */
+  '黄黃绿綠红紅蓝藍苹蘋酱醬盐鹽鸡雞柠檸桔橘叶葉炼煉浆漿冻凍葱蔥萝蘿卜蔔麦麥谷穀凤鳳樱櫻干乾纸紙盘盤铲鏟网網筛篩机機计計时時锅鍋层層圆圓条條块塊颗顆张張个個只隻' +   /* 簡體 → 繁體 */
+  '咸鹹奶嬭粘黏';
+var NR_VAR = (function () { var m = {}; for (var i = 0; i + 1 < NR_VAR_PAIRS.length; i += 2) m[NR_VAR_PAIRS.charAt(i)] = NR_VAR_PAIRS.charAt(i + 1); return m; })();
+function nrVar_(s) { return String(s || '').replace(/[\s\S]/g, function (c) { return NR_VAR[c] || c; }).toLowerCase(); }
+function nrNear1_(a, b) {   /* 長度相同、只差 1 個字 */
+  if (a.length !== b.length) return false;
+  var d = 0; for (var i = 0; i < a.length; i++) if (a.charAt(i) !== b.charAt(i) && ++d > 1) return false;
+  return d === 1;
+}
 function nrSimilar_(ings, name) {
-  var n = rbNorm_(name).replace(/\s+/g, ''), core = n.replace(/\([^)]*\)/g, '');
+  var n = rbNorm_(name).replace(/\s+/g, ''), core = nrVar_(n.replace(/\([^)]*\)/g, ''));
   if (!n) return [];
-  var out = [], seen = {};
+  var out = [], seen = {}, TIER = { variant: 0, contain: 1, near: 2 };
   ings.forEach(function (x) {
-    var k = x.kn.replace(/\s+/g, ''), kc = k.replace(/\([^)]*\)/g, '');
-    if (k === n) return;
-    var hit = (core.length >= 2 && (kc === core || (kc.length >= 2 && (kc.indexOf(core) >= 0 || core.indexOf(kc) >= 0))));
-    if (!hit) return;
+    var k = x.kn.replace(/\s+/g, ''), kc = nrVar_(k.replace(/\([^)]*\)/g, ''));
+    if (k === n || !kc) return;   /* 完全同名（只是單位不同）另外列在「同名不同單位」 */
+    var why = '';
+    if (core.length >= 1 && kc === core) why = 'variant';
+    else if (core.length >= 2 && kc.length >= 2 && (kc.indexOf(core) >= 0 || core.indexOf(kc) >= 0)) why = 'contain';
+    else if (core.length >= 3 && nrNear1_(core, kc)) why = 'near';
+    if (!why) return;
     var key = x.name + '|' + x.unit;
     if (seen[key]) return; seen[key] = 1;
-    out.push({ name: x.name, unit: x.unit, cate: x.cate, d: Math.abs(kc.length - core.length) });
+    out.push({ name: x.name, unit: x.unit, cate: x.cate, why: why, t: TIER[why], d: Math.abs(kc.length - core.length) });
   });
-  return out.sort(function (a, b) { return a.d - b.d; }).slice(0, 6).map(function (x) { return { name: x.name, unit: x.unit, cate: x.cate }; });
+  return out.sort(function (a, b) { return (a.t - b.t) || (a.d - b.d); }).slice(0, 6)
+    .map(function (x) { return { name: x.name, unit: x.unit, cate: x.cate, why: x.why }; });
 }
 
 /* ---------- 預覽（只讀） ---------- */
@@ -124,6 +142,7 @@ function nrPreview_(p, auth) {
       var k = rbNorm_(it.name).replace(/\s+/g, '') + '|' + rbNorm_(it.unit).replace(/\s+/g, '');
       if (!miss[k]) {
         miss[k] = { key: k, name: it.name, unit: it.unit, zone: it.zone, note: it.note, kind: it.kind, units: it.units, steps: [], qty: [], similar: nrSimilar_(sp.ings, it.name) };
+        miss[k].strong = miss[k].similar.some(function (x) { return x.why === 'variant'; });   /* 有相近字＝很可能是同一樣東西：前端不預設「建新品項」 */
         order.push(k);
       }
       if (miss[k].steps.indexOf(i + 1) < 0) miss[k].steps.push(i + 1);

@@ -628,7 +628,7 @@ function doCheck(){if(!S.cred||!S.rc||S.busy)return;var rc0=S.rc;S.busy='check';
     S.pv=r.data||{};S.pvAt=hhmm();
     var miss=S.pv.missing||[],zones=S.pv.zones||[];
     miss.forEach(function(m){if(S.dec[m.key])return;
-      S.dec[m.key]={act:m.kind==='name'?'create':'',name:m.name,unit:m.unit,zone:zones.indexOf(m.zone)>=0?m.zone:'',price:'0',cost:'0',note:'',map:'',factor:'1'}});
+      S.dec[m.key]={act:(m.kind==='name'&&!m.strong)?'create':'',name:m.name,unit:m.unit,zone:zones.indexOf(m.zone)>=0?m.zone:'',price:'0',cost:'0',note:'',map:'',factor:'1'}});
     suggestCats();
     /* 2026-10-08 經營者：公版素材直接幫忙選好（被最多食譜用過的那一個），選錯再到後台改；使用者自己按過「不放」、上傳了檔、或已選的還在候選裡就不動 */
     var nTpl=0;
@@ -643,12 +643,19 @@ function doCheck(){if(!S.cred||!S.rc||S.busy)return;var rc0=S.rc;S.busy='check';
 /* ---------- ④ 後台沒有的品項 ---------- */
 function missCands(m){var out=[],seen={},d=S.dec[m.key]||{};
   if(d.made){var k0=d.made.name+'\u241F'+d.made.unit;seen[k0]=1;out.push({v:k0,t:d.made.name+'（'+d.made.unit+'）— 剛建的新品項'})}
-  (m.units||[]).forEach(function(u){var k=m.name+'\u241F'+u;if(!seen[k]){seen[k]=1;out.push({v:k,t:m.name+'（'+u+'）— 同名、單位不同'})}});
-  (m.similar||[]).forEach(function(x){var k=x.name+'\u241F'+x.unit;if(!seen[k]){seen[k]=1;out.push({v:k,t:x.name+'（'+x.unit+'）'+(x.cate?'｜'+x.cate:'')})}});
+  (m.units||[]).forEach(function(u){var k=m.name+'\u241F'+u;if(!seen[k]){seen[k]=1;out.push({v:k,t:m.name+'（'+(u||'單位空白')+'）— 同名、單位不同'+(u?'':'　⚠ 要先到後台補單位')})}});
+  (m.similar||[]).forEach(function(x){var k=x.name+'\u241F'+x.unit;if(!seen[k]){seen[k]=1;
+    out.push({v:k,t:x.name+'（'+(x.unit||'單位空白')+'）'+(x.why==='variant'?' — 相近字':(x.why==='near'?' — 只差一個字':''))+(x.cate?'｜'+x.cate:'')+(x.unit?'':'　⚠ 單位空白，要先到後台補單位')})}});
   return out}
+/* 2026-10-08 經營者：「把榴蓮榴槤這種相近字也提示出來」——後台有相近字／名稱相近的品項時，在這一項上面直接寫出來 */
+function simHint(m){var L=(m.similar||[]),v=L.filter(function(x){return x.why==='variant'}),o=L.filter(function(x){return x.why!=='variant'});
+  var f=function(x){return '<b>'+esc(x.name)+'</b>（'+esc(x.cate||'')+'｜單位 '+esc(x.unit||'空白')+'）'};
+  if(v.length)return '<div class="ru-warn" style="margin:4px 0">⚠ 後台有很像的：'+v.map(f).join('、')+'——相近字，很可能是同一樣東西。是同一樣就選「改用後台既有的」；真的是新東西才選「建新品項」。</div>';
+  if(o.length)return '<div class="ru-muted" style="margin:2px 0">後台有名稱相近的：'+o.slice(0,3).map(f).join('、')+'（是同一樣就選「改用後台既有的」）</div>';
+  return ''}
 function decOk(m){var d=S.dec[m.key]||{};
   if(d.act==='skip')return '';
-  if(d.act==='map'){if(!d.map)return '還沒選要改用哪一個';if(!(Number(d.factor)>0))return '數量倍率要大於 0';return ''}
+  if(d.act==='map'){if(!d.map)return '還沒選要改用哪一個';if(!d.map.split('\u241F')[1])return '改用的後台品項單位是空白：要先到後台食材管理補上單位，再按「🔍 重新檢查」';if(!(Number(d.factor)>0))return '數量倍率要大於 0';return ''}
   if(d.act==='create')return '還沒建立（按下面「建立新品項」）';
   return '還沒選處理方式'}
 function createRowErr(d){if(!String(d.name||'').trim())return '名稱是空的';if(!String(d.unit||'').trim())return '單位是空的';if(!d.zone)return '請選取放區';
@@ -664,7 +671,7 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
   miss.forEach(function(m,i){var d=S.dec[m.key],cands=missCands(m);
     h+='<tr><td><b>'+esc(m.name)+'</b> '+esc(m.unit)+(m.zone?'<div class="ru-muted">'+esc(m.zone)+'</div>':'')
       +(m.kind==='unit'?'<div class="ru-note">後台有「'+esc(m.name)+'」，但單位是 '+esc((m.units||[]).join('／'))+'</div>':'<div class="ru-miss">後台食材清單沒有</div>')
-      +(m.note?'<div class="ru-muted">附註：'+esc(m.note)+'</div>':'')+'</td>'
+      +(m.note?'<div class="ru-muted">附註：'+esc(m.note)+'</div>':'')+simHint(m)+'</td>'
       +'<td class="n">第 '+m.steps.join('、')+' 步</td><td><div class="ru-acts">'
       +'<label><input type="radio" name="mact'+i+'" value="create" data-mk="'+esc(m.key)+'"'+(d.act==='create'?' checked':'')+dis+'> 建新品項</label>'
       +'<label><input type="radio" name="mact'+i+'" value="map" data-mk="'+esc(m.key)+'"'+(d.act==='map'?' checked':'')+(cands.length?'':' disabled')+dis+'> 改用後台既有的'+(cands.length?'':'（沒有相近的）')+'</label>'
@@ -681,6 +688,7 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
     else if(d.act==='map'){
       h+='<div class="ru-sub"><div style="grid-column:span 2"><label>改用後台的</label><select data-map="'+esc(m.key)+'"'+dis+'><option value="">選一個…</option>'+cands.map(function(o){return '<option value="'+esc(o.v)+'"'+(d.map===o.v?' selected':'')+'>'+esc(o.t)+'</option>'}).join('')+'</select></div>'
         +'<div><label>數量 ×（倍率）</label><input type="number" data-factor="'+esc(m.key)+'" min="0" step="0.01" value="'+esc(d.factor)+'"'+dis+'></div></div>'
+        +(d.map&&!d.map.split('\u241F')[1]?'<div class="ru-err">✕ 這個後台品項的單位是空白，系統掛不上：請先到後台「食材管理」補上單位（例如 g），再按上面的「🔍 重新檢查」；或改選「這次不掛」</div>':'')
         +(d.made?'<div class="ru-note">剛建的新品項名稱或單位跟食譜寫的不同，已自動改用它'+(kn(d.made.unit)!==kn(m.unit)?'；單位不同（食譜 '+esc(m.unit)+' → 後台 '+esc(d.made.unit)+'），請確認倍率':'')+'</div>':'')
         +'<div class="ru-muted">單位不同時要換算：例如食譜寫「3 平匙」、後台是 g、1 平匙＝5 g，倍率就填 5（上傳時 3×5＝15 g）。單位一樣填 1。</div>'}
     else if(d.act==='skip')h+='<div class="ru-muted">上傳後寫在後台這支食譜的「備註」，請負責食譜的夥伴補上。</div>';
@@ -696,7 +704,7 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
     var on=function(){S.dec[k][e.getAttribute('data-f')]=e.value;var er=createRowErr(S.dec[k]),el=c.querySelector('[data-er="'+k.replace(/["\\]/g,'\\$&')+'"]');if(el)el.textContent=er?'⚠ '+er:'';
       var nb=miss.filter(function(m){var d=S.dec[m.key];return d.act==='create'&&createRowErr(d)}).length;var b=$('mCreate');if(b&&S.busy!=='ing')b.disabled=!nC||!!nb||!!S.busy;renderGo()};
     e.oninput=on;e.onchange=on})});
-  c.querySelectorAll('[data-map]').forEach(function(e){e.onchange=function(){S.dec[e.getAttribute('data-map')].map=e.value;renderGo()}});
+  c.querySelectorAll('[data-map]').forEach(function(e){e.onchange=function(){S.dec[e.getAttribute('data-map')].map=e.value;renderMiss();renderGo()}});
   c.querySelectorAll('[data-factor]').forEach(function(e){e.oninput=function(){S.dec[e.getAttribute('data-factor')].factor=e.value;renderGo()}});
   if($('mCreate'))$('mCreate').onclick=createIngs}
 function createIngs(){var miss=(S.pv&&S.pv.missing)||[];if(S.busy||!S.cred)return;
