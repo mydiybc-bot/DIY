@@ -3712,6 +3712,7 @@ async function riImport() {
         '回應沒送到（' + why + '）。後端很可能已經做完，' + (wait / 1000) + ' 秒後自動重試確認（' + n + '/' + max + '）…')
     });
     bar.style.width = '100%';
+    window._riLast = r;
     riRenderMatrix(r);
 
     if (!r || !r.ok) {
@@ -3818,7 +3819,7 @@ function riRenderCommitPanel(holdYms) {
   let h = '<div id="ri-commit-panel" style="margin-top:12px; padding:12px 14px; background:#fff8e1; border-radius:8px; font-size:13px;">';
   h += '<div style="font-weight:600; margin-bottom:6px;">準備寫入：' + holdYms.length + ' 個月</div>';
   h += '<div style="font-size:12px; color:var(--text2); margin-bottom:10px;">' +
-       '系統會一個月一個月寫，每月十幾秒，已經有的月份會被覆蓋（覆蓋前自動備份）。中途斷掉沒關係，按「查目前進度」就能接著跑。</div>';
+       '系統會一個月一個月寫，每月十幾秒。跟現有資料完全相同的月份自動跳過，有更動的月份會被覆蓋（覆蓋前自動備份）。中途斷掉沒關係，按「查目前進度」就能接著跑。</div>';
   h += '<div id="ri-commit-list" style="font-size:13px; line-height:1.9;">';
   holdYms.forEach(x => {
     h += '<div id="ri-cm-' + x.ym + '">⬜ ' + x.ym + '　<span style="color:var(--text2);">' + x.stores + ' 店 / ' + x.records + ' 筆</span></div>';
@@ -3839,7 +3840,7 @@ async function riCommitAll() {
   if (!items.length) return;
 
   if (!confirm('要寫入 ' + items.length + ' 個月的損益資料嗎？\n' +
-               '已存在的月份會被覆蓋（覆蓋前自動備份）。\n每月約十幾秒，中途請不要關視窗。')) return;
+               '跟現有資料完全相同的月份會自動跳過；有更動的月份會覆蓋（覆蓋前自動備份）。\n每月約十幾秒，中途請不要關視窗。')) return;
 
   _riCommitting = true;
   btn.disabled = true;
@@ -3875,6 +3876,10 @@ async function riCommitAll() {
     }
 
     doneN++;
+    if (r.skippedIdentical) {
+      el.innerHTML = '⏭ ' + ym + '　<span style="color:var(--text2);">跟現有資料完全相同，沒有寫入</span>';
+      continue;
+    }
     if (r.alreadyDone) {
       el.innerHTML = '✅ ' + ym + '　<span style="color:var(--text2);">已寫入（上一次其實成功了，只是回應沒送到）</span>';
       continue;
@@ -4205,7 +4210,45 @@ function riRenderMatrix(r) {
            '</div></details>';
     }
   }
+  h += riDiffHtml(r.diffByYm);
   mx.innerHTML = h;
+}
+
+/* 【2026-10-12】跟現有損益資料逐月比對（後端 diffByYm）：相同的月份寫入時自動跳過，有更動的列出差額 */
+function riDiffHtml(list) {
+  if (!list || !list.length) return '';
+  const esc = v => String(v).replace(/</g, '&lt;');
+  const fmt = n => Math.round(Number(n) || 0).toLocaleString();
+  let h = '<div style="margin-top:10px; padding:10px 12px; background:var(--card); border-radius:8px; font-size:13px;">' +
+          '<div style="font-weight:600; margin-bottom:6px;">跟現有損益資料比對</div>';
+  list.forEach(d => {
+    let line;
+    if (d.status === 'same') {
+      line = '⏭ ' + d.ym + '　<span style="color:var(--text2);">跟現有資料完全相同，寫入時自動跳過</span>';
+    } else if (d.status === 'new') {
+      line = '🆕 ' + d.ym + '　<span style="color:var(--text2);">新月份（' + d.stores + ' 店）</span>';
+    } else {
+      line = '✏️ ' + d.ym + '　<span style="color:#e65100;">有更動：' +
+             (d.changedStores.length ? d.changedStores.length + ' 店、' + d.diffCount + ' 個科目' : '') +
+             (d.newStores.length ? (d.changedStores.length ? '；' : '') + '新增 ' + d.newStores.length + ' 店' : '') +
+             '（寫入時覆蓋，覆蓋前自動備份）</span>';
+    }
+    h += '<div style="line-height:1.9;">' + line + '</div>';
+    if (d.diffs && d.diffs.length) {
+      h += '<details style="margin:0 0 6px 22px;"><summary style="cursor:pointer; font-size:12px; color:var(--text2);">看差額明細</summary>' +
+           '<table style="border-collapse:collapse; font-size:12px; margin-top:4px;">' +
+           '<tr><th style="padding:2px 8px; text-align:left;">店</th><th style="padding:2px 8px; text-align:left;">科目</th>' +
+           '<th style="padding:2px 8px; text-align:right;">現有</th><th style="padding:2px 8px; text-align:right;">新檔</th>' +
+           '<th style="padding:2px 8px; text-align:right;">差額</th></tr>';
+      d.diffs.forEach(x => {
+        h += '<tr><td style="padding:2px 8px;">' + x.store_id + '</td><td style="padding:2px 8px;">' + esc(x.account_name || x.account_code) +
+             '</td><td style="padding:2px 8px; text-align:right;">' + fmt(x.old) + '</td><td style="padding:2px 8px; text-align:right;">' +
+             fmt(x['new']) + '</td><td style="padding:2px 8px; text-align:right;">' + (x.delta > 0 ? '+' : '') + fmt(x.delta) + '</td></tr>';
+      });
+      h += '</table></details>';
+    }
+  });
+  return h + '</div>';
 }
 
 async function adminAskCommit() {
