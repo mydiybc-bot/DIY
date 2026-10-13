@@ -24,6 +24,7 @@ from reimbursement_dashboard import load_reimbursement_dashboard
 from report_store import ReportStore
 from self_dashboard import load_self_dashboard
 from storage_paths import FILE_LOCK, get_rev, bump_rev
+from scoreboard import build_public_scoreboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
 from recipe_auth import recipe_auth, call_anthropic
@@ -100,6 +101,15 @@ class TrainingHandler(BaseHTTPRequestHandler):
                     "role": session["role"] if session else None,
                     "employee_name": session.get("employee_name") if session else None,
                     "employee_id": session.get("employee_id") if session else None,
+                }
+            )
+            return
+        if parsed.path == "/api/public/scoreboard":
+            # 登入首頁的各店人員成績表(公開):只有姓名、店別與練習統計,不含員編與密碼
+            self.send_json(
+                {
+                    "ok": True,
+                    **build_public_scoreboard(STORE.load(), AUTH_STORE.load(), REPORT_STORE.load(), PROGRESS_STORE.load()),
                 }
             )
             return

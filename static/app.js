@@ -140,6 +140,29 @@ const RULE_GROUPS = [
   { id: "encourage", title: "鼓勵語", advanced: false },
   { id: "advanced", title: "進階 AI 設定（沒把握可不動）", advanced: true },
 ];
+// 員工帳號的店別選項(後台建立帳號必填;首頁成績表依此分組,數字開頭的依店號排序)
+const STORE_OPTIONS = [
+  "1 台中精明店",
+  "2 台中草悟道店",
+  "3 台北南京店",
+  "4 台北士林店",
+  "5 台南focus店",
+  "6 新竹文化店",
+  "7 新北板橋店",
+  "8 新北新店店",
+  "9 桃園中壢店",
+  "10 桃園藝文店",
+  "11 台北遠百信義A13店",
+  "12 高雄SKM Park店",
+  "北區",
+  "中南區",
+  "體驗設計部",
+  "體驗設計部（顧問）",
+  "體驗支援部",
+  "出貨中心",
+  "財務人資(含客服行政)",
+  "其他",
+];
 const AUTH_FIELDS = [
   { key: "admin_password", label: "管理員密碼" },
 ];
@@ -724,6 +747,7 @@ async function goToLoginPage() {
   reportsSummary.textContent = "尚未載入報告。";
   loginForm.reset();
   setLoginPasswordVisible(false);
+  loadScoreboard();
   toggleLoginFields();
   prefillLastEmployeeId();
   appPanel.classList.add("hidden");
@@ -954,7 +978,9 @@ function applyEmployeeFilter() {
   employeesForm.querySelectorAll(".point-row").forEach((row) => {
     const id = row.querySelector('[data-employee-field="employee_id"]').value.toLowerCase();
     const name = row.querySelector('[data-employee-field="employee_name"]').value.toLowerCase();
-    const match = !q || id.includes(q) || name.includes(q);
+    const storeField = row.querySelector('[data-employee-field="store"]');
+    const store = storeField ? storeField.value.toLowerCase() : "";
+    const match = !q || id.includes(q) || name.includes(q) || store.includes(q);
     row.classList.toggle("hidden", !match);
   });
 }
@@ -967,6 +993,23 @@ function applyPasswordVisibility() {
 }
 
 async function saveAllSettings() {
+  // 店別必填:有人沒選就不送出,跳到帳號設定並標出來
+  const missingStore = [...employeesForm.querySelectorAll(".point-row")].filter(
+    (row) => !(row.querySelector('[data-employee-field="store"]')?.value || "").trim(),
+  );
+  if (missingStore.length) {
+    setAdminSection("accounts");
+    if (employeeSearch) employeeSearch.value = "";
+    applyEmployeeFilter();
+    missingStore.forEach((row) => row.querySelector('[data-employee-field="store"]')?.classList.add("field-missing"));
+    missingStore[0].scrollIntoView({ behavior: "smooth", block: "center" });
+    const names = missingStore
+      .slice(0, 5)
+      .map((row) => row.querySelector('[data-employee-field="employee_name"]').value.trim() || "（未填姓名）")
+      .join("、");
+    showToast(`還有 ${missingStore.length} 位員工沒選店別：${names}${missingStore.length > 5 ? "…" : ""}`, "error");
+    return;
+  }
   try {
     const result = await api("/api/admin/save-all", {
       auth: collectAuthData(),
@@ -1041,7 +1084,7 @@ function toggleLoginFields() {
   employeeLoginFields.classList.toggle("hidden", roleSelect.value === "admin");
 }
 
-function addEmployeeEditor(employee = { employee_id: "", employee_name: "", password: "" }) {
+function addEmployeeEditor(employee = { employee_id: "", employee_name: "", password: "", store: "" }) {
   const row = document.createElement("div");
   row.className = "point-row";
 
@@ -1063,6 +1106,30 @@ function addEmployeeEditor(employee = { employee_id: "", employee_name: "", pass
   passwordInput.dataset.employeeField = "password";
   passwordInput.type = (showPasswords && showPasswords.checked) ? "text" : "password";
 
+  // 店別(必填):下拉選單;舊資料若不在選項內也保留顯示
+  const storeSelect = document.createElement("select");
+  storeSelect.dataset.employeeField = "store";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "請選擇店別";
+  storeSelect.appendChild(placeholder);
+  const currentStore = (employee.store || "").trim();
+  const storeChoices = currentStore && !STORE_OPTIONS.includes(currentStore)
+    ? [...STORE_OPTIONS, currentStore]
+    : STORE_OPTIONS;
+  storeChoices.forEach((store) => {
+    const option = document.createElement("option");
+    option.value = store;
+    option.textContent = store;
+    storeSelect.appendChild(option);
+  });
+  storeSelect.value = currentStore;
+  storeSelect.classList.toggle("field-missing", !currentStore);
+  storeSelect.addEventListener("change", () => {
+    storeSelect.classList.toggle("field-missing", !storeSelect.value);
+    applyEmployeeFilter();
+  });
+
   const removeButton = createButton("刪除員工", "ghost-button mini-button", () => {
     if (confirmDelete(`確定要刪除員工「${nameInput.value || idInput.value || "這位"}」嗎？`)) {
       row.remove();
@@ -1070,7 +1137,7 @@ function addEmployeeEditor(employee = { employee_id: "", employee_name: "", pass
       refreshEmployeeCount();
     }
   });
-  row.append(idInput, nameInput, passwordInput, removeButton);
+  row.append(idInput, nameInput, storeSelect, passwordInput, removeButton);
   employeesForm.appendChild(row);
 }
 
@@ -1516,6 +1583,7 @@ function collectAuthData() {
     employee_id: row.querySelector('[data-employee-field="employee_id"]').value.trim(),
     employee_name: row.querySelector('[data-employee-field="employee_name"]').value.trim(),
     password: row.querySelector('[data-employee-field="password"]').value.trim(),
+    store: (row.querySelector('[data-employee-field="store"]')?.value || "").trim(),
   }));
   return payload;
 }
@@ -1961,7 +2029,84 @@ window.addEventListener("pageshow", () => {
   }
 });
 
+// ---- 登入首頁：各店人員練習成績(公開) ----
+const scoreboardList = document.getElementById("scoreboard-list");
+const scoreboardSummary = document.getElementById("scoreboard-summary");
+
+async function loadScoreboard() {
+  if (!scoreboardList) return;
+  try {
+    const response = await fetch("/api/public/scoreboard");
+    const data = await response.json();
+    if (!response.ok || data.ok === false) throw new Error(data.error || "載入失敗");
+    renderScoreboard(data);
+  } catch (error) {
+    scoreboardSummary.textContent = "成績表暫時載入失敗，請稍後重新整理。";
+  }
+}
+
+function renderScoreboard(data) {
+  scoreboardList.innerHTML = "";
+  const stores = data.stores || [];
+  const sections = data.sections || [];
+  const totalPeople = stores.reduce((sum, s) => sum + s.people.length, 0);
+  const practiced = stores.reduce((sum, s) => sum + s.practiced, 0);
+  scoreboardSummary.textContent = `共 ${totalPeople} 人，已練習 ${practiced} 人。點店名可展開／收合。`;
+
+  stores.forEach((store) => {
+    const block = document.createElement("details");
+    block.className = "scoreboard-store";
+    block.open = true;
+    const summary = document.createElement("summary");
+    const title = document.createElement("strong");
+    title.textContent = store.store;
+    const count = document.createElement("span");
+    count.className = "status-text";
+    count.textContent = `已練習 ${store.practiced}／${store.people.length} 人`;
+    summary.append(title, count);
+    block.appendChild(summary);
+
+    const table = document.createElement("table");
+    table.className = "report-table scoreboard-table";
+    const head = document.createElement("tr");
+    ["姓名", ...sections.map((s) => s.title), "一次過關率", "平均答幾次", "平均分數", "最近練習"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      head.appendChild(th);
+    });
+    const thead = document.createElement("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    store.people.forEach((person) => {
+      const tr = document.createElement("tr");
+      const cells = [
+        person.name,
+        ...person.units.map((u) => (u.completed ? "✓ 完成" : u.done ? `${u.done}／${u.total}` : "—")),
+        person.first_try_pass_rate === null ? "—" : `${person.first_try_pass_rate}%`,
+        person.avg_attempts === null ? "—" : person.avg_attempts,
+        person.average_score === null ? "—" : person.average_score,
+        person.last_practice || "尚未練習",
+      ];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        td.textContent = val;
+        if (i > 0 && i <= sections.length && String(val).startsWith("✓")) td.className = "unit-done";
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const scroll = document.createElement("div");
+    scroll.className = "table-scroll";
+    scroll.appendChild(table);
+    block.appendChild(scroll);
+    scoreboardList.appendChild(block);
+  });
+}
+
 setupVoice();
+loadScoreboard();
 toggleLoginFields();
 prefillLastEmployeeId();
 refreshActionState();

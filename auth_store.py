@@ -82,6 +82,7 @@ class AuthStore:
                     "employee_id": employee_id,
                     "employee_name": employee_name,
                     "password": password,
+                    "store": str(item.get("store", "")).strip(),
                 }
             )
         return {
