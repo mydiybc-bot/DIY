@@ -122,14 +122,14 @@ function refreshFutureNear() {
 }
 /* 近 nDays 天重抓（呼叫端要先拿到 ScriptLock）。2026-10-13 從 refreshFutureNear 抽出來，給「門市今日」打開時的即時更新共用。
    抓完才寫；超過保險絲整輪放棄（沿用上一版）；成功後記指令碼屬性 FN_NEAR_AT（給 webRefreshNear_ 判斷要不要再抓）。 */
-function refreshFutureDays_(nDays) {
+function refreshFutureDays_(nDays, gapMs) {
   var t0 = Date.now(), fresh = [], days = {}, today = fmtDate_(new Date());
   for (var i = 0; i < nDays; i++) {
     if (Date.now() - t0 > FN_FUSE_MS) { Logger.log('保險絲：' + i + ' 天後時間不夠，這輪不寫（沿用上一版）'); return 0; }
     var d = fmtDate_(addDays_(new Date(), i));
     days[d] = 1;
     fresh.push.apply(fresh, fetchDayAuto_(d));
-    Utilities.sleep(200);
+    Utilities.sleep(gapMs || 200);   // 2026-10-13：網頁觸發的用 2 秒，讓訂位後台喘口氣
   }
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CFG.FUTURE);
   if (!sh) throw new Error('找不到分頁 ' + CFG.FUTURE);
@@ -154,7 +154,7 @@ function refreshFutureDays_(nDays) {
    ・上一次近期重抓（不論是誰觸發）未滿 FN_WEB_MIN 分鐘 → 不抓，直接回上次時間；12 家店共用同一份，誰先打開誰觸發。
    ・23～07 點（後台慢、沒人上班）與 10:00～10:44（10:15 整份重建＋快照要用鎖）不抓。
    ・拿不到鎖（守門員／回補正在跑）就回 busy，不等；下一次打開再試。只重抓 FN_WEB_DAYS 天（7 次查詢，約 35 秒）。 */
-var FN_WEB_DAYS = 7, FN_WEB_MIN = 10;
+var FN_WEB_DAYS = 3, FN_WEB_MIN = 15, FN_WEB_GAP_MS = 2000;   // 2026-10-13 晚經營者「怕查太密把訂位系統拖垮」：7 天／10 分鐘 → 今明後 3 天／15 分鐘，每筆間隔 2 秒（一天最多約 170 次查詢）
 function webRefreshNear_() {
   var now = new Date(), h = Number(Utilities.formatDate(now, CFG.TZ, 'H')), mi = Number(Utilities.formatDate(now, CFG.TZ, 'm'));
   var P = PropertiesService.getScriptProperties(), lastAt = Number(P.getProperty('FN_NEAR_AT')) || 0;
@@ -166,7 +166,7 @@ function webRefreshNear_() {
   try {
     lastAt = Number(P.getProperty('FN_NEAR_AT')) || 0;   // 拿到鎖後再看一次（剛剛別人可能已經抓完）
     if (Date.now() - lastAt < FN_WEB_MIN * 60000) return info({ refreshed: false, why: 'fresh' });
-    var n = refreshFutureDays_(FN_WEB_DAYS);
+    var n = refreshFutureDays_(FN_WEB_DAYS, FN_WEB_GAP_MS);
     lastAt = Number(P.getProperty('FN_NEAR_AT')) || lastAt;
     return info({ refreshed: true, rows: n });
   } catch (e) {
