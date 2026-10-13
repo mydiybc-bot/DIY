@@ -877,6 +877,7 @@ const SERVICE_KW = ['服務','服务','店員','店员','員工','员工','老�
 const NAME_STOP = new Set(['THE','AND','THIS','THAT','THEY','WAS','WERE','ARE','OUR','YOU','YOUR','HER','HIS','ITS','FOR','HAD','HAS','HAVE','VERY','GOOD','NICE','GREAT','FUN','BUT','ALL','CAN','WILL','SHE','HIM','NOT','AMAZING','AWESOME','REALLY','SUPER','LOVE','LOVED','YES','WOW','THANK','THANKS','GOOGLE','ORIGINAL','TRANSLATED','WOULD','COULD','SHOULD','HERE','THERE','WHEN','WHAT','TIME','MADE','MAKE','RECOMMEND','HIGHLY','DEFINITELY','EXPERIENCE','STAFF','SERVICE','ALSO','EVEN','JUST','ONLY','PLACE','CAKE','DIY','SKM','WITH','FROM','GOT','AGAIN','BEEN','THEM','WHO','HOW','OUT','WALKED','EVENTUALLY','EASY','UNLIMITED','ACCOMODATING','ACCOMMODATING','ESPECIALLY','NEITHER','HOWEVE','HOWEVER','WHENEVER','SEEING','ANOTHER','SOMETIMES','OVERALL','WHETHER','TAIPEI','BAKERY','SMALL','PIE','TARTS','BLACK','CHIFFON','VALENTINE','DAY','TEAM','TODAY','FIRST','THANKYOU','INSTAGRAM','PAD','PADS']);
 function validContent(r){ return cleanGoogleTranslation(String(r.text||'')).trim(); }   // 5星非空白判定用清理後內容
 function hasPersonName(c, store){
+  c = stripProductNames(c);                                                 // 先拿掉甜點名稱（如 萱萱的檸檬雙重奏），避免被當人名（2026-10-13）
   if (allowNames(c, store).length > 0) return true;                          // 分店夥伴綽號白名單（2026-08-17）
   if (/謝謝|谢谢|感謝|感谢|多謝|多谢|多虧|多亏|感恩/.test(c)) return true;   // 答謝某人＝有提到人
   const en = c.match(/[A-Z][a-z]{2,}|[A-Z]{3,}/g) || [];                    // 大寫英文名（從寬）
@@ -1105,6 +1106,12 @@ const NAME_ALLOW_BY_STORE = {
   '台中草悟道店': ['Kiki'],   // 2026-10-12：客人常寫 kiki／KiKi，大寫英文名規則抓不到（全小寫或中間大寫），登記白名單
 };
 // 比對不分大小寫（2026-10-12 起），回傳登記時的寫法（如 Kiki），與英文名規則抓到的同名會在 Set 裡自動合併
+// ===== 甜點名稱去除表（2026-10-13）=====
+// 有些甜點名稱含疊字（薇薇的洛可可、萱萱的檸檬雙重奏、汪汪狗蛋黃酥），會被疊字名規則誤當夥伴。
+// 判斷人名之前先把這些名稱從內容拿掉 → 同名的真夥伴（信義的萱萱、草悟道的汪汪）照樣算。
+// 全店通用；新增時寫完整甜點名稱，勿只寫兩字疊字（那是排除表的事）。
+const PRODUCT_NAME_STRIP = [/薇薇的?洛可可/g, /萱萱的?檸檬雙重奏/g, /汪汪狗/g];
+function stripProductNames(t){ let s = String(t||''); PRODUCT_NAME_STRIP.forEach(re => { s = s.replace(re, ' '); }); return s; }
 function allowNames(t, store){ const l = NAME_ALLOW_BY_STORE[store]; if(!l) return []; const low = String(t).toLowerCase(); return l.filter(w => low.indexOf(w.toLowerCase()) >= 0); }
 function rankMap(m){ return Object.entries(m).sort((a,b)=>b[1]-a[1]); }
 function countKeywords(r5){
@@ -1115,7 +1122,7 @@ function countKeywords(r5){
 function countNames(r5){
   const c = {};   // key = 店別\n夥伴 → {store,name,n}
   for (const r of r5){
-    const t = validContent(r); if(!t) continue;
+    const t = stripProductNames(validContent(r)); if(!t.trim()) continue;   // 甜點名稱不算夥伴（2026-10-13）
     const seen = new Set();
     (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
     (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w); });
@@ -1141,7 +1148,7 @@ function renderInsights(rows){
   // 2026-08-13 候選掃描：三種規則抓到的全部名稱（跨店合併、標類型），供經營者確認誤抓/漏抓後回報調整排除表
   const scan = {};
   for (const r of r5){
-    const t = validContent(r); if(!t) continue;
+    const t = stripProductNames(validContent(r)); if(!t.trim()) continue;   // 甜點名稱不算夥伴（2026-10-13）
     const seen = new Set();
     (t.match(/[A-Z][a-z]{2,}/g)||[]).forEach(w=>{ if(!EN_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n英文名'); });
     (t.match(/([\u4e00-\u9fff])\1/g)||[]).forEach(w=>{ if(!DUP_NAME_STOP.has(w) && !storeStopped(r.store,w)) seen.add(w+'\n疊字名'); });
