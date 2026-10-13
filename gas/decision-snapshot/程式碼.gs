@@ -2288,7 +2288,8 @@ function calcE_(res, rule, map) {
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
 //   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-07.15';   // .15：經營者更正 8 人以上（含）都算團體、都要先選甜點（團體 v1.4.1 need_dessert＝團體就要），只改說明文字；.14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
+var WEB_VER = 'e6-2026-10-13.16';   // .16：新增 action=mini（門市今日頁：自己人本月新增／還差、有效評論）；
+// 舊：.15   // .15：經營者更正 8 人以上（含）都算團體、都要先選甜點（團體 v1.4.1 need_dessert＝團體就要），只改說明文字；.14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊
 var BUNDLE_TTL = 21600;               // CacheService 最長 6 小時；runAll 寫完快照時另外主動清除
 
@@ -2306,6 +2307,7 @@ function doGet(e) {
     else if (act === 'live') out = webLive_(p.store);
     else if (act === 'fresh') out = webFresh_();
     else if (act === 'equip') out = webEquip_();
+    else if (act === 'mini') out = webMini_(p.store);   // 2026-10-13：門市今日（夥伴頁）只要自己人、好評幾個數字
     else out = { ok: false, error: '不支援的 action' };
   } catch (err) { out = { ok: false, error: '讀取失敗：' + shortErr_(err && err.message || err) }; }
   var json = JSON.stringify(out);
@@ -3011,4 +3013,31 @@ function zzWebTest() {
     var t = Date.now(), o = doGet({ parameter: p }).getContent();
     Logger.log(q + '：' + o.length + ' 字元｜' + (Date.now() - t) / 1000 + ' 秒｜' + o.slice(0, 200));
   });
+}
+
+// ============================================================
+// i. 門市今日（2026-10-13）：action=mini&store=N → 只回夥伴頁要的幾個數字（讀 snap_latest 一列，暫存 10 分鐘）
+//    自己人：本月至今新增、本月還需招（照自己人頁算法）、累計達成率；評論：本月有效評論（目標 15）。快照沒有該欄就回空字串。
+// ============================================================
+var MINI_TTL = 600;
+function webMini_(store) {
+  var sid = String(Number(store) || ''); if (!sid || Number(sid) < 1 || Number(sid) > 12) return { ok: false, error: '店號不對' };
+  var c = CacheService.getScriptCache(), key = 'mini|' + WEB_VER, all = null, hit = c.get(key);
+  if (hit) { try { all = JSON.parse(hit); } catch (e) { all = null; } }
+  if (!all) {
+    var sh = snapSS_().getSheetByName(TAB.LATEST); if (!sh) return { ok: false, error: '快照更新中，請稍後重新整理' };
+    var v = sh.getDataRange().getValues(), H = v[0].map(function (x) { return String(x); });
+    var col = function (pre) { for (var j = 0; j < H.length; j++) if (H[j].indexOf(pre) === 0 && H[j].indexOf('｜') < 0) return j; return -1; };
+    var cNew = col('E 本月至今新增'), cNeed = col('E 本月需招'), cRate = col('E 累計達成率%'), cRev = col('D 有效評論（本月）');
+    var cNewAt = H.indexOf('E 本月至今新增｜資料最新日'), cRevAt = cRev >= 0 ? H.indexOf(H[cRev] + '｜資料最新日') : -1;
+    var val = function (r, j) { if (j < 0) return ''; var x = r[j]; return x instanceof Date ? Utilities.formatDate(x, TZ, 'yyyy-MM-dd') : x; };
+    all = { stores: {} };
+    for (var i = 1; i < v.length; i++) {
+      var k = String(v[i][0]); if (!/^\d+$/.test(k)) continue;
+      all.stores[k] = { memNew: val(v[i], cNew), memNeed: val(v[i], cNeed), memRate: val(v[i], cRate), memAt: val(v[i], cNewAt), rev: val(v[i], cRev), revTarget: 15, revAt: val(v[i], cRevAt) };
+    }
+    try { c.put(key, JSON.stringify(all), MINI_TTL); } catch (e) {}
+  }
+  var o = all.stores[sid] || {};
+  return { ok: true, version: WEB_VER, store: Number(sid), memNew: o.memNew, memNeed: o.memNeed, memRate: o.memRate, memAt: o.memAt, rev: o.rev, revTarget: o.revTarget, revAt: o.revAt };
 }

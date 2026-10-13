@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<!-- 2026-10-13 新建「門市今日」：每店開店第一眼看的頁面（經營者裁定：夥伴都能看、每店一組簡單密碼、團體姓名電話要給夥伴看、
+     放自己人與好評數字、交辦不分班別、打勾要寫名字＋處理狀況、每期＝每季、店長／區主管／總部都能交辦、畫面要像給 5 歲小孩看一樣簡單）。
+     後端：公告及工作清單 API v6（storeDay／taskDone／taskUndo／taskAuth／taskList／taskSave／taskDel，都在伺服器驗密碼）
+           ＋決策中心讀取窗口（action=live 未來 7 天人數／團體問題／器具紅燈；action=mini 自己人、好評）＋公告（action=active）。
+     密碼：權限中心 dim_auth 的 store_N（夥伴）、task_store_N（店長）、task_zone_xx（區主管）、task_hq（總部）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>門市今日｜自己做烘焙聚樂部</title>
+<style>
+:root{--red:#C4412F;--red2:#E87060;--bg:#FFF8F2;--card:#fff;--ink:#3A2A24;--mute:#8A6F66;--line:#F0DDD3;--ok:#3E9A62;--okbg:#E5F4EA;--warn:#E0901F;--warnbg:#FDF0DB;--bad:#D0402F;--badbg:#FBE4E0;--blue:#3F86B0}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:18px;line-height:1.45;-webkit-text-size-adjust:100%}
+button{font:inherit;cursor:pointer}
+.wrap{max-width:760px;margin:0 auto;padding:12px 16px 90px}
+.top{display:flex;align-items:center;gap:10px;padding:6px 0 10px}
+.top h1{margin:0;font-size:28px;flex:1}
+.top .dt{font-size:18px;color:var(--mute)}
+.top .rf{border:0;background:#fff;border-radius:14px;width:48px;height:48px;font-size:24px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.fresh{font-size:14px;color:var(--mute);margin:-4px 0 10px}
+.sec{background:var(--card);border-radius:20px;padding:14px 14px 10px;margin:0 0 14px;box-shadow:0 1px 4px rgba(120,60,40,.08)}
+.sec h2{margin:0 0 10px;font-size:22px;display:flex;align-items:center;gap:8px}
+.sec h2 .n{font-size:16px;background:var(--red);color:#fff;border-radius:99px;padding:0 10px}
+.empty{color:var(--mute);font-size:18px;padding:6px 2px 10px}
+.wait{color:var(--mute);font-size:16px;padding:6px 2px 10px}
+.err{color:var(--bad);font-size:16px;padding:6px 2px 10px}
+/* 交辦 */
+.task{display:flex;gap:12px;align-items:flex-start;border-radius:16px;padding:12px;margin:0 0 10px;border:2px solid var(--line);background:#fff}
+.task .ck{flex:0 0 52px;height:52px;border-radius:50%;border:3px solid #D9C3B8;background:#fff;font-size:28px;color:#fff;line-height:1}
+.task .tx{flex:1;min-width:0}
+.task .tt{font-size:21px;font-weight:700;word-break:break-word}
+.task .nt{font-size:16px;color:var(--mute);margin-top:2px;white-space:pre-wrap;word-break:break-word}
+.task .tg{font-size:14px;color:var(--mute);margin-top:4px}
+.task .dn{font-size:16px;color:var(--ok);margin-top:4px;word-break:break-word}
+.task.late{border-color:var(--bad);background:var(--badbg)}
+.task.late .lt{color:var(--bad);font-weight:700;font-size:16px;margin-top:4px}
+.task.done{border-color:#BFE3CB;background:var(--okbg)}
+.task.done .tt{color:#5C8A6C;text-decoration:line-through}
+.task.done .ck{background:var(--ok);border-color:var(--ok)}
+/* 團體 */
+.grp{border:2px solid var(--line);border-radius:16px;padding:12px;margin:0 0 10px}
+.grp.today{border-color:var(--red2);background:#FFF1EC}
+.grp .h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.grp .d{font-size:22px;font-weight:800}
+.grp .p{font-size:22px;font-weight:800;color:var(--red)}
+.grp .who{font-size:20px;margin-top:4px}
+.grp .tel{display:inline-block;margin-top:8px;background:var(--blue);color:#fff;text-decoration:none;border-radius:12px;padding:8px 16px;font-size:20px;font-weight:700}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:15px;border-radius:99px;padding:3px 10px;background:#F3ECE8}
+.chip.ok{background:var(--okbg);color:#2E7A4C}.chip.warn{background:var(--warnbg);color:#9A5C08}.chip.bad{background:var(--badbg);color:var(--bad);font-weight:700}
+.grp .memo{font-size:15px;color:var(--mute);margin-top:6px;white-space:pre-wrap}
+.grp details{margin-top:6px}.grp summary{font-size:16px;color:var(--mute)}
+.grp ul{margin:4px 0 0;padding-left:22px;font-size:16px}
+/* 7 天 */
+.days{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.day{border-radius:14px;padding:8px 2px;text-align:center;border:0;background:#F6E3DD;color:var(--ink)}
+.day .w{font-size:15px}.day .m{font-size:13px;color:var(--mute)}.day .q{font-size:20px;font-weight:800}
+.day.l2{background:#FBD9A5}.day.l3{background:#F4A989}.day.l4{background:var(--bad);color:#fff}.day.l4 .m{color:#fff}
+.day.sel{outline:3px solid var(--ink)}
+.slots{margin-top:10px;font-size:17px}
+.slot{display:flex;gap:10px;align-items:center;padding:3px 0}
+.slot b{width:64px}.slot i{display:block;height:16px;border-radius:8px;background:var(--red2)}
+.eq{margin-top:10px;font-size:16px;color:var(--bad)}
+/* 目標 */
+.goal{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.gc{border-radius:16px;background:#FFF4EC;padding:12px}
+.gc .k{font-size:18px;font-weight:700}
+.gc .v{font-size:30px;font-weight:800;color:var(--red);line-height:1.2}
+.gc .s{font-size:15px;color:var(--mute)}
+.bar{height:14px;border-radius:7px;background:#F0DDD3;overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--ok);border-radius:7px}
+/* 公告 */
+.ann{border-bottom:1px solid var(--line);padding:8px 0}
+.ann:last-child{border-bottom:0}
+.ann summary{font-size:19px;font-weight:600;list-style:none;cursor:pointer}
+.ann summary::-webkit-details-marker{display:none}
+.ann .body{font-size:16px;white-space:pre-wrap;color:#5A463F;margin-top:6px;word-break:break-word}
+.ann a{display:block;font-size:16px;margin-top:4px;color:var(--blue)}
+/* 底部 */
+.foot{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.foot button{border:0;background:#fff;border-radius:14px;padding:12px 16px;font-size:17px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.foot .boss{background:var(--ink);color:#fff}
+/* 登入／選店 */
+.login{max-width:420px;margin:12vh auto 0;text-align:center;padding:0 16px}
+.login h1{font-size:30px;margin:0 0 6px}
+.login p{color:var(--mute);margin:0 0 18px}
+.login input{width:100%;font-size:26px;padding:14px;border-radius:16px;border:2px solid #E3CFC6;text-align:center;letter-spacing:2px}
+.big{width:100%;margin-top:14px;border:0;border-radius:16px;background:var(--red);color:#fff;font-size:24px;font-weight:800;padding:16px}
+.big:disabled{opacity:.5}
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.pick button{border:0;border-radius:16px;background:#fff;padding:16px 6px;font-size:20px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.link{background:none;border:0;color:var(--mute);text-decoration:underline;font-size:16px;margin-top:16px}
+/* 彈出 */
+.mask{position:fixed;inset:0;background:rgba(40,20,10,.45);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.mask.on{display:flex}
+.sheet{background:#fff;width:100%;max-width:760px;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:18px 16px 26px}
+.sheet h3{margin:0 0 12px;font-size:24px}
+.sheet label{display:block;font-size:17px;color:var(--mute);margin:12px 0 4px}
+.sheet input,.sheet textarea,.sheet select{width:100%;font-size:20px;padding:12px;border-radius:14px;border:2px solid #E3CFC6;font-family:inherit}
+.sheet textarea{min-height:90px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.ghost{width:100%;margin-top:10px;border:2px solid #E3CFC6;background:#fff;border-radius:16px;font-size:20px;padding:12px}
+.seg{display:flex;flex-wrap:wrap;gap:8px}
+.seg button{border:2px solid #E3CFC6;background:#fff;border-radius:14px;padding:10px 14px;font-size:18px}
+.seg button.on{border-color:var(--red);background:var(--red);color:#fff;font-weight:700}
+.msg{margin-top:10px;font-size:17px;min-height:24px}
+.msg.bad{color:var(--bad)}.msg.ok{color:var(--ok)}
+.mt{border:2px solid var(--line);border-radius:14px;padding:10px 12px;margin:0 0 8px}
+.mt .tt{font-size:19px;font-weight:700}
+.mt .tg{font-size:15px;color:var(--mute)}
+.mt .acts{display:flex;gap:8px;margin-top:6px}
+.mt .acts button{border:0;border-radius:12px;padding:8px 14px;font-size:16px;background:#F3ECE8}
+.mt .acts .del{background:var(--badbg);color:var(--bad)}
+@media (max-width:420px){.days{gap:4px}.day .q{font-size:17px}.goal{grid-template-columns:1fr}.top h1{font-size:24px}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="mask" id="mask"><div class="sheet" id="sheet"></div></div>
+<script>
+(function(){
+'use strict';
+var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API v6 */
+var SNAP_API = 'https://script.google.com/macros/s/AKfycbw55lxutTkj13v1E5pa3fVClI08K1ObXqj3V_VNOG3PV8rUaIe8l2ublZuEjMophVKFMw/exec'; /* 決策中心讀取窗口 */
+var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
+var WK = ['日','一','二','三','四','五','六'];
+var S = { sid: 0, pw: '', day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null };
+var $app = document.getElementById('app'), $mask = document.getElementById('mask'), $sheet = document.getElementById('sheet');
+
+/* ---------- 小工具 ---------- */
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function ls(k, v){ try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch(e){ return null; } }
+function ss(k, v){ try { if (v === undefined) return sessionStorage.getItem(k); if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch(e){ return null; } }
+function shortOf(id){ for (var i = 0; i < STORES.length; i++) if (STORES[i][0] === id) return STORES[i][1]; return id + ' 號'; }
+function tpeToday(){ var d = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function today(){ return (S.day && S.day.today) || tpeToday(); }
+function dObj(s){ return new Date(Number(s.slice(0,4)), Number(s.slice(5,7)) - 1, Number(s.slice(8,10))); }
+function md(s){ return Number(s.slice(5,7)) + '/' + Number(s.slice(8,10)); }
+function wk(s){ return '週' + WK[dObj(s).getDay()]; }
+function dayLabel(s){ var t = today(); if (s === t) return '今天'; var diff = Math.round((dObj(s) - dObj(t)) / 86400000); if (diff === 1) return '明天'; if (diff === 2) return '後天'; return md(s) + '（' + wk(s) + '）'; }
+function f0(n){ return '$' + Number(n || 0).toLocaleString('en-US'); }
+function telFmt(p){ p = String(p || '').replace(/\D/g, ''); return p.length === 10 ? p.slice(0,4) + '-' + p.slice(4,7) + '-' + p.slice(7) : p; }
+function rq(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+function post(body, ms){
+  ms = ms || 60000;
+  var once = function(){
+    var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function(){ ctl.abort(); }, ms) : 0;
+    return fetch(ANN_API, { method: 'POST', body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined, redirect: 'follow' })
+      .then(function(r){ return r.text(); })
+      .then(function(t){ clearTimeout(tm); try { return JSON.parse(t); } catch(e){ throw new Error('系統忙碌，請再按一次'); } },
+            function(e){ clearTimeout(tm); throw new Error(e && e.name === 'AbortError' ? '網路太慢，請再按一次' : '連不上，請再按一次'); });
+  };
+  return once().catch(function(e){ return new Promise(function(res){ setTimeout(res, 1500); }).then(once); });
+}
+var jpN = 0;
+function jsonp(url, ms){
+  return new Promise(function(resolve, reject){
+    var cb = '__st' + (++jpN) + '_' + Date.now(), s = document.createElement('script'), done = false;
+    var end = function(){ done = true; try { delete window[cb]; } catch(e){ window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+    var tm = setTimeout(function(){ if (!done){ end(); reject(new Error('逾時')); } }, ms || 60000);
+    window[cb] = function(d){ clearTimeout(tm); end(); resolve(d); };
+    s.onerror = function(){ clearTimeout(tm); if (!done){ end(); reject(new Error('讀取失敗')); } };
+    s.src = url + (url.indexOf('?') < 0 ? '?' : '&') + 'callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+function jsonpRetry(url){ return jsonp(url, 45000).catch(function(){ return jsonp(url, 60000); }); }
+
+/* ---------- 開始 ---------- */
+function init(){
+  var q = new URLSearchParams(location.search), s = Number(q.get('s') || ls('st_sid') || 0);
+  if (!(s >= 1 && s <= 12)) return renderPick();
+  S.sid = s; ls('st_sid', String(s));
+  if (q.get('s') !== String(s)) history.replaceState(null, '', '?s=' + s);
+  S.pw = ls('st_pw_' + s) || '';
+  if (!S.pw) return renderLogin('');
+  try { var c = JSON.parse(ls('st_cache_' + s) || 'null'); if (c && c.day && c.day.today === tpeToday()) { S.day = c.day; S.live = c.live; S.mini = c.mini; S.ann = c.ann; S.cached = c.at; } } catch(e){}
+  renderMain(); load();
+}
+function renderPick(){
+  document.title = '門市今日｜選店';
+  $app.innerHTML = '<div class="login"><h1>🏪 這是哪一家店？</h1><p>選一次就好，下次打開會記住</p><div class="pick">' +
+    STORES.map(function(x){ return '<button data-s="' + x[0] + '">' + x[0] + ' ' + esc(x[1]) + '</button>'; }).join('') + '</div></div>';
+  $app.querySelectorAll('[data-s]').forEach(function(b){ b.onclick = function(){ location.href = '?s=' + b.getAttribute('data-s'); }; });
+}
+function renderLogin(msg){
+  document.title = '門市今日｜' + shortOf(S.sid);
+  $app.innerHTML = '<div class="login"><h1>🔒 ' + esc(shortOf(S.sid)) + '店</h1><p>輸入店密碼</p>' +
+    '<input id="pw" type="password" inputmode="text" autocomplete="current-password" placeholder="店密碼">' +
+    '<button class="big" id="go">進去</button><div class="msg bad" id="lm">' + esc(msg || '') + '</div>' +
+    '<button class="link" id="chg">不是這家店？換店</button></div>';
+  var $pw = document.getElementById('pw'), $go = document.getElementById('go');
+  $pw.focus();
+  $pw.onkeydown = function(e){ if (e.key === 'Enter') $go.click(); };
+  document.getElementById('chg').onclick = function(){ ls('st_sid', null); location.href = location.pathname; };
+  $go.onclick = function(){
+    var pw = $pw.value.trim(); if (!pw) return;
+    $go.disabled = true; $go.textContent = '確認中…';
+    post({ action: 'storeDay', store: S.sid, spw: pw }).then(function(j){
+      if (!j.ok){ $go.disabled = false; $go.textContent = '進去'; document.getElementById('lm').textContent = j.msg || '不對，再試一次'; return; }
+      S.pw = pw; ls('st_pw_' + S.sid, pw); S.day = j.data; renderMain(); load(true);
+    }).catch(function(e){ $go.disabled = false; $go.textContent = '進去'; document.getElementById('lm').textContent = e.message; });
+  };
+}
+
+/* ---------- 讀資料 ---------- */
+var loading = false;
+function load(skipDay){
+  if (loading) return; loading = true; S.err = {};
+  var jobs = [];
+  if (!skipDay) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.pw }).then(function(j){
+    if (!j.ok){ if (j.code === 'auth'){ ls('st_pw_' + S.sid, null); S.pw = ''; renderLogin(j.msg); throw 'stop'; } S.err.day = j.msg; return; }
+    S.day = j.data; paint('todo'); paint('grp');
+  }, function(e){ if (e !== 'stop'){ S.err.day = e.message; paint('todo'); paint('grp'); } }));
+  jobs.push(jsonpRetry(SNAP_API + '?action=live&store=' + S.sid).then(function(j){ if (j && j.ok){ S.live = j; } else S.err.live = (j && j.error) || '讀取失敗'; paint('week'); paint('grp'); },
+    function(e){ S.err.live = e.message; paint('week'); }));
+  jobs.push(jsonpRetry(SNAP_API + '?action=mini&store=' + S.sid).then(function(j){ if (j && j.ok) S.mini = j; else S.err.mini = (j && j.error) || '讀取失敗'; paint('goal'); },
+    function(e){ S.err.mini = e.message; paint('goal'); }));
+  jobs.push(post({ action: 'active' }, 45000).then(function(j){ if (j.ok) S.ann = j.data; else S.err.ann = j.msg; paint('ann'); },
+    function(e){ S.err.ann = e.message; paint('ann'); }));
+  Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){
+    loading = false; S.cached = '';
+    if (S.pw && S.day) ls('st_cache_' + S.sid, JSON.stringify({ at: new Date().toISOString(), day: S.day, live: S.live, mini: S.mini, ann: S.ann }));
+    paint('fresh');
+  });
+  paint('fresh');
+}
+
+/* ---------- 主畫面 ---------- */
+function renderMain(){
+  document.title = '門市今日｜' + shortOf(S.sid);
+  var t = today();
+  $app.innerHTML = '<div class="wrap">' +
+    '<div class="top"><h1>🏪 ' + esc(shortOf(S.sid)) + '店</h1><div class="dt">' + md(t) + '（' + WK[dObj(t).getDay()] + '）</div><button class="rf" id="rf" title="重新整理">↻</button></div>' +
+    '<div class="fresh" id="fresh"></div>' +
+    '<div class="sec"><h2>✅ 今天要做 <span class="n" id="todoN" style="display:none"></span></h2><div id="todo"></div></div>' +
+    '<div class="sec"><h2>👥 團體客人</h2><div id="grp"></div></div>' +
+    '<div class="sec"><h2>📅 這 7 天的客人</h2><div id="week"></div></div>' +
+    '<div class="sec"><h2>🏆 本月目標</h2><div id="goal"></div></div>' +
+    '<div class="sec"><h2>📢 公告</h2><div id="ann"></div></div>' +
+    '<div class="foot"><button class="boss" id="boss">🔑 我要交辦</button><button id="home">⬅ 回首頁</button><button id="out">🔒 登出</button><button id="chg">🏪 換店</button></div>' +
+    '</div>';
+  document.getElementById('rf').onclick = function(){ load(); };
+  document.getElementById('boss').onclick = openMgr;
+  document.getElementById('home').onclick = function(){ location.href = 'hub.html'; };
+  document.getElementById('out').onclick = function(){ if (!confirm('登出這台裝置？')) return; ls('st_pw_' + S.sid, null); ls('st_cache_' + S.sid, null); location.reload(); };
+  document.getElementById('chg').onclick = function(){ ls('st_sid', null); location.href = location.pathname; };
+  ['todo','grp','week','goal','ann','fresh'].forEach(paint);
+}
+function paint(k){
+  var el = document.getElementById(k); if (!el) return;
+  if (k === 'fresh') el.textContent = loading ? (S.cached ? '⏳ 正在更新…（先給你看上次的）' : '⏳ 讀取中…') : (Object.keys(S.err).length ? '⚠️ 有一部分沒讀到，按右上 ↻ 再試' : '');
+  else if (k === 'todo') el.innerHTML = todoHtml(), bindTodo();
+  else if (k === 'grp') el.innerHTML = grpHtml();
+  else if (k === 'week') el.innerHTML = weekHtml(), bindWeek();
+  else if (k === 'goal') el.innerHTML = goalHtml();
+  else if (k === 'ann') el.innerHTML = annHtml();
+}
+
+/* ✅ 交辦 */
+function todoHtml(){
+  var n = document.getElementById('todoN');
+  if (!S.day) return S.err.day ? '<div class="err">😵 沒讀到：' + esc(S.err.day) + '</div>' : '<div class="wait">⏳ 讀取中…</div>';
+  var ts = S.day.tasks || [], left = ts.filter(function(t){ return t.st !== 'done'; }).length;
+  if (n){ n.style.display = left ? '' : 'none'; n.textContent = left; }
+  if (!ts.length) return '<div class="empty">今天沒有交辦 🎉</div>';
+  if (!left) ts = ts.slice();
+  return (left ? '' : '<div class="empty" style="color:var(--ok)">全部做完了 👏</div>') + ts.map(function(t, i){
+    var late = t.st === 'late', done = t.st === 'done';
+    return '<div class="task ' + t.st + '"><button class="ck" data-i="' + i + '" aria-label="' + (done ? '取消打勾' : '打勾') + '">' + (done ? '✓' : '') + '</button><div class="tx">' +
+      '<div class="tt">' + esc(t.title) + '</div>' + (t.note ? '<div class="nt">' + esc(t.note) + '</div>' : '') +
+      (late ? '<div class="lt">⏰ ' + md(t.occ) + ' 就要做了</div>' : '') +
+      (done ? '<div class="dn">✓ ' + esc(t.who) + ' ' + esc(t.doneAt) + (t.doneNote ? '：' + esc(t.doneNote) : '') + '</div>' : '') +
+      '<div class="tg">' + esc(t.when) + '・' + esc(t.by) + '交辦</div></div></div>';
+  }).join('');
+}
+function bindTodo(){
+  document.querySelectorAll('#todo .ck').forEach(function(b){ b.onclick = function(){ var t = S.day.tasks[Number(b.getAttribute('data-i'))]; if (t.st === 'done') undoTask(t); else doTask(t); }; });
+}
+function doTask(t){
+  openSheet('<h3>✅ ' + esc(t.title) + '</h3>' +
+    '<label>你的名字</label><input id="who" maxlength="20" value="' + esc(ls('st_who') || '') + '" placeholder="例：小美">' +
+    '<label>處理狀況</label><textarea id="nt" maxlength="200" placeholder="例：做好了／缺貨已叫貨／明天再補"></textarea>' +
+    '<button class="big" id="ok">✓ 做好了</button><button class="ghost" id="cx">先不要</button><div class="msg" id="sm"></div>');
+  var $who = document.getElementById('who'); if (!$who.value) $who.focus();
+  document.getElementById('cx').onclick = closeSheet;
+  document.getElementById('ok').onclick = function(){
+    var who = $who.value.trim(), nt = document.getElementById('nt').value.trim(), $b = this, $m = document.getElementById('sm');
+    if (!who){ $m.className = 'msg bad'; $m.textContent = '請寫名字'; $who.focus(); return; }
+    ls('st_who', who); $b.disabled = true; $b.textContent = '送出中…';
+    post({ action: 'taskDone', store: S.sid, spw: S.pw, task_id: t.id, who: who, note: nt, rq: rq() }).then(function(j){
+      if (!j.ok){ $b.disabled = false; $b.textContent = '✓ 做好了'; $m.className = 'msg bad'; $m.textContent = j.msg || '沒送出，再按一次'; return; }
+      t.st = 'done'; t.who = (j.data && j.data.already) ? j.data.who : who; t.doneNote = (j.data && j.data.already) ? '' : nt; t.doneAt = new Date().toTimeString().slice(0,5);
+      closeSheet(); paint('todo'); setTimeout(function(){ load(); }, 400);
+    }).catch(function(e){ $b.disabled = false; $b.textContent = '✓ 做好了'; $m.className = 'msg bad'; $m.textContent = e.message; });
+  };
+}
+function undoTask(t){
+  openSheet('<h3>取消打勾？</h3><div style="font-size:19px">' + esc(t.title) + '</div><div class="tg" style="color:var(--mute);margin-top:4px">' + esc(t.who) + ' ' + esc(t.doneAt) + ' 打的勾</div>' +
+    '<label>你的名字</label><input id="who" maxlength="20" value="' + esc(ls('st_who') || '') + '">' +
+    '<button class="big" id="ok" style="background:var(--bad)">取消打勾</button><button class="ghost" id="cx">不要</button><div class="msg" id="sm"></div>');
+  document.getElementById('cx').onclick = closeSheet;
+  document.getElementById('ok').onclick = function(){
+    var who = document.getElementById('who').value.trim(), $b = this, $m = document.getElementById('sm');
+    if (!who){ $m.className = 'msg bad'; $m.textContent = '請寫名字'; return; }
+    $b.disabled = true;
+    post({ action: 'taskUndo', store: S.sid, spw: S.pw, task_id: t.id, occ: t.occ, who: who, rq: rq() }).then(function(j){
+      if (!j.ok){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = j.msg; return; }
+      closeSheet(); load();
+    }).catch(function(e){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = e.message; });
+  };
+}
+
+/* 👥 團體 */
+function liveGroup(g){
+  var L = S.live && S.live.store && S.live.store.groups; if (!L) return null;
+  for (var i = 0; i < L.length; i++) if (L[i].d === g.d && L[i].t === g.t && Number(L[i].size) === Number(g.size)) return L[i];
+  for (var k = 0; k < L.length; k++) if (L[k].d === g.d && L[k].t === g.t) return L[k];
+  return null;
+}
+function grpHtml(){
+  if (!S.day) return S.err.day ? '<div class="err">😵 沒讀到：' + esc(S.err.day) + '</div>' : '<div class="wait">⏳ 讀取中…</div>';
+  var G = (S.day.groups && S.day.groups.rows) || [];
+  if (!G.length) return '<div class="empty">接下來 2 週沒有團體</div>';
+  return G.map(function(g){
+    var lg = liveGroup(g), chips = [];
+    var dep = g.deposit, paid = g.paid;
+    if (lg && lg.exempt) chips.push('<span class="chip ok">免訂金</span>');
+    else if (dep > 0 && paid >= dep) chips.push('<span class="chip ok">💰 訂金付了</span>');
+    else if (paid > 0) chips.push('<span class="chip warn">💰 訂金還差 ' + f0(dep - paid) + '</span>');
+    else if (/已付/.test(g.stTxt)) chips.push('<span class="chip ok">💰 ' + esc(g.stTxt) + '</span>');
+    else chips.push('<span class="chip bad">💰 訂金還沒付</span>');
+    var q = (g.menu || []).reduce(function(t, x){ return t + x.q; }, 0);
+    chips.push(g.menu && g.menu.length ? '<span class="chip ok">🍰 甜點選好了</span>' : '<span class="chip bad">🍰 甜點還沒選</span>');
+    if (lg) (lg.hi || []).forEach(function(x){ chips.push('<span class="chip bad">🚨 ' + esc(x) + '</span>'); });
+    if (lg) (lg.mid || []).forEach(function(x){ chips.push('<span class="chip warn">⚠️ ' + esc(x) + '</span>'); });
+    return '<div class="grp' + (g.d === today() ? ' today' : '') + '"><div class="h"><span class="d">' + esc(dayLabel(g.d)) + ' ' + esc(g.t) + '</span><span class="p">' + g.size + ' 人</span><span class="chip">' + esc(String(g.cat || '').replace(/訂位$/, '')) + '</span></div>' +
+      '<div class="who">🙋 ' + esc(g.name || '（沒有名字）') + (g.purpose ? '・' + esc(g.purpose) : '') + '</div>' +
+      (g.phone ? '<a class="tel" href="tel:' + esc(String(g.phone).replace(/[^\d+]/g, '')) + '">📞 ' + esc(telFmt(g.phone)) + '</a>' : '') +
+      '<div class="chips">' + chips.join('') + '</div>' +
+      (g.memo ? '<div class="memo">📝 ' + esc(g.memo) + '</div>' : '') +
+      (g.menu && g.menu.length ? '<details><summary>看甜點（' + g.menu.length + ' 款、' + q + ' 個）</summary><ul>' + g.menu.map(function(x){ return '<li>' + esc(x.n) + ' × ' + x.q + '</li>'; }).join('') + '</ul></details>' : '') +
+      '</div>';
+  }).join('');
+}
+
+/* 📅 7 天 */
+function lvOf(day, cap, red){
+  var mx = 0; Object.keys(day.s || {}).forEach(function(k){ mx = Math.max(mx, Number(day.s[k]) || 0); });
+  if (!mx) return ''; if (mx * 100 >= cap * red) return 'l4'; if (mx >= cap) return 'l3'; if (mx * 2 >= cap) return 'l2'; return 'l1';
+}
+function weekHtml(){
+  var L = S.live;
+  if (!L) return S.err.live ? '<div class="err">😵 沒讀到：' + esc(S.err.live) + '</div>' : '<div class="wait">⏳ 讀取中…</div>';
+  var days = (L.store && L.store.days) || {}, cap = Number(L.cap) || 24, red = Number(L.redPct) || 140, t = L.today || today(), list = [];
+  for (var i = 0; i < 7; i++){ var d = new Date(dObj(t).getTime() + i * 86400000), k = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); list.push(k); }
+  if (!S.selDay || list.indexOf(S.selDay) < 0) S.selDay = list[0];
+  var html = '<div class="days">' + list.map(function(k, i){
+    var dd = days[k] || { p: 0, s: {} }, lv = lvOf(dd, cap, red);
+    return '<button class="day ' + lv + (k === S.selDay ? ' sel' : '') + '" data-d="' + k + '"><div class="w">' + (i === 0 ? '今天' : WK[dObj(k).getDay()]) + '</div><div class="m">' + md(k) + '</div><div class="q">' + (dd.p || 0) + '</div></button>';
+  }).join('') + '</div>';
+  var sd = days[S.selDay] || { p: 0, s: {} }, ks = Object.keys(sd.s || {}).sort(), mx = Math.max.apply(null, [cap].concat(ks.map(function(k){ return Number(sd.s[k]) || 0; })));
+  html += '<div class="slots">' + (ks.length ? '<div style="font-size:16px;color:var(--mute);margin-bottom:4px">' + esc(dayLabel(S.selDay)) + '每個時段幾位客人</div>' + ks.map(function(k){
+    var v = Number(sd.s[k]) || 0, c = v * 100 >= cap * red ? 'var(--bad)' : (v >= cap ? '#E07A55' : 'var(--red2)');
+    return '<div class="slot"><b>' + esc(k) + '</b><i style="width:' + Math.max(6, Math.round(v / mx * 70)) + '%;background:' + c + '"></i><span>' + v + ' 人</span></div>';
+  }).join('') : '<div class="empty">' + esc(dayLabel(S.selDay)) + '還沒有人訂</div>') + '</div>';
+  var eq = ((L.store && L.store.equip) || []).filter(function(x){ return list.indexOf(x.d) >= 0; });
+  if (eq.length) html += '<div class="eq">' + eq.map(function(x){ return '🧁 ' + esc(dayLabel(x.d)) + ' ' + esc(x.t) + '：' + esc(x.item) + ' 要 ' + x.need + ' ' + esc(x.unit) + '（店裡只有 ' + x.limit + '）'; }).join('<br>') + '</div>';
+  return html;
+}
+function bindWeek(){ document.querySelectorAll('#week .day').forEach(function(b){ b.onclick = function(){ S.selDay = b.getAttribute('data-d'); paint('week'); }; }); }
+
+/* 🏆 目標 */
+function goalHtml(){
+  var m = S.mini;
+  if (!m) return S.err.mini ? '<div class="err">😵 沒讀到：' + esc(S.err.mini) + '</div>' : '<div class="wait">⏳ 讀取中…</div>';
+  var rate = Number(m.memRate), rev = Number(m.rev), tg = Number(m.revTarget) || 15;
+  var memCard = '<div class="gc"><div class="k">🤝 自己人</div>' + (m.memNew !== '' && m.memNew != null ? '<div class="v">' + Number(m.memNew).toLocaleString() + ' 人</div><div class="s">這個月招到的</div>' : '<div class="v">—</div>') +
+    (isFinite(rate) && m.memRate !== '' ? '<div class="bar"><i style="width:' + Math.min(100, Math.max(0, rate)) + '%;background:' + (rate >= 100 ? 'var(--ok)' : 'var(--warn)') + '"></i></div><div class="s">今年目標完成 ' + rate + '%</div>' : '') + '</div>';
+  var revCard = '<div class="gc"><div class="k">⭐ 好評</div>' + (m.rev !== '' && m.rev != null ? '<div class="v">' + rev + ' / ' + tg + '</div>' +
+    '<div class="bar"><i style="width:' + Math.min(100, Math.round(rev / tg * 100)) + '%;background:' + (rev >= tg ? 'var(--ok)' : 'var(--warn)') + '"></i></div><div class="s">' + (rev >= tg ? '這個月達標了 🎉' : '這個月還差 ' + (tg - rev) + ' 則') + '</div>' : '<div class="v">—</div>') + '</div>';
+  return '<div class="goal">' + memCard + revCard + '</div>';
+}
+
+/* 📢 公告 */
+function annHtml(){
+  var a = S.ann;
+  if (!a) return S.err.ann ? '<div class="err">😵 沒讀到：' + esc(S.err.ann) + '</div>' : '<div class="wait">⏳ 讀取中…</div>';
+  var rows = a.rows || [];
+  if (!rows.length) return '<div class="empty">目前沒有公告</div>';
+  return rows.map(function(r){
+    var txt = String(r.text || '').replace(/\n{2,}/g, '\n').trim();
+    return '<details class="ann"><summary>' + (r.pinned === 'Y' || r.pinned === true ? '📌 ' : '') + esc(r.title) + '</summary>' +
+      (txt ? '<div class="body">' + esc(txt.length > 800 ? txt.slice(0, 800) + '…' : txt) + '</div>' : '') +
+      (r.att || []).map(function(x){ return '<a href="' + esc(x.url) + '" target="_blank" rel="noopener">📎 ' + esc(x.name) + '</a>'; }).join('') +
+      '<a href="dashboard-announce.html#a=' + encodeURIComponent(r.ann_id) + '" target="_blank" rel="noopener">看全文</a></details>';
+  }).join('');
+}
+
+/* ---------- 彈出 ---------- */
+function openSheet(html){ $sheet.innerHTML = html; $mask.classList.add('on'); }
+function closeSheet(){ $mask.classList.remove('on'); $sheet.innerHTML = ''; }
+$mask.addEventListener('click', function(e){ if (e.target === $mask) closeSheet(); });
+
+/* ---------- 🔑 交辦（店長／區主管／總部） ---------- */
+var ROLES = [['store','店長'],['zone','區主管'],['hq','總部']];
+var FREQS = [['once','指定日期'],['daily','每天'],['weekly','每週'],['monthly','每月'],['quarterly','每季'],['halfyear','每半年']];
+function openMgr(){
+  var saved = null; try { saved = JSON.parse(ss('st_mgr') || 'null'); } catch(e){}
+  if (saved && saved.sid === S.sid){ S.mgr = saved; return mgrList(); }
+  var role = 'store';
+  openSheet('<h3>🔑 我要交辦</h3><label>你是</label><div class="seg" id="rl">' + ROLES.map(function(r){ return '<button data-r="' + r[0] + '"' + (r[0] === role ? ' class="on"' : '') + '>' + r[1] + '</button>'; }).join('') + '</div>' +
+    '<label>你的名字</label><input id="mw" maxlength="20" value="' + esc(ls('st_who') || '') + '">' +
+    '<label>交辦密碼</label><input id="mp" type="password" autocomplete="off">' +
+    '<button class="big" id="ok">進去</button><button class="ghost" id="cx">取消</button><div class="msg" id="sm"></div>');
+  document.querySelectorAll('#rl button').forEach(function(b){ b.onclick = function(){ role = b.getAttribute('data-r'); document.querySelectorAll('#rl button').forEach(function(x){ x.classList.toggle('on', x === b); }); }; });
+  document.getElementById('cx').onclick = closeSheet;
+  document.getElementById('ok').onclick = function(){
+    var who = document.getElementById('mw').value.trim(), pw = document.getElementById('mp').value.trim(), $b = this, $m = document.getElementById('sm');
+    if (!who || !pw){ $m.className = 'msg bad'; $m.textContent = '名字和密碼都要填'; return; }
+    $b.disabled = true; $b.textContent = '確認中…';
+    post({ action: 'taskAuth', store: S.sid, role: role, mpw: pw }).then(function(j){
+      $b.disabled = false; $b.textContent = '進去';
+      if (!j.ok){ $m.className = 'msg bad'; $m.textContent = j.msg; return; }
+      S.mgr = { sid: S.sid, role: role, pw: pw, who: who, label: j.data.label, scope: j.data.scope, stores: j.data.stores };
+      ss('st_mgr', JSON.stringify(S.mgr)); mgrList();
+    }).catch(function(e){ $b.disabled = false; $b.textContent = '進去'; $m.className = 'msg bad'; $m.textContent = e.message; });
+  };
+}
+function mgrBody(extra){ var M = S.mgr; return Object.assign({ store: S.sid, role: M.role, mpw: M.pw, who: M.who }, extra || {}); }
+function mgrList(){
+  var M = S.mgr;
+  openSheet('<h3>🔑 交辦（' + esc(M.label) + '）</h3><button class="big" id="add">＋ 新增交辦</button><div id="ml" style="margin-top:14px"><div class="wait">⏳ 讀取中…</div></div>' +
+    '<button class="ghost" id="cx">關閉</button><button class="link" id="lo" style="display:block;margin:12px auto 0">換人／登出交辦</button>');
+  document.getElementById('add').onclick = function(){ mgrForm(null); };
+  document.getElementById('cx').onclick = closeSheet;
+  document.getElementById('lo').onclick = function(){ ss('st_mgr', null); S.mgr = null; closeSheet(); };
+  post(mgrBody({ action: 'taskList' })).then(function(j){
+    var el = document.getElementById('ml'); if (!el) return;
+    if (!j.ok){ if (j.code === 'auth'){ ss('st_mgr', null); S.mgr = null; } el.innerHTML = '<div class="err">' + esc(j.msg) + '</div>'; return; }
+    var rows = j.data.rows || []; S.mgrRows = rows;
+    el.innerHTML = rows.length ? rows.map(function(t, i){
+      return '<div class="mt"><div class="tt">' + esc(t.title) + '</div><div class="tg">' + esc(t.when) + '・' + esc(storesTxt(t.stores)) + '・' + esc(t.by || '') + (t.end ? '・到 ' + md(t.end) : '') + '</div>' + '<div class="tg">' + (t.next ? '下次：' + esc(dayLabel(t.next)) : '已經結束') + '</div>' +
+        (t.canEdit ? '<div class="acts"><button data-e="' + i + '">✏️ 改</button><button class="del" data-x="' + i + '">🗑 刪</button></div>' : '<div class="tg">（上層交辦的，不能改）</div>') + '</div>';
+    }).join('') : '<div class="empty">還沒有交辦</div>';
+    el.querySelectorAll('[data-e]').forEach(function(b){ b.onclick = function(){ mgrForm(S.mgrRows[Number(b.getAttribute('data-e'))]); }; });
+    el.querySelectorAll('[data-x]').forEach(function(b){ b.onclick = function(){
+      var t = S.mgrRows[Number(b.getAttribute('data-x'))]; if (!confirm('刪掉「' + t.title + '」？\n（' + storesTxt(t.stores) + ' 都會一起不見）')) return;
+      post(mgrBody({ action: 'taskDel', id: t.id, rq: rq() })).then(function(r){ if (!r.ok) return alert(r.msg); mgrList(); load(); }).catch(function(e){ alert(e.message); });
+    }; });
+  }).catch(function(e){ var el = document.getElementById('ml'); if (el) el.innerHTML = '<div class="err">' + esc(e.message) + '</div>'; });
+}
+function storesTxt(ids){ ids = ids || []; if (ids.length >= 12) return '全部 12 店'; return ids.map(shortOf).join('、'); }
+function mgrForm(t){
+  var M = S.mgr, f = t ? { freq: t.freq, rule: t.rule || '', stores: t.stores.slice() } : { freq: 'daily', rule: '', stores: [S.sid] };
+  var multi = M.scope.length > 1;
+  openSheet('<h3>' + (t ? '✏️ 改交辦' : '＋ 新增交辦') + '</h3>' +
+    '<label>要做什麼</label><input id="ft" maxlength="40" placeholder="例：檢查冰箱溫度" value="' + esc(t ? t.title : '') + '">' +
+    '<label>說明（可不寫）</label><textarea id="fn" maxlength="300" placeholder="例：低於 5 度要拍照">' + esc(t ? t.note : '') + '</textarea>' +
+    '<label>多久做一次</label><div class="seg" id="ff">' + FREQS.map(function(x){ return '<button data-f="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+    '<div id="fr"></div>' +
+    (multi ? '<label>給哪幾家店</label><div class="seg" id="fs">' + M.stores.map(function(s){ return '<button data-s="' + s.id + '">' + esc(s.short) + '</button>'; }).join('') + '<button data-all="1">全選</button></div>' : '') +
+    '<details style="margin-top:12px"><summary style="font-size:17px;color:var(--mute)">做到哪天就停（可不設）</summary><input id="fe" type="date" value="' + esc(t && t.end ? t.end : '') + '" style="margin-top:6px"></details>' +
+    '<button class="big" id="ok">存起來</button><button class="ghost" id="cx">回上一頁</button><div class="msg" id="sm"></div>');
+  var segOn = function(){ document.querySelectorAll('#ff button').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-f') === f.freq); });
+    document.querySelectorAll('#fs button[data-s]').forEach(function(b){ b.classList.toggle('on', f.stores.indexOf(Number(b.getAttribute('data-s'))) >= 0); }); };
+  var ruleUI = function(){
+    var el = document.getElementById('fr'), r = f.rule, h = '';
+    var dayOpts = function(sel){ var o = ''; for (var d = 1; d <= 31; d++) o += '<option value="' + d + '"' + (String(sel) === String(d) ? ' selected' : '') + '>' + d + ' 號</option>'; return o + '<option value="L"' + (sel === 'L' ? ' selected' : '') + '>月底</option>'; };
+    if (f.freq === 'once') h = '<label>哪一天</label><input id="r1" type="date" value="' + esc(/^\d{4}-/.test(r) ? r : today()) + '">';
+    else if (f.freq === 'weekly'){ var on = r ? r.split(',') : [String(dObj(today()).getDay() || 7)]; h = '<label>星期幾（可選好幾天）</label><div class="seg" id="rw">' + [1,2,3,4,5,6,7].map(function(w){ return '<button data-w="' + w + '"' + (on.indexOf(String(w)) >= 0 ? ' class="on"' : '') + '>' + '一二三四五六日'.charAt(w - 1) + '</button>'; }).join('') + '</div>'; }
+    else if (f.freq === 'monthly') h = '<label>每個月的</label><select id="r1">' + dayOpts(r || '1') + '</select>';
+    else if (f.freq === 'quarterly' || f.freq === 'halfyear'){
+      var n = f.freq === 'quarterly' ? 3 : 6, p = (r || '1-1').split('-'), mo = '';
+      for (var i = 1; i <= n; i++) mo += '<option value="' + i + '"' + (String(p[0]) === String(i) ? ' selected' : '') + '>第 ' + i + ' 個月</option>';
+      h = '<label>' + (n === 3 ? '每一季（1、4、7、10 月開始）的' : '每半年（1、7 月開始）的') + '</label><div class="row"><select id="r1">' + mo + '</select><select id="r2">' + dayOpts(p[1] || '1') + '</select></div>';
+    }
+    el.innerHTML = h;
+    document.querySelectorAll('#rw button').forEach(function(b){ b.onclick = function(){ b.classList.toggle('on'); }; });
+  };
+  var readRule = function(){
+    if (f.freq === 'daily') return '';
+    if (f.freq === 'once' || f.freq === 'monthly') return document.getElementById('r1').value;
+    if (f.freq === 'weekly') return Array.prototype.map.call(document.querySelectorAll('#rw button.on'), function(b){ return b.getAttribute('data-w'); }).join(',');
+    return document.getElementById('r1').value + '-' + document.getElementById('r2').value;
+  };
+  document.querySelectorAll('#ff button').forEach(function(b){ b.onclick = function(){ f.freq = b.getAttribute('data-f'); f.rule = ''; segOn(); ruleUI(); }; });
+  document.querySelectorAll('#fs button').forEach(function(b){ b.onclick = function(){
+    if (b.getAttribute('data-all')){ f.stores = f.stores.length === M.scope.length ? [] : M.scope.slice(); }
+    else { var s = Number(b.getAttribute('data-s')), i = f.stores.indexOf(s); if (i >= 0) f.stores.splice(i, 1); else f.stores.push(s); }
+    segOn(); }; });
+  segOn(); ruleUI();
+  document.getElementById('cx').onclick = mgrList;
+  document.getElementById('ok').onclick = function(){
+    var $b = this, $m = document.getElementById('sm'), title = document.getElementById('ft').value.trim();
+    if (!title){ $m.className = 'msg bad'; $m.textContent = '請寫要做什麼'; return; }
+    var rule = readRule();
+    if (f.freq === 'weekly' && !rule){ $m.className = 'msg bad'; $m.textContent = '請選星期幾'; return; }
+    if (!f.stores.length){ $m.className = 'msg bad'; $m.textContent = '請選店'; return; }
+    $b.disabled = true; $b.textContent = '存檔中…';
+    post(mgrBody({ action: 'taskSave', id: t ? t.id : '', title: title, note: document.getElementById('fn').value.trim(), freq: f.freq, rule: rule, stores: f.stores, end: document.getElementById('fe').value, rq: rq() })).then(function(j){
+      $b.disabled = false; $b.textContent = '存起來';
+      if (!j.ok){ $m.className = 'msg bad'; $m.textContent = j.msg; return; }
+      mgrList(); load();
+    }).catch(function(e){ $b.disabled = false; $b.textContent = '存起來'; $m.className = 'msg bad'; $m.textContent = e.message; });
+  };
+}
+
+/* 每 10 分鐘自動更新（畫面在前景時） */
+setInterval(function(){ if (S.pw && document.visibilityState === 'visible' && !$mask.classList.contains('on')) load(); }, 600000);
+document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible' && S.pw && S.day && S.day.today !== tpeToday()) load(); });
+init();
+})();
+</script>
+</body>
+</html>

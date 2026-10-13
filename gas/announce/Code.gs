@@ -30,7 +30,8 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v5.2';   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
+var VERSION = 'announce-api-v6';   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+// 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
@@ -615,3 +616,267 @@ function str_(v) { if (v === null || v === undefined) return ''; if (v instanceo
 function normDate_(v) { if (v instanceof Date) return Utilities.formatDate(v, TZ, 'yyyy-MM-dd'); var s = str_(v).trim(); if (!s) return ''; var m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/); return m ? m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2) : s; }
 function fail_(msg, code) { var e = new Error(msg); if (code) e.code = code; return e; }
 function errMsg_(err) { return String((err && err.message) || err || '未知錯誤'); }
+
+/* =====================================================================
+ * v6（2026-10-13，經營者「門市今日」：每店開店第一眼看的頁面 static/store-today.html）
+ *   ① 交辦事項：店長／區主管／總部都能交辦；週期＝指定日期／每天／每週／每月／每季／每半年；夥伴打勾＋寫名字＋處理狀況。
+ *   ② 團體訂位聯絡資料（姓名、電話、人數…）：只在「店密碼」驗過後才回（讀「DIYBC 團體訂位」gb_bookings）。
+ *   密碼都在「儀表板權限中心」dim_auth：
+ *     store_1～store_12＝各店夥伴密碼（看頁面、打勾）；task_store_1～12＝店長交辦密碼（只管自己的店）；
+ *     task_zone_n1／n2／n3／cs＝區主管（北一／北二／北三／中南）；task_hq＝總部（全部 12 店）。
+ *   storeAuthSetup：只補「還沒有的列」（密碼空白＝還不能用，經營者在權限管理後台設好密碼才生效）；第一次會先備份 dim_auth 分頁。
+ * ===================================================================== */
+var GB_SS_ID = '1NrMGw6BOvMJigKfdAFNM1Np6KCa5cd6SEIBqzrmFLAQ', GB_TAB = 'gb_bookings';
+var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
+/* 店號｜標準店名｜短名｜區代號｜團體訂位表的店名（與決策中心 dim_store_map「訂位」欄一致） */
+var STORE_DEF = [
+  [1, '台中精明店', '精明', 'cs', '台中精明店'], [2, '台中草悟道店', '草悟道', 'cs', '台中草悟道店'],
+  [3, '台北南京店', '南京', 'n1', '台北南京店'], [4, '台北士林店', '士林', 'n1', '台北士林店'],
+  [5, '台南Focus店', 'Focus', 'cs', '台南Focus店'], [6, '新竹文化店', '新竹', 'cs', '新竹文化店'],
+  [7, '新北板橋店', '板橋', 'n2', '新北板橋店'], [8, '新北新店店', '新店', 'n1', '新北新店店'],
+  [9, '桃園中壢店', '中壢', 'n3', '桃園中壢店'], [10, '桃園藝文店', '藝文', 'n3', '桃園藝文店'],
+  [11, '台北遠百信義A13店', 'A13', 'n2', '台北遠百信義A13店'], [12, '高雄SKM Park店', 'SKM', 'cs', '高雄SKM Park店']
+];
+var ZONE_DEF = { n1: '北一區', n2: '北二區', n3: '北三區', cs: '中南區' };
+var TASK_FREQ = { once: '指定日期', daily: '每天', weekly: '每週', monthly: '每月', quarterly: '每季', halfyear: '每半年' };
+var DONE_TAIL = 30000;   /* 打勾紀錄只讀最後 3 萬列（約 4～6 個月；週期最長半年，超過的早就換下一次了） */
+var TASK_TITLE_MAX = 40, TASK_NOTE_MAX = 300, DONE_NOTE_MAX = 200, WHO_MAX = 20, GROUP_DAYS = 14;
+TABS.dim_task = ['task_id', 'stores', 'title', 'note', 'freq', 'rule', 'start_date', 'end_date', 'creator_role', 'creator_name',
+  'created_at', 'updated_at', 'updated_by', 'deleted', 'deleted_at'];
+TABS.fact_task_done = ['task_id', 'store', 'occ', 'who', 'note', 'ts', 'deleted', 'deleted_at', 'deleted_by'];
+ACTIONS.storeDay = storeDay_; ACTIONS.taskDone = taskDone_; ACTIONS.taskUndo = taskUndo_;
+ACTIONS.taskAuth = taskAuth_; ACTIONS.taskList = taskList_; ACTIONS.taskSave = taskSave_; ACTIONS.taskDel = taskDel_;
+ACTIONS.storeAuthSetup = storeAuthSetup_;
+['storeDay', 'taskDone', 'taskUndo', 'taskAuth', 'taskList', 'taskSave', 'taskDel', 'storeAuthSetup'].forEach(function (a) { OPEN[a] = 1; });   /* 這些動作自己驗密碼（各店／各角色不同密碼），不走 announce 的密碼 */
+['taskDone', 'taskUndo', 'taskSave', 'taskDel', 'storeAuthSetup'].forEach(function (a) { WRITES[a] = 1; });
+
+function storeOf_(sid) { sid = Number(sid); for (var i = 0; i < STORE_DEF.length; i++) if (STORE_DEF[i][0] === sid) return { id: sid, name: STORE_DEF[i][1], short: STORE_DEF[i][2], zone: STORE_DEF[i][3], gb: STORE_DEF[i][4] }; throw fail_('店號不對', 'bad'); }
+function zoneStores_(z) { return STORE_DEF.filter(function (s) { return s[3] === z; }).map(function (s) { return s[0]; }); }
+function storeAuth_(p) {
+  var st = storeOf_(p.store);
+  try { auth_(p.spw, 'store_' + st.id); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '店密碼不對').replace('請輸入密碼', '請輸入店密碼'), 'auth'); }
+  return st;
+}
+/* 交辦身分：role＝store（店長，只管這家店）｜zone（區主管，管這家店所在的區）｜hq（總部，全部）。只驗選的那一種，避免猜錯把別的密碼鎖住 */
+function mgrAuth_(p) {
+  var st = storeOf_(p.store), role = String(p.role || ''), dash, scope, label;
+  if (role === 'store') { dash = 'task_store_' + st.id; scope = [st.id]; label = st.short + '店長'; }
+  else if (role === 'zone') { dash = 'task_zone_' + st.zone; scope = zoneStores_(st.zone); label = ZONE_DEF[st.zone] + '區主管'; }
+  else if (role === 'hq') { dash = 'task_hq'; scope = STORE_DEF.map(function (s) { return s[0]; }); label = '總部'; }
+  else throw fail_('請選身分', 'bad');
+  try { auth_(p.mpw, dash); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '交辦密碼不對').replace('請輸入密碼', '請輸入交辦密碼'), 'auth'); }
+  return { role: role, scope: scope, label: label, store: st };
+}
+function loadTail_(name, n) {
+  var sh = ss_().getSheetByName(name), H = TABS[name], last = sh.getLastRow(), rows = [];
+  if (last > 1) {
+    var from = Math.max(2, last - n + 1), v = sh.getRange(from, 1, last - from + 1, H.length).getValues();
+    v.forEach(function (r, i) { var o = { _row: from + i }; H.forEach(function (h, j) { o[h] = str_(r[j]); }); rows.push(o); });
+  }
+  return { sh: sh, H: H, rows: rows };
+}
+function ensureStoreTabs_() {
+  var ss = ss_();
+  ['dim_task', 'fact_task_done'].forEach(function (n) { if (!ss.getSheetByName(n)) ensureTab_(ss, n); });
+}
+
+/* ---------- 週期：算「最近一次該做的日子」（≤ 今天） ---------- */
+function ymd_(y, m, d) { var dt = new Date(y, m - 1, d); return Utilities.formatDate(dt, TZ, 'yyyy-MM-dd'); }
+function dim_(y, m) { return new Date(y, m, 0).getDate(); }
+function dayIn_(y, m, d) { return d === 'L' ? dim_(y, m) : Math.min(Number(d), dim_(y, m)); }
+function addMonths_(y, m, k) { var t = (y * 12 + (m - 1)) + k; return [Math.floor(t / 12), (t % 12) + 1]; }
+function latestOcc_(t, today) {
+  var y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), rule = String(t.rule || ''), occ = '';
+  if (t.freq === 'daily') occ = today;
+  else if (t.freq === 'once') occ = (rule && rule <= today) ? rule : '';
+  else if (t.freq === 'weekly') {
+    var days = rule.split(',').map(Number).filter(function (x) { return x >= 1 && x <= 7; });
+    var base = new Date(Number(today.slice(0, 4)), m - 1, Number(today.slice(8, 10)));
+    for (var k = 0; k < 7 && !occ; k++) {
+      var dt = new Date(base.getTime() - k * 86400000), wd = dt.getDay() || 7;
+      if (days.indexOf(wd) >= 0) occ = Utilities.formatDate(dt, TZ, 'yyyy-MM-dd');
+    }
+  } else if (t.freq === 'monthly') {
+    var d0 = rule === 'L' ? 'L' : Number(rule) || 1, c = ymd_(y, m, dayIn_(y, m, d0));
+    if (c <= today) occ = c; else { var pm = addMonths_(y, m, -1); occ = ymd_(pm[0], pm[1], dayIn_(pm[0], pm[1], d0)); }
+  } else if (t.freq === 'quarterly' || t.freq === 'halfyear') {
+    var len = t.freq === 'quarterly' ? 3 : 6, parts = rule.split('-'), mi = Math.min(Math.max(Number(parts[0]) || 1, 1), len), dd = parts[1] === 'L' ? 'L' : (Number(parts[1]) || 1);
+    var ps = Math.floor((m - 1) / len) * len + 1;
+    for (var back = 0; back < 3 && !occ; back++) {
+      var st = addMonths_(y, ps, -len * back), tm = addMonths_(st[0], st[1], mi - 1), cand = ymd_(tm[0], tm[1], dayIn_(tm[0], tm[1], dd));
+      if (cand <= today) occ = cand;
+    }
+  }
+  if (occ && t.start_date && occ < t.start_date) occ = '';
+  if (occ && t.end_date && occ > t.end_date) occ = '';
+  return occ;
+}
+var WD_TXT = ['', '一', '二', '三', '四', '五', '六', '日'];
+function taskWhen_(t) {
+  var r = String(t.rule || ''), mi, dd;
+  if (t.freq === 'daily') return '每天';
+  if (t.freq === 'once') return r.slice(5).replace('-', '/');
+  if (t.freq === 'weekly') return '每週' + r.split(',').map(function (x) { return WD_TXT[Number(x)] || ''; }).join('、');
+  if (t.freq === 'monthly') return '每月' + (r === 'L' ? '月底' : r + '號');
+  var parts = r.split('-'); mi = parts[0]; dd = parts[1] === 'L' ? '月底' : parts[1] + '號';
+  if (t.freq === 'quarterly') return '每季第' + mi + '個月' + dd;
+  return '每半年第' + mi + '個月' + dd;
+}
+/* 下一次要做的日子（≥ 今天；最多往後找 400 天）：給交辦清單顯示「下次：MM/DD」，新增在週期中間的交辦從下一次才開始 */
+function nextOcc_(t, today) {
+  var base = new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)));
+  for (var k = 0; k < 400; k++) { var d = Utilities.formatDate(new Date(base.getTime() + k * 86400000), TZ, 'yyyy-MM-dd'); if (latestOcc_(t, d) === d) return d; }
+  return '';
+}
+function tasksFor_(sid) {
+  return load_('dim_task').rows.filter(function (t) {
+    return t.deleted !== 'Y' && String(t.stores || '').split(',').map(Number).indexOf(Number(sid)) >= 0;
+  });
+}
+
+/* ---------- 夥伴：今天這家店的全部資料 ---------- */
+function storeDay_(p) {
+  var st = storeAuth_(p); ensureStoreTabs_();
+  var today = today_(), done = {};
+  loadTail_('fact_task_done', DONE_TAIL).rows.forEach(function (d) { if (d.deleted !== 'Y' && Number(d.store) === st.id) done[d.task_id + '|' + d.occ] = d; });
+  var tasks = [];
+  tasksFor_(st.id).forEach(function (t) {
+    var occ = latestOcc_(t, today); if (!occ) return;
+    var d = done[t.task_id + '|' + occ];
+    if (d && String(d.ts).slice(0, 10) !== today) return;   /* 之前就做完的不再顯示，只留今天打勾的讓大家看到 */
+    tasks.push({ id: t.task_id, title: t.title, note: t.note, freq: t.freq, when: taskWhen_(t), occ: occ,
+      st: d ? 'done' : (occ < today ? 'late' : 'today'), who: d ? d.who : '', doneNote: d ? d.note : '', doneAt: d ? String(d.ts).slice(11, 16) : '',
+      by: t.creator_role === 'hq' ? '總部' : (t.creator_role === 'zone' ? '區主管' : '店長') });
+  });
+  var ord = { late: 0, today: 1, done: 2 };
+  tasks.sort(function (a, b) { return ord[a.st] - ord[b.st] || String(a.occ).localeCompare(String(b.occ)) || String(a.title).localeCompare(String(b.title)); });
+  return { data: { store: { id: st.id, name: st.name, short: st.short }, today: today, at: now_(), tasks: tasks, groups: groupsFor_(st, today) } };
+}
+/* 團體訂位（今天起 GROUP_DAYS 天、已取消不列）：姓名、電話、人數、訂金狀態、甜點。只回這家店 */
+function groupsFor_(st, today) {
+  var sh = SpreadsheetApp.openById(GB_SS_ID).getSheetByName(GB_TAB); if (!sh || sh.getLastRow() < 2) return { ok: true, rows: [] };
+  var v = sh.getDataRange().getValues(), H = v[0].map(function (x) { return String(x).trim(); }), ix = {};
+  H.forEach(function (h, i) { ix[h] = i; });
+  var endD = Utilities.formatDate(new Date(Date.now() + GROUP_DAYS * 86400000), TZ, 'yyyy-MM-dd'), rows = [];
+  for (var i = 1; i < v.length; i++) {
+    var r = v[i], g = function (k) { return ix[k] === undefined ? '' : r[ix[k]]; };
+    if (String(g('store')).trim() !== st.gb) continue;
+    var d = normDate_(g('date')); if (!d || d < today || d > endD) continue;
+    if (String(g('status')) === 'canceled') continue;
+    var slot = g('slot'); if (slot instanceof Date) slot = Utilities.formatDate(slot, TZ, 'HH:mm');
+    var menu = String(g('menu') || '').split(';').map(function (x) { var a = x.split('|'); var n = String(a[0] || '').replace(/^.*｜/, '').replace(/\s*\((葷|可做全素|全素|信義、高雄無法製作)\)/g, '').trim(); return n ? { n: n, q: Number(a[1]) || 1 } : null; }).filter(Boolean);
+    rows.push({ d: d, t: String(slot || ''), name: String(g('member') || ''), phone: String(g('phone') || ''), size: Number(g('size')) || 0,
+      cat: String(g('category') || ''), stTxt: String(g('status_text') || ''), purpose: String(g('purpose') || ''), memo: String(g('memo') || ''), menu: menu,
+      paid: Number(g('paid')) || 0, deposit: Number(g('deposit')) || 0 });
+  }
+  rows.sort(function (a, b) { return (a.d + a.t).localeCompare(b.d + b.t); });
+  return { ok: true, rows: rows, at: String(v[1] && ix.scanned_at !== undefined ? str_(v[1][ix.scanned_at]) : '') };
+}
+function cleanWho_(s) { var w = cleanTxt_(s, WHO_MAX).trim(); if (!w) throw fail_('請寫名字', 'bad'); return w; }
+function taskDone_(p) {
+  var st = storeAuth_(p); ensureStoreTabs_();
+  var who = cleanWho_(p.who), note = cleanTxt_(p.note, DONE_NOTE_MAX).trim(), today = today_();
+  rate_('td:' + st.id, 40, 60, '按太快了，請等一下再按');
+  var t = tasksFor_(st.id).filter(function (x) { return x.task_id === String(p.task_id); })[0];
+  if (!t) throw fail_('這件交辦已經刪除了，請重新整理', 'gone');
+  var occ = latestOcc_(t, today); if (!occ) throw fail_('這件今天不用做', 'bad');
+  var tb = loadTail_('fact_task_done', DONE_TAIL);
+  var dup = tb.rows.filter(function (d) { return d.deleted !== 'Y' && d.task_id === t.task_id && Number(d.store) === st.id && d.occ === occ; })[0];
+  if (dup) return { id: t.task_id, msg: st.short + ' 已有人打勾（' + dup.who + '）', data: { already: true, who: dup.who } };
+  put_(tb, nextRow_(tb), { task_id: t.task_id, store: String(st.id), occ: occ, who: who, note: note, ts: now_(), deleted: '' });
+  return { id: t.task_id, msg: st.short + '｜' + who + '｜' + t.title, data: { ok: true } };
+}
+function taskUndo_(p) {
+  var st = storeAuth_(p); ensureStoreTabs_();
+  var who = cleanWho_(p.who), tb = loadTail_('fact_task_done', DONE_TAIL), today = today_(), hit = null;
+  tb.rows.forEach(function (d) { if (d.deleted !== 'Y' && d.task_id === String(p.task_id) && Number(d.store) === st.id && d.occ === String(p.occ) && String(d.ts).slice(0, 10) === today) hit = d; });
+  if (!hit) throw fail_('只能取消今天打的勾', 'bad');
+  putCols_(tb, hit._row, { deleted: 'Y', deleted_at: now_(), deleted_by: who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'deleted_by'; });
+  return { id: hit.task_id, msg: st.short + '｜取消打勾｜' + who, data: { ok: true } };
+}
+
+/* ---------- 交辦管理（店長／區主管／總部） ---------- */
+function taskAuth_(p) { var a = mgrAuth_(p); return { data: { role: a.role, label: a.label, scope: a.scope, stores: STORE_DEF.filter(function (s) { return a.scope.indexOf(s[0]) >= 0; }).map(function (s) { return { id: s[0], short: s[2] }; }) } }; }
+function taskView_(t) {
+  return { id: t.task_id, stores: String(t.stores || '').split(',').map(Number).filter(Boolean), title: t.title, note: t.note, freq: t.freq, rule: t.rule,
+    when: taskWhen_(t), next: nextOcc_(t, today_()), start: t.start_date, end: t.end_date, role: t.creator_role, by: t.creator_name, at: String(t.updated_at || t.created_at || '').slice(0, 16) };
+}
+function canEdit_(a, t) { return String(t.stores || '').split(',').map(Number).every(function (s) { return a.scope.indexOf(s) >= 0; }); }
+function taskList_(p) {
+  var a = mgrAuth_(p); ensureStoreTabs_();
+  var rows = load_('dim_task').rows.filter(function (t) {
+    return t.deleted !== 'Y' && String(t.stores || '').split(',').map(Number).some(function (s) { return a.scope.indexOf(s) >= 0; });
+  }).map(function (t) { var v = taskView_(t); v.canEdit = canEdit_(a, t); return v; });
+  rows.sort(function (x, y) { return String(y.at).localeCompare(String(x.at)); });
+  return { data: { rows: rows } };
+}
+function checkRule_(freq, rule) {
+  rule = String(rule || '').trim();
+  if (!TASK_FREQ[freq]) throw fail_('請選多久做一次', 'bad');
+  if (freq === 'daily') return '';
+  if (freq === 'once') { if (!/^\d{4}-\d{2}-\d{2}$/.test(rule)) throw fail_('請選日期', 'bad'); return rule; }
+  if (freq === 'weekly') { var w = rule.split(',').map(Number).filter(function (x) { return x >= 1 && x <= 7; }); if (!w.length) throw fail_('請選星期幾', 'bad'); return w.sort().join(','); }
+  if (freq === 'monthly') { if (rule === 'L') return 'L'; var d = Number(rule); if (!(d >= 1 && d <= 31)) throw fail_('請選幾號', 'bad'); return String(d); }
+  var parts = rule.split('-'), len = freq === 'quarterly' ? 3 : 6, mi = Number(parts[0]), dd = parts[1];
+  if (!(mi >= 1 && mi <= len)) throw fail_('請選第幾個月', 'bad');
+  if (dd !== 'L') { dd = Number(dd); if (!(dd >= 1 && dd <= 31)) throw fail_('請選幾號', 'bad'); }
+  return mi + '-' + dd;
+}
+function taskSave_(p) {
+  var a = mgrAuth_(p); ensureStoreTabs_();
+  var who = cleanWho_(p.who), title = cleanTxt_(p.title, TASK_TITLE_MAX).trim(), note = cleanTxt_(p.note, TASK_NOTE_MAX).trim();
+  if (!title) throw fail_('請寫要做什麼', 'bad');
+  var freq = String(p.freq || ''), rule = checkRule_(freq, p.rule);
+  var stores = (Array.isArray(p.stores) ? p.stores : String(p.stores || '').split(',')).map(Number).filter(function (s) { return a.scope.indexOf(s) >= 0; });
+  stores = stores.filter(function (s, i) { return stores.indexOf(s) === i; }).sort(function (x, y) { return x - y; });
+  if (!stores.length) throw fail_('請選要交辦給哪幾家店', 'bad');
+  var start = /^\d{4}-\d{2}-\d{2}$/.test(String(p.start || '')) ? String(p.start) : today_();
+  if (freq === 'once') start = rule;   /* 指定日期：開始日就是那天（不會因為今天才建而被擋掉） */
+  var end = /^\d{4}-\d{2}-\d{2}$/.test(String(p.end || '')) ? String(p.end) : '';
+  if (end && end < start) throw fail_('結束日不能早於開始日', 'bad');
+  var tb = load_('dim_task'), id = String(p.id || '');
+  if (id) {
+    var t = tb.rows.filter(function (x) { return x.task_id === id && x.deleted !== 'Y'; })[0];
+    if (!t) throw fail_('這件交辦已經刪除了', 'gone');
+    if (!canEdit_(a, t)) throw fail_('這件是更上層交辦的，你不能改', 'deny');
+    if (p.base && String(p.base) !== String(t.updated_at)) throw fail_('別人剛改過這件，請重新整理再改', 'conflict');
+    putCols_(tb, t._row, { stores: stores.join(','), title: title, note: note, freq: freq, rule: rule, start_date: start, end_date: end, updated_at: now_(), updated_by: a.label + ' ' + who },
+      function (h) { return ['stores', 'title', 'note', 'freq', 'rule', 'start_date', 'end_date', 'updated_at', 'updated_by'].indexOf(h) >= 0; });
+    return { id: id, msg: a.label + '｜' + who + '｜修改｜' + title, data: { id: id } };
+  }
+  rate_('ts:' + a.role + ':' + a.store.id, 30, 600, '新增太多了，請 10 分鐘後再試');
+  id = 'T' + Utilities.formatDate(new Date(), TZ, 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
+  put_(tb, nextRow_(tb), { task_id: id, stores: stores.join(','), title: title, note: note, freq: freq, rule: rule, start_date: start, end_date: end,
+    creator_role: a.role, creator_name: a.label + ' ' + who, created_at: now_(), updated_at: now_(), updated_by: a.label + ' ' + who, deleted: '' });
+  return { id: id, msg: a.label + '｜' + who + '｜新增｜' + title + '｜' + stores.join(','), data: { id: id } };
+}
+function taskDel_(p) {
+  var a = mgrAuth_(p); ensureStoreTabs_();
+  var who = cleanWho_(p.who), tb = load_('dim_task'), t = tb.rows.filter(function (x) { return x.task_id === String(p.id) && x.deleted !== 'Y'; })[0];
+  if (!t) throw fail_('這件交辦已經刪除了', 'gone');
+  if (!canEdit_(a, t)) throw fail_('這件是更上層交辦的，你不能刪', 'deny');
+  putCols_(tb, t._row, { deleted: 'Y', deleted_at: now_(), updated_by: a.label + ' ' + who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'updated_by'; });
+  return { id: t.task_id, msg: a.label + '｜' + who + '｜刪除｜' + t.title, data: { ok: true } };
+}
+
+/* ---------- 一次性設定：權限中心 dim_auth 補列（只補沒有的；密碼空白，經營者在權限管理後台設定） ---------- */
+function storeAuthSetup_() {
+  var ss = SpreadsheetApp.openById(AUTHC_SS_ID), sh = ss.getSheetByName(AUTHC_TAB);
+  if (!sh) throw fail_('找不到權限中心 dim_auth', 'setup');
+  var want = [];
+  STORE_DEF.forEach(function (s) { want.push(['store_' + s[0], '門市今日｜' + s[2] + '（夥伴）', 720, '門市今日頁：看頁面、打勾']); });
+  STORE_DEF.forEach(function (s) { want.push(['task_store_' + s[0], '門市今日｜' + s[2] + '店長交辦', 12, '只能交辦給自己的店']); });
+  Object.keys(ZONE_DEF).forEach(function (z) { want.push(['task_zone_' + z, '門市今日｜' + ZONE_DEF[z] + '區主管交辦', 12, '交辦給 ' + zoneStores_(z).join('、') + ' 號店']); });
+  want.push(['task_hq', '門市今日｜總部交辦', 12, '交辦給全部 12 店']);
+  var last = sh.getLastRow(), have = {};
+  if (last > 1) sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { have[String(r[0]).trim()] = 1; });
+  var add = want.filter(function (w) { return !have[w[0]]; });
+  if (!add.length) return { msg: '不用補', data: { added: 0 } };
+  var bk = 'dim_auth_備份_' + stamp_();
+  if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+  var rows = add.map(function (w) { return [w[0], w[1], '', w[2], 'Y', new Date(), w[3] + '（2026-10-13 補；密碼空白＝還不能用，請在權限管理後台設定）']; });
+  sh.getRange(last + 1, 1, rows.length, 1).setNumberFormat('@');
+  sh.getRange(last + 1, 3, rows.length, 1).setNumberFormat('@');
+  sh.getRange(last + 1, 1, rows.length, 7).setValues(rows);
+  return { msg: '補 ' + rows.length + ' 列；備份 ' + bk, data: { added: rows.length, backup: bk, before: last - 1 } };
+}
