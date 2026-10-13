@@ -174,6 +174,10 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
+        # 先把整個請求內容讀完再分流：登出、權限不足、找不到網址等情況不會讀內容，
+        # HTTP/1.1 連線重用時沒讀走的內容會黏到下一個請求前面，造成 501。
+        self._body_cache = None
+        self.read_body_bytes()
         parsed = urlparse(self.path)
         if parsed.path == "/api/login":
             body = self.read_json()
@@ -433,13 +437,14 @@ class TrainingHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+        raw = self.read_body_bytes().decode("utf-8")
         return json.loads(raw or "{}")
 
     def read_body_bytes(self) -> bytes:
-        length = int(self.headers.get("Content-Length", "0"))
-        return self.rfile.read(length) if length else b""
+        if getattr(self, "_body_cache", None) is None:
+            length = int(self.headers.get("Content-Length", "0"))
+            self._body_cache = self.rfile.read(length) if length else b""
+        return self._body_cache
 
     def read_multipart_form(self) -> dict[str, dict[str, str | bytes]]:
         content_type = self.headers.get("Content-Type", "")
