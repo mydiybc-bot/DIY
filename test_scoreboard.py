@@ -31,7 +31,8 @@ class ScoreboardTests(unittest.TestCase):
         self.board = build_public_scoreboard(CONTENT, AUTH, REPORTS, PROGRESS)
 
     def test_store_order_and_unassigned_last(self):
-        self.assertEqual([s["store"] for s in self.board["stores"]], ["2 台中草悟道店", "12 高雄SKM Park店", "體驗設計部", UNASSIGNED])
+        # 部門(主管、總部)不列;未設定店別仍列出提醒補填
+        self.assertEqual([s["store"] for s in self.board["stores"]], ["2 台中草悟道店", "12 高雄SKM Park店", UNASSIGNED])
 
     def test_metrics_dedupe_latest(self):
         ming = self.board["stores"][1]["people"][0]

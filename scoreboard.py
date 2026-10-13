@@ -1,6 +1,8 @@
 """登入首頁的「各店人員成績表」(公開,不需登入)。
 
 只回傳姓名、店別與練習統計,不含員編、密碼或作答內容。
+只列門市(店別以店號開頭,例「4 台北士林店」)與「未設定店別」;北區、中南區、各部門、其他是主管或總部,
+不需要練習,不列(2026-10-13 經營者指示)。
 同一位員工同一單元同一題若出現在多筆練習紀錄(中途結束後接續練),以最新一筆為準,避免重複計算。
 """
 from __future__ import annotations
@@ -10,6 +12,11 @@ import re
 _STORE_NO = re.compile(r"^\s*(\d+)\s*")
 _SCORE_ITEM = re.compile(r"^Q(\d+):(\d+)")
 UNASSIGNED = "未設定店別"
+
+
+def is_listed_store(store: str) -> bool:
+    """首頁成績表要列的分組:門市(店號開頭)與未設定店別。"""
+    return bool(_STORE_NO.match(store)) or store == UNASSIGNED
 
 
 def _store_sort_key(store: str) -> tuple:
@@ -61,6 +68,9 @@ def build_public_scoreboard(content: dict, auth: dict, reports: list[dict], prog
 
     groups: dict[str, list[dict]] = {}
     for employee in auth.get("employees", []):
+        store_name = (employee.get("store") or "").strip() or UNASSIGNED
+        if not is_listed_store(store_name):
+            continue
         employee_id = employee.get("employee_id", "")
         own_reports = sorted(employee_reports.get(employee_id, []), key=lambda r: r.get("created_at", ""))
 
@@ -91,7 +101,7 @@ def build_public_scoreboard(content: dict, auth: dict, reports: list[dict], prog
             finished = section["id"] in completed or (total > 0 and done >= total)
             units.append({"done": total if finished else done, "total": total, "completed": finished})
 
-        groups.setdefault((employee.get("store") or "").strip() or UNASSIGNED, []).append(
+        groups.setdefault(store_name, []).append(
             {
                 "name": employee.get("employee_name", ""),
                 "units": units,
