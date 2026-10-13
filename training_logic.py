@@ -276,6 +276,11 @@ def _build_scoring_prompt(question: dict, answer: str, rules: dict) -> str:
 
 {style_block}
 
+【分數由系統計算】
+你不用給分數,只要逐一判斷每個重點「員工有沒有講到意思」(不必逐字,同義說法都算)。
+系統會依「抓到的重點數 ÷ 重點總數 × 10」計分;重點全抓到時,語氣自然 = 10 分、表達需加強 = 9 分。
+needs_better_expression 只在明顯像條列式念重點、背稿、或對客人語氣不禮貌時才給 true;一般口語、句子不完美都算自然。
+
 【本題資訊】
 題目: {question['prompt']}
 標準答案: {question['answer']}
@@ -287,10 +292,8 @@ def _build_scoring_prompt(question: dict, answer: str, rules: dict) -> str:
 
 【請回覆 JSON,格式如下,不要加任何其他文字】
 {{
-  "score": <0-10 的整數>,
-  "matched_labels": [<員工有抓到的重點 label 文字陣列>],
-  "missing_labels": [<員工沒抓到的重點 label 文字陣列>],
-  "needs_better_expression": <true 或 false,如果回答像條列式或口語不自然就 true>,
+  "matched_points": [<員工有抓到的重點編號,整數陣列,例如 [1, 3]>],
+  "needs_better_expression": <true 或 false>,
   "uses_profanity": <true 或 false,如果有髒話或攻擊字眼就 true>,
   "coaching": "<給員工的回饋,2-3 句,先肯定再建議,必須採用上面店家指定的話術語氣>"
 }}"""
@@ -308,7 +311,7 @@ def _call_openai(prompt: str) -> dict:
             {"role": "system", "content": "你是專業的內訓教練,請嚴格依照指示用 JSON 格式回覆,不要有任何 markdown 或其他文字。"},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.3,
+        "temperature": 0,
         "response_format": {"type": "json_object"},
     }
 
@@ -329,20 +332,54 @@ def _call_openai(prompt: str) -> dict:
     return json.loads(content)
 
 
+def compute_points_score(matched_count: int, point_count: int, needs_better_expression: bool) -> int:
+    """固定公式:抓到的重點數 ÷ 重點總數 × 10(四捨五入);
+    重點全抓到 + 語氣自然 = 10,全抓到但表達需加強 = 9,沒抓齊最多 9。"""
+    point_count = max(point_count, 1)
+    matched_count = max(0, min(matched_count, point_count))
+    if matched_count == point_count:
+        return 9 if needs_better_expression else 10
+    return min(9, int(matched_count * 10 / point_count + 0.5))
+
+
+def _matched_indexes_from_ai(ai_result: dict, labels: list[str]) -> list[int]:
+    """AI 回的重點編號(1 起算);舊格式只回 label 文字時,用文字對回編號。"""
+    raw = ai_result.get("matched_points")
+    indexes: set[int] = set()
+    if isinstance(raw, list):
+        for value in raw:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= number <= len(labels):
+                indexes.add(number - 1)
+        return sorted(indexes)
+    normalized_labels = [normalize_text(label) for label in labels]
+    for text in ai_result.get("matched_labels", []) or []:
+        key = normalize_text(str(text))
+        for idx, label in enumerate(normalized_labels):
+            if key and (key == label or key in label or label in key):
+                indexes.add(idx)
+    return sorted(indexes)
+
+
 def _score_with_ai(question: dict, answer: str, rules: dict) -> dict:
-    """AI 評分(主要路徑)"""
+    """AI 評分(主要路徑):AI 判斷抓到哪些重點,分數由系統依固定公式計算"""
     prompt = _build_scoring_prompt(question, answer, rules)
     ai_result = _call_openai(prompt)
 
-    # 解析並對齊舊回傳格式
-    score = int(ai_result.get("score", 0))
-    score = max(0, min(10, score))  # 夾在 0-10
-
-    matched = ai_result.get("matched_labels", []) or []
-    missing = ai_result.get("missing_labels", []) or []
+    labels = [point["label"] for point in question["required_points"]]
+    if "matched_points" not in ai_result and "matched_labels" not in ai_result:
+        raise ValueError("AI 回傳缺少 matched_points")
+    matched_idx = _matched_indexes_from_ai(ai_result, labels)
+    matched = [labels[i] for i in matched_idx]
+    missing = [label for i, label in enumerate(labels) if i not in matched_idx]
     needs_better_expression = bool(ai_result.get("needs_better_expression", False))
     uses_profanity = bool(ai_result.get("uses_profanity", False))
     coaching_text = ai_result.get("coaching", "") or rules.get("retry_prompt", "請再回答一次。")
+
+    score = compute_points_score(len(matched), len(labels), needs_better_expression)
 
     # 髒話強制扣分(後端保險,不完全信任 AI)
     if uses_profanity:
@@ -442,6 +479,20 @@ def build_report_record(session: dict) -> dict:
     attempted = session["scoreboard"]
     scores = [item["best_score"] for item in attempted]
     average = round(sum(scores) / len(scores), 1) if scores else 0.0
+    # 每題明細:第一次分數、答了幾次、有沒有看過答案、有沒有跳過(成績報表與難題統計用)
+    details = [
+        {
+            "number": item["number"],
+            "first_score": item.get("first_score"),
+            "best_score": item["best_score"],
+            "attempts": item.get("attempts", 0),
+            "revealed": bool(item.get("revealed")),
+            "skipped": bool(item.get("skipped")),
+        }
+        for item in attempted
+    ]
+    first_try = sum(1 for d in details if d["first_score"] == 10)
+    answered = [d["attempts"] for d in details if d["attempts"] > 0]
     return {
         "section_id": session["section_id"],
         "section_title": session["section_title"],
@@ -451,6 +502,11 @@ def build_report_record(session: dict) -> dict:
             for item in attempted
         ],
         "average_score": average,
+        "first_try_pass_rate": round(first_try / len(details) * 100) if details else 0,
+        "avg_attempts": round(sum(answered) / len(answered), 1) if answered else 0.0,
+        "revealed_count": sum(1 for d in details if d["revealed"]),
+        "skipped_count": sum(1 for d in details if d["skipped"]),
+        "details": details,
     }
 
 
@@ -466,7 +522,7 @@ def _ensure_scoreboard_item(session: dict, question: dict) -> dict:
         if item["number"] == question["number"]:
             return item
 
-    item = {"number": question["number"], "best_score": 0, "attempts": 0}
+    item = {"number": question["number"], "best_score": 0, "attempts": 0, "first_score": None, "revealed": False}
     session["scoreboard"].append(item)
     return item
 
@@ -534,6 +590,8 @@ def respond(session: dict, answer: str) -> dict:
 
     record = _ensure_scoreboard_item(session, question)
     record["attempts"] += 1
+    if record.get("first_score") is None:
+        record["first_score"] = result["score"]
     record["best_score"] = max(record["best_score"], result["score"])
 
     parts = [
@@ -553,6 +611,7 @@ def respond(session: dict, answer: str) -> dict:
             parts.append(retry_prompt)
         if session["attempts"] >= rules["max_attempts_before_answer"]:
             revealed = True
+            record["revealed"] = True
             parts.append(ANSWER_TEXT_ONLY_NOTE)
             parts.append(rules["reference_answer_intro"] + question["answer"])
             parts.append(rules["answer_reveal_prompt"])

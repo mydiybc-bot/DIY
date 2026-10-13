@@ -25,6 +25,22 @@ REPORT_HEADERS = [
     "題目數",
     "各題分數",
     "平均分數",
+    "一次過關率(%)",
+    "平均答幾次",
+    "看過答案題數",
+    "跳過題數",
+]
+REPORT_DETAIL_HEADERS = [
+    "練習時間",
+    "員工編號",
+    "員工姓名",
+    "單元名稱",
+    "題號",
+    "第一次分數",
+    "最佳分數",
+    "答幾次",
+    "看過答案",
+    "跳過",
 ]
 
 
@@ -140,8 +156,31 @@ def export_reports_to_excel(reports: list[dict]) -> bytes:
                 report.get("question_count", 0),
                 "；".join(report.get("scores", [])),
                 report.get("average_score", 0),
+                report.get("first_try_pass_rate", ""),
+                report.get("avg_attempts", ""),
+                report.get("revealed_count", ""),
+                report.get("skipped_count", ""),
             ]
         )
+    # 每題明細(2026-10-13 起的練習紀錄才有)
+    detail_sheet = workbook.create_sheet("每題明細")
+    detail_sheet.append(REPORT_DETAIL_HEADERS)
+    for report in reports:
+        for item in report.get("details", []) or []:
+            detail_sheet.append(
+                [
+                    report.get("created_at", ""),
+                    report.get("employee_id", ""),
+                    report.get("employee_name", ""),
+                    report.get("section_title", ""),
+                    item.get("number", ""),
+                    "" if item.get("first_score") is None else item.get("first_score"),
+                    item.get("best_score", ""),
+                    item.get("attempts", 0),
+                    "是" if item.get("revealed") else "",
+                    "是" if item.get("skipped") else "",
+                ]
+            )
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()

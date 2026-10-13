@@ -75,7 +75,7 @@ class TrainingLogicTests(unittest.TestCase):
         workbook = load_workbook(BytesIO(raw))
         sheet = workbook["reports"]
         headers = [cell.value for cell in sheet[1]]
-        self.assertEqual(headers, ["練習時間", "員工編號", "員工姓名", "單元名稱", "題目數", "各題分數", "平均分數"])
+        self.assertEqual(headers, ["練習時間", "員工編號", "員工姓名", "單元名稱", "題目數", "各題分數", "平均分數", "一次過關率(%)", "平均答幾次", "看過答案題數", "跳過題數"])
         first_row = [cell.value for cell in sheet[2]]
         self.assertEqual(first_row[0], "2026-03-22T10:00:00")
         self.assertEqual(first_row[1], "E001")

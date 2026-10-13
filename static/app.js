@@ -723,6 +723,7 @@ async function goToLoginPage() {
   reportsList.innerHTML = "";
   reportsSummary.textContent = "尚未載入報告。";
   loginForm.reset();
+  setLoginPasswordVisible(false);
   toggleLoginFields();
   prefillLastEmployeeId();
   appPanel.classList.add("hidden");
@@ -1341,8 +1342,8 @@ function renderReports() {
   }
   const rows = currentReports.slice().sort((a, b) => {
     let av, bv;
-    if (reportSort.key === "average_score") {
-      av = Number(a.average_score) || 0; bv = Number(b.average_score) || 0;
+    if (["average_score", "first_try_pass_rate", "avg_attempts"].includes(reportSort.key)) {
+      av = Number(a[reportSort.key]) || 0; bv = Number(b[reportSort.key]) || 0;
     } else if (reportSort.key === "employee_name") {
       av = a.employee_name || ""; bv = b.employee_name || "";
     } else {
@@ -1358,6 +1359,8 @@ function renderReports() {
     { key: "employee_id", label: "員編", sortable: false },
     { key: "section_title", label: "單元", sortable: false },
     { key: "average_score", label: "平均分", sortable: true },
+    { key: "first_try_pass_rate", label: "一次過關率", sortable: true },
+    { key: "avg_attempts", label: "平均答幾次", sortable: true },
     { key: "question_count", label: "題數", sortable: false },
     { key: "created_at", label: "時間", sortable: true },
   ];
@@ -1397,6 +1400,9 @@ function renderReports() {
       report.employee_id || "-",
       report.section_title || "-",
       report.average_score,
+      // 2026-10-13 前的舊紀錄沒有每題明細,顯示「—」
+      Array.isArray(report.details) ? `${report.first_try_pass_rate}%` : "—",
+      Array.isArray(report.details) ? report.avg_attempts : "—",
       report.question_count,
       report.created_at,
     ];
@@ -1414,6 +1420,91 @@ function renderReports() {
   wrap.className = "table-scroll";
   wrap.appendChild(table);
   reportsList.appendChild(wrap);
+  renderQuestionDifficulty();
+}
+
+// 哪幾題最多人卡關:依目前篩選的練習紀錄,按題目統計(一次過關率低的排前面)
+function renderQuestionDifficulty() {
+  const promptOf = {};
+  (currentConfig?.sections || []).forEach((section) => {
+    (section.questions || []).forEach((q) => {
+      promptOf[`${section.id}#${q.number}`] = q.prompt || "";
+    });
+  });
+  const stats = {};
+  currentReports.forEach((report) => {
+    (Array.isArray(report.details) ? report.details : []).forEach((d) => {
+      const key = `${report.section_id}#${d.number}`;
+      if (!stats[key]) {
+        stats[key] = { section: report.section_title || "-", number: d.number, key, people: 0, firstPass: 0, attempts: 0, answered: 0, revealed: 0, skipped: 0 };
+      }
+      const st = stats[key];
+      st.people += 1;
+      if (d.first_score === 10) st.firstPass += 1;
+      if (d.attempts > 0) { st.attempts += d.attempts; st.answered += 1; }
+      if (d.revealed) st.revealed += 1;
+      if (d.skipped) st.skipped += 1;
+    });
+  });
+  const rows = Object.values(stats).sort((a, b) =>
+    (a.firstPass / a.people) - (b.firstPass / b.people)
+    || (b.answered ? b.attempts / b.answered : 0) - (a.answered ? a.attempts / a.answered : 0)
+  );
+
+  const block = document.createElement("div");
+  block.className = "difficulty-block";
+  const title = document.createElement("h3");
+  title.textContent = "哪幾題最多人卡關";
+  const note = document.createElement("p");
+  note.className = "status-text";
+  note.textContent = rows.length
+    ? "依上方篩選的練習紀錄統計，一次過關率低的排前面。2026-10-13 之後的練習才有每題明細。"
+    : "還沒有每題明細（2026-10-13 之後完成的練習才會統計）。";
+  block.append(title, note);
+
+  if (rows.length) {
+    const pct = (n, d) => (d ? `${Math.round((n / d) * 100)}%` : "—");
+    const t = document.createElement("table");
+    t.className = "report-table";
+    const head = document.createElement("tr");
+    ["單元", "題號", "題目", "作答人次", "一次過關率", "平均答幾次", "看過答案", "跳過"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      head.appendChild(th);
+    });
+    const th0 = document.createElement("thead");
+    th0.appendChild(head);
+    t.appendChild(th0);
+    const body = document.createElement("tbody");
+    rows.forEach((st) => {
+      const tr = document.createElement("tr");
+      const prompt = promptOf[st.key] || "";
+      const cells = [
+        st.section,
+        `Q${st.number}`,
+        prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt,
+        st.people,
+        pct(st.firstPass, st.people),
+        st.answered ? (st.attempts / st.answered).toFixed(1) : "—",
+        pct(st.revealed, st.people),
+        pct(st.skipped, st.people),
+      ];
+      cells.forEach((val, i) => {
+        const td = document.createElement("td");
+        td.textContent = val;
+        if (i === 2) td.title = prompt;
+        if (i === 4) td.className = "score-cell";
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    t.appendChild(body);
+    const scroll = document.createElement("div");
+    scroll.className = "table-scroll";
+    scroll.appendChild(t);
+    block.appendChild(scroll);
+  }
+  reportsList.appendChild(block);
 }
 
 function collectAuthData() {
@@ -1874,6 +1965,26 @@ setupVoice();
 toggleLoginFields();
 prefillLastEmployeeId();
 refreshActionState();
+
+// ---- 登入頁：密碼欄眼睛（顯示／隱藏密碼）；登出回登入頁時一律改回隱藏 ----
+function setLoginPasswordVisible(show) {
+  const input = document.getElementById("password");
+  const eye = document.getElementById("toggle-password");
+  if (!input || !eye) return;
+  input.type = show ? "text" : "password";
+  eye.setAttribute("aria-pressed", show ? "true" : "false");
+  eye.setAttribute("aria-label", show ? "隱藏密碼" : "顯示密碼");
+  eye.title = show ? "隱藏密碼" : "顯示密碼";
+}
+
+const togglePasswordButton = document.getElementById("toggle-password");
+if (togglePasswordButton) {
+  togglePasswordButton.addEventListener("click", () => {
+    const input = document.getElementById("password");
+    setLoginPasswordVisible(input && input.type === "password");
+    if (input) input.focus();
+  });
+}
 
 // ---- 後台友善化：搜尋、密碼顯示、未存提醒 ----
 if (employeeSearch) employeeSearch.addEventListener("input", applyEmployeeFilter);
