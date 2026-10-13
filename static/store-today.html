@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- 2026-10-13 (2) 團體與 7 天客人改「打開就更新」：背景呼叫訂位管線 fn=refreshNear（10 分鐘內只抓一次近 7 天，不吃觸發器額度），抓完重讀團體名單與 live（minFut）；區塊標題旁顯示幾點的訂位。 -->
 <!-- 2026-10-13 新建「門市今日」：每店開店第一眼看的頁面（經營者裁定：夥伴都能看、每店一組簡單密碼、團體姓名電話要給夥伴看、
      放自己人與好評數字、交辦不分班別、打勾要寫名字＋處理狀況、每期＝每季、店長／區主管／總部都能交辦、畫面要像給 5 歲小孩看一樣簡單）。
      後端：公告及工作清單 API v6（storeDay／taskDone／taskUndo／taskAuth／taskList／taskSave／taskDel，都在伺服器驗密碼）
@@ -23,6 +24,7 @@ button{font:inherit;cursor:pointer}
 .sec{background:var(--card);border-radius:20px;padding:14px 14px 10px;margin:0 0 14px;box-shadow:0 1px 4px rgba(120,60,40,.08)}
 .sec h2{margin:0 0 10px;font-size:22px;display:flex;align-items:center;gap:8px}
 .sec h2 .n{font-size:16px;background:var(--red);color:#fff;border-radius:99px;padding:0 10px}
+.sec h2 .at{font-size:14px;font-weight:400;color:var(--mute);margin-left:auto}
 .empty{color:var(--mute);font-size:18px;padding:6px 2px 10px}
 .wait{color:var(--mute);font-size:16px;padding:6px 2px 10px}
 .err{color:var(--bad);font-size:16px;padding:6px 2px 10px}
@@ -124,9 +126,10 @@ button{font:inherit;cursor:pointer}
 'use strict';
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API v6 */
 var SNAP_API = 'https://script.google.com/macros/s/AKfycbw55lxutTkj13v1E5pa3fVClI08K1ObXqj3V_VNOG3PV8rUaIe8l2ublZuEjMophVKFMw/exec'; /* 決策中心讀取窗口 */
+var RSV_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';   /* 訂位資料管線：fn=refreshNear（10 分鐘內只抓一次近 7 天，12 店共用） */
 var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
 var WK = ['日','一','二','三','四','五','六'];
-var S = { sid: 0, pw: '', day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null };
+var S = { sid: 0, pw: '', day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null, rsv: null, rsvBusy: false };
 var $app = document.getElementById('app'), $mask = document.getElementById('mask'), $sheet = document.getElementById('sheet');
 
 /* ---------- 小工具 ---------- */
@@ -221,6 +224,7 @@ function load(skipDay){
     function(e){ S.err.mini = e.message; paint('goal'); }));
   jobs.push(post({ action: 'active' }, 45000).then(function(j){ if (j.ok) S.ann = j.data; else S.err.ann = j.msg; paint('ann'); },
     function(e){ S.err.ann = e.message; paint('ann'); }));
+  refreshRsv();
   Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){
     loading = false; S.cached = '';
     if (S.pw && S.day) ls('st_cache_' + S.sid, JSON.stringify({ at: new Date().toISOString(), day: S.day, live: S.live, mini: S.mini, ann: S.ann }));
@@ -228,6 +232,23 @@ function load(skipDay){
   });
   paint('fresh');
 }
+
+/* 2026-10-13 (2)：打開頁面（含每 10 分鐘自動更新）時，在背景請訂位後台重抓近 7 天（10 分鐘內只會真的抓一次、12 店共用）。
+   抓完 → 重讀這家店的團體名單＋7 天人數（live 帶 minFut，暫存比這次訂位版本舊就重算）。 */
+function refreshRsv(){
+  if (S.rsvBusy) return; S.rsvBusy = true; paint('grpAt'); paint('weekAt');
+  jsonp(RSV_API + '?fn=refreshNear', 150000).then(function(j){
+    S.rsvBusy = false; if (!j || !j.ok) { paint('grpAt'); paint('weekAt'); return; }
+    S.rsv = j;
+    var liveOld = !S.live || !S.live.fut || String(S.live.fut.at || '') < String(j.built || '');
+    var jobs = [];
+    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.pw }).then(function(r){ if (r.ok){ S.day = r.data; paint('todo'); paint('grp'); } }));
+    if ((j.refreshed || liveOld) && j.built) jobs.push(jsonp(SNAP_API + '?action=live&store=' + S.sid + '&minFut=' + encodeURIComponent(j.built), 90000).then(function(r){ if (r && r.ok){ S.live = r; paint('week'); paint('grp'); } }));
+    Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){ paint('grpAt'); paint('weekAt'); });
+  }, function(){ S.rsvBusy = false; paint('grpAt'); paint('weekAt'); });
+}
+function hm(s){ s = String(s || ''); var m = s.match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/); if (!m) return ''; return (m[1] === tpeToday() ? '' : md(m[1]) + ' ') + m[2]; }
+function atLine(at){ return S.rsvBusy ? '🔄 正在抓最新訂位…' : (at ? '🕒 ' + hm(at) + ' 的訂位' : ''); }
 
 /* ---------- 主畫面 ---------- */
 function renderMain(){
@@ -237,8 +258,8 @@ function renderMain(){
     '<div class="top"><h1>🏪 ' + esc(shortOf(S.sid)) + '店</h1><div class="dt">' + md(t) + '（' + WK[dObj(t).getDay()] + '）</div><button class="rf" id="rf" title="重新整理">↻</button></div>' +
     '<div class="fresh" id="fresh"></div>' +
     '<div class="sec"><h2>✅ 今天要做 <span class="n" id="todoN" style="display:none"></span></h2><div id="todo"></div></div>' +
-    '<div class="sec"><h2>👥 團體客人</h2><div id="grp"></div></div>' +
-    '<div class="sec"><h2>📅 這 7 天的客人</h2><div id="week"></div></div>' +
+    '<div class="sec"><h2>👥 團體客人 <span class="at" id="grpAt"></span></h2><div id="grp"></div></div>' +
+    '<div class="sec"><h2>📅 這 7 天的客人 <span class="at" id="weekAt"></span></h2><div id="week"></div></div>' +
     '<div class="sec"><h2>🏆 本月目標</h2><div id="goal"></div></div>' +
     '<div class="sec"><h2>📢 公告</h2><div id="ann"></div></div>' +
     '<div class="foot"><button class="boss" id="boss">🔑 我要交辦</button><button id="home">⬅ 回首頁</button><button id="out">🔒 登出</button><button id="chg">🏪 換店</button></div>' +
@@ -248,7 +269,7 @@ function renderMain(){
   document.getElementById('home').onclick = function(){ location.href = 'hub.html'; };
   document.getElementById('out').onclick = function(){ if (!confirm('登出這台裝置？')) return; ls('st_pw_' + S.sid, null); ls('st_cache_' + S.sid, null); location.reload(); };
   document.getElementById('chg').onclick = function(){ ls('st_sid', null); location.href = location.pathname; };
-  ['todo','grp','week','goal','ann','fresh'].forEach(paint);
+  ['todo','grp','week','goal','ann','fresh','grpAt','weekAt'].forEach(paint);
 }
 function paint(k){
   var el = document.getElementById(k); if (!el) return;
@@ -258,6 +279,8 @@ function paint(k){
   else if (k === 'week') el.innerHTML = weekHtml(), bindWeek();
   else if (k === 'goal') el.innerHTML = goalHtml();
   else if (k === 'ann') el.innerHTML = annHtml();
+  else if (k === 'grpAt') el.textContent = atLine(S.day && S.day.groups && S.day.groups.at);
+  else if (k === 'weekAt') el.textContent = atLine(S.live && S.live.fut && S.live.fut.at);
 }
 
 /* ✅ 交辦 */
@@ -330,8 +353,8 @@ function grpHtml(){
     var dep = g.deposit, paid = g.paid;
     if (lg && lg.exempt) chips.push('<span class="chip ok">免訂金</span>');
     else if (dep > 0 && paid >= dep) chips.push('<span class="chip ok">💰 訂金付了</span>');
-    else if (paid > 0) chips.push('<span class="chip warn">💰 訂金還差 ' + f0(dep - paid) + '</span>');
-    else if (/已付/.test(g.stTxt)) chips.push('<span class="chip ok">💰 ' + esc(g.stTxt) + '</span>');
+    else if (dep > 0 && paid > 0) chips.push('<span class="chip warn">💰 訂金還差 ' + f0(dep - paid) + '</span>');
+    else if (paid > 0 || /已付/.test(g.stTxt)) chips.push('<span class="chip ok">💰 訂金付了' + (paid > 0 ? '（' + f0(paid) + '）' : '') + '</span>');
     else chips.push('<span class="chip bad">💰 訂金還沒付</span>');
     var q = (g.menu || []).reduce(function(t, x){ return t + x.q; }, 0);
     chips.push(g.menu && g.menu.length ? '<span class="chip ok">🍰 甜點選好了</span>' : '<span class="chip bad">🍰 甜點還沒選</span>');

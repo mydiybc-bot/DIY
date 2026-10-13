@@ -599,7 +599,8 @@ function doGet(e) {
       }
       return out_(cb, json);
     }
-    if (p.fn === 'future') return out_(cb, futureJson_());   // 2026-10-06：走暫存（CacheService），每次重建 future 後立刻換新
+    if (p.fn === 'future') return out_(cb, futureJson_());
+    if (p.fn === 'refreshNear') return out_(cb, JSON.stringify(webRefreshNear_()));   // 2026-10-13：門市今日打開時近 7 天即時更新（10 分鐘內只抓一次）   // 2026-10-06：走暫存（CacheService），每次重建 future 後立刻換新
     const m = readCache_('months');
     return out_(cb, m || JSON.stringify(apiMonthsLive_()));
   } catch (err) {

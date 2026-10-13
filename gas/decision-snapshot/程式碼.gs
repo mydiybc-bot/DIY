@@ -2288,7 +2288,8 @@ function calcE_(res, rule, map) {
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
 //   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-13.16';   // .16：新增 action=mini（門市今日頁：自己人本月新增／還差、有效評論）；
+var WEB_VER = 'e6-2026-10-13.17';   // .17：live 多 minFut（門市今日重抓訂位後強制重算）；
+// .16   // .16：新增 action=mini（門市今日頁：自己人本月新增／還差、有效評論）；
 // 舊：.15   // .15：經營者更正 8 人以上（含）都算團體、都要先選甜點（團體 v1.4.1 need_dessert＝團體就要），只改說明文字；.14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊
 var BUNDLE_TTL = 21600;               // CacheService 最長 6 小時；runAll 寫完快照時另外主動清除
@@ -2304,7 +2305,7 @@ function doGet(e) {
     else if (act === 'series') out = webSeries_(p.store, p.days);
     else if (act === 'track_list') out = webTrackList_();
     else if (act === 'track_set') out = webTrackSet_(p);
-    else if (act === 'live') out = webLive_(p.store);
+    else if (act === 'live') out = webLive_(p.store, p.minFut);   // 2026-10-13：minFut＝門市今日剛觸發訂位重抓的時間，暫存比它舊就重算
     else if (act === 'fresh') out = webFresh_();
     else if (act === 'equip') out = webEquip_();
     else if (act === 'mini') out = webMini_(p.store);   // 2026-10-13：門市今日（夥伴頁）只要自己人、好評幾個數字
@@ -2422,12 +2423,15 @@ var LIVE_SLOT_RED = 140;     // 同時段人數 ≥ 每時段上限 × 140% → 
 var LIVE_SLOT_CAP = { '1': 14, '2': 20, '3': 24, '4': 13, '5': 16, '6': 19, '7': 12, '8': 16, '9': 12, '10': 18, '11': 14, '12': 12 };
 var LIVE_KEY = 'live|v5';   // v5：團體 v1.4（卡位排除、散客甜點）；v4：eq 多 limits、名稱比對修正；v3：eq.at 改成 yyyy-MM-dd HH:mm:ss；v2：多了 equip
 
-function webLive_(store) {
+function webLive_(store, minFut) {
   var sid = String(store == null ? '' : store).trim();
   if (!/^([1-9]|1[0-2])$/.test(sid)) return { ok: false, error: '店號要是 1～12' };
   var c = CacheService.getScriptCache(), t0 = Date.now(), all = liveCacheGet_(c), src = 'cache';
+  /* 2026-10-13 門市今日：訂位後台剛重抓過（minFut＝重抓完成時間，不可晚於現在），暫存裡的訂位版本比它舊 → 重算一次（約 15～20 秒） */
+  var mf = String(minFut || '').slice(0, 16), nowS = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm');
+  if (all && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(mf) && mf <= nowS && all.fut && String(all.fut.at || '') < mf) { all = null; src = 'rebuild'; }
   if (!all) {
-    all = liveBuild_(); src = 'build';
+    all = liveBuild_(); if (src !== 'rebuild') src = 'build';
     if (all.fut.ok || all.gb.ok) liveCachePut_(c, all, (all.fut.ok && all.gb.ok) ? LIVE_TTL : LIVE_TTL_PART);
   }
   return { ok: true, version: WEB_VER, builtAt: all.builtAt, today: all.today, fut: all.fut, gb: all.gb, eq: all.eq || { ok: false, error: '尚未計算' },

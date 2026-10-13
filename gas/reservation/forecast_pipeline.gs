@@ -95,6 +95,7 @@ function dailyFutureAndSnapshot() {
     var cookie = login_();
     rebuildFuture_(cookie, t0);   // 沿用既有函式，完全不修改
     futureCacheRefresh_();        // 2026-10-06：記下重建時間、換新 fn=future 暫存（失敗只記 log）
+    PropertiesService.getScriptProperties().setProperty('FN_NEAR_AT', String(Date.now()));   // 2026-10-13：整份重建也算一次近期更新
     var n = snapshotFuture_();
     Logger.log('future 重建完成，快照寫入 ' + n + ' 列');
   } catch (e) {
@@ -117,30 +118,59 @@ function refreshFutureNear() {
   if (h < 7 || h >= 23 || h === 10) return;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) { Logger.log('另一個執行中，這輪略過'); return; }
+  try { refreshFutureDays_(FN_DAYS); } finally { lock.releaseLock(); }
+}
+/* 近 nDays 天重抓（呼叫端要先拿到 ScriptLock）。2026-10-13 從 refreshFutureNear 抽出來，給「門市今日」打開時的即時更新共用。
+   抓完才寫；超過保險絲整輪放棄（沿用上一版）；成功後記指令碼屬性 FN_NEAR_AT（給 webRefreshNear_ 判斷要不要再抓）。 */
+function refreshFutureDays_(nDays) {
+  var t0 = Date.now(), fresh = [], days = {}, today = fmtDate_(new Date());
+  for (var i = 0; i < nDays; i++) {
+    if (Date.now() - t0 > FN_FUSE_MS) { Logger.log('保險絲：' + i + ' 天後時間不夠，這輪不寫（沿用上一版）'); return 0; }
+    var d = fmtDate_(addDays_(new Date(), i));
+    days[d] = 1;
+    fresh.push.apply(fresh, fetchDayAuto_(d));
+    Utilities.sleep(200);
+  }
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CFG.FUTURE);
+  if (!sh) throw new Error('找不到分頁 ' + CFG.FUTURE);
+  var last = sh.getLastRow(), keep = [], di = CFG.HEADERS.indexOf('date');
+  if (last > 1) {
+    sh.getRange(2, 1, last - 1, CFG.HEADERS.length).getValues().forEach(function (r) {
+      var d = wdDateStr_(r[di]);
+      if (d && d >= today && !days[d]) keep.push(r);   // nDays 天以外的照舊；今天以前的丟掉；nDays 天內換成剛抓的
+    });
+  }
+  var rows = fresh.concat(keep);
+  if (last > 1) sh.getRange(2, 1, last - 1, CFG.HEADERS.length).clearContent();   // 全部抓完才動表，中斷不留半套
+  if (rows.length) sh.getRange(2, 1, rows.length, CFG.HEADERS.length).setValues(rows);
+  try { futureMenuWrite_(fresh, days); } catch (e) { Logger.log('甜點明細寫入失敗（不影響 future）：' + e.message); }   // 1006 #2
+  futureCacheRefresh_();
+  PropertiesService.getScriptProperties().setProperty('FN_NEAR_AT', String(Date.now()));
+  Logger.log('近 ' + nDays + ' 天重抓 ' + fresh.length + ' 筆＋沿用 ' + keep.length + ' 筆，耗時 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
+  return fresh.length;
+}
+/* 2026-10-13 經營者「團體和 7 天客人要更密集」：門市今日頁打開（或每 10 分鐘自動更新）時呼叫 doGet?fn=refreshNear。
+   ・網頁觸發的執行不算「觸發器每日 90 分鐘」額度（個人帳號），所以不加任何排程。
+   ・上一次近期重抓（不論是誰觸發）未滿 FN_WEB_MIN 分鐘 → 不抓，直接回上次時間；12 家店共用同一份，誰先打開誰觸發。
+   ・23～07 點（後台慢、沒人上班）與 10:00～10:44（10:15 整份重建＋快照要用鎖）不抓。
+   ・拿不到鎖（守門員／回補正在跑）就回 busy，不等；下一次打開再試。只重抓 FN_WEB_DAYS 天（7 次查詢，約 35 秒）。 */
+var FN_WEB_DAYS = 7, FN_WEB_MIN = 10;
+function webRefreshNear_() {
+  var now = new Date(), h = Number(Utilities.formatDate(now, CFG.TZ, 'H')), mi = Number(Utilities.formatDate(now, CFG.TZ, 'm'));
+  var P = PropertiesService.getScriptProperties(), lastAt = Number(P.getProperty('FN_NEAR_AT')) || 0;
+  var info = function (o) { o.ok = true; o.at = lastAt ? Utilities.formatDate(new Date(lastAt), CFG.TZ, 'yyyy-MM-dd HH:mm:ss') : ''; o.built = P.getProperty('FUT_BUILT_AT') || ''; o.days = FN_WEB_DAYS; return o; };   // built＝fn=future 的 built_at（決策中心 live 用它判斷暫存是否過時）
+  if (h < 7 || h >= 23 || (h === 10 && mi < 45)) return info({ refreshed: false, why: 'quiet-hours' });
+  if (Date.now() - lastAt < FN_WEB_MIN * 60000) return info({ refreshed: false, why: 'fresh' });
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(500)) return info({ refreshed: false, why: 'busy' });
   try {
-    var t0 = Date.now(), fresh = [], days = {}, today = fmtDate_(new Date());
-    for (var i = 0; i < FN_DAYS; i++) {
-      if (Date.now() - t0 > FN_FUSE_MS) { Logger.log('保險絲：' + i + ' 天後時間不夠，這輪不寫（沿用上一版）'); return; }
-      var d = fmtDate_(addDays_(new Date(), i));
-      days[d] = 1;
-      fresh.push.apply(fresh, fetchDayAuto_(d));
-      Utilities.sleep(200);
-    }
-    var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CFG.FUTURE);
-    if (!sh) throw new Error('找不到分頁 ' + CFG.FUTURE);
-    var last = sh.getLastRow(), keep = [], di = CFG.HEADERS.indexOf('date');
-    if (last > 1) {
-      sh.getRange(2, 1, last - 1, CFG.HEADERS.length).getValues().forEach(function (r) {
-        var d = wdDateStr_(r[di]);
-        if (d && d >= today && !days[d]) keep.push(r);   // 14 天以外的照舊；今天以前的丟掉；14 天內換成剛抓的
-      });
-    }
-    var rows = fresh.concat(keep);
-    if (last > 1) sh.getRange(2, 1, last - 1, CFG.HEADERS.length).clearContent();   // 全部抓完才動表，中斷不留半套
-    if (rows.length) sh.getRange(2, 1, rows.length, CFG.HEADERS.length).setValues(rows);
-    try { futureMenuWrite_(fresh, days); } catch (e) { Logger.log('甜點明細寫入失敗（不影響 future）：' + e.message); }   // 1006 #2
-    futureCacheRefresh_();
-    Logger.log('近 ' + FN_DAYS + ' 天重抓 ' + fresh.length + ' 筆＋沿用 ' + keep.length + ' 筆，耗時 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
+    lastAt = Number(P.getProperty('FN_NEAR_AT')) || 0;   // 拿到鎖後再看一次（剛剛別人可能已經抓完）
+    if (Date.now() - lastAt < FN_WEB_MIN * 60000) return info({ refreshed: false, why: 'fresh' });
+    var n = refreshFutureDays_(FN_WEB_DAYS);
+    lastAt = Number(P.getProperty('FN_NEAR_AT')) || lastAt;
+    return info({ refreshed: true, rows: n });
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
   } finally { lock.releaseLock(); }
 }
 /** 守門員第一次跑到時呼叫：沒有 refreshFutureNear 觸發器就建一個，另外預約 1 分鐘後跑一次 refreshFutureNearOnce 當驗證；

@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v6';   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v6.1';   // 2026-10-13 v6.1：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
@@ -752,25 +752,73 @@ function storeDay_(p) {
   tasks.sort(function (a, b) { return ord[a.st] - ord[b.st] || String(a.occ).localeCompare(String(b.occ)) || String(a.title).localeCompare(String(b.title)); });
   return { data: { store: { id: st.id, name: st.name, short: st.short }, today: today, at: now_(), tasks: tasks, groups: groupsFor_(st, today) } };
 }
-/* 團體訂位（今天起 GROUP_DAYS 天、已取消不列）：姓名、電話、人數、訂金狀態、甜點。只回這家店 */
+/* 團體訂位（今天起 GROUP_DAYS 天、已取消不列）：姓名、電話、人數、訂金狀態、甜點。只回這家店。
+   2026-10-13 (2)：名單改讀「DIYBC 訂位資料」近期訂位 fact_reservations_future（門市今日打開時每 10 分鐘可重抓近 7 天，比團體表一天 2 輪新），
+   再從團體表 gb_bookings 補「應付訂金、備註、目的」（res_id＝團體表 id），甜點從 fact_future_menu（同一次重抓寫的）補；
+   近期訂位讀不到才退回只用團體表。團體＝類別含大組／包館／包場、或 8 人以上（與團體 GAS 同規則）；
+   會員是「客服訂位」且備註有「卡位」＝門市／客服卡位，不是真客人，不列。 */
+var RSV_SS_ID = '13NI3vGV4MSsngeO_DecVYKrOzky-fXCsN9ActscJorQ', RSV_FUT_TAB = 'fact_reservations_future', RSV_MENU_TAB = 'fact_future_menu';
+var GROUP_CAT_RE = /大組|包館|包場/, GROUP_MIN_SIZE = 8;
+function hhmm_(v) { if (v instanceof Date) return Utilities.formatDate(v, TZ, 'HH:mm'); var m = String(v || '').match(/(\d{1,2}):(\d{2})/); return m ? ('0' + m[1]).slice(-2) + ':' + m[2] : String(v || ''); }
+/* 讀一張表。fixedHead＝寫入程式用的欄位順序（訂位管線照「位置」寫入，第一列標題不一定跟著改），有給就照位置對欄名，不看標題文字 */
+var RSV_FUT_HEAD = ['res_id', 'date', 'store', 'slot', 'member_name', 'phone', 'line_uid', 'email', 'category', 'party_size', 'recipes', 'companions',
+  'order_total', 'paid', 'status', 'attended', 'purpose', 'member_level', 'note', 'group_id', 'fetched_at'];   /* ＝訂位管線 CFG.HEADERS（改那邊要同步改這裡） */
+var RSV_MENU_HEAD = ['date', 'store', 'slot', 'category', 'party_size', 'status', 'menu', 'fetched_at'];   /* ＝訂位管線 FM_HEAD */
+function tabRows_(ssId, tab, fixedHead) {
+  var sh = SpreadsheetApp.openById(ssId).getSheetByName(tab); if (!sh || sh.getLastRow() < 2) return { ix: {}, rows: [] };
+  var v = sh.getDataRange().getValues(), ix = {};
+  (fixedHead || v[0]).forEach(function (h, i) { ix[String(h).trim()] = i; });
+  return { ix: ix, rows: v.slice(1) };
+}
+function menuList_(raw) {
+  var a = raw; if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+  if (!Array.isArray(a)) return [];
+  return a.map(function (x) { var n = Array.isArray(x) ? x[0] : (x && x.n), q = Array.isArray(x) ? x[1] : (x && x.q); n = String(n || '').replace(/^.*｜/, '').replace(/\s*\((葷|可做全素|全素|信義、高雄無法製作)\)/g, '').trim(); return n ? { n: n, q: Number(q) || 1 } : null; }).filter(Boolean);
+}
+function gbMenu_(s) { return menuList_(String(s || '').split(';').map(function (x) { var a = x.split('|'); return [a[0], a[1]]; })); }
 function groupsFor_(st, today) {
-  var sh = SpreadsheetApp.openById(GB_SS_ID).getSheetByName(GB_TAB); if (!sh || sh.getLastRow() < 2) return { ok: true, rows: [] };
-  var v = sh.getDataRange().getValues(), H = v[0].map(function (x) { return String(x).trim(); }), ix = {};
-  H.forEach(function (h, i) { ix[h] = i; });
-  var endD = Utilities.formatDate(new Date(Date.now() + GROUP_DAYS * 86400000), TZ, 'yyyy-MM-dd'), rows = [];
-  for (var i = 1; i < v.length; i++) {
-    var r = v[i], g = function (k) { return ix[k] === undefined ? '' : r[ix[k]]; };
-    if (String(g('store')).trim() !== st.gb) continue;
-    var d = normDate_(g('date')); if (!d || d < today || d > endD) continue;
-    if (String(g('status')) === 'canceled') continue;
-    var slot = g('slot'); if (slot instanceof Date) slot = Utilities.formatDate(slot, TZ, 'HH:mm');
-    var menu = String(g('menu') || '').split(';').map(function (x) { var a = x.split('|'); var n = String(a[0] || '').replace(/^.*｜/, '').replace(/\s*\((葷|可做全素|全素|信義、高雄無法製作)\)/g, '').trim(); return n ? { n: n, q: Number(a[1]) || 1 } : null; }).filter(Boolean);
-    rows.push({ d: d, t: String(slot || ''), name: String(g('member') || ''), phone: String(g('phone') || ''), size: Number(g('size')) || 0,
-      cat: String(g('category') || ''), stTxt: String(g('status_text') || ''), purpose: String(g('purpose') || ''), memo: String(g('memo') || ''), menu: menu,
-      paid: Number(g('paid')) || 0, deposit: Number(g('deposit')) || 0 });
+  var endD = Utilities.formatDate(new Date(Date.now() + GROUP_DAYS * 86400000), TZ, 'yyyy-MM-dd');
+  var gb = {}, gbList = [], gbAt = '';
+  try {
+    var G = tabRows_(GB_SS_ID, GB_TAB), gi = G.ix;
+    G.rows.forEach(function (r) {
+      if (String(r[gi.store]).trim() !== st.gb) return;
+      var d = normDate_(r[gi.date]); if (!d || d < today || d > endD) return;
+      var o = { id: String(r[gi.id] || ''), d: d, t: hhmm_(r[gi.slot]), name: String(r[gi.member] || ''), phone: String(r[gi.phone] || ''), size: Number(r[gi.size]) || 0,
+        cat: String(r[gi.category] || ''), stTxt: String(r[gi.status_text] || ''), status: String(r[gi.status] || ''), purpose: String(r[gi.purpose] || ''), memo: String(r[gi.memo] || ''),
+        menu: gbMenu_(r[gi.menu]), paid: Number(r[gi.paid]) || 0, deposit: gi.deposit === undefined ? 0 : (Number(r[gi.deposit]) || 0) };
+      if (o.id) gb[o.id] = o;
+      gbList.push(o);
+      if (gi.scanned_at !== undefined && str_(r[gi.scanned_at]) > gbAt) gbAt = str_(r[gi.scanned_at]);
+    });
+  } catch (e) { }
+  var rows = [], src = 'future', futAt = '';
+  try {
+    var F = tabRows_(RSV_SS_ID, RSV_FUT_TAB, RSV_FUT_HEAD), fi = F.ix, menus = {};
+    if (fi.res_id === undefined || fi.member_name === undefined) throw new Error('近期訂位欄位不對');
+    try {
+      var M = tabRows_(RSV_SS_ID, RSV_MENU_TAB, RSV_MENU_HEAD), mi = M.ix;
+      M.rows.forEach(function (r) { if (String(r[mi.store]).trim() === st.gb) menus[normDate_(r[mi.date]) + '|' + hhmm_(r[mi.slot]) + '|' + (Number(r[mi.party_size]) || 0)] = menuList_(r[mi.menu]); });
+    } catch (eM) { }
+    F.rows.forEach(function (r) {
+      if (String(r[fi.store]).trim() !== st.gb) return;
+      var at = str_(r[fi.fetched_at]); if (at > futAt) futAt = at;
+      var d = normDate_(r[fi.date]); if (!d || d < today || d > endD) return;
+      var status = String(r[fi.status] || ''); if (status === '已取消') return;
+      var cat = String(r[fi.category] || ''), size = Number(r[fi.party_size]) || 0, name = String(r[fi.member_name] || ''), note = String(r[fi.note] || '');
+      if (!(GROUP_CAT_RE.test(cat) || size >= GROUP_MIN_SIZE)) return;
+      if (name.indexOf('客服訂位') >= 0 && /卡位/.test(note)) return;   // 客服／門市卡位
+      var t = hhmm_(r[fi.slot]), g = gb[String(r[fi.res_id] || '')] || null, mk = d + '|' + t + '|' + size;
+      rows.push({ d: d, t: t, name: name, phone: String(r[fi.phone] || ''), size: size, cat: cat, stTxt: status,
+        purpose: String(r[fi.purpose] || '') || (g ? g.purpose : ''), memo: g ? g.memo : '', menu: menus[mk] || (g ? g.menu : []),
+        paid: Number(r[fi.paid]) || 0, deposit: g ? g.deposit : 0 });
+    });
+  } catch (eF) {
+    src = 'gb';   // 近期訂位讀不到 → 只用團體表（一天 2 輪）
+    rows = gbList.filter(function (o) { return o.status !== 'canceled'; }).map(function (o) { return { d: o.d, t: o.t, name: o.name, phone: o.phone, size: o.size, cat: o.cat, stTxt: o.stTxt, purpose: o.purpose, memo: o.memo, menu: o.menu, paid: o.paid, deposit: o.deposit }; });
   }
   rows.sort(function (a, b) { return (a.d + a.t).localeCompare(b.d + b.t); });
-  return { ok: true, rows: rows, at: String(v[1] && ix.scanned_at !== undefined ? str_(v[1][ix.scanned_at]) : '') };
+  return { ok: true, rows: rows, src: src, at: src === 'future' ? futAt : gbAt };
 }
 function cleanWho_(s) { var w = cleanTxt_(s, WHO_MAX).trim(); if (!w) throw fail_('請寫名字', 'bad'); return w; }
 function taskDone_(p) {
