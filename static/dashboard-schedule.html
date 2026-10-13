@@ -1560,7 +1560,7 @@ function _csvDownload(headers, rows, baseName){
 }
 function exportHeatCSV(){ _csvDownload(['門市','週','rev/h','工時','旗標'], _csvHeat, '排班熱力矩陣'); }
 function exportDailyCSV(){
-  _csvDownload(['日期','週','工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常','甜點券$100','獎金營收','日獎金'], _csvDaily, '排班月份明細');
+  _csvDownload(['日期','週','工時（扣會議請假）','排班總工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常','甜點券$100','獎金營收','日獎金'], _csvDaily, '排班月份明細');
 }
 function exportEmpCSV(){
   if(!_csvEmp) return;
@@ -1843,6 +1843,7 @@ function loadDailyData() {
       return;
     }
     dailyData = res;
+    applyWorkHours(dailyData);
     updateBaselineLabel();
     renderDailyTab();
   };
@@ -2001,6 +2002,36 @@ function bonusNonWork(e, dateNote, daySegs){
   });
   return { off: Math.min(h, Math.round(off * 100) / 100), why: why.join('、') };
 }
+/* 2026-10-13 經營者裁示：每日「工時」與 rev/h 改用真正工作時數（扣會議、內訓、請假、不計現場人力，規則同日獎金 bonusNonWork）；
+   排班總工時另存 hours_all，格子顯示「14h(全22h)」。月平均（baseline）照後端同一算法用新工時重算 */
+function dayOffHours(r){
+  const emps = Array.isArray(r.employees) ? r.employees : [];
+  const daySegs = bonusDayMeetSegs(r);
+  let off = 0;
+  emps.forEach(e => { off += bonusNonWork(e, r.date_note, daySegs).off; });
+  return off;
+}
+function applyWorkHours(res){
+  const rows = (res && Array.isArray(res.daily)) ? res.daily : [];
+  rows.forEach(r => {
+    if (r.hours_all != null) return;   /* 已換算過 */
+    const all = Number(r.hours) || 0, work = Math.max(0, Math.round((all - dayOffHours(r)) * 100) / 100);
+    r.hours_all = all;
+    r.hours = work;
+    r.rev_per_hour = work > 0 ? Math.round((Number(r.revenue) || 0) / work * 100) / 100 : 0;
+  });
+  if (res && res.baseline) {
+    const v = rows.filter(r => r.hours > 0 && r.revenue > 0), n = v.length;
+    res.baseline.avg_hours   = n ? Math.round(v.reduce((s, r) => s + r.hours, 0) / n * 100) / 100 : 0;
+    res.baseline.avg_revenue = n ? Math.round(v.reduce((s, r) => s + r.revenue, 0) / n * 100) / 100 : 0;
+    res.baseline.avg_rph     = n ? Math.round(v.reduce((s, r) => s + r.rev_per_hour, 0) / n * 100) / 100 : 0;
+    res.baseline.valid_days  = n;
+  }
+}
+function fmtDayHours(r, unit){
+  const u = unit == null ? 'h' : unit;
+  return (r.hours_all > r.hours) ? r.hours + u + '(全' + r.hours_all + u + ')' : r.hours + u;
+}
 function calcDayBonus(r){
   if (!r || r.bonus_rev == null) return null;   // GAS 沒回傳（舊版本或甜點券查詢失敗）→ 不顯示
   const emps = Array.isArray(r.employees) ? r.employees : [];
@@ -2108,7 +2139,7 @@ function _renderDailyCalendarImpl() {
           const empList = Array.isArray(r.employees) ? r.employees : [];
           window._calTipMap[dStr] = {
             date: dStr, isOff: isOff, tier: tier,
-            hours: r.hours, revenue: r.revenue, rph: r.rev_per_hour,
+            hours: r.hours, hours_all: r.hours_all, revenue: r.revenue, rph: r.rev_per_hour,
             employees: empList.map(e => ({name: e.name, hours: e.hours, shift: e.shift, note: e.note})),
             bonus: calcDayBonus(r),
             date_note: r.date_note || '',
@@ -2117,7 +2148,7 @@ function _renderDailyCalendarImpl() {
           };
           cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip-key="' + dStr + '">'
             + '<div class="day-num">' + dayIdx + (flagged ? ' <span style="color:var(--flag-red);font-size:12px;">🚩</span>' : '') + '</div>'
-            + '<div class="cell-hrs">⏱ ' + (r.hours > 0 ? r.hours + 'h' : '—') + '</div>'
+            + '<div class="cell-hrs">⏱ ' + (r.hours_all > 0 ? fmtDayHours(r) : '—') + '</div>'
             + '<div class="cell-rev">💰 ' + revShort + '</div>'
             + '<div class="cell-rph ' + rphCls + '">' + rphTxt + '/h</div>'
             + bonusCellHtml(calcDayBonus(r))
@@ -2131,7 +2162,7 @@ function _renderDailyCalendarImpl() {
 
   document.getElementById('dailyTabCalendar').innerHTML =
     bonusMonthSummary(rows)
-    + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">格子看 rev/h：🟢 優秀（平日 >$750、假日 >$1500）・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2＝跨級加倍）。把滑鼠移到日期格上，可以看當天班表和每人獎金。</div>'
+    + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">格子看 rev/h：🟢 優秀（平日 >$750、假日 >$1500）・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2＝跨級加倍）・ ⏱ 工時只算真正在店工作的時數（扣會議、內訓、請假），括號「全」是排班總工時，rev/h 用前面的數字算。把滑鼠移到日期格上，可以看當天班表和每人獎金。</div>'
     + '<div class="cal-grid">' + cells + '</div>'
     + '<div id="calTooltip" class="cal-tooltip"></div>';
 
@@ -2163,7 +2194,7 @@ function _escNote(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
 function buildTooltipHtml(d) {
   const tierLabel = d.tier === 'good' ? '優秀' : (d.tier === 'normal' ? '正常' : (d.tier === 'low' ? '偏低' : '—'));
   let html = '<div class="tt-title">' + d.date + (d.isOff ? ' (假日)' : ' (平日)') + ' ・ ' + tierLabel + '</div>';
-  html += '<div style="font-size:12px;color:var(--muted);">工時 ' + d.hours + 'h ・ 營收 $' + Math.round(d.revenue).toLocaleString() + ' ・ rev/h $' + d.rph + '</div>';
+  html += '<div style="font-size:12px;color:var(--muted);">工時 ' + d.hours + 'h' + (d.hours_all > d.hours ? '（排班共 ' + d.hours_all + 'h，會議／內訓／請假 ' + (Math.round((d.hours_all - d.hours) * 100) / 100) + 'h 不算）' : '') + ' ・ 營收 $' + Math.round(d.revenue).toLocaleString() + ' ・ rev/h $' + d.rph + '</div>';
 
   if (d.date_note) {
     html += '<div class="tt-date-note">📋 ' + _escNote(d.date_note) + '</div>';
@@ -2241,7 +2272,7 @@ function renderDailyTable() {
 
   let html = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportDailyCSV()">⬇ 匯出 CSV</button></div>'
     + '<table class="daily-table"><thead><tr>'
-    + '<th>日期</th><th>週</th><th class="num">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
+    + '<th>日期</th><th>週</th><th class="num" title="扣掉會議、內訓、請假後真正在店工作的時數；括號「全」是排班總工時">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
     + '</tr></thead><tbody>';
 
   rows.forEach(r => {
@@ -2266,7 +2297,7 @@ function renderDailyTable() {
     const bn = calcDayBonus(r);   // 2026-10-01 日獎金
 
     _csvDaily.push([
-      r.date, wkday, (r.hours > 0 ? r.hours : ''), (r.revenue > 0 ? Math.round(r.revenue) : ''),
+      r.date, wkday, (r.hours_all > 0 ? r.hours : ''), (r.hours_all > 0 ? r.hours_all : ''), (r.revenue > 0 ? Math.round(r.revenue) : ''),
       (r.rev_per_hour > 0 ? r.rev_per_hour : ''), tierLabel.replace(/^[^ ]+ /,''),
       (r.rev_per_head > 0 ? Math.round(r.rev_per_head) : ''),
       (r.hours > 0 ? hDelta.toFixed(0) : ''), (r.revenue > 0 ? rDelta.toFixed(0) : ''),
@@ -2276,7 +2307,7 @@ function renderDailyTable() {
     html += '<tr' + (flagged ? ' class="flagged-row"' : '') + '>'
       + '<td>' + r.date.substring(5) + (r.is_holiday ? ' 🎉' : '') + '</td>'
       + '<td class="' + dayCellClass + '">' + wkday + '</td>'
-      + '<td class="num">' + (r.hours > 0 ? r.hours : '—') + '</td>'
+      + '<td class="num">' + (r.hours_all > 0 ? fmtDayHours(r, '') : '—') + '</td>'
       + '<td class="num">' + (r.revenue > 0 ? '$' + Math.round(r.revenue).toLocaleString() : '—') + '</td>'
       + '<td class="num" style="' + rphBg + '">' + (r.rev_per_hour > 0 ? '$' + r.rev_per_hour : '—') + '</td>'
       + '<td>' + tierLabel + '</td>'
