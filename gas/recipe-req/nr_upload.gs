@@ -65,6 +65,28 @@ function nrMetaAll_(sess) {
   return { recipe: rm, ing: nrIngMeta_(ig.text, rm.langId) };
 }
 
+/* ---------- 後台「食材管理」清單：品項編號對照（2026-10-14）
+   後台每個品項有編號（RF0246、M0111 這種），前綴＝種類：R 常溫食材、RF 冰箱食材、A 請向店員拿取、B 飲料區、U 器具、M／MC 模具、MS／BK 烘烤區耗材包材。
+   「新增食材」頁沒有編號欄，編號由後台自動給；這裡只是讀清單（/IngredSources，約 1MB、一頁全部）把 id→編號 對照出來，
+   給前端顯示「後台既有的是哪一個」「建好的拿到什麼編號」。讀不到就當沒有編號，不影響檢查與建立。暫存 10 分鐘。 ---------- */
+function nrCodeRows_(html) {
+  var out = {}, re = /<td\s+id="([0-9a-f-]{36})"\s+class="titleRow"\s*>\s*([^<]*?)\s*<\/td>/gi, m;
+  while ((m = re.exec(html))) out[m[1]] = rbTrim_(m[2]);
+  return out;
+}
+function nrCodeMap_(sess, fresh) {
+  var cache = CacheService.getScriptCache(), k = 'nrcodes';
+  if (!fresh) { var c = cache.get(k); if (c) try { return JSON.parse(c); } catch (e) {} }
+  try {
+    var r = rbAuthedGet_(sess, '/IngredSources');
+    if (r.code !== 200) return {};
+    var map = nrCodeRows_(r.text);
+    if (Object.keys(map).length) { try { cache.put(k, JSON.stringify(map), 600); } catch (e2) {} }
+    return map;
+  } catch (e3) { return {}; }
+}
+function nrAttachCodes_(ings, codes) { ings.forEach(function (x) { if (!x.code) x.code = codes[x.id] || ''; }); return ings; }
+
 /* ---------- 比對：跟 🍰 匯入同一套規則（rbMatch_＋單位帶括號合回），另外回結構化的「後台沒有」清單 ---------- */
 function nrMatchOne_(ings, g) {
   var r = rbMatch_(ings, { name: g[0], unit: g[2], cate: g[3] }), inUnit = false;
@@ -118,10 +140,10 @@ function nrSimilar_(ings, name) {
     if (!why) return;
     var key = x.name + '|' + x.unit;
     if (seen[key]) return; seen[key] = 1;
-    out.push({ name: x.name, unit: x.unit, cate: x.cate, why: why, t: TIER[why], d: Math.abs(kc.length - core.length) });
+    out.push({ name: x.name, unit: x.unit, cate: x.cate, code: x.code || '', why: why, t: TIER[why], d: Math.abs(kc.length - core.length) });
   });
   return out.sort(function (a, b) { return (a.t - b.t) || (a.d - b.d); }).slice(0, 6)
-    .map(function (x) { return { name: x.name, unit: x.unit, cate: x.cate, why: x.why }; });
+    .map(function (x) { return { name: x.name, unit: x.unit, cate: x.cate, code: x.code, why: x.why }; });
 }
 
 /* ---------- 預覽（只讀） ---------- */
@@ -139,6 +161,7 @@ function nrPreview_(p, auth) {
   catch (e) { out.warn.push('讀不到後台食譜清單，沒有檢查同名食譜（' + errMsg_(e) + '）'); }
   if (list && title) out.dup = list.filter(function (r) { return rbTitleNorm_(r.title) === rbTitleNorm_(title); }).slice(0, 10);
   var sp = rbProbeIngs_(sess, list), pool = [];
+  nrAttachCodes_(sp.ings, nrCodeMap_(sess, false));   /* 2026-10-14：後台品項編號（前綴＝種類），給前端顯示用 */
   try { pool = rbMediaPool_(); } catch (e) { out.warn.push('讀不到「食譜素材索引」公版候選，沒有建議公版圖片／影片（' + errMsg_(e) + '）'); }
   var miss = {}, order = [];
   rc.steps.forEach(function (s, i) {
@@ -146,7 +169,9 @@ function nrPreview_(p, auth) {
     m.items.forEach(function (it) {
       var k = rbNorm_(it.name).replace(/\s+/g, '') + '|' + rbNorm_(it.unit).replace(/\s+/g, '');
       if (!miss[k]) {
-        miss[k] = { key: k, name: it.name, unit: it.unit, zone: it.zone, note: it.note, kind: it.kind, units: it.units, steps: [], qty: [], similar: nrSimilar_(sp.ings, it.name) };
+        var n0 = rbNorm_(it.name), same = sp.ings.filter(function (x) { return x.kn === n0 || x.kz === n0; });   /* 同名、單位不同的後台品項（含編號） */
+        miss[k] = { key: k, name: it.name, unit: it.unit, zone: it.zone, note: it.note, kind: it.kind, units: it.units, steps: [], qty: [], similar: nrSimilar_(sp.ings, it.name),
+          unitsInfo: same.map(function (x) { return { unit: x.unit, code: x.code || '', cate: x.cate }; }) };
         miss[k].strong = miss[k].similar.some(function (x) { return x.why === 'variant'; });   /* 有相近字＝很可能是同一樣東西：前端不預設「建新品項」 */
         order.push(k);
       }
@@ -236,12 +261,17 @@ function nrIngCreate_(p, auth) {
       if (hit) { r.st = 'created'; r.id = hit.id; r.cate = hit.cate; made++; delete r.msg; }
       else if (r.st === 'sent') { r.st = 'missing'; r.msg = '後台回覆成功，但重讀食材清單找不到（可能名稱或單位被後台改過）'; }
     });
+    /* 2026-10-14：建好的（和本來就有的）附上後台編號，前端顯示「建好了：RF0425 榴槤果泥」 */
+    if (out.some(function (r) { return r.st === 'created' || r.st === 'exists'; })) {
+      var codes = nrCodeMap_(sess, made > 0);
+      out.forEach(function (r) { if (r.id && codes[r.id]) r.code = codes[r.id]; });
+    }
     rbSaveSession_(sess);
     var left = items.length - out.filter(function (r) { return r.st === 'created' || r.st === 'exists'; }).length;
     if (err && !made && left === items.length) throw fail_('建立新品項沒有成功：' + errMsg_(err), (err && err.code) || 'rbnet', { items: out });
     return { id: '', data: { items: out, made: made, left: left },
       msg: ('新品項：建立 ' + made + '、已存在 ' + out.filter(function (r) { return r.st === 'exists'; }).length + '、未完成 ' + left + '｜' +
-        out.map(function (r) { return r.name + '(' + r.unit + ')' + r.st; }).join('、')).slice(0, 480) };   /* 寫進 log 分頁（doPost 記） */
+        out.map(function (r) { return r.name + '(' + r.unit + ')' + r.st + (r.code ? ' ' + r.code : ''); }).join('、')).slice(0, 480) };   /* 寫進 log 分頁（doPost 記） */
   } finally { cache.remove('nring'); }
 }
 
