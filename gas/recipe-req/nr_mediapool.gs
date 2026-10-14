@@ -11,8 +11,10 @@ var NR_MEDIA_POOL = [{"u":"00d10826-aeba-403c-a941-2a913ae20f6a/1dd76906-19ee-41
 function nrTitleKey_(s) { return String(s == null ? '' : s).replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').replace(/\([^)]*\)/g, '').replace(/\(.*$/, ''); }
 /* 回 {tier:'auto'|'maybe'|'none', n:近期用這個標題的食譜數, list:[{url,type,mb,recipes,share,id,title}]}（list 依近期食譜數排序，最多 5 個） */
 function nrMediaFor_(title) {
-  var k = nrTitleKey_(title), n = NR_TITLE_N[k] || 0, L = [];
-  NR_MEDIA_POOL.forEach(function (p) {
+  var live = (typeof nmPool_ === 'function') ? nmPool_() : null;   /* 2026-10-14：排程掃出來的分頁資料優先（nm_scan.gs），沒有才用本檔常數 */
+  var POOL = live ? live.pool : NR_MEDIA_POOL, TN = live ? live.titles : NR_TITLE_N;
+  var k = nrTitleKey_(title), n = TN[k] || 0, L = [];
+  POOL.forEach(function (p) {
     var c = p.t[k]; if (!c) return;
     L.push({ url: RB_MEDIA_PREFIX + p.u, type: p.k === 'v' ? '影片' : '圖片', mb: p.mb, recipes: c, share: n ? Math.round(c / n * 100) : 0, id: '', title: String(title || '').trim() });
   });
@@ -20,5 +22,6 @@ function nrMediaFor_(title) {
   var top = L[0], tier = 'none';
   if (top && n >= NR_MEDIA_META.min_n && top.recipes / n >= NR_MEDIA_META.auto_share) tier = 'auto';
   else if (top && top.recipes >= 2 && n && top.recipes / n >= NR_MEDIA_META.maybe_share) tier = 'maybe';
-  return { tier: tier, n: n, list: L.slice(0, 5) };
+  return { tier: tier, n: n, list: L.slice(0, 5), source: live ? 'sheet' : 'constant' };
 }
+function nrMediaMeta_() { var live = (typeof nmPool_ === 'function') ? nmPool_() : null; return live ? { source: 'sheet', scanned: live.meta.scanned, recipes: live.meta.recipes, recent_from: live.meta.recent_from } : { source: 'constant', scanned: NR_MEDIA_META.scanned, recipes: NR_MEDIA_META.recipes, recent_from: NR_MEDIA_META.recent_from }; }

@@ -185,6 +185,7 @@ function nrPreview_(p, auth) {
       media: mf.tier === 'auto' ? mf.list : [], media_alt: mf.tier === 'maybe' ? mf.list.slice(0, 3) : [], media_tier: mf.tier, media_n: mf.n });
   });
   out.missing = order.map(function (k) { return miss[k]; });
+  out.media_meta = nrMediaMeta_();   /* 2026-10-14：公版資料來源與掃描時間，給畫面顯示 */
   rbSaveSession_(sess);
   return { id: '', data: out };
 }

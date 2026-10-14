@@ -266,7 +266,8 @@ var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adm
   patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
   adminSetRoleEmail: 1, adminTestMail: 1, formPatch: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
-var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1 };   /* formPatch＝整檔連結上改表頭（2026-10-08 v14） */   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
+var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1 };
+var NOAUTH = { nmStatus: 1, nmKick: 1, nmProbe: 1 };   /* 2026-10-14 公版掃描排程：不用身分密碼（只讀後台、寫自己的分頁，重跑無害；見 nm_scan.gs） */   /* formPatch＝整檔連結上改表頭（2026-10-08 v14） */   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
 /* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
 var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1, formPatch: 1 };
 /* 寫完要讓身分表暫存失效的動作 */
@@ -296,7 +297,7 @@ function doPost(e) {
   /* 先驗身分（在鎖外面）：密碼錯 → 停 1 秒再回（拖慢亂猜，不佔鎖、不影響別人）；不做「錯太多次就鎖整個身分」——
      那會讓知道網址的人故意打錯把全部主廚鎖在外面（2026-09-28 測試時實際發生過） */
   var auth;
-  try { auth = KEY_ACTS[act] ? keyAuth_(p) : auth_(p); } catch (err) {
+  try { auth = NOAUTH[act] ? { kind: 'none' } : (KEY_ACTS[act] ? keyAuth_(p) : auth_(p)); } catch (err) {
     Utilities.sleep(1000);
     res = { ok: false, act: act, code: (err && err.code) || 'auth', msg: errMsg_(err) };
     log_(who, act, guessId_(p), false, res.msg);
