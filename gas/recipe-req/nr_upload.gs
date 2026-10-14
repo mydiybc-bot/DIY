@@ -162,7 +162,7 @@ function nrPreview_(p, auth) {
   if (list && title) out.dup = list.filter(function (r) { return rbTitleNorm_(r.title) === rbTitleNorm_(title); }).slice(0, 10);
   var sp = rbProbeIngs_(sess, list), pool = [];
   nrAttachCodes_(sp.ings, nrCodeMap_(sess, false));   /* 2026-10-14：後台品項編號（前綴＝種類），給前端顯示用 */
-  try { pool = rbMediaPool_(); } catch (e) { out.warn.push('讀不到「食譜素材索引」公版候選，沒有建議公版圖片／影片（' + errMsg_(e) + '）'); }
+  /* 2026-10-14：公版圖片／影片改用 nr_mediapool.gs 的 nrMediaFor_（近期食譜、同內容合併、依占比分 auto／maybe／none），不再讀素材索引的「公版候選」分頁 */
   var miss = {}, order = [];
   rc.steps.forEach(function (s, i) {
     var m = nrMatchStep_(sp.ings, s), keys = [];
@@ -180,7 +180,9 @@ function nrPreview_(p, auth) {
       if (!miss[k].zone && it.zone) miss[k].zone = it.zone;
       keys.push(k);
     });
-    out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, mk: keys, notes: m.notes, media: rbMediaFor_(pool, s.t) });
+    var mf = nrMediaFor_(s.t);
+    out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, mk: keys, notes: m.notes,
+      media: mf.tier === 'auto' ? mf.list : [], media_alt: mf.tier === 'maybe' ? mf.list.slice(0, 3) : [], media_tier: mf.tier, media_n: mf.n });
   });
   out.missing = order.map(function (k) { return miss[k]; });
   rbSaveSession_(sess);

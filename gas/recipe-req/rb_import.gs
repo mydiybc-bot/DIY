@@ -130,12 +130,11 @@ function rbMediaPool_() {
   cachePutBig_(cache, key, JSON.stringify(out), 600);
   return out;
 }
-/* 步驟標題相同（或在該素材的「其他步驟標題」裡）的公版素材，被最多食譜用的排前面，最多 5 個 */
+/* 2026-10-14 改：公版素材改走 nr_mediapool.gs 的 nrMediaFor_（近期食譜、同內容合併、占比 ≥70% 才算公版）；
+   這裡只回「公版」那一級（自動配上用），沒有公版就回空陣列。pool 參數保留不用（舊的「公版候選」分頁不再讀）。 */
 function rbMediaFor_(pool, title) {
-  var k = rbTitleNorm_(title);
-  return pool.filter(function (c) { return c.k === k || c.alt.indexOf(k) >= 0; })
-    .sort(function (a, b) { return b.recipes - a.recipes; }).slice(0, 5)
-    .map(function (c) { return { url: c.url, type: c.type, mb: c.mb, recipes: c.recipes, id: c.id, title: c.title }; });
+  var mf = nrMediaFor_(title);
+  return mf.tier === 'auto' ? mf.list : [];
 }
 /* 讀食材清單要借一支現有食譜的「新增步驟」頁：先用上次記住的，打不開就從後台清單挑一支啟用中的 */
 function rbProbeIngs_(sess, list) {
@@ -167,8 +166,7 @@ function rbPreview_(p, auth) {
   catch (e) { out.warn.push('讀不到後台食譜清單，沒有檢查同名食譜（' + errMsg_(e) + '）'); }
   if (list) out.dup = list.filter(function (r) { return rbTitleNorm_(r.title) === rbTitleNorm_(d.title); }).slice(0, 10);
   var sp = rbProbeIngs_(sess, list);
-  var pool = [];
-  try { pool = rbMediaPool_(); } catch (e) { out.warn.push('讀不到「食譜素材索引」公版候選，沒有建議圖片／影片（' + errMsg_(e) + '）'); }
+  var pool = [];   /* 2026-10-14：不再讀素材索引「公版候選」，rbMediaFor_ 改用 nr_mediapool.gs */
   rc.steps.forEach(function (s, i) {
     var m = rbMatchStep_(sp.ings, s);
     out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, notes: m.notes, media: rbMediaFor_(pool, s.t) });
