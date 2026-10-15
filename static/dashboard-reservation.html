@@ -1,3 +1,5 @@
+<!-- 2026-10-15 v2.21（經營者回報多帳號 Chrome 能登入但頁面讀不出來）：訂位主資料／團體／POS／器具紅燈 4 個 GAS 讀取改走 gasLoad()——
+     先 fetch 不帶 Google cookie（Chrome 多帳號登入時 <script> 帶 cookie 會被 Google 轉到 /macros/u/1/ 回 503），fetch 出錯才走原本的 <script>；逾時、重試、畫面一律不變 -->
 <!-- 2026-10-07 v2.20.1（經營者同日更正）：8 人以上（含 8 人）都算團體、都要先選甜點 → 拿掉 v2.20 的②（散客不必先選）：
      團體總表甜點欄、「還沒選甜點」副標、說明框改回團體都要選；門市卡位（①）不變。 -->
 <!-- 2026-10-07 v2.20（經營者裁定）：團體區配合團體 GAS v1.4——①「客服訂位」備註寫「卡位」但沒寫時間（例「人力不足卡位」）＝客服配合門市卡位，
@@ -1072,6 +1074,26 @@ function storeSeqCmp(a, b) {
   return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b);
 }
 
+// ============ 2026-10-15 v2.21：多帳號 Chrome 讀不到資料 ============
+// Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 Google cookie → Google 把 /macros/s/…/exec 轉到 /macros/u/1/… 回 503。
+// gasLoad(s, src)：取代「s.src = src; appendChild(s)」。先用 fetch 不帶 cookie 讀同一個網址（各 GAS 回 callback名({...})、有 CORS），
+// 剝掉外層後呼叫 window[callback名]；Google 回 404／5xx＝觸發 s.onerror（跟原本一樣）；fetch 本身出錯或回應不是 JSON → 改走原本的 <script>。
+// 呼叫端的回呼、逾時、重試、收尾一律不變。
+function gasLoad(s, src) {
+  const m = /[?&]callback=([^&]+)/.exec(src), cb = m && decodeURIComponent(m[1]);
+  const viaScript = () => { s.src = src; document.head.appendChild(s); };
+  if (!cb || !window.fetch) return viaScript();
+  fetch(src, { credentials: 'omit', cache: 'no-store' }).then(r => {
+    if (!r.ok) { if (s.onerror) s.onerror(); return; }
+    return r.text().then(t => {
+      const w = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+      let d;
+      try { d = JSON.parse(w ? w[1] : t); } catch (_) { viaScript(); return; }   // 回的不是 JSON（例如 Google 錯誤頁）→ 交給 <script> 原本的判斷
+      if (typeof window[cb] === 'function') window[cb](d);
+    });
+  }).catch(viaScript);   // CORS 被擋、網路錯 → 原本的 JSONP
+}
+
 // ============ JSONP ============
 function jsonp(url) {
   return new Promise((resolve, reject) => {
@@ -1090,8 +1112,7 @@ function jsonp(url) {
       try { document.head.removeChild(script); } catch (e) {}
       reject(new Error('讀取失敗'));
     };
-    script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cbName;
-    document.head.appendChild(script);
+    gasLoad(script, url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cbName);
   });
 }
 
@@ -1131,8 +1152,7 @@ function jsonpRetry(url) {
       // 載入完成卻沒有呼叫回呼＝回來的不是資料（例如 Google 錯誤頁）→ 當作失敗，馬上補發
       s.onload = () => { if (end()) { live--; why = '回應格式不對'; again(2000 * n); } };
       timers.push(setTimeout(() => { if (!over) { why = '讀取逾時'; again(0); } }, JSONP_TIMEOUT_MS));
-      s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
-      document.head.appendChild(s);
+      gasLoad(s, url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb);
     }
     timers.push(setTimeout(() => finish(null, new Error('讀取逾時（已等 ' + Math.round(JSONP_TIMEOUT_MS * JSONP_MAX_TRIES / 1000) + ' 秒、自動重試 ' + (n - 1) + ' 次）')),
       JSONP_TIMEOUT_MS * JSONP_MAX_TRIES));
@@ -1463,13 +1483,13 @@ function posJsonpOnce(timeoutMs) {
     // POS 地雷 18：GAS 冷啟動會回 5xx 觸發 onerror（不是逾時）→ 首次失敗 3 秒後自動重掛一次
     function mount() {
       script = document.createElement('script');
-      script.src = POS_API + '?callback=' + cb;
       script.onerror = () => {
         try { if (script.parentNode) script.parentNode.removeChild(script); } catch (_) {}
+        if (done) return;
         if (!retried) { retried = true; setTimeout(mount, 3000); return; }
         finish(null, new Error('POS API 連線失敗'));
       };
-      document.head.appendChild(script);
+      gasLoad(script, POS_API + '?callback=' + cb);
     }
     mount();
   });
@@ -1719,7 +1739,7 @@ function loadEquip() {
     const clean = () => { try { delete window[cb]; } catch (_) { window[cb] = undefined; } if (sc.parentNode) sc.parentNode.removeChild(sc); };
     window[cb] = d => { clean(); if (over) return; if (d && d.ok) done(d); else if (++fails >= 3) done(null, d && d.error); else fire(); };
     sc.onerror = () => { clean(); if (over) return; if (++fails >= 3) done(null, '連不上'); else setTimeout(fire, 700); };
-    sc.src = DECISION_API + '?action=equip&callback=' + cb; document.head.appendChild(sc);
+    gasLoad(sc, DECISION_API + '?action=equip&callback=' + cb);
   };
   box.innerHTML = '<div class="empty-note">讀取中…</div>';
   fire(); timers.push(setTimeout(fire, 8000), setTimeout(fire, 20000), setTimeout(() => done(null, '逾時'), 75000));
