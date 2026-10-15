@@ -309,6 +309,9 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
    ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
    ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
       還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
    緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
 (function(){
   if (window.__dashAuth) return;
@@ -362,6 +365,32 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
     (document.head || document.documentElement).appendChild(s);
     return end;
   }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
   function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
   function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
     var last = 0, now = Date.now(), l = ls();
@@ -373,7 +402,7 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
     }
     (function ping(k){
       var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
-      var end = jsonp('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
     })(1);
     return true;
   }
@@ -401,7 +430,7 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
       if (done || n >= 3) return;
       n++; live++;
       if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
-      ends.push(jsonp(qs, function(d){
+      ends.push(call(qs, function(d){
         live--;
         if (done) return;
         if (d && d.ok) return finish(d);
@@ -416,7 +445,7 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
   function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
     read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
   }
-  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify };
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
 })();
 /* ===== AUTH-CORE v2 END ===== */
 /* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
