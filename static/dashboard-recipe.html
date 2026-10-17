@@ -1845,7 +1845,7 @@ return { ensureInit, fetchPos, render, get ready(){ return READY; },
   /* 2026-09-05 供 ApplyMod（新品申請表）共用：同一套 costLines 引擎與已載入主檔，不另抓資料 */
   costOf:costLines, skuOf:skuOf, isTool:isTool, conv:conv, priceOf:priceOf,
   parseRecipeHTML:parseRecipeHTML, proseMiss:proseMiss, stripPos:stripPos, bomTsv:bomTsv,
-  gq:gq, gqShared:gqShared, SKU_TQ:SKU_TQ, readIdOf:readIdOf, skus:function(){return SKUARR}, convs:function(){return CONV}, aliasMap:function(){return SKUALIAS} };
+  gq:gq, gqShared:gqShared, SKU_TQ:SKU_TQ, readIdOf:readIdOf, skus:function(){return SKUARR}, bom:function(){return BOM}, convs:function(){return CONV}, aliasMap:function(){return SKUALIAS} };
 })();
 
 </script>
@@ -1979,7 +1979,7 @@ function gvDate(v){if(v==null||v==='')return null;if(v instanceof Date)return is
 /* 2026-09-28 A 階段：launch（預計上市日）／firstShip（店裡第一批配貨時間）拿掉，改由檔期帶出（舊草稿／舊 .json 的這兩欄載入時自動丟棄）；
    campaign_*＝選到的檔期快照（.json head 一起帶走）；req_id＝送件後系統配的申請單號（同一張再送＝更新同一張） */
 function blankHead(){return {brand:BRAND_DEFAULT,date:today(),period:'',name:'',diet:'',keep:'',fname:'',price:'',spec:'',pack:'',time:'',qty:'',cat:'',catOther:'',note:'',
-  campaign_id:'',campaign_name:'',campaign_start:'',campaign_end:'',campaign_ship:'',campaign_early:'',req_id:''}}
+  campaign_id:'',campaign_name:'',campaign_start:'',campaign_end:'',campaign_ship:'',campaign_early:'',req_id:'',revise:''}}   /* revise：2026-10-17 改版既有甜點＝'Y' */
 function newLine(){var o={m:'',q:'',u:'',zone:'',cat:'',id:'',pin:false,conv:'',simok:''};NI_KEYS.forEach(function(k){o[k]=''});return o}   /* pin：主檔有、但填寫人按「加到新增表」手動加進表二（2026-09-18 經營者直接指示） */
 function inTable2(l){return isNewItem(l)||!!l.pin}
 /* 表二／摘要／複製新增食材表 的列＝🆕（自動）＋ pin（手動）；dim_sku 新品項列仍只有 🆕 */
@@ -2027,6 +2027,22 @@ function simGate(){var bad=[];AP.lines.forEach(function(l,i){if(isNewItem(l)&&si
   alert('⚠ 下面這些新品項，主檔有類似的品項，主廚還沒確認：\n\n'+bad.map(function(b){return '・'+b.l.m+'　→ 主檔：'+simPending(b.l).map(function(x){return x.o.id+' '+x.o.name+simTag(x.o)}).join('、')}).join('\n')
     +'\n\n請在表一每一列按「改用這個」（同一樣）或「都不是，確認是新品項」，再送出。');
   var tr=document.querySelector('tr[data-ln="'+bad[0].i+'"]');if(tr)tr.scrollIntoView({behavior:'smooth',block:'center'});return false}
+/* 2026-10-17 經營者「改版既有甜點」：正式名稱（沒填用暫定名稱）在採購系統 BOM 表已經有配方 → 主廚要勾「改版既有甜點」（核准時整份換掉舊配方，寫前備份、可還原），
+   或換一個名字；兩個都沒做 → 不能產出連結／送件（不然核准時配方不會寫進去） */
+function dessName(){return String(AP.head.fname||'').trim()||String(AP.head.name||'').trim()}
+function bomHaveOf(nm){nm=String(nm||'').trim();if(!nm||!R.bom)return 0;var b=R.bom()[nm];return b?b.length:0}
+function reviseHTML(){var nm=dessName(),n=bomHaveOf(nm),on=AP.head.revise==='Y',dis=lockedReq()||unitMode()?' disabled':'';
+  if(!n&&!on)return '';
+  var cb='<div class="ap-simrow"><label style="font-weight:700"><input type="checkbox" data-hfc="revise"'+(on?' checked':'')+dis+'> 改版既有甜點（核准時整份換掉採購系統的舊配方）</label></div>';
+  if(!n)return '<div class="ap-sim ok">已勾「改版既有甜點」，但採購系統沒有「'+esc(nm)+'」的配方：核准時會當新甜點建立。'+cb+'</div>';
+  return '<div class="ap-sim'+(on?' ok':'')+'">'+(on?'✓ 改版：核准時，採購系統「'+esc(nm)+'」現有配方 '+n+' 列會整份換成這張單的用料（寫入前會備份，管理者可以還原）。用料請填完整的新配方。'
+    :'⚠ 採購系統已經有「'+esc(nm)+'」的配方（'+n+' 列）。這張是<b>改版</b>嗎？是 → 勾下面；是<b>新甜點</b> → 請換一個正式名稱（不然核准時配方不會寫進去）。')+cb+'</div>'}
+function reviseNeed(){return !!(bomHaveOf(dessName())&&AP.head.revise!=='Y')}
+function reviseGate(){if(!reviseNeed())return true;
+  alert('⚠ 採購系統已經有「'+dessName()+'」的配方（'+bomHaveOf(dessName())+' 列）。\n\n這張是改版 → 在表頭「商品正式名稱」下面勾「改版既有甜點」；\n是新甜點 → 請換一個正式名稱。');
+  var b=document.getElementById('apRevise');if(b)b.scrollIntoView({behavior:'smooth',block:'center'});return false}
+function refreshRevise(){var b=document.getElementById('apRevise');if(!b)return;b.innerHTML=reviseHTML();wireRevise(b)}
+function wireRevise(root){(root||document).querySelectorAll('[data-hfc="revise"]').forEach(function(el){el.onchange=function(){AP.head.revise=el.checked?'Y':'';OUT=null;saveDraft();refreshRevise();var td=document.getElementById('apTodo');if(td)td.innerHTML=todoHTML()}})}
 var _simAlerted={};
 function simAlert(i){var l=AP.lines[i];if(!l||!isNewItem(l))return;var p=simPending(l),nm=String(l.m||'').trim();if(!p.length||_simAlerted[nm])return;_simAlerted[nm]=1;
   setTimeout(function(){alert('⚠ 「'+nm+'」主檔沒有，但有類似的品項：\n\n'+p.map(function(x){return '・'+x.o.id+' '+x.o.name+simTag(x.o)}).join('\n')+'\n\n是同一樣嗎？請在表一這一列按「改用這個」或「都不是，確認是新品項」。')},200)}
@@ -2275,6 +2291,7 @@ function validate(){var e=[],h=AP.head;
   if(!String(h.campaign_id||'').trim())e.push('檔期（送件前要在表頭選）');
   if(!String(h.brand||'').trim())e.push('品牌別');
   if(!String(h.name||'').trim())e.push('商品暫定名稱');
+  if(reviseNeed())e.push('採購系統已經有「'+dessName()+'」的配方：是改版請勾「改版既有甜點」，是新甜點請換正式名稱');
   if(!(num(h.price)>0))e.push('產品定價');
   var L=AP.lines.filter(function(l){return String(l.m||'').trim()});
   if(!L.length)e.push('用料（表一還沒有任何品項，成本算不出來）');
@@ -2445,7 +2462,7 @@ function headHTML(c){var rate=rateOf(c),col=rateColor(rate);
    +'<div class="ap-row ap-row-3">'+cell('品牌別',sel('brand',BRANDS))+cell('申請日期',inp('date','date'))+cell('檔期',campSelectHTML())+'</div>'
    +'<div class="ap-row ap-row-1 ap-dim">'+cell('檔期資訊','<div id="apCampInfo" style="width:100%">'+campInfoHTML()+'</div>')+'</div>'
    +'<div class="ap-row ap-row-3">'+cell('商品暫定名稱',inp('name').replace('<input ','<input autocomplete="off" '))+cell('葷素',sel('diet',DIETS))+cell('保存方式',sel('keep',KEEPS))+'</div>'
-   +'<div class="ap-row ap-row-1">'+cell('商品正式名稱',inp('fname','text','新品上架要用的正式名稱（核准後系統會用這個名稱建 BOM 表與 POS 對照）').replace('<input ','<input autocomplete="off" '))+'</div>'
+   +'<div class="ap-row ap-row-1">'+cell('商品正式名稱',inp('fname','text','新品上架要用的正式名稱（核准後系統會用這個名稱建 BOM 表與 POS 對照）').replace('<input ','<input autocomplete="off" ')+'<div id="apRevise" style="width:100%">'+reviseHTML()+'</div>')+'</div>'
    +'<div class="ap-row ap-row-7">'+cell('產品成本','<div class="ap-ro" id="apCostRO" title="唯讀＝成本卡每份材料成本">'+fm(c.total)+' 元</div>')
      +cell('產品定價',inp('price','number','元'))
      +cell('產品利潤率','<div class="ap-ro" id="apMarginRO" title="唯讀＝(定價−成本)÷定價" style="color:'+col+'">'+(rate===null?'—':(100-rate).toFixed(1)+'%')+'</div>')
@@ -2940,7 +2957,7 @@ function saveReqP(cr,force,onRetry){var isNew=!AP.head.req_id;
     return r})}
 function sendReq(force){if(_busy)return;
   if(lockedReq()){alert('這張單目前是「'+AP.sub.status+'」，不能再送件。');return}
-  if(!simGate())return;   /* 2026-10-17：類似品項沒確認不能送 */
+  if(!simGate()||!reviseGate())return;   /* 2026-10-17：類似品項沒確認、撞到既有甜點沒勾改版 → 不能送 */
   var h=AP.head;
   if(!h.campaign_id){alert('請先在表頭「檔期」選這支新品要上的檔期（清單沒有就按「＋ 新增檔期」）。');var s=document.getElementById('apCampSel');if(s){s.scrollIntoView({behavior:'smooth',block:'center'});s.focus()}return}
   var nm=String(h.fname||'').trim()||String(h.name||'').trim(),isNew=!h.req_id,moved=!isNew&&AP.sub.campId&&AP.sub.campId!==h.campaign_id;
@@ -3341,7 +3358,7 @@ function simpleCardHTML(){var h=AP.head,s=AP.sub||{},st=s.status||'',rid=h.req_i
 function linkFlow(force){if(_busy)return;var h=AP.head,cid=h.campaign_id;
   if(!cid){alert('請先在表頭「檔期」選這支新品要上的檔期（清單沒有就按「＋ 新增檔期」）。');var sl=document.getElementById('apCampSel');if(sl){sl.scrollIntoView({behavior:'smooth',block:'center'});sl.focus()}return}
   var save=!lockedReq(),tk=null;
-  if(save&&!unitMode()&&!simGate())return;   /* 2026-10-17：類似品項沒確認不能存檔產出連結 */
+  if(save&&!unitMode()&&(!simGate()||!reviseGate()))return;   /* 2026-10-17：類似品項沒確認不能存檔產出連結 */
   credRun('主廚','產出申請表連結要主廚密碼。',function(cr,onR){_busy=true;var t0=Date.now(),note='';
       var show=function(){SENDMSG='<span class="ap-muted">'+(save?'存檔並產出連結中…':'產出連結中…')+'已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note+'（Google 慢的時候要 10～30 秒；同一張不會重複存）</span>';updSendUI()};
       show();clearInterval(tk);tk=setInterval(show,1000);
@@ -3643,7 +3660,9 @@ function pvTable(head,rows){return '<div class="ap-tblwrap"><table class="ap-uni
   +rows.map(function(r){return '<tr>'+r.map(function(x){return '<td>'+esc(x==null?'':x)+'</td>'}).join('')+'</tr>'}).join('')+'</tbody></table></div>'}
 function planHTML(pl){var m=pl.map||[],x='<div class="ap-pushpv"><div><b>核准後會寫進採購系統</b>：'+esc(pl.name)+(pl.campaign?'｜'+esc(pl.campaign):'')+'</div>';
   x+='<div><b>① 產品名稱對照表</b>：'+(pl.mapSkip?'<span class="ap-muted">'+esc(pl.mapSkip)+'</span>':'新增 1 列｜'+esc(m[2]||'（沒有起日）')+'～'+esc(m[3]||'（沒有迄日）')+'｜主類別 '+esc(m[4])+'｜次類別 '+esc(m[5]))+'</div>';
-  x+='<div><b>② BOM 表</b>：'+(pl.bomSkip?'<span class="ap-muted">'+esc(pl.bomSkip)+'</span>':'新增 '+pl.bom.length+' 列（用料全部；同品項同單位合併）')+'</div>';
+  var br=pl.bomReplace;   /* 2026-10-17 改版 */
+  x+='<div><b>② BOM 表</b>：'+(pl.bomSkip?'<span class="ap-muted">'+esc(pl.bomSkip)+'</span>':br?'<b style="color:#B26A00">改版</b>：採購系統現有 '+br.old+' 列（第 '+br.start+' 列起）整份換成下面 '+pl.bom.length+' 列（寫入前備份，管理者可還原）':'新增 '+pl.bom.length+' 列（用料全部；同品項同單位合併）')+'</div>';
+  if(!pl.bomSkip&&br&&(br.oldRows||[]).length)x+='<details><summary>現有配方 '+br.old+' 列（會被換掉）</summary>'+pvTable(['品項','數量','單位','容器'],br.oldRows.map(function(r){return [r[1],r[2],r[3],r[4]]}))+'</details>';
   if(!pl.bomSkip&&pl.bom.length)x+=pvTable(['品項','數量','單位','容器'],pl.bom.map(function(r){return [r[1],r[2],r[3],r[4]]}));
   x+='<div><b>③ 主檔新品項</b>：'+(pl.sku.length?'新增 '+pl.sku.length+' 項，標「🆕 待確認」由採購補單價、單位換算、適用店':'沒有新品項')+'</div>';
   if(pl.sku.length)x+=pvTable(['編號','品名','廠商品名','品類別','廠商','使用單位','採購單位','內容量','單價'],pl.sku.map(function(r){return [r.sku_id,r.name+(r.semi?'（店製半成品）':''),r.vname||'—',r.cat,r.vendor,r.unit,r.buy,r.pack,r.price||'（待補）']}));
@@ -3665,7 +3684,7 @@ function pushPvHTML(){if(PUSHPV.rid!==AP.head.req_id)return '';
   return PUSHPV.plan?planHTML(PUSHPV.plan):''}
 function pushDoneHTML(pi){var w=(pi&&pi.written)||[];if(!w.length)return '<div class="ap-muted">三張表都已經有這支甜點，沒有寫新的列。</div>';
   var nm={sku:'主檔新品項',sku2:'主檔新品項（採購系統讀取用的副本）',bom:'BOM 表',map:'產品名稱對照表',conv:'新單位換算（單位對照）',par:'新器具／模具各店標配',par2:'新器具／模具各店標配（採購系統讀取用的副本）',skuSt:'主檔停售改回在用',skuSt2:'主檔停售改回在用（採購系統讀取用的副本）'};
-  var x='<div class="ap-pushpv"><details class="xhelp" style="margin:0"><summary>ⓘ 寫在哪幾張表、第幾列（總部查核用）</summary><div>'+w.map(function(d){return '<b>'+esc(nm[d.table]||d.name)+'</b> '+(/^skuSt/.test(d.table)?'第 '+esc((d.show||[]).map(function(r){return r[2]}).join('、'))+' 列（'+esc(d.n)+' 項）':'第 '+esc(d.start)+'～'+esc(d.start+d.n-1)+' 列（'+esc(d.n)+' 列）')}).join('<br>')+'</div></details>';
+  var x='<div class="ap-pushpv"><details class="xhelp" style="margin:0"><summary>ⓘ 寫在哪幾張表、第幾列（總部查核用）</summary><div>'+w.map(function(d){return '<b>'+esc((nm[d.table]||d.name)+(d.replace?'（改版，換掉舊配方 '+d.old+' 列）':''))+'</b> '+(/^skuSt/.test(d.table)?'第 '+esc((d.show||[]).map(function(r){return r[2]}).join('、'))+' 列（'+esc(d.n)+' 項）':'第 '+esc(d.start)+'～'+esc(d.start+d.n-1)+' 列（'+esc(d.n)+' 列）')}).join('<br>')+'</div></details>';
   var sk=w.filter(function(d){return d.table==='sku'})[0],bm=w.filter(function(d){return d.table==='bom'})[0];
   if(sk&&sk.show.length)x+='<details><summary>主檔新品項 '+sk.show.length+' 項</summary>'+pvTable(['編號','品名','品類別','廠商'],sk.show)+'</details>';
   var rcw=w.filter(function(d){return d.table==='skuSt'})[0];   /* 2026-10-17 */
@@ -4153,7 +4172,7 @@ function wire(){var root=document.getElementById('apRoot');
   /* 表頭＋頁尾 */
   root.querySelectorAll('[data-hf]').forEach(function(el){var k=el.dataset.hf;
     el.oninput=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='price'||k==='qty')refreshCost()};
-    el.onchange=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='cat')renderSoon();else if(k==='name'||k==='fname')updateSemiCard();else if(k==='brand')refreshCost();var td=document.getElementById('apTodo');if(td)td.innerHTML=todoHTML()}});
+    el.onchange=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='cat')renderSoon();else if(k==='name'||k==='fname'){updateSemiCard();refreshRevise()}else if(k==='brand')refreshCost();var td=document.getElementById('apTodo');if(td)td.innerHTML=todoHTML()}});
   /* 半成品 */
   root.querySelectorAll('.ap-semi').forEach(function(box){var si=+box.dataset.semi,sm=AP.semis[si];if(!sm)return;
     box.querySelectorAll('[data-sh]').forEach(function(el){var k=el.dataset.sh;el.oninput=function(){sm[k]=el.value;OUT=null;saveDraft()};
@@ -4200,6 +4219,7 @@ function wire(){var root=document.getElementById('apRoot');
           var m=document.querySelector('tr[data-n2="'+i+'"] td:nth-child(5)');if(m){m.textContent=el.value||'—';m.title=el.value}}}})});
   root.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){AP.lines.splice(+b.dataset.del,1);if(!AP.lines.length)AP.lines=[newLine()];OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-pin]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.pin];if(!l)return;l.pin=true;OUT=null;saveDraft();render();var tr=document.querySelector('tr[data-n2="'+b.dataset.pin+'"]');if(tr){tr.scrollIntoView({behavior:'smooth',block:'center'});var inp=tr.querySelector('[data-nf="sticker"]');if(inp)inp.focus()}}});
+  wireRevise(root);   /* 2026-10-17：改版既有甜點 */
   /* 2026-10-17：類似品項確認 */
   root.querySelectorAll('[data-simuse]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.simuse];if(!l)return;var o=R.skus().filter(function(x){return String(x.id)===b.dataset.simid})[0];if(!o)return;
     if(!confirm('把「'+l.m+'」改成主檔的「'+o.id+' '+o.name+'」？\n\n用量、單位不變（單位和主檔不同的話，表一會請你填換算）。'))return;

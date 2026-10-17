@@ -18,8 +18,9 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v15';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v16';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -591,6 +592,19 @@ function saveCampaign_(p, auth) {
 }
 
 /* ================= 申請單 ================= */
+/* 2026-10-17 經營者（11 月大菜單：脆笛可可、我的生日蛋糕、奧利奧 各有「海綿蛋糕版／自選版」兩張單、正式名稱一樣）：
+   核准寫入採購系統用「正式名稱」建配方與 POS 對照，同名的第二張會被當成「已經有了」整段跳過 → 同一檔期內正式名稱（沒填用暫定名稱）不能重複。
+   回傳撞名那一張 {req_id, seq, name}；沒撞回 null */
+function reqNameKey_(v) { return str_(v).trim().replace(/\s+/g, ' '); }
+function dupName_(t, campId, name, exceptRid) {
+  var k = reqNameKey_(name);
+  if (!k) return null;
+  var hit = t.rows.filter(function (r) {
+    return str_(r.campaign_id) === campId && str_(r.req_id) !== exceptRid && reqNameKey_(str_(r['商品正式名稱']).trim() || str_(r['商品暫定名稱']).trim()) === k;
+  })[0];
+  return hit ? { req_id: str_(hit.req_id), seq: str_(hit.seq), name: k } : null;
+}
+function dupNameMsg_(d) { return '這個檔期已經有一支叫「' + d.name + '」（第 ' + d.seq + ' 支，' + d.req_id + '）。同一個甜點有不同版本（例：海綿蛋糕版／自選版）時，正式名稱要分開寫，並和 POS 上的品名一樣，例：「' + d.name + '(海綿蛋糕版)」'; }
 function saveReq_(p, auth) {
   var q = p.req || {}, now = now_();
   var campId = str_(q.campaign_id).trim();
@@ -633,6 +647,10 @@ function saveReq_(p, auth) {
         { updated_at: str_(row.updated_at), updated_by: str_(row.updated_by) });
     }
   }
+  /* 2026-10-17：同一檔期正式名稱不能重複（沒填正式名稱用暫定名稱） */
+  var nm0 = str_(q['商品正式名稱']).trim() || str_(j && j.head && j.head.fname).trim() || str_(q['商品暫定名稱']).trim() || str_(j && j.head && j.head.name).trim();
+  var dn0 = dupName_(t, campId, nm0, row ? str_(row.req_id) : '');
+  if (dn0) throw fail_(dupNameMsg_(dn0), 'dupname', { dup: dn0 });
   var obj = {}, skipped = [];
   if (row) t.H.forEach(function (h) { obj[h] = row[h]; });
   else {
@@ -758,6 +776,12 @@ function formPatch_(p, auth) {
   var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
   if (!row || str_(row.campaign_id) !== auth.camp) throw fail_('這張申請表不在這個連結的檔期裡', 'perm');
   var ph = (p.patch && p.patch.head) || {};
+  if (ph.fname !== undefined || ph.name !== undefined) {   /* 2026-10-17：改名稱也不能和同檔期別支撞名 */
+    var cur = {}; try { cur = (JSON.parse(readPayload_(t, row._row)) || {}).head || {}; } catch (e) { }
+    var nmF = str_(ph.fname !== undefined ? ph.fname : cur.fname).trim() || str_(ph.name !== undefined ? ph.name : cur.name).trim();
+    var dnF = dupName_(t, auth.camp, nmF, rid);
+    if (dnF) throw fail_(dupNameMsg_(dnF), 'dupname', { dup: dnF });
+  }
   var r = patchReq_({ req_id: rid, patch: { head: ph } }, { kind: 'role', role: '104簽核：' + who, name: who, rules: parseRules_(FORM_HEAD_RULES), fields: FORM_HEAD_RULES });
   var d = r.data || {};
   if (d.changed && d.changed.length && d.payload) {   /* 申請單表上的名稱、定價等欄跟著改（檔期清單、重新載入清單看得到新名稱） */
@@ -1113,6 +1137,8 @@ function submitSignCamp_(p, auth) {
     var st = str_(row.status);
     if (st !== '草稿' && st !== '退回') { probs.push(nm + ' 目前是「' + st + '」，不能送簽'); return; }
     if (!p.force && str_(row.updated_at) !== x.base) { probs.push(nm + ' 在 ' + str_(row.updated_at) + ' 被「' + str_(row.updated_by) + '」改過，請先按「🔄 重新整理」'); return; }
+    var dnS = dupName_(t, cid, nm, x.rid);   /* 2026-10-17：舊單可能已經同名 → 送簽前擋 */
+    if (dnS) { probs.push(nm + '：和第 ' + dnS.seq + ' 支（' + dnS.req_id + '）同名，請把正式名稱分開（例：' + nm + '(海綿蛋糕版)）'); return; }
     rows.push(row);
   });
   if (probs.length) throw fail_((saved ? '畫面上這一支已存檔，但' : '') + '整檔送簽沒有送出（一支都沒送）：' + probs.join('；'), 'conflict', { probs: probs, saved: saved });
@@ -1533,8 +1559,21 @@ function planPush_(rid) {
     agg[key].q = tool ? Math.max(agg[key].q, l.qty) : agg[key].q + l.qty;
   });
   var bomRows = order.map(function (k) { var a = agg[k]; return [name, a.m, r4_(a.q), a.u, cont[a.m] || '']; });
-  var bomHave = P.bom.vals.filter(function (r) { return ptName_(r[0]) === name; }).length;
-  var bom = { rows: bomRows, skip: bomHave ? 'BOM 表已經有「' + name + '」的配方 ' + bomHave + ' 列，沒有重寫（要改配方請在 BOM 本手動改）' : (bomRows.length ? '' : '用料（全部）沒有數量 > 0 的品項') };
+  var bomIdx = [];
+  P.bom.vals.forEach(function (r, i) { if (ptName_(r[0]) === name) bomIdx.push(i); });
+  var bomHave = bomIdx.length, revise = h.revise === true || h.revise === 'Y';
+  var bom = { rows: bomRows, skip: '', replace: null };
+  /* 2026-10-17 經營者：改版既有甜點（表頭勾「改版」）→ 核准時把 BOM 表這支甜點現有那一段整份換成這張單的用料（寫前備份、管理者可還原原位放回）；
+     沒勾改版而 BOM 已經有 → 照舊不寫（避免新甜點撞到舊名字把別人的配方蓋掉） */
+  if (!bomRows.length) bom.skip = '用料（全部）沒有數量 > 0 的品項';
+  else if (bomHave && revise) {
+    if (bomIdx[bomIdx.length - 1] - bomIdx[0] + 1 !== bomHave) bom.skip = 'BOM 表「' + name + '」的配方分散在好幾段，沒有改版（請先到 📚 BOM 管理整理成一段，再按「📦 寫入採購系統」重試）';
+    else {
+      bom.replace = { start: bomIdx[0] + 2, old: bomIdx.map(function (i) { return P.bom.vals[i].slice(0, PT_COLS.bom); }) };
+      warn.push('改版：BOM 表「' + name + '」現有 ' + bomHave + ' 列（第 ' + (bomIdx[0] + 2) + '～' + (bomIdx[bomHave - 1] + 2) + ' 列）會整份換成這張單的 ' + bomRows.length + ' 列；寫入前會備份，管理者按「還原」會把舊配方原位放回');
+    }
+  } else if (bomHave) bom.skip = 'BOM 表已經有「' + name + '」的配方 ' + bomHave + ' 列，沒有重寫（這張如果是改版，請主廚在申請表表頭勾「改版既有甜點」）';
+  else if (revise) warn.push('表頭勾了「改版既有甜點」，但 BOM 表沒有「' + name + '」的配方：會當新甜點建立');
 
   /* ③ 對照表
      2026-10-01 需求 7（POS 分類改選「主類別」，head.cat_kind==='main'）：G＝選的主類別（要在對照表現有主類別內，否則用預設）；
@@ -1573,6 +1612,7 @@ function planView_(pl) {
   return { req_id: pl.rid, name: pl.name, campaign: pl.campaign, from: pl.from, to: pl.to, warn: pl.warn, dash: !!pl.P.sku2,
     sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, vname: r.vname || '', cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
     existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip,
+    bomReplace: pl.bom.replace ? { start: pl.bom.replace.start, old: pl.bom.replace.old.length, oldRows: pl.bom.replace.old.map(function (r) { return r.map(ptNorm_); }) } : null,   /* 2026-10-17 改版 */
     conv: (pl.conv ? pl.conv.rows : []).map(function (r) { return r.slice(0, 4).map(ptNorm_); }),
     par: (pl.par ? pl.par.show : []).map(function (r) { return r.map(ptNorm_); }),
     react: (pl.react || []).map(function (r) { return { sku_id: r.sku_id, name: r.name, line: r.line, cat: r.cat }; }) };
@@ -1644,6 +1684,38 @@ function ptRemove_(tab, rec) {
   if (hit.length) SpreadsheetApp.flush();
   return { removed: hit.length, miss: miss };
 }
+/* 2026-10-17：BOM 表改版——把「name」那一段（連續列）由 fromRows 換成 toRows（寫入、失敗收尾、還原共用）。
+   重新讀 A 欄找這支甜點的列；不連續、列數或內容跟 fromRows 不同（有人剛改過）、F 欄以後有資料 → 停下不改；
+   多的列在段內插入、少的列從段尾刪；寫完讀回逐格比對 */
+function ptBlockReplace_(tab, name, fromRows, toRows) {
+  var sh = tab.sh, w = PT_COLS.bom;
+  var colA = sh.getRange(1, 1, Math.max(sh.getLastRow(), 1), 1).getValues(), idx = [];
+  for (var i = 1; i < colA.length; i++) if (ptName_(colA[i][0]) === name) idx.push(i + 1);
+  if (!idx.length) throw fail_('BOM 表找不到「' + name + '」的配方（可能有人剛刪掉），先停下不改', 'busy');
+  if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) throw fail_('BOM 表「' + name + '」的配方分散在好幾段，先停下不改（請到 📚 BOM 管理整理成一段）', 'bomsplit');
+  var start = idx[0], n0 = idx.length, n1 = toRows.length;
+  if (n0 !== fromRows.length) throw fail_('BOM 表「' + name + '」現在是 ' + n0 + ' 列、預期 ' + fromRows.length + ' 列（可能有人剛改過），先停下不改', 'busy');
+  var cur = sh.getRange(start, 1, n0, w).getValues();
+  cur.forEach(function (r, i2) { r.forEach(function (v, j) { if (!ptSame_(v, fromRows[i2][j])) throw fail_('BOM 表第 ' + (start + i2) + ' 列第 ' + (j + 1) + ' 欄和預期不同（可能有人剛改過），先停下不改', 'busy'); }); });
+  var lc = sh.getLastColumn();
+  if (lc > w && sh.getRange(start, w + 1, n0, lc - w).getValues().some(function (r) { return r.some(function (v) { return ptNorm_(v) !== ''; }); }))
+    throw fail_('BOM 表「' + name + '」那幾列在第 ' + (w + 1) + ' 欄以後有資料，先停下不改（請到 📚 BOM 管理處理）', 'bomextra');
+  if (!n1) throw fail_('改版沒有要寫的用料', 'bad');
+  if (n1 > n0) sh.insertRowsAfter(start + n0 - 1, n1 - n0);
+  else if (n1 < n0) sh.deleteRows(start + n1, n0 - n1);
+  var rg = sh.getRange(start, 1, n1, w);
+  rg.setNumberFormats(toRows.map(function (r) { return r.slice(0, w).map(function (v) { return typeof v === 'string' ? '@' : 'General'; }); }));
+  rg.setValues(toRows.map(function (r) { return r.slice(0, w).map(function (v) { return typeof v === 'string' ? safe_(v) : v; }); }));
+  SpreadsheetApp.flush();
+  var back = sh.getRange(start, 1, n1, w).getValues();
+  back.forEach(function (r, i3) { r.forEach(function (v, j) { if (!ptSame_(v, toRows[i3][j])) throw fail_('BOM 表第 ' + (start + i3) + ' 列第 ' + (j + 1) + ' 欄讀回不一致（寫「' + ptNorm_(toRows[i3][j]) + '」讀到「' + ptNorm_(v) + '」）', 'verify'); }); });
+  return { table: 'bom', start: start, name: name, replace: true, rows: toRows.map(function (r) { return r.slice(0, w).map(ptNorm_); }), old: fromRows.map(function (r) { return r.slice(0, w).map(ptNorm_); }) };
+}
+/* 改版倒回：現在那一段＝當初寫的新配方 → 換回舊配方 */
+function ptBlockUndo_(tab, rec) {
+  try { ptBlockReplace_(tab, rec.name, rec.rows, rec.old); return { removed: (rec.rows || []).length, restored: (rec.old || []).length, miss: [] }; }
+  catch (e) { return { removed: 0, restored: 0, miss: ['改版的配方沒有換回（' + errMsg_(e) + '）'] }; }
+}
 /* 2026-10-17：改主檔「狀態」欄（停售 → 在用＝清空；還原時倒過來）。用 sku_id＋品名找列（不靠列號，期間有人插刪列也找得到），
    改之前再讀一次那一格要是 from；已經是 to＝不用改（專用檔可能已同步過）；改完讀回比對，讀回不符 → 把這次改的倒回去再丟錯 */
 function ptStatusSet_(key, items, from, to) {
@@ -1703,6 +1775,7 @@ function backupTab_(pl, batch) {
   if (!pl.map.skip) out.push(['map', JSON.stringify(pl.map.row.map(ptNorm_)), '', '', '', '']);
   pl.conv.rows.forEach(function (r) { out.push(['conv', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   pl.par.rows.forEach(function (r) { out.push(['par', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
+  if (pl.bom.replace && !pl.bom.skip) pl.bom.replace.old.forEach(function (r) { out.push(['bomOld', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });   /* 2026-10-17：改版前的舊配方 */
   (pl.react || []).forEach(function (r) { out.push(['skuSt', JSON.stringify([r.sku_id, r.name, REACT_FROM, '']), '', '', '', '']); });   /* 2026-10-17：停售改回在用（改前／改後） */
   var rg = sh.getRange(1, 1, out.length, 6);
   rg.setNumberFormat('@');
@@ -1735,13 +1808,14 @@ function pushToPurchase_(rid, who) {
         catch (e4) { soft.push('儀表板專用檔主檔的狀態沒改到（' + errMsg_(e4) + '）：明天 07:05 會同步'); }
       }
     }
-    if (!pl.bom.skip) done.push(ptAppend_(pl.P.bom, pl.bom.rows));
+    if (!pl.bom.skip) done.push(pl.bom.replace ? ptBlockReplace_(pl.P.bom, pl.name, pl.bom.replace.old, pl.bom.rows) : ptAppend_(pl.P.bom, pl.bom.rows));   /* 2026-10-17：改版＝原位換新 */
     if (pl.conv.rows.length && pl.P.conv) done.push(ptAppend_(pl.P.conv, pl.conv.rows));   /* 2026-10-07：新單位換算（對照表仍最後寫＝備料啟動開關） */
     if (!pl.map.skip) done.push(ptAppend_(pl.P.map, [pl.map.row]));
   } catch (e) {
     var undo = [];
     done.slice().reverse().forEach(function (d) {
       try {
+        if (d.replace) { var ub = ptBlockUndo_(ptRead_('bom'), d); undo.push('BOM表 改版換回舊配方 ' + ub.restored + ' 列' + (ub.miss.length ? '（' + ub.miss.join('、') + '）' : '')); return; }
         if (d.status) { var u = ptStatusUndo_(d); undo.push(PT[d.table] + ' 倒回停售 ' + u.removed + ' 項' + (u.miss.length ? '（' + u.miss.join('、') + '）' : '')); return; }
         var tab = ptRead_(d.table), r = ptRemove_(tab, d); undo.push(PT[d.table] + ' 刪回 ' + r.removed + ' 列' + (r.miss.length ? '（' + r.miss.length + ' 列找不到：' + r.miss.join('、') + '）' : ''));
       }
@@ -1757,12 +1831,12 @@ function pushToPurchase_(rid, who) {
   done.forEach(function (d) { if (d.status) show[d.table] = d.rows.map(function (r) { return [r[0], r[1], r[2]]; }); });   /* 停售改回在用：編號｜品名｜列號 */
   done.forEach(function (d) {
     pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: d.table, rows: String(d.rows.length),
-      detail: JSON.stringify({ start: d.start, rows: d.rows, show: show[d.table] || [], status: !!d.status }), backup: bk, ok: 'Y',
-      msg: (who || '') + '｜' + PT[d.table] + (d.status ? '：' + d.rows.map(function (r) { return r[0] + ' ' + r[1] + '（第 ' + r[2] + ' 列）'; }).join('、') : ' 第 ' + d.start + '～' + (d.start + d.rows.length - 1) + ' 列') });
+      detail: JSON.stringify({ start: d.start, rows: d.rows, show: show[d.table] || [], status: !!d.status, replace: !!d.replace, name: d.name || '', old: d.old || undefined }), backup: bk, ok: 'Y',
+      msg: (who || '') + '｜' + PT[d.table] + (d.replace ? '（改版，換掉舊配方 ' + d.old.length + ' 列）' : '') + (d.status ? '：' + d.rows.map(function (r) { return r[0] + ' ' + r[1] + '（第 ' + r[2] + ' 列）'; }).join('、') : ' 第 ' + d.start + '～' + (d.start + d.rows.length - 1) + ' 列') });
   });
   if (!done.length) pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: '', rows: '0', detail: '{}', backup: bk, ok: 'Y', msg: (who || '') + '｜三張表都已經有了，沒有寫' });
   var v = planView_(pl);
-  v.written = done.map(function (d) { return { table: d.table, name: PT[d.table], start: d.start, n: d.rows.length }; });
+  v.written = done.map(function (d) { return { table: d.table, name: PT[d.table] + (d.replace ? '（改版，換掉舊配方 ' + d.old.length + ' 列）' : ''), start: d.start, n: d.rows.length, replace: !!d.replace, old: d.replace ? d.old.length : 0 }; });
   v.backup = bk; v.batch = batch; v.warn = v.warn.concat(soft);
   if (soft.length) pushLog_({ ts: now, req_id: rid, batch: batch, action: 'warn', table: 'sku2', rows: '0', detail: '{}', backup: bk, ok: 'Y', msg: soft.join('｜') });
   return v;
@@ -1800,12 +1874,12 @@ function rollbackPush_(rid, who) {
       pushLog_({ ts: now, req_id: rid, batch: st.batch, action: 'rollback', table: key, rows: '0', detail: '{}', backup: st.backup, ok: 'N', msg: (who || '') + '｜專用檔沒刪到（' + errMsg_(e) + '），明天 07:05 會跟 BOM 本同步' });
       return;
     }
-    var r = rec ? ptRemove_(tab, rec) : { removed: 0, miss: [] };
+    var r = rec ? ((key === 'bom' && rec.replace) ? ptBlockUndo_(tab, { name: rec.name, rows: rec.rows, old: rec.old }) : ptRemove_(tab, rec)) : { removed: 0, miss: [] };   /* 2026-10-17：改版＝舊配方原位放回 */
     var after = ptDigest_(ptRead_(key)), same = bkDig[key] ? after === bkDig[key] : null;
-    res.push({ table: key, name: PT[key], removed: r.removed, miss: r.miss, digest: after, backToBackup: same });
+    res.push({ table: key, name: PT[key], removed: r.removed, miss: r.miss, digest: after, backToBackup: same, replace: !!(rec && rec.replace), restored: r.restored || 0 });
     pushLog_({ ts: now, req_id: rid, batch: st.batch, action: 'rollback', table: key, rows: String(r.removed),
       detail: JSON.stringify({ miss: r.miss, digest: after, before: bkDig[key] || '' }), backup: st.backup, ok: 'Y',
-      msg: (who || '') + '｜' + PT[key] + ' 刪 ' + r.removed + ' 列' + (r.miss.length ? '，' + r.miss.length + ' 列找不到' : '') + (same === true ? '｜已回到寫入前' : same === false ? '｜和寫入前不同（期間可能有人改過這張表）' : '') });
+      msg: (who || '') + '｜' + PT[key] + (rec && rec.replace ? ' 改版換回舊配方 ' + (r.restored || 0) + ' 列' : ' 刪 ' + r.removed + ' 列') + (r.miss.length ? '，' + r.miss.length + ' 列找不到' : '') + (same === true ? '｜已回到寫入前' : same === false ? '｜和寫入前不同（期間可能有人改過這張表）' : '') });
   });
   return { tables: res, backup: st.backup };
 }
@@ -1857,7 +1931,7 @@ function rollbackPurchase_(p, auth) {
   var r = rollbackPush_(rid, auth.role);
   var st = reqStatus_(rid);
   if (st === PUSH_OK) setStatus_(rid, '已核准');
-  return { id: rid, data: { status: st === PUSH_OK ? '已核准' : st, rollback: r }, msg: '還原：' + r.tables.map(function (x) { return x.status ? x.name.replace('停售改回在用', '改回停售') + ' ' + x.removed + ' 項' : x.name + ' 刪 ' + x.removed; }).join('、') };
+  return { id: rid, data: { status: st === PUSH_OK ? '已核准' : st, rollback: r }, msg: '還原：' + r.tables.map(function (x) { return x.replace ? x.name + ' 改版換回舊配方 ' + x.restored + ' 列' : x.status ? x.name.replace('停售改回在用', '改回停售') + ' ' + x.removed + ' 項' : x.name + ' 刪 ' + x.removed; }).join('、') };
 }
 function pushMsg_(v) {
   var w = v.written || [];
@@ -1878,7 +1952,7 @@ function rollbackReq(rid) {
 function pushInfo_(rid) {
   var st = pushState_(rid), rows = st.rows || [];
   return { live: st.live, ts: st.ts || '', backup: st.backup || '',
-    written: st.live ? Object.keys(st.tables).filter(function (k) { return PT[k]; }).map(function (k) { var d = st.tables[k] || {}; return { table: k, name: PT[k], start: d.start, n: (d.rows || []).length, show: d.show || [] }; }) : [],
+    written: st.live ? Object.keys(st.tables).filter(function (k) { return PT[k]; }).map(function (k) { var d = st.tables[k] || {}; return { table: k, name: PT[k] + (d.replace ? '（改版，換掉舊配方 ' + (d.old || []).length + ' 列）' : ''), start: d.start, n: (d.rows || []).length, show: d.show || [], replace: !!d.replace, old: (d.old || []).length }; }) : [],
     history: rows.map(function (r) { return { ts: r.ts, action: r.action, table: r.table, rows: r.rows, ok: r.ok, msg: r.msg }; }) };
 }
 
