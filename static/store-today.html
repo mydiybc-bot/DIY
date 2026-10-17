@@ -8,6 +8,24 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
+<script>
+/* 2026-10-17 三頁合併成「自己做決策中心」入口（decision-center.html）：直接打開本頁（平板舊書籤 ?s=店號）＝轉到入口的「🏪 門市今日」；
+   ?embed=1＝被入口裝進去（身分、密碼從入口拿）；?classic=1＝照舊單獨打開（緊急退回用） */
+(function(){
+  var q = new URLSearchParams(location.search);
+  if (!q.get('embed') && !q.get('classic') && window.top === window) {
+    var sid = q.get('s'); try { sid = sid || localStorage.getItem('st_sid'); } catch(_){}
+    document.documentElement.style.display = 'none';
+    location.replace('decision-center.html' + (/^(?:[1-9]|1[0-2])$/.test(sid || '') ? '?s=' + sid : '') + '#today'); return;
+  }
+  if (!q.get('embed')) return;
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (/^dashboard-announce\.html/.test(href) && window.parent !== window && parent.DC) { e.preventDefault(); parent.DC.go('ann', href.split('#')[1] || ''); }
+  }, true);
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>門市今日｜自己做烘焙聚樂部</title>
 <style>
@@ -129,7 +147,8 @@ var SNAP_API = 'https://script.google.com/macros/s/AKfycbw55lxutTkj13v1E5pa3fVCl
 var RSV_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';   /* 訂位資料管線：fn=refreshNear（15 分鐘內只抓一次今明後 3 天，12 店共用） */
 var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
 var WK = ['日','一','二','三','四','五','六'];
-var S = { sid: 0, pw: '', day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null, rsv: null, rsvBusy: false };
+var EMB = !!new URLSearchParams(location.search).get('embed');   /* 2026-10-17 被「自己做決策中心」入口裝進去 */
+var S = { sid: 0, pw: '', hq: false, day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null, rsv: null, rsvBusy: false };
 var $app = document.getElementById('app'), $mask = document.getElementById('mask'), $sheet = document.getElementById('sheet');
 
 /* ---------- 小工具 ---------- */
@@ -173,8 +192,18 @@ function jsonp(url, ms){
 function jsonpRetry(url){ return jsonp(url, 45000).catch(function(){ return jsonp(url, 60000); }); }
 
 /* ---------- 開始 ---------- */
+/* 入口的登入（localStorage dc_auth_v1）：總部＝可以看任何一家店（送 hpw）；店＝只能看自己的店（送 spw） */
+function dcAuth(){ try { var o = JSON.parse(ls('dc_auth_v1') || 'null'); return o && o.pw && o.exp > Date.now() ? o : null; } catch(e){ return null; } }
+function relogin(msg){ try { if (window.parent !== window && parent.DC) return parent.DC.relogin(msg || ''); } catch(e){} location.replace('decision-center.html'); }
 function init(){
   var q = new URLSearchParams(location.search), s = Number(q.get('s') || ls('st_sid') || 0);
+  if (EMB) {
+    var a = dcAuth(); s = Number(q.get('s')) || 0;
+    if (!a || !(s >= 1 && s <= 12) || !(a.role === 'hq' || (a.role === 'store' && Number(a.sid) === s))) return relogin('請重新登入');
+    S.sid = s; S.hq = a.role === 'hq'; S.pw = a.pw;
+    try { var c0 = JSON.parse(ls('st_cache_' + s) || 'null'); if (c0 && c0.day && c0.day.today === tpeToday()) { S.day = c0.day; S.live = c0.live; S.mini = c0.mini; S.ann = c0.ann; S.cached = c0.at; } } catch(e){}
+    renderMain(); load(); return;
+  }
   if (!(s >= 1 && s <= 12)) return renderPick();
   S.sid = s; ls('st_sid', String(s));
   if (q.get('s') !== String(s)) history.replaceState(null, '', '?s=' + s);
@@ -214,8 +243,8 @@ var loading = false;
 function load(skipDay){
   if (loading) return; loading = true; S.err = {};
   var jobs = [];
-  if (!skipDay) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.pw }).then(function(j){
-    if (!j.ok){ if (j.code === 'auth'){ ls('st_pw_' + S.sid, null); S.pw = ''; renderLogin(j.msg); throw 'stop'; } S.err.day = j.msg; return; }
+  if (!skipDay) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(j){
+    if (!j.ok){ if (j.code === 'auth'){ if (EMB){ relogin(j.msg); throw 'stop'; } ls('st_pw_' + S.sid, null); S.pw = ''; renderLogin(j.msg); throw 'stop'; } S.err.day = j.msg; return; }
     S.day = j.data; paint('todo'); paint('grp');
   }, function(e){ if (e !== 'stop'){ S.err.day = e.message; paint('todo'); paint('grp'); } }));
   jobs.push(jsonpRetry(SNAP_API + '?action=live&store=' + S.sid).then(function(j){ if (j && j.ok){ S.live = j; } else S.err.live = (j && j.error) || '讀取失敗'; paint('week'); paint('grp'); },
@@ -242,7 +271,7 @@ function refreshRsv(){
     S.rsv = j;
     var liveOld = !S.live || !S.live.fut || String(S.live.fut.at || '') < String(j.built || '');
     var jobs = [];
-    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.pw }).then(function(r){ if (r.ok){ S.day = r.data; paint('todo'); paint('grp'); } }));
+    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(r){ if (r.ok){ S.day = r.data; paint('todo'); paint('grp'); } }));
     if ((j.refreshed || liveOld) && j.built) jobs.push(jsonp(SNAP_API + '?action=live&store=' + S.sid + '&minFut=' + encodeURIComponent(j.built), 90000).then(function(r){ if (r && r.ok){ S.live = r; paint('week'); paint('grp'); } }));
     Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){ paint('grpAt'); paint('weekAt'); });
   }, function(){ S.rsvBusy = false; paint('grpAt'); paint('weekAt'); });
@@ -262,13 +291,17 @@ function renderMain(){
     '<div class="sec"><h2>📅 這 7 天的客人 <span class="at" id="weekAt"></span></h2><div id="week"></div></div>' +
     '<div class="sec"><h2>🏆 本月目標</h2><div id="goal"></div></div>' +
     '<div class="sec"><h2>📢 公告</h2><div id="ann"></div></div>' +
-    '<div class="foot"><button class="boss" id="boss">🔑 我要交辦</button><button id="home">⬅ 回首頁</button><button id="out">🔒 登出</button><button id="chg">🏪 換店</button></div>' +
+    (EMB ? '<div class="foot"><button class="boss" id="boss">🔑 我要交辦</button><button id="tosm">📊 店長看板 →</button></div>'
+         : '<div class="foot"><button class="boss" id="boss">🔑 我要交辦</button><button id="home">⬅ 回首頁</button><button id="out">🔒 登出</button><button id="chg">🏪 換店</button></div>') +
     '</div>';
   document.getElementById('rf').onclick = function(){ load(); };
   document.getElementById('boss').onclick = openMgr;
+  if (EMB) { document.getElementById('tosm').onclick = function(){ try { parent.DC.go('sm'); } catch(e){} }; }
+  else {
   document.getElementById('home').onclick = function(){ location.href = 'hub.html'; };
   document.getElementById('out').onclick = function(){ if (!confirm('登出這台裝置？')) return; ls('st_pw_' + S.sid, null); ls('st_cache_' + S.sid, null); location.reload(); };
   document.getElementById('chg').onclick = function(){ ls('st_sid', null); location.href = location.pathname; };
+  }
   ['todo','grp','week','goal','ann','fresh','grpAt','weekAt'].forEach(paint);
 }
 function paint(k){
@@ -314,7 +347,7 @@ function doTask(t){
     var who = $who.value.trim(), nt = document.getElementById('nt').value.trim(), $b = this, $m = document.getElementById('sm');
     if (!who){ $m.className = 'msg bad'; $m.textContent = '請寫名字'; $who.focus(); return; }
     ls('st_who', who); $b.disabled = true; $b.textContent = '送出中…';
-    post({ action: 'taskDone', store: S.sid, spw: S.pw, task_id: t.id, who: who, note: nt, rq: rq() }).then(function(j){
+    post({ action: 'taskDone', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '', task_id: t.id, who: who, note: nt, rq: rq() }).then(function(j){
       if (!j.ok){ $b.disabled = false; $b.textContent = '✓ 做好了'; $m.className = 'msg bad'; $m.textContent = j.msg || '沒送出，再按一次'; return; }
       t.st = 'done'; t.who = (j.data && j.data.already) ? j.data.who : who; t.doneNote = (j.data && j.data.already) ? '' : nt; t.doneAt = new Date().toTimeString().slice(0,5);
       closeSheet(); paint('todo'); setTimeout(function(){ load(); }, 400);
@@ -330,7 +363,7 @@ function undoTask(t){
     var who = document.getElementById('who').value.trim(), $b = this, $m = document.getElementById('sm');
     if (!who){ $m.className = 'msg bad'; $m.textContent = '請寫名字'; return; }
     $b.disabled = true;
-    post({ action: 'taskUndo', store: S.sid, spw: S.pw, task_id: t.id, occ: t.occ, who: who, rq: rq() }).then(function(j){
+    post({ action: 'taskUndo', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '', task_id: t.id, occ: t.occ, who: who, rq: rq() }).then(function(j){
       if (!j.ok){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = j.msg; return; }
       closeSheet(); load();
     }).catch(function(e){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = e.message; });
@@ -431,7 +464,27 @@ $mask.addEventListener('click', function(e){ if (e.target === $mask) closeSheet(
 /* ---------- 🔑 交辦（店長／區主管／總部） ---------- */
 var ROLES = [['store','店長'],['zone','區主管'],['hq','總部']];
 var FREQS = [['once','指定日期'],['daily','每天'],['weekly','每週'],['monthly','每月'],['quarterly','每季'],['halfyear','每半年']];
+/* 2026-10-17 入口裡：不用再選身分、輸密碼（總部＝交辦全部店；店＝交辦自己店，用店密碼），只問名字 */
+function openMgrDc(){
+  var role = S.hq ? 'hq' : 'store';
+  if (S.mgr && S.mgr.sid === S.sid && S.mgr.role === role && S.mgr.pw === S.pw) return mgrList();
+  openSheet('<h3>🔑 我要交辦</h3><label>你的名字</label><input id="mw" maxlength="20" value="' + esc(ls('st_who') || '') + '">' +
+    '<button class="big" id="ok">進去</button><button class="ghost" id="cx">取消</button><div class="msg" id="sm"></div>');
+  document.getElementById('cx').onclick = closeSheet;
+  document.getElementById('ok').onclick = function(){
+    var who = document.getElementById('mw').value.trim(), $b = this, $m = document.getElementById('sm');
+    if (!who){ $m.className = 'msg bad'; $m.textContent = '請寫名字'; return; }
+    ls('st_who', who); $b.disabled = true; $b.textContent = '確認中…';
+    post({ action: 'taskAuth', store: S.sid, role: role, mpw: S.pw }).then(function(j){
+      $b.disabled = false; $b.textContent = '進去';
+      if (!j.ok){ if (j.code === 'auth') return relogin(j.msg); $m.className = 'msg bad'; $m.textContent = j.msg; return; }
+      S.mgr = { sid: S.sid, role: role, pw: S.pw, who: who, label: j.data.label, scope: j.data.scope, stores: j.data.stores };
+      mgrList();
+    }).catch(function(e){ $b.disabled = false; $b.textContent = '進去'; $m.className = 'msg bad'; $m.textContent = e.message; });
+  };
+}
 function openMgr(){
+  if (EMB) return openMgrDc();
   var saved = null; try { saved = JSON.parse(ss('st_mgr') || 'null'); } catch(e){}
   if (saved && saved.sid === S.sid){ S.mgr = saved; return mgrList(); }
   var role = 'store';

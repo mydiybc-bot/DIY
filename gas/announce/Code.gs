@@ -30,13 +30,13 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v6.1';   // 2026-10-13 v6.1：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v7';   // 2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
 var ROOT_FOLDER_ID = '1MnFAKso03ERa8zSj9z0_ytDUVoF66JYg';
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
-var DASH_VIEW = 'announce', DASH_PUB = 'announce_pub';
+var DASH_VIEW = 'announce', DASH_PUB = 'announce_pub', DASH_HQ = 'task_hq';   /* v7：DASH_HQ＝決策中心「總部」密碼 */
 var SEG_MAX = 45000, SEG_N = 4, LOG_KEEP = 5000, MAX_FILE = 10 * 1024 * 1024, MAX_ATT = 10;
 /* v5 工作留言：上限與可收的副檔名（前端 dashboard-announce.html 的 DISC_* 要跟這裡一致） */
 var DISC_TEXT_MAX = 3000, DISC_MAX_FILES = 5, DISC_MAX_FILE = 10 * 1024 * 1024, DISC_MAX_TOTAL = 20 * 1024 * 1024;
@@ -129,7 +129,9 @@ function doPost(e) {
   var who;
   if (OPEN[act] || (act === 'bundle' && !String(p.password || '').trim())) who = '訪客';   /* v3：公告免密碼；bundle 沒帶密碼只回公告＋選單 */
   else {
-    try { who = auth_(p.password, (PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub')) ? DASH_PUB : DASH_VIEW); }
+    var needPub = PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub');
+    /* v7：決策中心用「總部」身分登入時帶 asHq，發佈／修改／刪除改驗總部密碼（task_hq）；沒帶照舊驗 announce_pub */
+    try { if (needPub && p.asHq) { auth_(p.password, DASH_HQ); who = '發佈者（總部）'; } else who = auth_(p.password, needPub ? DASH_PUB : DASH_VIEW); }
     catch (err) { Utilities.sleep(800); res = { ok: false, act: act, code: 'auth', msg: errMsg_(err) }; log_('', act, '', false, res.msg); return out_(res); }
   }
   var lock = LockService.getScriptLock();
@@ -652,15 +654,20 @@ ACTIONS.storeAuthSetup = storeAuthSetup_;
 
 function storeOf_(sid) { sid = Number(sid); for (var i = 0; i < STORE_DEF.length; i++) if (STORE_DEF[i][0] === sid) return { id: sid, name: STORE_DEF[i][1], short: STORE_DEF[i][2], zone: STORE_DEF[i][3], gb: STORE_DEF[i][4] }; throw fail_('店號不對', 'bad'); }
 function zoneStores_(z) { return STORE_DEF.filter(function (s) { return s[3] === z; }).map(function (s) { return s[0]; }); }
+/* v7：帶 hpw＝總部密碼（task_hq），可看任何一家店；沒帶照舊驗這家店的店密碼 */
 function storeAuth_(p) {
   var st = storeOf_(p.store);
+  if (String(p.hpw || '').trim()) {
+    try { auth_(p.hpw, DASH_HQ); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '總部密碼不對').replace('請輸入密碼', '請輸入總部密碼'), 'auth'); }
+    return st;
+  }
   try { auth_(p.spw, 'store_' + st.id); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '店密碼不對').replace('請輸入密碼', '請輸入店密碼'), 'auth'); }
   return st;
 }
 /* 交辦身分：role＝store（店長，只管這家店）｜zone（區主管，管這家店所在的區）｜hq（總部，全部）。只驗選的那一種，避免猜錯把別的密碼鎖住 */
 function mgrAuth_(p) {
   var st = storeOf_(p.store), role = String(p.role || ''), dash, scope, label;
-  if (role === 'store') { dash = 'task_store_' + st.id; scope = [st.id]; label = st.short + '店長'; }
+  if (role === 'store') { dash = 'store_' + st.id; scope = [st.id]; label = st.short + '店'; }   /* v7：一店一組密碼（原 task_store_N 店長交辦密碼不再使用） */
   else if (role === 'zone') { dash = 'task_zone_' + st.zone; scope = zoneStores_(st.zone); label = ZONE_DEF[st.zone] + '區主管'; }
   else if (role === 'hq') { dash = 'task_hq'; scope = STORE_DEF.map(function (s) { return s[0]; }); label = '總部'; }
   else throw fail_('請選身分', 'bad');

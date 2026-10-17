@@ -21,6 +21,30 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<script>
+/* 2026-10-17 三頁合併成「自己做決策中心」入口（decision-center.html）：直接打開本頁（含 104 公告裡的 #w=工作編號、#a=公告編號）＝轉到入口的「📢 公告・工作」分頁；
+   ?embed=1＝被入口裝進去：總部身分＝直接是管理者模式（用總部密碼，後端 asHq 驗 task_hq）；店的身分＝不顯示管理者模式。?classic=1＝照舊單獨打開（緊急退回用） */
+(function(){
+  var q = new URLSearchParams(location.search);
+  if (!q.get('embed') && !q.get('classic') && window.top === window) {
+    document.documentElement.style.display = 'none';
+    var h = String(location.hash || '').replace(/^#/, '');
+    location.replace('decision-center.html#ann' + (h ? '&' + h : '')); return;
+  }
+  if (!q.get('embed')) return;
+  var o = null; try { o = JSON.parse(localStorage.getItem('dc_auth_v1') || 'null'); } catch(_){}
+  window.__DC_HQ = (o && o.pw && o.exp > Date.now() && o.role === 'hq') ? o.pw : '';
+  document.documentElement.className += ' emb' + (window.__DC_HQ ? ' emb-hq' : ' emb-st');
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href="hub.html"]') : null;
+    if (a && window.top !== window) { e.preventDefault(); top.location.href = 'hub.html'; }
+  }, true);
+})();
+</script>
+<style>
+html.emb .header-back,html.emb .header>div:first-child,html.emb-st #pubBtn{display:none!important}
+html.emb-st .header{display:none!important}
+</style>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>工作清單儀表板 | 自己做烘焙聚樂部</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -397,6 +421,7 @@ DOMPurify.addHook('afterSanitizeAttributes', function(n){ if(n.tagName==='A'){ n
 function clean(h){ return DOMPurify.sanitize(String(h||''), { FORBID_TAGS:['style','script','iframe','form','input','button','textarea','select','object','embed','link','meta','base'], FORBID_ATTR:['class','id'] }); }
 function call(body, pw, ms){
   body = Object.assign({}, body, { password: pw });
+  if (window.__DC_HQ && pw && pw === window.__DC_HQ) body.asHq = true;   /* 2026-10-17 入口總部身分：後端改驗總部密碼 */
   var ctl = window.AbortController ? new AbortController() : null, to = setTimeout(function(){ if(ctl) ctl.abort(); }, ms||60000);
   return fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body), signal: ctl?ctl.signal:undefined })
     .then(function(r){ return r.json(); })
@@ -470,7 +495,9 @@ function setPub(on){
   $('pubBtn').textContent = on ? '✏️ 管理者模式：開（點一下關閉）' : '✏️ 管理者模式';
   if (!on && document.querySelector('.tab.on').dataset.tab==='imp') showTab('ann');
 }
-$('pubBtn').onclick=function(){ if (S.pub) { S.pub=''; ss(K_PUB,null); setPub(false); } else gate('pub'); };
+$('pubBtn').onclick=function(){
+  if (window.__DC_HQ) { if (S.pub) { S.pub=''; setPub(false); } else { S.pub=window.__DC_HQ; setPub(true); } return; }   /* 2026-10-17 入口總部：開關不用再輸密碼 */
+  if (S.pub) { S.pub=''; ss(K_PUB,null); setPub(false); } else gate('pub'); };
 
 /* ===== 分頁 ===== */
 function showTab(t){
@@ -1006,6 +1033,8 @@ $('impGo').onclick=function(){
 
 /* ===== 啟動 ===== */
 S.pw=ss(K_VIEW); S.pub=ss(K_PUB);
+if (window.__DC_HQ) S.pub = window.__DC_HQ;   /* 2026-10-17 入口總部＝直接是管理者模式 */
+else if (/\bemb-st\b/.test(document.documentElement.className)) S.pub = '';   /* 入口店的身分：不帶管理者密碼 */
 if (S.pub) setPub(true);
 var h=(location.hash||'').slice(1);
 S.deepW = /^w=/.test(h) ? decodeURIComponent(h.slice(2)) : '';   /* v1.5：#w=工作編號（104 公告連過來）先記下，讀完資料再打開 */

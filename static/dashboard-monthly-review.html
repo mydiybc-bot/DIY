@@ -2,6 +2,28 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
+<script>
+/* 2026-10-17 三頁合併成「自己做決策中心」入口（decision-center.html）：
+   直接打開本頁＝轉到入口對應的分頁（#monthly→月會、#mg→魔導師、#sm→店長看板、其他→總部）；
+   ?embed=hq（總部：經營者＋魔導師）｜sm&store=N（店長看板）｜mon（月會，照舊要財務密碼）＝被入口裝進去；?classic=1＝照舊單獨打開（緊急退回用） */
+(function(){
+  var q = new URLSearchParams(location.search), em = q.get('embed') || '';
+  if (!em && !q.get('classic') && window.top === window) { document.documentElement.style.display = 'none'; var m = {'#monthly':'#mon', '#mg':'#mg', '#sm':'#sm'}; location.replace('decision-center.html' + (m[location.hash] || '#hq')); return; }
+  if (!/^(hq|sm|mon)$/.test(em)) return;
+  document.documentElement.className += ' emb emb-' + em;
+  /* 嵌入時：公告連結改切到入口的「📢 公告・工作」分頁；回首頁換整個視窗 */
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (/^dashboard-announce\.html/.test(href) && window.parent !== window && parent.DC) { e.preventDefault(); parent.DC.go('ann', href.split('#')[1] || ''); }
+    else if (href === 'hub.html' && window.top !== window) { e.preventDefault(); top.location.href = 'hub.html'; }
+  }, true);
+})();
+</script>
+<style>
+html.emb .topbar .back,html.emb-hq .topbar,html.emb-sm .topbar{display:none!important}
+html.emb-sm .tabs,html.emb-mon .tabs,html.emb-hq #tabBtnSm,html.emb-hq #tabBtnMon,html.emb-sm .rl-pick{display:none!important}
+</style>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>自己做決策中心｜自己做烘焙聚樂部</title>
 <!-- 2026-07-30 口徑修正：客單價改讀 monthlyByStore.revenue_net/headcount（淨營收÷來客，與 pos-dashboard v25 一致）；舊版誤用 monthly[].revenue（毛額）致客單價虛高 -->
@@ -492,12 +514,26 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
   window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
 })();
 /* ===== AUTH-CORE v2 END ===== */
+/* 2026-10-17 決策中心入口嵌入：總部（embed=hq）、店長看板（embed=sm）用入口的登入（localStorage dc_auth_v1：總部＝task_hq、各店＝store_N），
+   不再問財務密碼——只在這一頁、這一次把 dash_auth_monthly 當成已通過（不寫進瀏覽器）；月會（embed=mon）不受影響，照舊要財務密碼。
+   店的身分只能看自己那家店的店長看板。入口登入失效＝請入口叫回登入畫面。 */
+(function(){
+  var q = new URLSearchParams(location.search), em = q.get('embed') || '';
+  window.__DC_EMBED = /^(hq|sm|mon)$/.test(em) ? em : '';
+  if (em !== 'hq' && em !== 'sm') return;
+  var o = null; try { o = JSON.parse(localStorage.getItem('dc_auth_v1') || 'null'); } catch(_){}
+  var st = Number(q.get('store')) || 0;
+  var ok = o && o.pw && o.exp > Date.now() && (o.role === 'hq' || (em === 'sm' && o.role === 'store' && Number(o.sid) === st));
+  if (!ok) { if (window.parent !== window && parent.DC) { try { parent.DC.relogin('請重新登入'); } catch(_){} } return; }
+  var A = window.__dashAuth, g = A.get;
+  A.get = function(k){ return k === 'dash_auth_monthly' ? JSON.stringify({ exp: Date.now() + 600000 }) : g(k); };
+})();
 /* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
    2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
    本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
 (function(){
   var DASH_ID = 'monthly';
-  var DASH_NAME = '自己做決策中心';   /* 2026-09-26 由「月會模式」改名（2026-09-26 再改名「自己做決策中心」；只影響閘門顯示，驗證只看 DASH_ID=monthly）。dim_auth 的 name 欄仍是「月會模式」，可在權限中心後台順手改成一致 */
+  var DASH_NAME = window.__DC_EMBED === 'mon' ? '月會（請輸入財務密碼，不是總部密碼）' : '自己做決策中心';   /* 2026-10-17 入口的月會分頁：提醒輸財務密碼 */   /* 2026-09-26 由「月會模式」改名（2026-09-26 再改名「自己做決策中心」；只影響閘門顯示，驗證只看 DASH_ID=monthly）。dim_auth 的 name 欄仍是「月會模式」，可在權限中心後台順手改成一致 */
   var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
   /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
      簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
@@ -1369,8 +1405,10 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   /* ---- 分頁切換：經營者（預設）／魔導師 #mg／店長 #sm／月會 #monthly。上次選的角色記在這台裝置 ---- */
   function hashTab(){ var x = location.hash; return x === '#monthly' ? 'mon' : (x === '#mg' ? 'mg' : (x === '#sm' ? 'sm' : '')); }
   function setTab(t){
+    var EM = window.__DC_EMBED || '';   /* 2026-10-17 入口嵌入：店長看板只有店長頁、月會只有月會、總部只有經營者＋魔導師 */
+    if (EM === 'sm') t = 'sm'; else if (EM === 'mon') t = 'mon'; else if (EM === 'hq' && t !== 'mg') t = 'own';
     var dec = t !== 'mon';
-    if (dec) { ROLE = t === 'mg' || t === 'sm' ? t : 'own'; lsPut(RLS, ROLE); }
+    if (dec) { ROLE = t === 'mg' || t === 'sm' ? t : 'own'; if (!EM) lsPut(RLS, ROLE); }
     document.body.classList.toggle('dz-on', dec);
     ['own', 'mg', 'sm'].forEach(function(r){ document.body.classList.toggle('r-' + r, dec && ROLE === r); });
     document.getElementById('tabBtnDec').classList.toggle('on', dec && ROLE === 'own');
@@ -2355,6 +2393,8 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   (function(){ var st = lsGet(SLS), mz = lsGet(MLS);
     if (/^(?:[1-9]|1[0-2])$/.test(st)) MYSTORE = st;
     if (ZONES.some(function(x){ return x[0] === mz; })) MYZONE = mz; })();
+  if (window.__DC_EMBED === 'sm') { var esid = new URLSearchParams(location.search).get('store') || ''; if (/^(?:[1-9]|1[0-2])$/.test(esid)) MYSTORE = esid; }   /* 2026-10-17 入口選的店 */
+  if (window.__DC_EMBED === 'hq') { document.getElementById('tabBtnDec').textContent = '👤 全公司'; document.getElementById('tabBtnMg').textContent = '🧙 各區（魔導師）'; }
   document.getElementById('tabBtnDec').onclick = function(){ setTab('own'); };
   document.getElementById('tabBtnMg').onclick = function(){ setTab('mg'); };
   document.getElementById('tabBtnSm').onclick = function(){ setTab('sm'); };

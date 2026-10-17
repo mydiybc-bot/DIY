@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<!-- 2026-10-17 新建「自己做決策中心」入口（經營者裁定：門市今日＋決策中心＋工作清單三頁合併成一個儀表板；魔導師併入總部；總部 1 組、各店 1 組密碼）。
+     ・登入：先選身分（🏢 總部／1～12 號店）再輸密碼，只驗選的那一組（權限中心 dim_auth：總部＝task_hq，各店＝store_N；打錯只鎖到自己那一組）。
+       通過後存 localStorage dc_auth_v1 {role, sid, pw, exp}（效期＝dim_auth ttl_hours：店 720、總部 12），裡面各分頁從這裡拿身分；
+       門市今日的團體電話、交辦、發佈公告仍由公告 API v7 在伺服器再驗一次密碼（hpw／spw／asHq）。
+     ・分頁＝把原本三頁用「嵌入模式」裝進來（不重寫計算）：
+       總部：🏢 總部（原經營者＋魔導師）｜🏪 門市今日｜📊 店長看板（原決策中心店長頁）｜📢 公告・工作｜📋 月會（再輸原財務密碼 monthly）
+       各店：🏪 門市今日｜📊 店長看板｜📢 公告・工作
+     ・舊網址（store-today.html?s=N、dashboard-announce.html#w=／#a=、dashboard-monthly-review.html#mg／#sm／#monthly）直接打開會自動轉到這裡對應的分頁；
+       在舊網址後面加 ?classic=1 可以照舊單獨打開（緊急退回用）。
+     ・網址 hash：#today #sm #hq #mg #mon #ann；#ann&w=工作編號、#ann&a=公告編號。?s=店號＝預選那家店。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自己做決策中心｜自己做烘焙聚樂部</title>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+</script>
+<style>
+:root{--brown:#4A3228;--brown2:#7B4B36;--bg:#FAF6F2;--line:#E6D8CF;--mute:#8A6F66;--red:#C4412F;--ink:#3A2A24}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;-webkit-text-size-adjust:100%}
+button{font:inherit;cursor:pointer}
+/* 上方列 */
+#hdr{position:fixed;top:0;left:0;right:0;z-index:20;background:var(--brown);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.hr1{display:flex;align-items:center;gap:8px;padding:8px 12px 6px;flex-wrap:wrap}
+.hr1 h1{margin:0;font-size:18px;font-weight:800;white-space:nowrap}
+.who{font-size:14px;background:rgba(255,255,255,.16);border-radius:99px;padding:3px 10px;white-space:nowrap}
+.sp{flex:1}
+.hb{border:0;background:rgba(255,255,255,.14);color:#fff;border-radius:10px;padding:6px 10px;font-size:14px;white-space:nowrap}
+#sidSel{font-size:15px;padding:5px 8px;border-radius:10px;border:0;background:#fff;color:var(--ink);max-width:46vw}
+.tabs{display:flex;gap:4px;padding:0 8px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:0 0 auto;border:0;background:transparent;color:#E9DCD3;font-size:16px;font-weight:700;padding:9px 14px 10px;border-radius:12px 12px 0 0;white-space:nowrap}
+.tab.on{background:var(--bg);color:var(--brown)}
+/* 內容 */
+#main{position:fixed;left:0;right:0;bottom:0;top:var(--hh,96px)}
+#main iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--bg);display:none}
+#main iframe.on{display:block}
+.ld{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--mute);font-size:16px;pointer-events:none}
+/* 登入 */
+#login{max-width:560px;margin:0 auto;padding:7vh 16px 40px;text-align:center}
+#login h1{margin:0 0 4px;font-size:28px;color:var(--brown)}
+#login p{margin:0 0 18px;color:var(--mute);font-size:16px}
+.hqb{width:100%;border:0;border-radius:16px;background:var(--brown);color:#fff;font-size:22px;font-weight:800;padding:16px;margin:0 0 18px}
+.zn{font-size:14px;color:var(--mute);text-align:left;margin:10px 2px 6px}
+.pk{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pk button{border:0;border-radius:14px;background:#fff;padding:14px 4px;font-size:18px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.08);color:var(--ink)}
+.pw{position:relative;margin-top:6px}
+.pw input{width:100%;font-size:24px;padding:14px 48px 14px 14px;border-radius:16px;border:2px solid #E3CFC6;text-align:center;letter-spacing:2px}
+.pw .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:none;font-size:20px}
+.go{width:100%;margin-top:14px;border:0;border-radius:16px;background:var(--red);color:#fff;font-size:22px;font-weight:800;padding:15px}
+.go:disabled{opacity:.55}
+.msg{min-height:22px;margin-top:10px;font-size:15px;color:#C43030}
+.msg.info{color:var(--mute)}
+.lk{background:none;border:0;color:var(--mute);text-decoration:underline;font-size:15px;margin-top:16px}
+@media (max-width:520px){.hr1{gap:6px;flex-wrap:nowrap}.lg{display:none}.who{font-size:13px;padding:3px 8px}.hr1 h1{font-size:16px}#sidSel{font-size:14px;max-width:38vw}.tab{font-size:15px;padding:8px 11px 9px}.pk{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div id="login" style="display:none"></div>
+<div id="hdr" style="display:none"><div class="hr1"><h1>📋 <span class="lg">自己做</span>決策中心</h1><span class="who" id="who"></span><span class="sp"></span><select id="sidSel" style="display:none" aria-label="看哪一家店"></select><button class="hb" id="home" title="回首頁">⬅<span class="lg"> 首頁</span></button><button class="hb" id="out" title="登出">🔒<span class="lg"> 登出</span></button></div><div class="tabs" id="tabs" role="tablist"></div></div>
+<div id="main" style="display:none"></div>
+<script>
+(function(){
+'use strict';
+var A = window.__dashAuth;
+var AK = 'dc_auth_v1', LK = 'dc_last_v1', HSK = 'dc_hq_sid_v1';
+var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
+var ZONES = [['北一區',[3,4,8]],['北二區',[7,11]],['北三區',[9,10]],['中南區',[1,2,5,6,12]]];
+/* 分頁：src 回傳嵌入網址；hq＝總部才看得到 */
+var TABS = [
+  { k:'hq',    t:'🏢 總部',      hq:1, src:function(sub){ return 'dashboard-monthly-review.html?embed=hq' + (sub === 'mg' ? '#mg' : ''); } },
+  { k:'today', t:'🏪 門市今日',  src:function(){ return 'store-today.html?embed=1&s=' + SID; }, store:1 },
+  { k:'sm',    t:'📊 店長看板',  src:function(){ return 'dashboard-monthly-review.html?embed=sm&store=' + SID; }, store:1 },
+  { k:'ann',   t:'📢 公告・工作', src:function(sub){ return 'dashboard-announce.html?embed=1' + (sub ? '#' + sub : ''); } },
+  { k:'mon',   t:'📋 月會',      hq:1, src:function(){ return 'dashboard-monthly-review.html?embed=mon#monthly'; } }
+];
+var AU = null, SID = 0, CUR = '', FR = {};
+var $login = document.getElementById('login'), $hdr = document.getElementById('hdr'), $main = document.getElementById('main'), $tabs = document.getElementById('tabs');
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function lsg(k){ try { return localStorage.getItem(k); } catch(_){ return null; } }
+function lsp(k, v){ try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch(_){} }
+function shortOf(id){ for (var i = 0; i < STORES.length; i++) if (STORES[i][0] === id) return STORES[i][1]; return id + ' 號'; }
+function readAuth(){ try { var o = JSON.parse(lsg(AK) || 'null'); return (o && o.pw && o.exp > Date.now() && (o.role === 'hq' || (o.role === 'store' && o.sid >= 1 && o.sid <= 12))) ? o : null; } catch(_){ return null; } }
+function dashOf(role, sid){ return role === 'hq' ? 'task_hq' : 'store_' + sid; }
+function parseHash(){ var h = String(location.hash || '').replace(/^#/, ''), i = h.indexOf('&'); return { t: i < 0 ? h : h.slice(0, i), sub: i < 0 ? '' : h.slice(i + 1) }; }
+
+/* ---------- 登入 ---------- */
+function showPick(msg){
+  document.title = '自己做決策中心｜登入';
+  $hdr.style.display = $main.style.display = 'none'; $login.style.display = '';
+  $login.innerHTML = '<h1>📋 自己做決策中心</h1><p>你是哪裡的？選一次，這台裝置會記住</p>' +
+    '<button class="hqb" data-r="hq">🏢 總部（經營者・區主管）</button>' +
+    ZONES.map(function(z){ return '<div class="zn">' + z[0] + '</div><div class="pk">' + z[1].map(function(id){ return '<button data-r="s' + id + '">' + id + ' ' + esc(shortOf(id)) + '</button>'; }).join('') + '</div>'; }).join('') +
+    '<div class="msg">' + esc(msg || '') + '</div>';
+  $login.querySelectorAll('[data-r]').forEach(function(b){ b.onclick = function(){ var r = b.getAttribute('data-r'); lsp(LK, r); showPw(r, ''); }; });
+}
+function showPw(r, msg){
+  var hq = r === 'hq', sid = hq ? 0 : Number(r.slice(1));
+  document.title = '自己做決策中心｜' + (hq ? '總部' : shortOf(sid) + '店');
+  $hdr.style.display = $main.style.display = 'none'; $login.style.display = '';
+  $login.innerHTML = '<h1>🔒 ' + (hq ? '🏢 總部' : sid + ' ' + esc(shortOf(sid)) + '店') + '</h1><p>' + (hq ? '輸入總部密碼' : '輸入店密碼') + '</p>' +
+    '<div class="pw"><input id="pw" type="password" autocomplete="new-password" name="pw-dc-' + esc(r) + '" data-lpignore="true" data-1p-ignore placeholder="密碼"><button type="button" class="eye" id="eye" aria-label="顯示密碼">👁</button></div>' +
+    '<button class="go" id="go">進去</button><div class="msg" id="lm">' + esc(msg || '') + '</div>' +
+    '<button class="lk" id="chg">不是這裡？換身分</button><div><a href="hub.html" class="lk" style="display:inline-block">⬅ 回首頁</a></div>';
+  var $pw = document.getElementById('pw'), $go = document.getElementById('go'), $m = document.getElementById('lm'), busy = false;
+  $pw.value = ''; setTimeout(function(){ $pw.value = ''; $pw.focus(); }, 80);
+  document.getElementById('eye').onclick = function(){ var s = $pw.type === 'password'; $pw.type = s ? 'text' : 'password'; this.textContent = s ? '🙈' : '👁'; $pw.focus(); };
+  document.getElementById('chg').onclick = function(){ lsp(LK, null); showPick(''); };
+  $pw.onkeydown = function(e){ if (e.key === 'Enter') $go.click(); };
+  A.warm();
+  $go.onclick = function(){
+    var v = $pw.value.trim(); if (!v || busy) return;
+    busy = true; $go.disabled = true; $go.textContent = '確認中…'; $m.className = 'msg'; $m.textContent = '';
+    A.verify(dashOf(hq ? 'hq' : 'store', sid), v, function(res){
+      busy = false; $go.disabled = false; $go.textContent = '進去';
+      if (res && res.ok) return loginOk(hq ? 'hq' : 'store', sid, v, res.ttl_hours);
+      var e = (res && res.error) || '驗證失敗';
+      if (e.indexOf('密碼錯誤') > -1) { e = '密碼不對，再試一次'; $pw.value = ''; }
+      $m.className = 'msg'; $m.textContent = e; $pw.focus();
+    }, function(t){ $m.className = 'msg info'; $m.textContent = t; });
+  };
+}
+function loginOk(role, sid, pw, ttl){
+  var h = Number(ttl) || (role === 'hq' ? 12 : 720);
+  AU = { role: role, sid: role === 'hq' ? 0 : sid, pw: pw, exp: Date.now() + h * 3600e3 };
+  lsp(AK, JSON.stringify(AU)); lsp(LK, role === 'hq' ? 'hq' : 's' + sid);
+  if (role === 'store') { lsp('st_sid', String(sid)); lsp('st_pw_' + sid, pw); }   /* 跟原「門市今日」同一份，舊書籤也通 */
+  start();
+}
+/* 原「門市今日」平板上存過店密碼 → 自動換成這裡的登入（不用重輸） */
+function migrate(sid, cb){
+  var pw = lsg('st_pw_' + sid); if (!pw) return cb(false);
+  $login.style.display = ''; $login.innerHTML = '<h1>📋 自己做決策中心</h1><p>⏳ 正在用這台裝置記住的店密碼登入…</p>';
+  A.verify('store_' + sid, pw, function(res){ if (res && res.ok) { loginOk('store', sid, pw, res.ttl_hours); cb(true); } else { lsp('st_pw_' + sid, null); cb(false); } });
+}
+
+/* ---------- 主畫面 ---------- */
+function visTabs(){ return TABS.filter(function(t){ return AU.role === 'hq' || !t.hq; }); }
+function start(){
+  $login.style.display = 'none'; $hdr.style.display = ''; $main.style.display = '';
+  var hq = AU.role === 'hq';
+  if (hq) { var q = Number(new URLSearchParams(location.search).get('s')) || Number(lsg(HSK)) || 3; SID = (q >= 1 && q <= 12) ? q : 3; }
+  else SID = AU.sid;
+  document.getElementById('who').textContent = hq ? '🏢 總部' : '🏪 ' + SID + ' ' + shortOf(SID) + '店';
+  document.title = '自己做決策中心｜' + (hq ? '總部' : shortOf(SID) + '店');
+  var sel = document.getElementById('sidSel');
+  sel.innerHTML = STORES.map(function(s){ return '<option value="' + s[0] + '"' + (s[0] === SID ? ' selected' : '') + '>看 ' + s[0] + ' ' + esc(s[1]) + '店</option>'; }).join('');
+  sel.onchange = function(){ SID = Number(sel.value); lsp(HSK, String(SID)); ['today', 'sm'].forEach(drop); show(CUR, '', true); };
+  $tabs.innerHTML = visTabs().map(function(t){ return '<button class="tab" role="tab" data-k="' + t.k + '">' + t.t + '</button>'; }).join('');
+  $tabs.querySelectorAll('[data-k]').forEach(function(b){ b.onclick = function(){ show(b.getAttribute('data-k'), ''); }; });
+  sizeHdr();
+  var h = parseHash();
+  if (h.t === 'mg') show('hq', 'mg');
+  else if (visTabs().some(function(t){ return t.k === h.t; })) show(h.t, h.sub);
+  else show(hq ? 'hq' : 'today', '');
+}
+function drop(k){ var f = FR[k]; if (f) { f.remove(); delete FR[k]; } }
+function show(k, sub, keepHash){
+  var t = visTabs().filter(function(x){ return x.k === k; })[0]; if (!t) t = visTabs()[0];
+  CUR = t.k;
+  $tabs.querySelectorAll('[data-k]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-k') === CUR); });
+  document.getElementById('sidSel').style.display = (AU.role === 'hq' && t.store) ? '' : 'none';
+  sizeHdr();
+  if (sub && FR[CUR]) drop(CUR);   /* 指定子頁（某則公告、魔導師頁）＝重新打開 */
+  if (!FR[CUR]) {
+    var f = document.createElement('iframe');
+    f.src = t.src(sub); f.title = t.t; f.setAttribute('data-k', CUR);
+    $main.appendChild(f); FR[CUR] = f;
+  }
+  Object.keys(FR).forEach(function(x){ FR[x].classList.toggle('on', x === CUR); });
+  if (!keepHash) { try { history.replaceState(null, '', location.pathname + location.search + '#' + CUR + (sub ? '&' + sub : '')); } catch(_){} }
+}
+function sizeHdr(){ document.documentElement.style.setProperty('--hh', $hdr.offsetHeight + 'px'); }
+window.addEventListener('resize', sizeHdr);
+window.addEventListener('hashchange', function(){ if (!AU) return; var h = parseHash(); if (h.t === 'mg') show('hq', 'mg', true); else if (h.t && h.t !== CUR) show(h.t, h.sub, true); });
+function logout(){ lsp(AK, null); if (AU && AU.role === 'store') { lsp('st_pw_' + AU.sid, null); lsp('st_cache_' + AU.sid, null); } AU = null; Object.keys(FR).forEach(drop); try { history.replaceState(null, '', location.pathname); } catch(_){} showPick(''); }
+document.getElementById('home').onclick = function(){ location.href = 'hub.html'; };
+document.getElementById('out').onclick = function(){ if (confirm('登出這台裝置？下次要重新輸密碼')) logout(); };
+
+/* 給裡面各分頁用（同網域）：拿身分、切分頁、密碼失效時叫回登入畫面 */
+window.DC = {
+  auth: function(){ return readAuth(); },
+  sid: function(){ return SID; },
+  go: function(k, sub){ show(k, sub || ''); },
+  relogin: function(msg){ var r = AU ? (AU.role === 'hq' ? 'hq' : 's' + AU.sid) : ''; lsp(AK, null); AU = null; Object.keys(FR).forEach(drop); if (r) showPw(r, msg || '密碼已更換或過期，請重新輸入'); else showPick(msg); }
+};
+
+/* ---------- 開始 ---------- */
+(function(){
+  AU = readAuth();
+  if (AU) return start();
+  var qs = Number(new URLSearchParams(location.search).get('s'));
+  var last = lsg(LK) || '';
+  if (qs >= 1 && qs <= 12) last = 's' + qs;
+  if (/^s(?:[1-9]|1[0-2])$/.test(last)) return migrate(Number(last.slice(1)), function(ok){ if (!ok) showPw(last, ''); });
+  if (last === 'hq') return showPw('hq', '');
+  showPick('');
+})();
+})();
+</script>
+</body>
+</html>
