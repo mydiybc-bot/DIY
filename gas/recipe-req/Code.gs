@@ -18,6 +18,7 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v22＝2026-10-17 經營者：主檔算不出成本的品項，主廚可手填每份成本（lines.manual_cost）；核准預覽提醒主檔負責人補價，不寫進主檔。 */
 /* v21＝2026-10-17 經營者：申請表拿掉「新單位：1 平匙≈幾 g」→ planPush_ 不再用 lines.conv，核准不寫 dim_unitconv（只留提醒）。 */
 /* v20＝2026-10-17 經營者：儀表板改名「新品申請表」——通知信寄件人／標題、測試信、後台匯入備註標籤（舊標籤照樣認得）改字。 */
 /* v19＝2026-10-17 經營者：🔀 調整選項比例（optAdjust／optAdjustUndo；已寫入採購的單只改寫 BOM 用量會變的列、比對、讀回、記 fact_push optadj；有沒還原的調整時擋還原採購寫入）；BOM 合併抽成 bomAgg_。 */
@@ -25,7 +26,7 @@
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v21';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v22';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -1503,9 +1504,12 @@ function planPush_(rid) {
       shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname), supply: ptName_(l.supply),
       perStore: Number(l.per_store) > 0 ? Math.round(Number(l.per_store)) : 0,   /* 2026-10-07 晚：新器具／模具每店要幾個 */
       conv: 0, cbase: '',   /* 2026-10-17 經營者：申請表不再填換算、核准不再寫 dim_unitconv（換算交給平匙換算專案）；舊單裡的 conv 一律不用 */
-      og: ptName_(l.opt_group), oo: ptName_(l.opt_name), op: parseFloat(l.opt_pct) };   /* 2026-10-17 客人選一 */
+      og: ptName_(l.opt_group), oo: ptName_(l.opt_name), op: parseFloat(l.opt_pct),   /* 2026-10-17 客人選一 */
+      mc: Number(l.manual_cost) > 0 ? Number(l.manual_cost) : 0 };   /* 2026-10-17 主廚手填每份成本（只用來提醒主檔負責人補價，不寫進主檔） */
   }).filter(function (l) { return l.name; });
   var optInfo = optShares_(lines);
+  var mcL = lines.filter(function (l) { return l.mc > 0; });
+  if (mcL.length) warn.push('主廚手填成本（採購主檔還算不出這幾項）：' + mcL.map(function (l) { return l.name + ' 每份 ' + l.mc + ' 元（' + l.qty + ' ' + l.unit + '）'; }).join('、') + '——請主檔負責人到採購系統「主檔」補正確單價或單位（系統不會把手填的數字寫進主檔）');
   if (optInfo.text.length) warn.push('客人選一（BOM 用量已乘預估比例）：' + optInfo.text.join('；'));
   var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null, conv: null };
   try { P.sku2 = ptRead_('sku2'); } catch (e) { P.sku2 = null; P.sku2err = errMsg_(e); }
