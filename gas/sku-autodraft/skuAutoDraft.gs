@@ -34,6 +34,14 @@ var AD_SRC_COL = '來源';                       // dim_sku 新欄（最右邊�
 var AD_MAP_TAB = '產品名稱對照表', AD_LV_COL = '最後有效日';   // v1.1
 var AD_SKIP_RE = /下架|測試/;                 // v1.1：BOM 名含這些字 → 不建草稿，提示刪 BOM 列
 var AD_AGG_TAB = 'agg_purchase';
+/* 2026-10-18 經營者裁定（Shopline 停用專案，待決定「過季 15 規格要不要讓門市繼續可訂？」→「可以繼續訂貨」）：
+   下列品項不論配方檔期，最後有效日一律寫空白＝長期有效（不進「🗓 過季」、訂貨單「加其他品項」訂得到）。
+   要恢復照配方算 → 從這裡刪掉該編號。狀態欄（在用／不盤點／停售）不受影響。 */
+var AD_LV_KEEP = {
+  T051: '大蒙布朗花嘴', T058: 'A02 水彩筆', M023: '圓形矽膠模', F253: '愛心壓模(大)', M025: '愛心壓模', F254: '愛心壓模(小)',
+  T047: '小紅烤盤', M031: '螺旋矽膠模', T061: '隔熱手套', F264: '火花橙色膏', F095: '正紅色膏', F123: '嫩粉色膏',
+  F238: '海鹽焦糖丁', F104: '烏龍茶粉'
+};
 var AD_ENDED_GRACE_DAYS = 30;                 // v1.2：甜點結束不到 N 天仍算「在賣」（對照表結束日常比實際停賣早）
 var AD_HELD_PROP = 'AD_HELD_SIG';             // v1.2：暫緩清單簽章（有變動才寫 log）
 var AD_PREFIX = { '食材': 'F', '耗材': 'C', '器具': 'T', '模具': 'T' };
@@ -275,12 +283,14 @@ function adLastValid_(ss, skuSh, sv, h, bv, bh, bName, exact, dry, today, out) {
   var tz = 'Asia/Taipei', used = adAggUsed_(ss), conflict = [], sample = [];
   for (var k = 1; k < sv.length; k++) {
     var id = String(sv[k][cId] || '').trim(), o2 = byItem[id], v = '';
+    if (id && AD_LV_KEEP.hasOwnProperty(id)) { res.kept = (res.kept || 0) + 1; col.push(['']); continue; }   // 2026-10-18 經營者指定長期可訂
     if (id && o2 && o2.any && !o2.open && o2.max) {
       v = Utilities.formatDate(o2.max, tz, 'yyyy-MM-dd'); res.written++;
       if (v < today) { res.expired++; var nm2 = String(sv[k][cName] || id); if (sample.length < 15) sample.push(nm2 + ' ' + v); if (used[id] > 0) conflict.push(nm2 + '（最後有效 ' + v + '，近4週均 ' + Math.round(used[id]) + '）'); }
     }
     col.push([v]);
   }
+  if (res.kept) out.push('  📌 經營者指定長期可訂（AD_LV_KEEP）' + res.kept + ' 筆：最後有效日寫空白');
   if (sample.length) out.push('  🗓 過季範例：' + sample.join('；'));
   if (conflict.length) { out.push('  ⚠ 過季但近 4 週仍有用量 ' + conflict.length + ' 筆（對照表結束有效日可能填錯，或該甜點續賣）：'); conflict.slice(0, 40).forEach(function (x) { out.push('    ' + x); }); }
   res.conflict = conflict.length;
