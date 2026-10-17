@@ -26,6 +26,7 @@ window.__ime=(function(){
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
+<!-- 2026-10-17 深夜 🧬 食譜演化：①大圖用網站縮圖（static/thumbs/r/{id}.jpg，tools/make_thumbs.py：超過 200KB 的封面縮成長邊 480px），點圖在頁面上放大看、可再點「看原圖」②家族也看「相同步驟」（lineage.gs shared_steps；顯示「跟『X』共用 N 個圖片影片、M 個相同步驟」）。 -->
 <!-- 2026-10-17 晚 全頁中文輸入保護 IME-GUARD（head 最前面）：經營者回報 BOM 管理搜尋框也打不出中文、要求整頁全測 → 選字中的 input／keydown／keyup 在最外層攔下、選完字補送 input；BOM 兩個搜尋框延遲重畫前檢查 __ime.on。 -->
 <!-- 2026-10-17 晚 🧬 食譜演化：搜尋框打中文會被打斷（經營者回報，多個儀表板發生過）→ 搜尋框只建一次、打字只重畫清單；注音選字中不搜尋（compositionstart／end）。 -->
 <!-- 2026-10-17 晚 🧬 食譜演化：每款甜點一張代表圖（有啟用的版本優先、最新那支的封面 recipeimages/{id}/{id}.jpg；點圖開大圖）；家族清單也帶始祖款的圖。申請單 API lineage 多回 cover 欄。 -->
@@ -5968,6 +5969,14 @@ return {start:start};
   .lg-row>.lg-kn{flex:1;min-width:0}
   .lg-imgw{flex:0 0 auto;display:block;width:64px;height:64px;border-radius:8px;overflow:hidden;background:#F3EDE8;border:1px solid #E6D8CF}
   .lg-imgw img{width:100%;height:100%;object-fit:cover;display:block}
+  button.lg-imgw{padding:0;cursor:zoom-in;font:inherit}
+  .lg-imgx{display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:20px}
+  .lg-zoom{position:fixed;inset:0;z-index:9800;background:rgba(20,20,20,.72);display:flex;align-items:center;justify-content:center;padding:16px}
+  .lg-zbox{background:#fff;border-radius:12px;max-width:min(560px,100%);max-height:100%;overflow:auto;padding:12px}
+  .lg-zbox img{display:block;width:100%;height:auto;max-height:70vh;object-fit:contain;border-radius:8px;background:#F3EDE8}
+  .lg-zcap{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin-top:8px;font-size:13px}
+  .lg-zcap span{color:#7A6A60}
+  .lg-zcap button{margin-left:auto}
   .lg-noimg{flex:0 0 auto;width:64px;height:64px;border-radius:8px;background:#F3EDE8;border:1px dashed #D6CCC4;display:flex;align-items:center;justify-content:center;font-size:12px;color:#9A8A80;text-align:center}
   .lg-fam{display:flex;gap:10px;align-items:center}
   .lg-fam .ft{min-width:0;flex:1}
@@ -5981,7 +5990,7 @@ window.LineageMod=(function(){
   var API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
   var BACK='https://diybc.azurewebsites.net/Recipes/Edit/';
   var IMG='https://diybcstorage.blob.core.windows.net/recipeimages/';   /* 封面圖（公開） */
-  var IMG_KB=1500, IMG_BIG=3000;   /* 封面有的到 19MB：代表圖先挑 1.5MB 以下的；超過 3MB 的不直接載入，改成「點開看」 */
+  var IMG_BIG=3000, THUMB_KB=200, THUMB='thumbs/r/';   /* 2026-10-17 晚：超過 200KB 的封面用網站上的縮圖（tools/make_thumbs.py 產生，長邊 480px）；縮圖還沒做好時，3MB 以下才直接載原圖 */
   var S={inited:false,data:null,fams:[],sel:'',q:'',onlyOn:false,sort:'size',open:{}};
   function $(id){return document.getElementById(id)}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -6005,12 +6014,13 @@ window.LineageMod=(function(){
     var rows=(d.rows||[]).map(function(r){var o={};H.forEach(function(h){o[h]=r[ix[h]]});o.gen=Number(o.gen)||1;o.ver=Number(o.ver)||1;o.shared=Number(o.shared)||0;return o});
     var F={};
     rows.forEach(function(o){var f=F[o.family_id]=F[o.family_id]||{id:o.family_id,kuans:{},n:0,on:0,last:'',maxGen:1};
-      var k=f.kuans[o.kuan]=f.kuans[o.kuan]||{key:o.kuan,birth:o.kuan_birth,parent:o.parent_kuan,gen:o.gen,shared:o.shared,vers:[],on:0};
+      var k=f.kuans[o.kuan]=f.kuans[o.kuan]||{key:o.kuan,birth:o.kuan_birth,parent:o.parent_kuan,gen:o.gen,shared:o.shared,sharedSteps:Number(o.shared_steps)||0,vers:[],on:0};
       k.vers.push(o);f.n++;if(o.status==='Active'){f.on++;k.on++}if(o.birth>f.last)f.last=o.birth;if(o.gen>f.maxGen)f.maxGen=o.gen});
     var fams=Object.keys(F).map(function(id){var f=F[id];f.kList=Object.keys(f.kuans).map(function(k){return f.kuans[k]});
       f.kList.forEach(function(k){k.vers.sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))||String(a.upd).localeCompare(String(b.upd))})});
-      f.kList.forEach(function(k){var c=k.vers.filter(function(v){return v.cover}),sm=c.filter(function(v){var n=Number(v.cover_kb);return n>0&&n<=IMG_KB}),pool=sm.length?sm:c,a=pool.filter(function(v){return v.status==='Active'});
-        var p=(a.length?a:pool).slice().sort(function(x,y){return String(y.birth).localeCompare(String(x.birth))||String(y.upd).localeCompare(String(x.upd))})[0];k.img=p?IMG+p.cover:'';k.imgName=p?p.name:'';k.imgKb=p?Number(p.cover_kb)||0:0});   /* 代表圖：先挑檔案不大（≤1.5MB）的，再以有啟用的版本優先、最新出生的那支封面 */
+      f.kList.forEach(function(k){var c=k.vers.filter(function(v){return v.cover}),a=c.filter(function(v){return v.status==='Active'});
+        var p=(a.length?a:c).slice().sort(function(x,y){return String(y.birth).localeCompare(String(x.birth))||String(y.upd).localeCompare(String(x.upd))})[0];
+        k.imgKb=p?Number(p.cover_kb)||0:0;k.full=p?IMG+p.cover:'';k.img=p?(k.imgKb>THUMB_KB?THUMB+p.recipe_id+'.jpg':k.full):'';k.imgName=p?p.name:''});   /* 代表圖：有啟用的版本優先、最新出生的那支封面；大圖用縮圖 */
       f.first=f.kList.reduce(function(m,k){return !m||k.birth<m?k.birth:m},'');return f});
     return {meta:d.meta||{},rows:rows,fams:fams};
   }
@@ -6024,6 +6034,17 @@ window.LineageMod=(function(){
         else $('lgRoot').innerHTML='<div class="lg-card">讀不到食譜演化資料：'+esc(e.message)+'　<button class="ap-btn2" type="button" id="lgRetry">再試一次</button></div>',$('lgRetry').onclick=function(){S.inited=false;ensureInit()}})});
   }
   function famMatch(f,q){if(!q)return null;var hit={};f.kList.forEach(function(k){if(k.key.toLowerCase().indexOf(q)>=0||k.vers.some(function(v){return String(v.name).toLowerCase().indexOf(q)>=0}))hit[k.key]=1});return Object.keys(hit).length?hit:false}
+  /* 圖片：大圖先用縮圖；縮圖還沒做好 → 3MB 以下改載原圖，更大的顯示「📷」，點了照樣可以開原圖 */
+  function imgTag(k,alt){return '<img loading="lazy" alt="'+alt+'" src="'+esc(k.img)+'"'+(k.img!==k.full?' data-full="'+esc(k.full)+'" data-kb="'+k.imgKb+'"':'')+' onerror="LineageMod._imgErr(this)">'}
+  function imgErr(el){var f=el.getAttribute('data-full'),kb=Number(el.getAttribute('data-kb'))||0;
+    if(f&&!el.getAttribute('data-tried')&&kb<=IMG_BIG){el.setAttribute('data-tried','1');el.src=f;return}
+    var sp=document.createElement('span');sp.className='lg-imgx';sp.textContent='📷';el.replaceWith(sp)}
+  function zoom(k){
+    var d=document.createElement('div');d.className='lg-zoom';d.setAttribute('role','dialog');
+    d.innerHTML='<div class="lg-zbox"><img alt="'+esc(k.key)+'" src="'+esc(k.img)+'" onerror="LineageMod._imgErr(this)"'+(k.img!==k.full?' data-full="'+esc(k.full)+'" data-kb="'+k.imgKb+'"':'')+'><div class="lg-zcap"><b>'+esc(k.key)+'</b><span>'+esc(k.imgName)+'</span>'
+      +'<a href="'+esc(k.full)+'" target="_blank" rel="noopener">看原圖'+(k.imgKb?'（'+(k.imgKb>=1024?(Math.round(k.imgKb/102.4)/10)+' MB':k.imgKb+' KB')+'）':'')+' ↗</a><button type="button" class="ap-btn2 ap-mini">關閉</button></div></div>';
+    var close=function(){d.remove();document.removeEventListener('keydown',esc1,true)},esc1=function(e){if(e.key==='Escape')close()};
+    d.onclick=function(e){if(e.target===d||e.target.tagName==='BUTTON')close()};document.addEventListener('keydown',esc1,true);document.body.appendChild(d)}
   function famList(){
     var q=S.q.trim().toLowerCase(),list=S.data.fams.filter(function(f){if(S.onlyOn&&!f.on)return false;if(q&&!famMatch(f,q))return false;return true});
     var by={size:function(a,b){return b.kList.length-a.kList.length||b.n-a.n},gen:function(a,b){return b.maxGen-a.maxGen||b.kList.length-a.kList.length},recent:function(a,b){return String(b.last).localeCompare(String(a.last))},name:function(a,b){return a.id.localeCompare(b.id,'zh-Hant')}}[S.sort];
@@ -6062,7 +6083,7 @@ window.LineageMod=(function(){
     if(!S.sel||!list.some(function(f){return f.id===S.sel}))S.sel=list[0]?list[0].id:'';
     $('lgListBox').innerHTML='<div class="lg-muted" style="margin:0 0 6px">'+list.length+' 個家族</div><div class="lg-list" id="lgList">'+list.slice(0,300).map(function(f){
       var root=f.kList.filter(function(k){return k.gen===1})[0]||f.kList[0];
-      return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'">'+(root.img&&root.imgKb<=IMG_BIG?'<img loading="lazy" alt="" src="'+esc(root.img)+'">':'<span class="lg-fi0">🍰</span>')+'<span class="ft"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
+      return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'">'+(root.img?imgTag(root,''):'<span class="lg-fi0">🍰</span>')+'<span class="ft"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
         +'<div class="m">'+f.kList.length+' 款・'+f.n+' 支・傳到第 '+f.maxGen+' 代・'+yr(f.first)+'～'+yr(f.last)+'</div></span></button>'}).join('')
       +(list.length>300?'<div class="lg-muted">只列前 300 個，請用搜尋縮小</div>':'')+(list.length?'':'<div class="lg-muted">找不到符合的家族</div>')+'</div>';
     Array.prototype.forEach.call(document.querySelectorAll('#lgList [data-f]'),function(b){b.onclick=function(){S.sel=b.getAttribute('data-f');S.open={};renderList();var d=$('lgDetail');if(d&&window.innerWidth<900)d.scrollIntoView({behavior:'smooth'})}});
@@ -6077,9 +6098,9 @@ window.LineageMod=(function(){
     var roots=f.kList.filter(function(k){return !k.parent||!f.kuans[k.parent]}).sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))});
     var order=[];
     function node(k){order.push(k);var open=S.open[k.key]||hit[k.key];
-      var s='<li class="lg-node"><div class="lg-row">'+(k.img?(k.imgKb>IMG_BIG?'<a class="lg-imgw lg-noimg" href="'+esc(k.img)+'" target="_blank" rel="noopener" title="'+esc(k.imgName)+'">📷 點開看<br>'+(Math.round(k.imgKb/102.4)/10)+' MB</a>':'<a class="lg-imgw" href="'+esc(k.img)+'" target="_blank" rel="noopener" title="'+esc(k.imgName)+'（點開看大圖）"><img loading="lazy" alt="'+esc(k.key)+'" src="'+esc(k.img)+'"></a>'):'<span class="lg-noimg">沒有<br>封面圖</span>')+'<button type="button" class="lg-kn'+(hit[k.key]?' hit':'')+'" data-k="'+esc(k.key)+'"><span class="nm">'+(open?'▾ ':'▸ ')+esc(k.key)+'</span><span class="lg-pill lg-gen">第 '+k.gen+' 代</span>'
+      var s='<li class="lg-node"><div class="lg-row">'+(k.img?'<button type="button" class="lg-imgw" data-zoom="'+esc(k.key)+'" title="'+esc(k.imgName)+'（點一下看大圖）">'+imgTag(k,esc(k.key))+'</button>':'<span class="lg-noimg">沒有<br>封面圖</span>')+'<button type="button" class="lg-kn'+(hit[k.key]?' hit':'')+'" data-k="'+esc(k.key)+'"><span class="nm">'+(open?'▾ ':'▸ ')+esc(k.key)+'</span><span class="lg-pill lg-gen">第 '+k.gen+' 代</span>'
         +(k.on?'<span class="lg-pill lg-on">'+k.on+' 支啟用</span>':'<span class="lg-pill lg-off">停用</span>')
-        +'<span class="dt">出生 '+esc(k.birth||'—')+'・'+k.vers.length+' 個版本'+(k.parent&&k.shared?'・沿用「'+esc(k.parent)+'」'+k.shared+' 個圖片影片':'')+'</span></button></div>';
+        +'<span class="dt">出生 '+esc(k.birth||'—')+'・'+k.vers.length+' 個版本'+(k.parent&&(k.shared||k.sharedSteps)?'・跟「'+esc(k.parent)+'」'+[k.shared?'共用 '+k.shared+' 個圖片影片':'',k.sharedSteps?k.sharedSteps+' 個相同步驟':''].filter(Boolean).join('、'):'')+'</span></button></div>';
       if(open)s+='<div class="lg-vers"><table class="lg-t"><thead><tr><th>#</th><th>食譜名稱</th><th>狀態</th><th>語言</th><th>類別</th><th>店別</th><th>出生</th><th>最後更新</th><th>步驟</th><th></th></tr></thead><tbody>'
         +k.vers.map(function(v,i){return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(v.name)+'</td><td>'+(v.status==='Active'?'<span class="lg-pill lg-on">啟用</span>':'<span class="lg-pill lg-off">停用</span>')+'</td><td>'+esc(v.lang)+'</td><td>'+esc(v.cat)+'</td><td>'+esc(v.store)+'</td><td class="n">'+esc(v.birth)+(v.birth_src==='upd'?'*':'')+'</td><td class="n">'+esc(v.upd)+'</td><td class="n">'+esc(v.steps)+'</td><td><a href="'+BACK+esc(v.recipe_id)+'" target="_blank" rel="noopener">後台 ↗</a></td></tr>'}).join('')
         +'</tbody></table><div class="lg-muted" style="margin:4px 0 0">出生日＝這支自己第一次上傳圖片影片或封面的日子；有 * 的是查不到上傳日，先用最後更新日。</div></div>';
@@ -6091,6 +6112,7 @@ window.LineageMod=(function(){
       +'<button type="button" class="ap-btn2 ap-mini" id="lgAll" style="margin-left:8px">全部展開</button></div>'+tree+'</div>';
     h+='<div class="lg-card"><div class="lg-h">📅 時間軸</div><div class="lg-muted" style="margin:0 0 8px">每一列是一款，點＝那個版本出生的日子；綠點＝目前啟用，灰點＝停用，大點＝這款的第一版。</div>'+timeline(order)+'</div>';
     el.innerHTML=h;
+    Array.prototype.forEach.call(el.querySelectorAll('[data-zoom]'),function(b){b.onclick=function(){var k=f.kuans[b.getAttribute('data-zoom')];if(k)zoom(k)}});
     Array.prototype.forEach.call(el.querySelectorAll('[data-k]'),function(b){b.onclick=function(){var k=b.getAttribute('data-k');S.open[k]=!(S.open[k]||hit[k]);if(hit[k]&&!S.open[k])delete hit[k];renderFam()}});
     $('lgAll').onclick=function(){f.kList.forEach(function(k){S.open[k.key]=true});renderFam()};
   }
@@ -6106,7 +6128,7 @@ window.LineageMod=(function(){
         +k.vers.map(function(v,i){if(!/^\d{4}\/\d{2}\/\d{2}$/.test(v.birth))return '';return '<span class="lg-dot'+(v.status==='Active'?' on':'')+(i===0?' root':'')+'" style="left:'+x(v.birth)+'%" title="'+esc(v.name+'｜'+v.birth+'｜'+(v.status==='Active'?'啟用':'停用'))+'"></span>'}).join('')+'</div></div>'});
     return h+'</div></div>';
   }
-  return {ensureInit:ensureInit};
+  return {ensureInit:ensureInit,_imgErr:imgErr};
 })();
 /* 打開網址就是 #lineage 時，分頁切換比本模組早跑 → 這裡補叫一次 */
 (function(){var p=document.getElementById('tab-lineage');if(p&&p.classList.contains('active'))LineageMod.ensureInit()})();

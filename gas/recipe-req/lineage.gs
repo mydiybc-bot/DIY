@@ -9,10 +9,13 @@
    誰是誰的上一代：家族內依出生日排，每支找「比它早出生、跟它共用最多檔」的那支當上一代（名稱相同加分、步驟標題相近加分）。
    只讀：不寫後台；只寫本試算表的 recipe_lineage／lineage_meta 分頁（每次整張重寫）。 */
 var LG_TAB = 'recipe_lineage', LG_META = 'lineage_meta';
-var LG_HEAD = ['recipe_id', 'name', 'lang', 'region', 'status', 'cat', 'store', 'upd', 'birth', 'birth_src', 'kuan', 'kuan_birth', 'kuan_size', 'ver', 'family_id', 'family_kuans', 'family_size', 'parent_kuan', 'gen', 'shared', 'steps', 'media_steps', 'cover', 'cover_kb'];   /* cover：封面圖在 recipeimages/ 下的路徑（2026-10-17 晚加，頁面每款挑一張當代表圖） */
+var LG_HEAD = ['recipe_id', 'name', 'lang', 'region', 'status', 'cat', 'store', 'upd', 'birth', 'birth_src', 'kuan', 'kuan_birth', 'kuan_size', 'ver', 'family_id', 'family_kuans', 'family_size', 'parent_kuan', 'gen', 'shared', 'steps', 'media_steps', 'cover', 'cover_kb', 'shared_steps'];   /* cover：封面圖在 recipeimages/ 下的路徑（2026-10-17 晚加，頁面每款挑一張當代表圖） */
 var LG_HOUR = 1;              /* 每天 1 點以後、公版掃描做完，算一次 */
 var LG_COMMON = 20;           /* 超過這麼多「款」都在用的檔（教學影片等）不拿來認親 */
-var LG_MIN_SHARED = 3;        /* 兩款共用幾個非通用檔以上算有親戚關係（或共用 2 個且佔較少那款的一半以上） */
+var LG_MIN_SHARED = 3;
+/* 2026-10-17 晚 經營者：「製作步驟有多個步驟相似」也算親戚——步驟標題（去掉數字、括號、空白）相同的步驟；
+   超過 LG_TCOMMON 款都有的標題（教學影片、軟化奶油…）不算；兩款共用 ≥ LG_TMIN 個不常見的步驟標題，且佔較少那款的 LG_TRATIO 以上 → 同家族 */
+var LG_TCOMMON = 15, LG_TMIN = 5, LG_TRATIO = 0.6;        /* 兩款共用幾個非通用檔以上算有親戚關係（或共用 2 個且佔較少那款的一半以上） */
 var LG_COVER_LIST = 'https://diybcstorage.blob.core.windows.net/recipeimages?restype=container&comp=list&maxresults=5000';
 
 /* ---------- 「款」：名稱去掉期別、版本、英文名、葷素標示後相同＝同一款（中英文版、備份、匙版、半成品版都算同一款） ---------- */
@@ -23,6 +26,7 @@ function lgBase_(n) {
     .replace(/（.*?）|\(.*?\)|【.*?】|《|》/g, '')
     .replace(/[_\s]*(海綿蛋糕版|自選版|已解凍版本|原版備用|半成品版|要更新)$/, '').replace(/\s*\d+(\.\d+)?$/, '').replace(/[\s*！!]/g, '').trim();
 }
+function lgTitleKey_(t) { return String(t == null ? '' : t).replace(/（.*?）|\(.*?\)/g, '').replace(/[\s\d０-９.,，、。:：!！?？~～\-－_＿#＃*]/g, '').trim(); }
 /* 路徑 {步驟id}/{食譜id}.副檔名 → 上傳時的食譜id */
 function lgOrigin_(path) { var m = String(path || '').match(/^[0-9a-f-]{36}\/([0-9a-f-]{36})\./i); return m ? m[1].toLowerCase() : ''; }
 
@@ -66,6 +70,14 @@ function lgCompute_(recipes, dates, covers) {
     var a = Object.keys(byPath[p]); if (a.length < 2 || a.length > LG_COMMON) return;
     for (var x = 0; x < a.length; x++) for (var y = x + 1; y < a.length; y++) { var k = a[x] < a[y] ? a[x] + '\u0001' + a[y] : a[y] + '\u0001' + a[x]; pair[k] = (pair[k] || 0) + 1; }
   });
+  /* 步驟標題：每款用到哪些標題（各版本合起來），算「不常見標題」兩兩共用數 */
+  var kt = {}, tuse = {};
+  recipes.forEach(function (r) { var o = kt[r._base] = kt[r._base] || {}; (r.steps || []).forEach(function (s) { var t = lgTitleKey_(s.t); if (t.length >= 2) o[t] = 1; }); });
+  Object.keys(kt).forEach(function (k) { Object.keys(kt[k]).forEach(function (t) { tuse[t] = (tuse[t] || 0) + 1; }); });
+  var byT = {}, tdist = {};
+  Object.keys(kt).forEach(function (k) { tdist[k] = 0; Object.keys(kt[k]).forEach(function (t) { if (tuse[t] <= LG_TCOMMON) { tdist[k]++; if (tuse[t] >= 2) (byT[t] = byT[t] || []).push(k); } }); });
+  var tpair = {};
+  Object.keys(byT).forEach(function (t) { var a = byT[t]; for (var x = 0; x < a.length; x++) for (var y = x + 1; y < a.length; y++) { var kk = a[x] < a[y] ? a[x] + '\u0001' + a[y] : a[y] + '\u0001' + a[x]; tpair[kk] = (tpair[kk] || 0) + 1; } });
   var up = {}; kl.forEach(function (k) { up[k.key] = k.key; });
   var find = function (x) { while (up[x] !== x) { up[x] = up[up[x]]; x = up[x]; } return x; };
   var link = {};
@@ -76,22 +88,31 @@ function lgCompute_(recipes, dates, covers) {
       (link[a] = link[a] || {})[b] = c; (link[b] = link[b] || {})[a] = c;
     }
   });
+  var tlink = {};
+  Object.keys(tpair).forEach(function (k) {
+    var ab = k.split('\u0001'), a = ab[0], b = ab[1], c = tpair[k], mn = Math.min(tdist[a] || 0, tdist[b] || 0) || 1;
+    (tlink[a] = tlink[a] || {})[b] = c; (tlink[b] = tlink[b] || {})[a] = c;
+    if (c >= LG_TMIN && c / mn >= LG_TRATIO) { var ra = find(a), rb = find(b); if (ra !== rb) up[rb] = ra; }
+  });
   var fam = {}; kl.forEach(function (k) { (fam[find(k.key)] = fam[find(k.key)] || []).push(k); });
   var out = new Array(n);
   Object.keys(fam).forEach(function (f) {
     var ks = fam[f].slice().sort(function (a, b) { return String(a.birth).localeCompare(String(b.birth)) || a.key.localeCompare(b.key); });
     var root = ks[0], fsize = 0; ks.forEach(function (k) { fsize += k.mem.length; });
     ks.forEach(function (k, at) {
-      var par = null, best = -1;
-      for (var q = 0; q < at; q++) { var c = (link[k.key] || {})[ks[q].key] || 0; if (c > best || (c === best && c > 0)) { best = c; par = ks[q]; } }
-      if (at > 0 && best <= 0) par = root;   /* 跟更早的款沒有直接共用檔（經由後來的款連進家族）→ 掛在始祖底下 */
-      k.parent = par; k.gen = par ? par.gen + 1 : 1; k.shared = Math.max(best, 0);
+      var par = null, best = -1, bm = 0, bt = 0;
+      for (var q = 0; q < at; q++) {
+        var cm = (link[k.key] || {})[ks[q].key] || 0, ct = (tlink[k.key] || {})[ks[q].key] || 0, sc = cm * 10 + ct * 2;   /* 共用圖片影片最重要，相同步驟其次 */
+        if (sc > best || (sc === best && sc > 0)) { best = sc; par = ks[q]; bm = cm; bt = ct; }
+      }
+      if (at > 0 && best <= 0) { par = null; bm = 0; bt = 0; }   /* 跟更早的款沒有直接關係（經由後來的款才連進家族）→ 自己也是這個家族的一支源頭（第 1 代），不硬掛在別人底下 */
+      k.parent = par; k.gen = par ? par.gen + 1 : 1; k.shared = bm; k.shared_steps = bt;
       var vers = k.mem.slice().sort(function (a, b) { return String(recipes[a]._birth).localeCompare(String(recipes[b]._birth)) || String(recipes[a].upd).localeCompare(String(recipes[b].upd)); });
       vers.forEach(function (i, vi) {
         var r = recipes[i];
         out[i] = { recipe_id: r.id, name: r.name, lang: r.lang || '', region: r.region || '', status: r.status || '', cat: r.cat || '', store: r.store || '', upd: r.upd || '',
           birth: r._birth, birth_src: r._bsrc, kuan: k.key, kuan_birth: k.birth, kuan_size: k.mem.length, ver: vi + 1,
-          family_id: root.key, family_kuans: ks.length, family_size: fsize, parent_kuan: par ? par.key : '', gen: k.gen, shared: k.shared,
+          family_id: root.key, family_kuans: ks.length, family_size: fsize, parent_kuan: par ? par.key : '', gen: k.gen, shared: k.shared, shared_steps: k.shared_steps,
           steps: (r.steps || []).length, media_steps: r._media };
       });
     });
@@ -159,7 +180,7 @@ function lgRun_() {
   var maxGen = out.reduce(function (m, o) { return Math.max(m, o.gen); }, 0);
   var info = { at: nmNow_(), recipes: out.length, kuans: Object.keys(kuans).length, families: Object.keys(fams).length, max_gen: maxGen, multi: out.filter(function (o) { return o.family_size > 1; }).length, secs: Math.round((Date.now() - t0) / 1000) };
   lgMetaSet_(info);
-  try { CacheService.getScriptCache().remove('lineage:v1'); } catch (e) {}
+  try { CacheService.getScriptCache().remove('lineage:v2'); } catch (e) {}
   return info;
 }
 function lgMetaSet_(o) {
@@ -186,7 +207,7 @@ function lgRunNow() { var lock = LockService.getScriptLock(); lock.waitLock(3000
 
 /* ---------- 讀取動作：整張表（壓成陣列；暫存 30 分鐘） ---------- */
 function lineage_(p, auth) {
-  var cache = CacheService.getScriptCache(), key = 'lineage:v1', s = cacheGetBig_(cache, key);
+  var cache = CacheService.getScriptCache(), key = 'lineage:v2', s = cacheGetBig_(cache, key);
   if (s) { try { return { id: '', data: JSON.parse(s) }; } catch (e) {} }
   var sh = ss_().getSheetByName(LG_TAB);
   if (!sh || sh.getLastRow() < 2) return { id: '', data: { meta: lgMetaGet_(), head: LG_HEAD, rows: [] } };
