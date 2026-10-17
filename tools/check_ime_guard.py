@@ -30,7 +30,7 @@ REQUIRED = [
     'dashboard-announce.html', 'dashboard-pnl.html', 'pos-dashboard.html', 'zijiren.html',
     'google-reviews.html', 'dashboard-schedule.html', 'dashboard-purchase.html',
     'dashboard-reservation.html', 'recipe-upload.html', 'project-hub.html', 'admin-auth.html',
-    'recipe-studio.html',
+    'recipe-studio.html', 'index.html',   # 訓練站首頁（核心檔；2026-10-18 經營者同意加）
 ]
 
 # 不加的頁面與原因
@@ -39,7 +39,7 @@ SKIP = {
     'pnl-dashboard.html': '廢棄', 'budget-2026.html': '廢棄', 'dashboard-vendor-price.html': '廢棄',
     'dashboard-recipe-cost.html': '廢棄', 'dashboard_m4.1.html': '廢棄',
     # 訓練站（核心檔或訓練站頁面，要改先問經營者）
-    'index.html': '訓練站核心檔', 'self-dashboard.html': '訓練站（只有日期框）',
+    'self-dashboard.html': '訓練站（只有日期框）',
     'training-guide.html': '訓練站教學頁（輸入框都是唯讀示意）',
     # 歷史整合入口（沒有輸入框）
     'dashboard.html': '舊整合入口（沒有輸入框）',
