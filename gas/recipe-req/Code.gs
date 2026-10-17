@@ -18,9 +18,10 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v16';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v17';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -35,7 +36,7 @@ var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
 var TABS = {
   fact_campaign: ['campaign_id', '檔期名稱', '起', '迄', '第一批配貨日', '品牌別', '自己人搶先體驗', '配合活動',
     '作業_第一批出貨_時間', '作業_第一批出貨_備註', '作業_貼紙_時間', '作業_貼紙_備註', '作業_POS_時間', '作業_POS_備註',
-    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by', '自己人搶先開賣日'],   /* 最後一欄 2026-10-05 新增（加在最後，舊欄位位置不動；migrate_ 自動補表頭） */
+    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by', '自己人搶先開賣日', '類型'],   /* 類型：2026-10-17 新增（空白＝檔期、「常態菜單」＝長期菜單；migrate_ ⑫ 補表頭） */   /* 最後一欄 2026-10-05 新增（加在最後，舊欄位位置不動；migrate_ 自動補表頭） */
   fact_recipe_req: ['req_id', 'campaign_id', 'seq', '商品暫定名稱', '商品正式名稱', '定價', '成本', '利潤率', '規格', '葷素',
     '保存方式', '包裝方式', '製作時間', '預估銷售數', 'status', 'signers', 'payload_1', 'payload_2', 'payload_3', 'payload_4',
     'created_at', 'updated_at', 'updated_by'],
@@ -133,7 +134,7 @@ function randPw_(len) {
    ① 2026-09-28「管理者」身分（🔑 密碼管理用）：舊試算表沒有這一列 → 補上；密碼 10 碼隨機，只在 dim_role 分頁
    ② 2026-09-29 B 階段：補建 fact_req_fill 分頁（只新增分頁，不動既有分頁）
    ③ 2026-09-29 C 階段：補建 fact_push 分頁 */
-var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH', 'MIG_EMAIL'];
+var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH', 'MIG_EMAIL', 'MIG_CTYPE'];
 /* 2026-10-07 加速：每次請求的指令碼屬性只讀一次（原本 migrate_ 逐一讀 6 個、ss_ 再讀 1 個；一個約 50～100 毫秒） */
 var _props = null;
 function props_() { if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {}; return _props; }
@@ -169,7 +170,7 @@ function migrate_() {
       P.setProperty('MIG_BOM', '1');
     }
     if (P.getProperty('MIG_EARLY') !== '1') {   /* ⑤ 2026-10-05：fact_campaign 最後補一欄「自己人搶先開賣日」（只加表頭，既有資料一格不動） */
-      var cs = ss_().getSheetByName('fact_campaign'), CH = TABS.fact_campaign, cn = CH.length;
+      var cs = ss_().getSheetByName('fact_campaign'), CH = TABS.fact_campaign, cn = CH.indexOf('自己人搶先開賣日') + 1;   /* 2026-10-17：用欄名找位置（之後又加了「類型」欄） */
       if (cs.getMaxColumns() < cn) cs.insertColumnsAfter(cs.getMaxColumns(), cn - cs.getMaxColumns());
       var hc = cs.getRange(1, cn);
       if (String(hc.getValue()).trim() === '') hc.setValue(CH[cn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
@@ -206,6 +207,15 @@ function migrate_() {
       ensureTab_(ss_(), 'fact_notify');
       authCacheClear_();
       setProp_('MIG_EMAIL', '1');
+    }
+    if (P.getProperty('MIG_CTYPE') !== '1') {   /* ⑫ 2026-10-17：fact_campaign 補一欄「類型」（只加表頭，既有檔期一格不動；空白＝檔期） */
+      var ts = ss_().getSheetByName('fact_campaign'), TH = TABS.fact_campaign, tn = TH.indexOf('類型') + 1;
+      if (ts.getMaxColumns() < tn) ts.insertColumnsAfter(ts.getMaxColumns(), tn - ts.getMaxColumns());
+      var tc = ts.getRange(1, tn);
+      if (String(tc.getValue()).trim() === '') tc.setValue(TH[tn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
+      if (String(tc.getValue()).trim() !== TH[tn - 1]) throw new Error('fact_campaign 第 ' + tn + ' 欄表頭不對');
+      ts.getRange(2, tn, Math.max(1, ts.getMaxRows() - 1), 1).setNumberFormat('@');
+      setProp_('MIG_CTYPE', '1');
     }
     if (!P.getProperty('SIGN_SECRET')) setProp_('SIGN_SECRET', Utilities.getUuid() + Utilities.getUuid());   /* ⑧ 簽核連結通行碼的密鑰（只在伺服器；在鎖裡產生，不會兩個請求各產一組） */
     var seed = P.getProperty('SIGNER_SEED');
@@ -578,7 +588,10 @@ function saveCampaign_(p, auth) {
     if (!can_(auth, 'C:' + h)) { if (str_(c[h]) !== str_(obj[h])) skipped.push(h); return; }
     obj[h] = c[h];
   });
+  obj['類型'] = str_(obj['類型']).trim() === REG_TYPE ? REG_TYPE : '';   /* 2026-10-17：常態菜單沒有結束日 */
+  if (obj['類型'] === REG_TYPE) obj['迄'] = '';
   ['起', '迄', '第一批配貨日', '自己人搶先開賣日'].forEach(function (h) { obj[h] = normDate_(obj[h]); });
+  if (obj['類型'] === REG_TYPE && !/^\d{4}-\d{2}-\d{2}$/.test(obj['起'])) throw fail_('常態菜單要填上市日（開始日）');
   if (obj['自己人搶先開賣日'] && !/^\d{4}-\d{2}-\d{2}$/.test(obj['自己人搶先開賣日'])) throw fail_('「自己人搶先開賣日」日期格式不對');
   if (obj['自己人搶先開賣日'] && /^\d{4}-\d{2}-\d{2}$/.test(obj['起']) && obj['自己人搶先開賣日'] > obj['起']) throw fail_('「自己人搶先開賣日」不能晚於檔期開始日');
   if (obj['起'] && obj['迄'] && /^\d{4}-\d{2}-\d{2}$/.test(obj['起']) && /^\d{4}-\d{2}-\d{2}$/.test(obj['迄']) && obj['迄'] < obj['起']) throw fail_('檔期「迄」早於「起」，請確認日期');
@@ -1336,7 +1349,10 @@ var PURCHASE_ID_DEFAULT = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';   /* B
 var DASH_ID_DEFAULT = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';       /* 儀表板專用檔（只寫 dim_sku）；指令碼屬性 DASH_PURCHASE_ID 可覆蓋 */
 var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv', par: 'dim_store_par', par2: 'dim_store_par（儀表板專用檔）',
   skuSt: 'dim_sku 停售改回在用', skuSt2: 'dim_sku 停售改回在用（儀表板專用檔）' };   /* 2026-10-17：skuSt／skuSt2 不是分頁，是「改主檔狀態欄」的紀錄名（ptRead_ 不讀它們） */
-var REACT_FROM = '停售';   /* 2026-10-17 經營者：核准寫入時，申請單用到、主檔是「停售」的品項改回在用（狀態欄清空）；「不盤點」不動 */
+var REACT_FROM = '停售';
+/* 2026-10-17 經營者：檔期「類型」＝常態菜單（例：11 月大菜單）→ 沒有結束日；核准寫對照表時 次類別＝「無」、結束有效日＝2099-12-31（同現有常態甜點寫法）、
+   主類別＝申請表 POS 分類（沒選或不在對照表現有主類別 → 「其他」＋提醒）。採購系統 EventLayer 只認「YYYY 名稱」次類別的檔期，常態菜單不會自動算首批量 */
+var REG_TYPE = '常態菜單', REG_END = '2099-12-31', REG_MAIN = '其他';   /* 2026-10-17 經營者：核准寫入時，申請單用到、主檔是「停售」的品項改回在用（狀態欄清空）；「不盤點」不動 */
 var PAR_NEED = ['店號', 'sku_id', '標配數量'];   /* 2026-10-07 晚：新器具／模具每店標配（店別參數只寫這三欄，其餘留空＝用預設） */
 var BRAND_STORES = { '自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], '吳寶春自己做': [11, 12], '自己做＆吳寶春自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] };   /* 同採購系統 EventLayer EV_BRAND_STORES */
 function brandStores_(b) { b = ptName_(b); return (BRAND_STORES[b] || BRAND_STORES['自己做＆吳寶春自己做']).slice(); }
@@ -1583,7 +1599,13 @@ function planPush_(rid) {
   var campName = camp ? ptName_(camp['檔期名稱']) : '';
   var sub, cnt = {}, main = '', best = 0, mainsAll = {};
   P.map.vals.forEach(function (r) { var g0 = ptName_(r[6]); if (g0) mainsAll[g0] = 1; });
-  if (h.cat_kind === 'main' || (catTxt && mainsAll[catTxt])) {   /* 營運POS 局部修改時 cat_kind 不一定有 → 值是現有主類別就當主類別 */
+  var isReg = !!camp && ptName_(camp['類型']) === REG_TYPE;
+  if (isReg) {   /* 2026-10-17 常態菜單 */
+    sub = '無';
+    main = mainsAll[catTxt] ? catTxt : REG_MAIN;
+    if (!mainsAll[catTxt]) warn.push('常態菜單要選 POS 分類（主類別）' + (catTxt ? '：「' + catTxt + '」不在對照表現有主類別' : '：申請表沒選') + '，對照表主類別先寫「' + REG_MAIN + '」（核准前請主廚選好，或之後到 📚 BOM 管理改）');
+    warn.push('常態菜單：對照表次類別寫「無」、結束有效日 ' + REG_END + '（長期）。採購系統不會自動算這支的首批量（檔期新品頁照樣列出新品項），第一批請出貨中心／店長照預估銷售數安排');
+  } else if (h.cat_kind === 'main' || (catTxt && mainsAll[catTxt])) {   /* 營運POS 局部修改時 cat_kind 不一定有 → 值是現有主類別就當主類別 */
     main = mainsAll[catTxt] ? catTxt : '';
     if (catTxt && !main) warn.push('POS 分類「' + catTxt + '」不在對照表現有主類別，改用「' + DEFAULT_MAIN + '」');
     var campSub = campName.replace(/^(20\d{2})\s*/, '$1 ');
@@ -1598,7 +1620,8 @@ function planPush_(rid) {
   var d1 = camp ? normDate_(camp['起']) : '', d2 = camp ? normDate_(camp['迄']) : '';
   var dE = camp ? normDate_(camp['自己人搶先開賣日']) : '';   /* 2026-10-05：有搶先開賣日就用它當對照表起始有效日（POS 那天起就會賣、採購系統以它提前 14 天備料） */
   if (dE && /^\d{4}-\d{2}-\d{2}$/.test(dE) && (!d1 || dE < d1)) { warn.push('這個檔期有「自己人搶先開賣日」' + dE + '：對照表的起始日用它（正式開賣 ' + (d1 || '未填') + '），採購系統會以 ' + dE + ' 當開賣日提前備料'); d1 = dE; }
-  if (!d1 || !d2) warn.push('檔期沒有填起訖日：對照表的有效日期留空，採購系統的新品備料不會啟動（到對照表補日期即可）');
+  if (isReg) { d2 = REG_END; if (!d1) warn.push('常態菜單沒有填上市日：對照表的起始有效日留空（到 📚 BOM 管理補即可）'); }
+  else if (!d1 || !d2) warn.push('檔期沒有填起訖日：對照表的有效日期留空，採購系統的新品備料不會啟動（到對照表補日期即可）');
   var mapHave = P.map.vals.filter(function (r) { return ptName_(r[0]) === name; })[0];
   var map = { row: [name, name, '', '', ymd_(d1), ymd_(d2), main, sub], show: [name, name, d1, d2, main, sub],
     skip: mapHave ? '對照表已經有「' + name + '」（' + normDate_(mapHave[4]) + '～' + normDate_(mapHave[5]) + '），沒有新增（重新上架請到對照表改日期）' : '' };

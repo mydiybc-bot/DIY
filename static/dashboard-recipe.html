@@ -2291,6 +2291,7 @@ function validate(){var e=[],h=AP.head;
   if(!String(h.campaign_id||'').trim())e.push('檔期（送件前要在表頭選）');
   if(!String(h.brand||'').trim())e.push('品牌別');
   if(!String(h.name||'').trim())e.push('商品暫定名稱');
+  if(h.campaign_id&&campIsReg(campById(h.campaign_id))&&!catText())e.push('POS 分類（常態菜單要選，核准後寫進產品名稱對照表的主類別）');
   if(reviseNeed())e.push('採購系統已經有「'+dessName()+'」的配方：是改版請勾「改版既有甜點」，是新甜點請換正式名稱');
   if(!(num(h.price)>0))e.push('產品定價');
   var L=AP.lines.filter(function(l){return String(l.m||'').trim()});
@@ -2744,9 +2745,10 @@ function reqNo(){return AP.head.req_id||reqDate()}
 function lockedReq(){return !!LOCK_ST[String((AP.sub||{}).status||'')]}
 function campById(id){for(var i=0;i<CAMP.list.length;i++){if(CAMP.list[i].campaign_id===id)return CAMP.list[i]}return null}
 function mmdd(s){s=String(s||'');return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(5,7)+'/'+s.slice(8,10):s}
-function campRange(a,b){return (a||b)?(a||'?')+'～'+(b||'?'):''}
-function campLabel(c){var r=campRange(mmdd(c['起']),mmdd(c['迄']));return String(c['檔期名稱']||c.campaign_id)+(r?'（'+r+'）':'')+(c.status==='封存'?'［封存］':'')}
-function campText(){var h=AP.head;if(h.campaign_id){var r=campRange(h.campaign_start,h.campaign_end);return (h.campaign_name||h.campaign_id)+(r?' '+r:'')}return String(h.period||'').trim()}
+function campRange(a,b,reg){if(reg)return (a?a+' 起':'')+(a?'，':'')+'常態菜單';return (a||b)?(a||'?')+'～'+(b||'?'):''}   /* reg：2026-10-17 常態菜單（沒有結束日） */
+function campIsReg(c){return !!c&&String(c['類型']||'').trim()==='常態菜單'}
+function campLabel(c){var r=campRange(mmdd(c['起']),mmdd(c['迄']),campIsReg(c));return String(c['檔期名稱']||c.campaign_id)+(r?'（'+r+'）':'')+(c.status==='封存'?'［封存］':'')}
+function campText(){var h=AP.head;if(h.campaign_id){var r=campRange(h.campaign_start,h.campaign_end,campIsReg(campById(h.campaign_id)));return (h.campaign_name||h.campaign_id)+(r?' '+r:'')}return String(h.period||'').trim()}
 function setCampSnap(c){var h=AP.head;
   if(!c){h.campaign_id='';h.campaign_name='';h.campaign_start='';h.campaign_end='';h.campaign_ship='';h.campaign_early='';return}
   h.campaign_id=String(c.campaign_id||'');h.campaign_name=String(c['檔期名稱']||'');h.campaign_start=String(c['起']||'');h.campaign_end=String(c['迄']||'');h.campaign_ship=String(c['第一批配貨日']||'');h.campaign_early=String(c['自己人搶先開賣日']||'');h.period=h.campaign_name}
@@ -2768,8 +2770,9 @@ function campInfoHTML(){var h=AP.head;
   if(!h.campaign_id){var old=String(h.period||'').trim();
     return '<span class="ap-muted">'+(old?'舊草稿寫的檔期名稱：「'+esc(old)+'」，請改從上方選檔期（沒有就按「＋ 新增檔期」）':((CAMP.loaded&&!CAMP.list.some(function(c){return c.status!=='封存'}))?'目前還沒有任何檔期，請先按右上「＋ 新增檔期」建立（填檔期名稱和期間，要主廚密碼）':'選了檔期，這裡會顯示起訖日與第一批配貨日'))
       +((CAMP.err&&!CAMP.loaded)?'　⚠ 檔期清單讀不到（'+esc(CAMP.err)+'），其他功能照常可以用':'')+'</span>'}
-  var c=campById(h.campaign_id)||{},p=['<b>'+esc(h.campaign_name||h.campaign_id)+'</b>'],r=campRange(h.campaign_start,h.campaign_end);
-  if(r)p.push('檔期 '+esc(r));
+  var c=campById(h.campaign_id)||{},reg=campIsReg(c),p=['<b>'+esc(h.campaign_name||h.campaign_id)+'</b>'],r=campRange(h.campaign_start,h.campaign_end);
+  if(reg)p.push('<b style="color:#2E6B8A">常態菜單</b>（長期，沒有結束日'+(h.campaign_start?'；'+esc(h.campaign_start)+' 起上市':'')+'；核准後對照表次類別寫「無」。採購系統不會自動算首批量，第一批請照預估銷售數安排）');
+  else if(r)p.push('檔期 '+esc(r));
   if(h.campaign_early)p.push('<b style="color:#B26A00">自己人搶先開賣 '+esc(h.campaign_early)+'</b>（採購系統以這天當開賣日，提前 14 天提醒各店叫貨）');
   p.push('第一批配貨日 '+esc(h.campaign_ship||'（未填）'));
   if(c['品牌別'])p.push('品牌別 '+esc(c['品牌別']));
@@ -2897,8 +2900,10 @@ function newCampDialog(){openCampForm(getCred('主廚'))}
 function openCampForm(cr){
   var m=modal('<div class="ap-h">＋ 新增檔期</div><div class="ap-muted">同一檔期的新品都掛在這裡；建立後所有人都選得到。</div>'
     +'<div id="apCampPwRow"'+(cr?' style="display:none"':'')+'><label>主廚密碼（建立檔期要；只記在這個分頁）</label><input type="password" id="apCampPw" name="rcp-camp-pw" autocomplete="new-password"></div>'
+    +'<label>類型</label><select data-cf="類型" id="apCampType"><option value="">限定檔期（有開始日和結束日，例：萬聖節、中秋）</option><option value="常態菜單">常態菜單（長期，只有上市日，例：11 月大菜單）</option></select>'
     +'<label>檔期名稱（必填）</label><input type="text" data-cf="檔期名稱" placeholder="例：2026 萬聖節">'
-    +'<div class="ap-2col"><div><label>期間：開始日（必填）</label><input type="date" data-cf="起"></div><div><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
+    +'<div class="ap-2col"><div><label id="apCampStartLbl">期間：開始日（必填）</label><input type="date" data-cf="起"></div><div id="apCampEndBox"><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
+    +'<div class="ap-muted" id="apCampRegNote" style="display:none;margin-top:2px">常態菜單沒有結束日。核准後產品名稱對照表的次類別寫「無」、結束有效日寫 2099-12-31（跟現有常態甜點一樣）；主類別用申請表的 POS 分類，請記得選。採購系統不會自動算首批量。</div>'
     +'<div class="ap-2col"><div><label>第一批配貨日</label><input type="date" data-cf="第一批配貨日"></div><div><label>品牌別</label><select data-cf="品牌別">'+opts(BRANDS,BRAND_DEFAULT,'— 不指定 —')+'</select></div></div>'
     +'<label>自己人搶先開賣日（沒有就留空）</label><input type="date" data-cf="自己人搶先開賣日"><div class="ap-muted" style="margin-top:2px">自己人會員比正式開賣早買得到的第一天。有填的話，採購系統會以這天當開賣日，提前 14 天提醒各店叫貨。</div>'
     +'<label>自己人搶先體驗（說明文字）</label><input type="text" data-cf="自己人搶先體驗" placeholder="例：9/25–9/30 自己人先開放；沒有就留空">'
@@ -2908,16 +2913,20 @@ function openCampForm(cr){
     +'<div class="ap-actions"><button class="ap-btn" id="apCampOk" type="button">建立檔期</button><button class="ap-btn2" id="apCampNo" type="button">取消</button></div>');
   var ok=m.querySelector('#apCampOk'),box=m.querySelector('#apCampMsg');
   m.querySelector('#apCampNo').onclick=closeModal;
+  var ty=m.querySelector('#apCampType');if(ty)ty.onchange=function(){var reg=ty.value==='常態菜單';m.querySelector('#apCampEndBox').style.display=reg?'none':'';m.querySelector('#apCampRegNote').style.display=reg?'':'none';
+    m.querySelector('#apCampStartLbl').textContent=reg?'上市日（必填）':'期間：開始日（必填）';var nm=m.querySelector('[data-cf="檔期名稱"]');if(nm)nm.placeholder=reg?'例：2026 11月大菜單':'例：2026 萬聖節'};   /* 2026-10-17 */
   setTimeout(function(){var f=m.querySelector('[data-cf="檔期名稱"]');if(f)f.focus()},30);
   ok.onclick=function(){var o={};m.querySelectorAll('[data-cf]').forEach(function(el){o[el.dataset.cf]=String(el.value||'').trim()});
     var pwRow=m.querySelector('#apCampPwRow'),c2=cr;
     if(!c2||(pwRow&&pwRow.style.display!=='none')){var pw=String((m.querySelector('#apCampPw')||{}).value||'');if(!pw){box.textContent='請輸入主廚密碼';m.querySelector('#apCampPw').focus();return}c2={role:'主廚',pw:pw}}
     if(!o['檔期名稱']){box.textContent='請填檔期名稱';return}
-    if(!o['起']||!o['迄']){box.textContent='請填檔期期間（開始日和結束日都要填）';return}
-    if(o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
+    var reg=o['類型']==='常態菜單';if(reg)o['迄']='';
+    if(reg&&!o['起']){box.textContent='請填上市日';return}
+    if(!reg&&(!o['起']||!o['迄'])){box.textContent='請填檔期期間（開始日和結束日都要填）';return}
+    if(!reg&&o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
     if(o['自己人搶先開賣日']&&o['自己人搶先開賣日']>o['起']){box.textContent='自己人搶先開賣日不能晚於開始日，請確認日期';return}
-    var r=campRange(o['起'],o['迄']);
-    if(!confirm('新增檔期「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+'？\n建立後所有人都選得到。'))return;
+    var r=campRange(o['起'],o['迄'],reg);
+    if(!confirm('新增'+(reg?'常態菜單':'檔期')+'「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+'？\n建立後所有人都選得到。'))return;
     ok.disabled=true;box.textContent='建立中…';createCamp(o,c2,box,ok,m)}}
 function createCamp(o,cr,box,btn,m){var t0=Date.now(),note='',tick=setInterval(function(){box.textContent='建立中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note},1000);
   apiPost({action:'saveCampaign',role:cr.role,password:cr.pw,campaign:o,rq:rqToken()},function(k){note='（連線不穩，自動重試第 '+k+' 次）'}).then(function(r){btn.disabled=false;clearInterval(tick);
@@ -3283,7 +3292,7 @@ function lmShow(rid){var D=lmD(rid);if(!D)return;LM.rid=rid;LM.ready=true;LM.che
 function lmHash(){try{history.replaceState(null,'',location.pathname+location.search+'#sign='+encodeURIComponent(LM.cid)+'&k='+encodeURIComponent(LM.k)+'&view=1&r='+encodeURIComponent(LM.rid))}catch(e){}}
 function lmNm(D){var q=D.req||{},j={};try{j=JSON.parse(q.payload||'{}')}catch(e){}var h=j.head||{};return String(h.fname||'').trim()||String(h.name||'').trim()||q['商品正式名稱']||q['商品暫定名稱']||'（未命名）'}
 function lmBarHTML(){if(!LM)return '';var c=(LM.data&&LM.data.campaign)||{},R=(LM.data&&LM.data.reqs)||[];
-  return '<div class="ap-lmbar"><div><b>📋 '+esc(c['檔期名稱']||LM.cid)+'</b>'+(c['起']||c['迄']?'　<span class="ap-muted">'+esc((c['起']||'?')+'～'+(c['迄']||'?'))+'</span>':'')+'　<span class="ap-muted">這個檔期的新甜點（點一支切換）：</span></div>'
+  return '<div class="ap-lmbar"><div><b>📋 '+esc(c['檔期名稱']||LM.cid)+'</b>'+(c['起']||c['迄']?'　<span class="ap-muted">'+esc((c['起']||'?')+'～'+(c['迄']||(String(c['類型']||'')==='常態菜單'?'長期':'?')))+'</span>':'')+'　<span class="ap-muted">這個檔期的新甜點（點一支切換）：</span></div>'
     +'<div class="ap-lmlist">'+R.map(function(D){var q=D.req||{};return '<button type="button" class="ap-lmgo'+(q.req_id===LM.rid?' on':'')+'" data-lmgo="'+esc(q.req_id)+'">'+(q.seq?esc(q.seq)+'. ':'')+esc(lmNm(D))+'</button>'}).join('')+'</div>'
     +(LM.chef?'<div class="ap-okline" style="margin-top:6px">🔓 主廚模式：整張都可以改；改完按最下方「🔗 產出申請表連結」存檔（連結不變）。</div>'
       :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…）；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+'</div>'}
@@ -5503,7 +5512,7 @@ function viewHTML(){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload||'{}')
   var hd=j.head||{},camp=v.campaign||{},x='';
   x+=doneHTML();
   x+='<div class="sg-card"><div class="sg-h">'+(q.seq?'第 '+esc(q.seq)+' 支　':'')+esc(prodName())+'</div>'
-    +'<div class="sg-muted">'+esc(camp['檔期名稱']||q.campaign_id||'')+((camp['起']||camp['迄'])?'　'+esc((camp['起']||'?')+'～'+(camp['迄']||'?')):'')+(camp['第一批配貨日']?'　第一批配貨 '+esc(camp['第一批配貨日']):'')+'</div>'
+    +'<div class="sg-muted">'+esc(camp['檔期名稱']||q.campaign_id||'')+((camp['起']||camp['迄'])?'　'+esc((camp['起']||'?')+'～'+(camp['迄']||(String(camp['類型']||'')==='常態菜單'?'長期':'?'))):'')+(camp['第一批配貨日']?'　第一批配貨 '+esc(camp['第一批配貨日']):'')+'</div>'
     +kpiHTML(q,hd)+'</div>';
   x+=detailHTML(false);
   if(people())x+=meHTML();
@@ -5580,7 +5589,7 @@ function cStTxt(D){var q=D.req||{},st=q.status,names=cNames(D),ag=cLive(D).filte
 function cMyTxt(s){if(!S.me||!s.isS)return '';return s.mine?(s.mine.decision==='同意'?'你：✓ 同意':'你：✕ 退回'):(s.can?'待你簽':(s.yet?'還沒輪到你':''))}
 function cInfoHTML(){var c=cCamp(),R=cReqs(),ops=[['第一批出貨','作業_第一批出貨_'],['貼紙','作業_貼紙_'],['POS 上架','作業_POS_']].filter(function(o){return c[o[1]+'時間']||c[o[1]+'備註']});
   return '<div class="sg-card"><div class="sg-h">'+esc(c['檔期名稱']||S.rid)+'　<span class="sg-muted" style="font-weight:600">新甜點 '+R.length+' 支</span></div>'
-    +'<div class="sg-muted">'+esc([(c['起']||c['迄'])?(c['起']||'?')+'～'+(c['迄']||'?'):'',c['自己人搶先開賣日']?'自己人搶先 '+c['自己人搶先開賣日']:'',c['第一批配貨日']?'第一批配貨 '+c['第一批配貨日']:'',c['品牌別']||''].filter(Boolean).join('　'))+'</div>'
+    +'<div class="sg-muted">'+esc([(c['起']||c['迄'])?(c['起']||'?')+'～'+(c['迄']||(String(c['類型']||'')==='常態菜單'?'長期':'?')):'',c['自己人搶先開賣日']?'自己人搶先 '+c['自己人搶先開賣日']:'',c['第一批配貨日']?'第一批配貨 '+c['第一批配貨日']:'',c['品牌別']||''].filter(Boolean).join('　'))+'</div>'
     +(ops.length?'<dl class="sg-kv" style="margin-top:6px">'+ops.map(function(o){return kv(o[0],[c[o[1]+'時間'],c[o[1]+'備註']].filter(Boolean).join('｜'))}).join('')+'</dl>':'')
     +(c['檔期備註']?'<div class="sg-muted" style="margin-top:4px;white-space:pre-wrap">'+esc(c['檔期備註'])+'</div>':'')+'</div>'}
 function cListHTML(){var R=cReqs();if(!R.length)return '<div class="sg-card sg-muted">這個檔期還沒有申請單。</div>';
