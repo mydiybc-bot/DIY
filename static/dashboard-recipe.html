@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
+<!-- 2026-10-17 晚 🧬 食譜演化：搜尋框打中文會被打斷（經營者回報，多個儀表板發生過）→ 搜尋框只建一次、打字只重畫清單；注音選字中不搜尋（compositionstart／end）。 -->
 <!-- 2026-10-17 晚 🧬 食譜演化：每款甜點一張代表圖（有啟用的版本優先、最新那支的封面 recipeimages/{id}/{id}.jpg；點圖開大圖）；家族清單也帶始祖款的圖。申請單 API lineage 多回 cover 欄。 -->
 <!-- 2026-10-17 新分頁「🧬 食譜演化」（LineageMod，經營者：後台 1000 多支食譜一代一代演化，想看家族樹＋時間軸；每天凌晨 1～2 點自動更新）：讀申請單 API 動作 lineage（免身分密碼、只讀；分頁 recipe_lineage 由 gas/recipe-req/lineage.gs 在公版掃描後重算）。只讀，不寫任何資料。 -->
 <!-- 2026-10-07 經營者「儀表板待處理問題 1007」：①加速——檔期清單先顯示上次的、開頁就讀；讀取 4/12 秒補送、寫入 9/22 秒補送（同回條只寫一次）；密碼跟動作一趟送出（credRun）；送簽「存檔＋送簽」一個請求 ②送簽改 104 公告（標題／內容／連結一鍵複製，取代 LINE 文字）；簽核連結帶通行碼 k，點開免 PIN 看整張申請單；簽核人點名字、第一次自設 PIN、手機記住 ③💬 意見交流（申請表與簽核頁共用，留言＋簽核意見照時間排）④新單位（例：糖粉 平匙）不再紅字錯誤：表一填「1 平匙≈幾 g」、成本照換算算，核准後自動加進採購系統 dim_unitconv（採購確認）。申請單 API v10。 -->
@@ -6005,28 +6006,43 @@ window.LineageMod=(function(){
     var by={size:function(a,b){return b.kList.length-a.kList.length||b.n-a.n},gen:function(a,b){return b.maxGen-a.maxGen||b.kList.length-a.kList.length},recent:function(a,b){return String(b.last).localeCompare(String(a.last))},name:function(a,b){return a.id.localeCompare(b.id,'zh-Hant')}}[S.sort];
     return list.sort(by);
   }
+  /* 2026-10-17 晚：搜尋框打中文（注音、倉頡選字中）不能被打斷——
+     ①搜尋框只建一次，之後打字、排序、勾選只重畫清單和家族樹，不重建輸入框 ②選字中（compositionstart～compositionend）不搜尋，選完字才搜 */
   function render(){
     var D=S.data,m=D.meta||{},nK=0;D.fams.forEach(function(f){nK+=f.kList.length});
     var multi=D.fams.filter(function(f){return f.kList.length>1});
-    var h='<div class="lg-stats"><div class="lg-stat"><b>'+D.rows.length+'</b><span>支食譜（後台）</span></div><div class="lg-stat"><b>'+nK+'</b><span>款甜點</span></div><div class="lg-stat"><b>'+D.fams.length+'</b><span>個家族（'+multi.length+' 個有演化）</span></div><div class="lg-stat"><b>'+D.fams.reduce(function(x,f){return Math.max(x,f.maxGen)},1)+'</b><span>最多傳了幾代</span></div></div>';
-    h+='<div class="lg-bar"><input type="search" id="lgQ" placeholder="搜甜點名稱（例：小黑炭、提拉米蘇）" value="'+esc(S.q)+'">'
+    var stats='<div class="lg-stat"><b>'+D.rows.length+'</b><span>支食譜（後台）</span></div><div class="lg-stat"><b>'+nK+'</b><span>款甜點</span></div><div class="lg-stat"><b>'+D.fams.length+'</b><span>個家族（'+multi.length+' 個有演化）</span></div><div class="lg-stat"><b>'+D.fams.reduce(function(x,f){return Math.max(x,f.maxGen)},1)+'</b><span>最多傳了幾代</span></div>';
+    var foot='資料最後更新：'+esc(m.at||'—')+'（每天凌晨 1～2 點自動更新；只讀，不會改後台）'+(m.error?'　<b style="color:#A3321F">上次更新失敗：'+esc(m.error)+'</b>':'');
+    var note=S.stale?'⏳ 先顯示上次的資料，正在讀最新…':'';
+    if($('lgQ')){   /* 已經有搜尋框：只換數字、說明、清單（新資料讀回來時，正在打字的人不受影響） */
+      $('lgStats').innerHTML=stats;$('lgFoot').innerHTML=foot;$('lgNote').textContent=note;renderList();return;
+    }
+    $('lgRoot').innerHTML='<div class="lg-stats" id="lgStats">'+stats+'</div>'
+      +'<div class="lg-bar"><input type="search" id="lgQ" placeholder="搜甜點名稱（例：小黑炭、提拉米蘇）" value="'+esc(S.q)+'" autocomplete="off">'
       +'<select id="lgSort"><option value="size">家族最大的先</option><option value="gen">代數最多的先</option><option value="recent">最近有新版的先</option><option value="name">依名稱</option></select>'
       +'<label><input type="checkbox" id="lgOn"'+(S.onlyOn?' checked':'')+'> 只看還有啟用的</label>'
-      +'<span class="lg-muted" id="lgNote">'+(S.stale?'⏳ 先顯示上次的資料，正在讀最新…':'')+'</span></div>';
+      +'<span class="lg-muted" id="lgNote">'+note+'</span></div>'
+      +'<div class="lg-wrap"><div id="lgListBox"></div><div id="lgDetail"></div></div>'
+      +'<div class="lg-muted" style="margin-top:12px" id="lgFoot">'+foot+'</div>';
+    $('lgSort').value=S.sort;
+    var qi=$('lgQ'),composing=false;
+    var apply=function(){clearTimeout(qi.t);qi.t=setTimeout(function(){if(composing)return;if(S.q===qi.value)return;S.q=qi.value;S.sel='';renderList()},250)};
+    qi.addEventListener('compositionstart',function(){composing=true;clearTimeout(qi.t)});
+    qi.addEventListener('compositionend',function(){composing=false;apply()});
+    qi.addEventListener('input',function(e){if(composing||e.isComposing)return;apply()});
+    $('lgSort').onchange=function(){S.sort=this.value;renderList()};
+    $('lgOn').onchange=function(){S.onlyOn=this.checked;renderList()};
+    renderList();
+  }
+  function renderList(){
     var list=famList();
     if(!S.sel||!list.some(function(f){return f.id===S.sel}))S.sel=list[0]?list[0].id:'';
-    h+='<div class="lg-wrap"><div><div class="lg-muted" style="margin:0 0 6px">'+list.length+' 個家族</div><div class="lg-list" id="lgList">'+list.slice(0,300).map(function(f){
+    $('lgListBox').innerHTML='<div class="lg-muted" style="margin:0 0 6px">'+list.length+' 個家族</div><div class="lg-list" id="lgList">'+list.slice(0,300).map(function(f){
       var root=f.kList.filter(function(k){return k.gen===1})[0]||f.kList[0];
       return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'">'+(root.img&&root.imgKb<=IMG_BIG?'<img loading="lazy" alt="" src="'+esc(root.img)+'">':'<span class="lg-fi0">🍰</span>')+'<span class="ft"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
         +'<div class="m">'+f.kList.length+' 款・'+f.n+' 支・傳到第 '+f.maxGen+' 代・'+yr(f.first)+'～'+yr(f.last)+'</div></span></button>'}).join('')
-      +(list.length>300?'<div class="lg-muted">只列前 300 個，請用搜尋縮小</div>':'')+(list.length?'':'<div class="lg-muted">找不到符合的家族</div>')+'</div></div><div id="lgDetail"></div></div>';
-    h+='<div class="lg-muted" style="margin-top:12px">資料最後更新：'+esc(m.at||'—')+'（每天凌晨 1～2 點自動更新；只讀，不會改後台）'+(m.error?'　<b style="color:#A3321F">上次更新失敗：'+esc(m.error)+'</b>':'')+'</div>';
-    $('lgRoot').innerHTML=h;
-    $('lgSort').value=S.sort;
-    var qi=$('lgQ');qi.oninput=function(){clearTimeout(qi.t);qi.t=setTimeout(function(){var p=qi.selectionStart;S.q=qi.value;S.sel='';render();var n=$('lgQ');n.focus();try{n.setSelectionRange(p,p)}catch(e){}},300)};
-    $('lgSort').onchange=function(){S.sort=this.value;render()};
-    $('lgOn').onchange=function(){S.onlyOn=this.checked;render()};
-    Array.prototype.forEach.call(document.querySelectorAll('#lgList [data-f]'),function(b){b.onclick=function(){S.sel=b.getAttribute('data-f');S.open={};render();var d=$('lgDetail');if(d&&window.innerWidth<900)d.scrollIntoView({behavior:'smooth'})}});
+      +(list.length>300?'<div class="lg-muted">只列前 300 個，請用搜尋縮小</div>':'')+(list.length?'':'<div class="lg-muted">找不到符合的家族</div>')+'</div>';
+    Array.prototype.forEach.call(document.querySelectorAll('#lgList [data-f]'),function(b){b.onclick=function(){S.sel=b.getAttribute('data-f');S.open={};renderList();var d=$('lgDetail');if(d&&window.innerWidth<900)d.scrollIntoView({behavior:'smooth'})}});
     renderFam();
   }
   function renderFam(){
