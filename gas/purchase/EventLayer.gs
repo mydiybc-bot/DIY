@@ -1,5 +1,13 @@
 // ================================================================
-// EventLayer.gs — 節慶事件層 v1.11（2026-10-08）
+// EventLayer.gs — 節慶事件層 v1.12（2026-10-17）
+// v1.12：★ 常態菜單的新甜點也算開賣前首批量（經營者 2026-10-17：11 月大菜單是長期菜單，不是限定檔期）
+//   食譜系統檔期類型「常態菜單」核准後，對照表寫 次類別「無」、結束 2099-12-31 ⇒ evBuildContext_ 認不出來、首批量全無。
+//   evReadReg_ 讀 fact_campaign 類型＝常態菜單、申請單已核准／已寫入採購、預估銷售數 > 0 的甜點，
+//   每個（檔期×上市日）建一個「開賣窗口」instance：開始＝上市日（對照表起始有效日，沒有就用檔期起／自己人搶先開賣日）、
+//   長度 EV_CFG.REG_DAYS＝28 天（不用 2099）；預估銷售數＝開賣後頭 4 週、品牌別門市合計 → 走 v1.9 同一套「有預估」算法
+//   （開賣前 28～15 天寫 agg_newitem_pv、14 天起寫 agg_newitem、開賣滿 7 天 POS 交給近 4 週均）。
+//   常態菜單不寫 dim_event、agg_evneed、agg_evcurve；不找去年同檔期。限定檔期的計算與輸出逐字不變（常態菜單列排在最後）。
+//   aaaEvRegDryRun()：唯讀試跑，比對「限定檔期」五張表與現有表 0 差異，列出常態菜單會多出的列；不寫任何表。
 // v1.11：★ 舊流程申請的檔期也能給預估銷售數（經營者 2026-10-08：「自己做的台灣味」走舊流程，沒有新品申請表）
 //   食譜系統_申請單試算表新分頁「預估銷售數_舊流程」（甜點名稱｜預估銷售數｜品牌別｜檔期｜來源），evReadPlan_ 讀完申請單後補讀；
 //   同一支甜點申請單有就用申請單（新流程優先）。分頁不存在＝與 v1.10 完全相同。aaaSetupPlanManual() 建分頁並填 2026 台灣味 4 支。
@@ -261,6 +269,85 @@ function evPlanSplit_(pl, pool, recent) {
   var t = {}; Object.keys(base).forEach(function (st) { t[st] = pl.qty * base[st] / tot; });
   return { t: t, src: src };
 }
+/* ★ v1.12 試跑開關（只給 aaaEvRegDryRun 用；平常兩個都是 false）：dry＝算完不寫表、結果放 EV_DRY_OUT；noReg＝不算常態菜單 */
+var EV_OPT = { dry: false, noReg: false };
+var EV_DRY_OUT = null;
+var EV_REG_TYPE = '常態菜單';
+/* ★ v1.12：常態菜單的新甜點（唯讀）→ [{name, qty, brand, req, camp, start}]。讀不到／沒有「類型」欄＝空陣列，照原算法 */
+function evReadReg_(map, log) {
+  var out = [];
+  try {
+    var ss = SpreadsheetApp.openById(EV_REQ_ID);
+    var rq = ss.getSheetByName('fact_recipe_req'), cp = ss.getSheetByName('fact_campaign');
+    if (!rq || !cp || rq.getLastRow() < 2 || cp.getLastRow() < 2) return out;
+    function tab(sh) {
+      var v = sh.getDataRange().getValues(), H = v[0].map(function (x) { return String(x).trim(); });
+      return { rows: v.slice(1), c: function (n) { return H.indexOf(n); } };
+    }
+    var C = tab(cp), cType = C.c('類型');
+    if (cType < 0) { log.push('🍽 常態菜單：fact_campaign 還沒有「類型」欄，略過'); return out; }
+    var camp = {}, nCamp = 0;
+    C.rows.forEach(function (r) {
+      if (String(r[cType]).trim() !== EV_REG_TYPE || String(r[C.c('status')]).trim() === '封存') return;
+      var d1 = evDate_(r[C.c('起')]), dE = C.c('自己人搶先開賣日') >= 0 ? evDate_(r[C.c('自己人搶先開賣日')]) : null;
+      if (dE && (!d1 || dE < d1)) d1 = dE;   /* 同食譜系統核准寫對照表的起始日規則 */
+      camp[String(r[C.c('campaign_id')]).trim()] = { name: String(r[C.c('檔期名稱')]).trim(), brand: String(r[C.c('品牌別')]).trim(), start: d1 }; nCamp++;
+    });
+    if (!nCamp) { log.push('🍽 常態菜單：食譜系統目前沒有常態菜單檔期'); return out; }
+    /* 對照表：甜點名 → 最早起始有效日、次類別（主廚／採購之後在 📚 BOM 管理改過日期就以對照表為準） */
+    var mp = {};
+    map.forEach(function (r) {
+      var nm = String(r['手動對應產品名稱'] || r['POS 資料產品名稱'] || '').trim(); if (!nm) return;
+      var st = evDate_(r['起始有效日']), sub = String(r['次類別'] || '').trim(), o = mp[nm] = mp[nm] || { start: null, ltd: false };
+      if (st && (!o.start || st < o.start)) o.start = st;
+      if (/^\d{4}\s*.+$/.test(sub)) o.ltd = true;
+    });
+    var R = tab(rq), byNm = {};
+    ['req_id', 'campaign_id', '商品暫定名稱', '商品正式名稱', '預估銷售數', 'status', 'updated_at'].forEach(function (n) { if (R.c(n) < 0) throw new Error('fact_recipe_req 找不到欄位「' + n + '」'); });
+    R.rows.forEach(function (r) {
+      var c = camp[String(r[R.c('campaign_id')]).trim()]; if (!c) return;
+      var st = String(r[R.c('status')]).trim(), q = Number(r[R.c('預估銷售數')]) || 0;
+      if (!EV_PLAN_OK[st] || !(q > 0)) return;
+      var nm = String(r[R.c('商品正式名稱')] || '').trim() || String(r[R.c('商品暫定名稱')] || '').trim(); if (!nm) return;
+      var up = String(r[R.c('updated_at')] || '');
+      if (byNm[nm] && byNm[nm].up > up) return;
+      byNm[nm] = { name: nm, qty: q, brand: c.brand, req: String(r[R.c('req_id')]).trim(), camp: c.name, up: up, cstart: c.start };
+    });
+    Object.keys(byNm).forEach(function (nm) {
+      var o = byNm[nm], m = mp[nm] || {};
+      if (m.ltd) { log.push('ℹ️ 常態菜單「' + nm + '」對照表次類別是限定檔期，照限定檔期算'); return; }
+      o.start = m.start || o.cstart;
+      if (!o.start) { log.push('⚠️ 常態菜單「' + nm + '」沒有上市日（對照表起始有效日、檔期起都空白），不算首批量'); return; }
+      out.push(o);
+    });
+    log.push('🍽 常態菜單預估銷售數：' + out.length + ' 支' + (out.length ? '（' + out.slice(0, 10).map(function (o) { return o.name + ' ' + o.qty + ' 份／' + evYmd_(o.start) + ' 上市'; }).join('、') + '）' : ''));
+  } catch (e) { log.push('⚠️ 讀常態菜單失敗（本次不算常態菜單，限定檔期照常）：' + e); return []; }
+  return out;
+}
+/* ★ v1.12：常態菜單 → 加進 ctx.inst（每個 檔期×上市日 一個開賣窗口），並補這些甜點的 POS 已售（逐店、首賣日）。只新增自己的 key，不動限定檔期 */
+function evAddReg_(ctx, regs, map, pos, log) {
+  if (!regs.length) return;
+  var nm2k = {};
+  regs.forEach(function (o) {
+    var k = EV_REG_TYPE + '｜' + o.camp + '｜' + evYmd_(o.start);
+    var C = ctx.inst[k] = ctx.inst[k] || { year: o.start.getFullYear(), evName: o.camp, start: o.start, end: evAddDays_(o.start, EV_CFG.REG_DAYS - 1), items: {}, posNames: {}, reg: true, plan: {} };
+    C.items[o.name] = { start: C.start, end: C.end };
+    C.plan[o.name] = { qty: o.qty, brand: o.brand, req: o.req, camp: o.camp, up: o.up };
+    nm2k[o.name] = k;
+  });
+  var p2c = {};
+  map.forEach(function (r) { var p = String(r['POS 資料產品名稱'] || '').trim(), m = String(r['手動對應產品名稱'] || '').trim(); if (p) p2c[p] = m || p; });
+  pos.forEach(function (r) {
+    var q = Number(r['數量']) || 0; if (!q) return;
+    var raw = String(r['商品名稱'] || '').trim(), nm = p2c[raw] || raw, k = nm2k[nm]; if (!k) return;
+    var d = evDate_(r['建立日期']); if (!d) return;
+    var stn = String(r['分店代碼'] || '');
+    var ii = (ctx.instItemStore[k] = ctx.instItemStore[k] || {});
+    (ii[nm] = ii[nm] || {})[stn] = (ii[nm][stn] || 0) + q;   /* 全部 POS（改版既有甜點早就在賣 ⇒ 首賣日很早 ⇒ 不給首批量） */
+    var ff = (ctx.instItemFirst[k] = ctx.instItemFirst[k] || {});
+    if (!ff[nm] || d < ff[nm]) ff[nm] = d;
+  });
+}
 var EV_DASH_ID = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';   // ★ v1.6.1 儀表板專用檔（與 Code.gs 的 DASH_ID 相同）
 var EV_MIRROR_TABS = ['dim_event', 'agg_newitem', 'agg_evcurve', 'agg_evneed', 'agg_endcut', 'agg_newitem_pv'];   /* v1.8 ＋agg_endcut；v1.10 ＋agg_newitem_pv（預計首批量） */
 
@@ -318,7 +405,8 @@ var EV_CFG = {
   ENDCUT_TAIL_DAYS: 7,    // 結束後 N 天內還在賣＝清尾貨正常；超過還在賣＝對照表日期沒更新，不扣
   ENDCUT_MIN_SHARE: 0.005, // 佔比低於此不寫（雜訊）
   ENDCUT_MIN_EFFECT: 0.02, // ★ v1.8.1：替代後最多只少備不到 2% 的店×料整組不寫（瘦身）
-  ENDCUT_OA_GAP_DAYS: 7   // ★ v1.8.3：在售甜點要比這一列多賣至少 N 天才算
+  ENDCUT_OA_GAP_DAYS: 7,  // ★ v1.8.3：在售甜點要比這一列多賣至少 N 天才算
+  REG_DAYS: 28            // ★ v1.12：常態菜單的「開賣窗口」天數（預估銷售數＝開賣後頭 4 週）
 };
 
 function rebuildEventLayer() {
@@ -335,6 +423,7 @@ function rebuildEventLayer() {
 
   var plan = evReadPlan_(log), recentQty = evRecentStoreQty_(pos, today);   /* ★ v1.9 */
   var ctx = evBuildContext_(map, pos, today, log);
+  if (!EV_OPT.noReg) evAddReg_(ctx, EV_OPT.fakeReg || evReadReg_(map, log), map, pos, log);   /* fakeReg：只有 aaaEvRegFakeTest 試跑用 */   /* ★ v1.12 常態菜單（新 key 排在限定檔期後面） */
   var inst = ctx.inst, dayTotal = ctx.dayTotal, instDay = ctx.instDay, instItemStore = ctx.instItemStore, instItemFirst = ctx.instItemFirst;
   var instItemStoreDay = ctx.instItemStoreDay;
 
@@ -403,11 +492,12 @@ function rebuildEventLayer() {
     var C = inst[k];
     if (C.end < evAddDays_(today, -35) || C.start > lookEnd) return; // 進行中/即將到來；已結束檔期保留35天
     var L = Math.round((C.end - C.start) / 864e5) + 1;
-    var P = evFindPrev_(inst, C);
+    var P = C.reg ? null : evFindPrev_(inst, C);   /* v1.12：常態菜單不找去年同檔期 */
 
     // ===== dim_event 自動列（v1.6 零改動） =====
     var warnMsg = '';
-    if (P) {
+    if (C.reg) { /* v1.12：常態菜單不寫 dim_event（不加成係數、不出無歷史樣本警告） */ }
+    else if (P) {
       if (L <= EV_CFG.SHORT_MAX) {
         EV_LAST_DIAG = null;
         var coef = evUplift_(P, dayTotal, instDay);
@@ -521,7 +611,7 @@ function rebuildEventLayer() {
     /* ★ v1.9：新品申請表預估銷售數（整檔 12 店合計）→ 本店整檔推估 T（只用在非曲線模式） */
     var planT = {};
     if (!curveMode) names.forEach(function (nm) {
-      var pl = plan[nm]; if (!pl) return;
+      var pl = (C.reg ? C.plan : plan)[nm]; if (!pl) return;   /* v1.12：常態菜單用自己讀到的預估（開賣後頭 4 週） */
       var sp = evPlanSplit_(pl, pool, recentQty); planT[nm] = sp.t;
       log.push('📋 ' + k + '「' + nm + '」用新品申請表預估 ' + pl.qty + ' 份（' + pl.req + '，' + (pl.brand || '全店') + '）拆店依' + sp.src);
     });
@@ -594,7 +684,7 @@ function rebuildEventLayer() {
             n.remainUse += remainServ * per;   /* ★ v1.7：剩餘份數直接來自各店速度，不再是 max(0, 推估−已售) */
             n.usedUse += sold * per;
             n.sold += sold; n.est += estTot; n.who[nm] = 1;
-          } else if (!curveMode && planT[nm] && !isDur && !isPv) {   /* v1.10：預覽中的檔期不寫 agg_evneed（和 v1.9 一樣開賣前 14 天起才寫） */
+          } else if (!curveMode && planT[nm] && !isDur && !isPv && !C.reg) {   /* v1.12：常態菜單不寫 agg_evneed */   /* v1.10：預覽中的檔期不寫 agg_evneed（和 v1.9 一樣開賣前 14 天起才寫） */
             /* ★ v1.9：開賣前（非曲線）也寫 agg_evneed，出貨中心看得到 12 店總需求：推估總份數＝max(T, 已售) */
             var per2 = toUse(b.mat, b.qty, b.unit), est2 = Math.max(planEst, sold);
             var n2 = need[key] = need[key] || { st: stn, id: u.id, remainUse: 0, usedUse: 0, sold: 0, est: 0, who: {} };
@@ -642,6 +732,12 @@ function rebuildEventLayer() {
   var endCut;
   try { endCut = evEndCut_(map, pos, bomByDessert, name2sku, conv, today, log); }
   catch (eEc) { log.push('⚠️ 收尾扣減計算失敗：' + eEc + '｜agg_endcut 本次寫空（前端不做收尾扣減），其他表照常更新'); endCut = { rows: [] }; }
+
+  /* ★ v1.12 試跑：算完就停，不寫任何表（aaaEvRegDryRun 用） */
+  if (EV_OPT.dry) {
+    EV_DRY_OUT = { dim_event: evRows, agg_newitem: niRows, agg_newitem_pv: pvRows, agg_evcurve: curveRows, agg_evneed: needRows, agg_endcut: endCut.rows, log: log };
+    return log.join('\n');
+  }
 
   // ---------- 寫回 dim_event（保留手動列） ----------
   var evSheet = evEnsure_(ss, 'dim_event', ['事件名', '開始日', '結束日', '加成係數', '適用品類', '啟用', '來源', '說明']);
@@ -1323,4 +1419,63 @@ function aaaSetupPlanManual() {
   if (add.length) { sh.getRange(sh.getLastRow() + 1, 1, add.length, H.length).setValues(add); sh.getRange(2, 2, sh.getLastRow() - 1, 1).setNumberFormat('0'); }
   Logger.log('預估銷售數_舊流程：新增 ' + add.length + ' 列，共 ' + (sh.getLastRow() - 1) + ' 列');
   return add.length;
+}
+/* ★ v1.12 唯讀試跑（不寫任何表）：①不算常態菜單＝v1.11 算法 ②算常態菜單。
+   檢查：①＝現有表（今天 07:31 寫的；之後有人改對照表／申請單會有合理差異）；②的前段＝①逐列逐格相同（限定檔期 0 差異）；
+   ②多出來的列只能在 agg_newitem／agg_newitem_pv，而且全是常態菜單。 */
+function aaaEvRegDryRun() { return evRegDryRun_(null); }
+/* ★ v1.12 唯讀測試：假裝有一支常態菜單甜點（用 BOM 表現有配方「臭豆腐哪有臭」，預估 480 份、兩品牌 12 店），
+   一個 20 天後上市（應出現在 agg_newitem_pv）、一個 10 天後上市（應出現在 agg_newitem）。不寫任何表、不碰申請單。 */
+function aaaEvRegFakeTest() {
+  var t = evDateOnly_(new Date()), b = '自己做＆吳寶春自己做';
+  return evRegDryRun_([
+    { name: '臭豆腐哪有臭', qty: 480, brand: b, req: '測試', camp: '測試常態菜單A', up: '', start: evAddDays_(t, 20) },
+    { name: '塑膠袋可以吃嗎', qty: 480, brand: '自己做', req: '測試', camp: '測試常態菜單B', up: '', start: evAddDays_(t, 10) }]);
+}
+function evRegDryRun_(fake) {
+  var W = { dim_event: 8, agg_newitem: 6, agg_newitem_pv: 6, agg_evcurve: 12, agg_evneed: 9, agg_endcut: 10 };
+  var out = [(fake ? 'aaaEvRegFakeTest（假資料）' : 'aaaEvRegDryRun') + ' ' + new Date()], bad = 0;
+  function norm(v) {
+    if (v instanceof Date) return evYmd_(v);
+    var s = String(v == null ? '' : v).trim();
+    return /^-?\d+(\.\d+)?(e-?\d+)?$/i.test(s) ? String(Math.round(Number(s) * 1e6) / 1e6) : s;
+  }
+  function diff(a, b) {
+    var n = 0, ex = '';
+    for (var i = 0; i < Math.max(a.length, b.length); i++) {
+      var x = a[i] ? a[i].map(norm).join('|') : '(無)', y = b[i] ? b[i].map(norm).join('|') : '(無)';
+      if (x !== y) { n++; if (!ex) ex = '第 ' + (i + 2) + ' 列：' + x + ' ≠ ' + y; }
+    }
+    return { n: n, ex: ex };
+  }
+  function run(noReg) {
+    EV_OPT = { dry: true, noReg: noReg, fakeReg: noReg ? null : fake }; EV_DRY_OUT = null;
+    try { rebuildEventLayer(); } finally { EV_OPT = { dry: false, noReg: false }; }
+    if (!EV_DRY_OUT) throw new Error('試跑沒有產出結果');
+    return EV_DRY_OUT;
+  }
+  var base = run(true), neu = run(false), ss = SpreadsheetApp.openById(EV_BOM_ID);
+  neu.log.filter(function (l) { return /常態菜單|🍽/.test(l); }).forEach(function (l) { out.push('  log｜' + l); });
+  Object.keys(W).forEach(function (t) {
+    var b = base[t], n = neu[t], sh = ss.getSheetByName(t), cur = [];
+    if (sh && sh.getLastRow() >= 2) cur = sh.getRange(2, 1, sh.getLastRow() - 1, W[t]).getValues().filter(function (r) { return r.some(function (x) { return x !== '' && x != null; }); });
+    if (t === 'dim_event') cur = cur.filter(function (r) { return String(r[6] || '') === '自動'; });
+    var d1 = diff(b, cur), d2 = diff(b, n.slice(0, b.length)), extra = n.slice(b.length);
+    var extraBad = (t === 'agg_newitem' || t === 'agg_newitem_pv') ? 0 : extra.length;
+    if (d2.n || extraBad) bad++;
+    out.push((d2.n || extraBad ? '❌ ' : '✅ ') + t + '：限定檔期 改前 ' + b.length + ' 列／改後前段 0 差異=' + (d2.n === 0 ? '是' : '否（' + d2.n + ' 列，' + d2.ex + '）')
+      + '｜常態菜單多出 ' + extra.length + ' 列' + (extraBad ? '（這張表不該有）' : '')
+      + '｜與現有表比 ' + (d1.n ? d1.n + ' 列不同（' + d1.ex + '）' : '0 差異') + '（現有 ' + cur.length + ' 列）');
+    if (extra.length && !extraBad) {
+      var st = {}, ev = {};
+      extra.forEach(function (r) { ev[r[3]] = 1; if (Number(r[2]) > 0) st[r[0]] = (st[r[0]] || 0) + 1; });
+      out.push('     常態菜單：' + Object.keys(ev).join('、') + '｜有數字的店 ' + Object.keys(st).length + ' 家（' + Object.keys(st).sort(function (a, b) { return a - b; }).map(function (s) { return s + '店 ' + st[s] + ' 項'; }).join('、') + '）');
+      var sum = {}; extra.forEach(function (r) { var k2 = r[3] + '｜' + r[1]; sum[k2] = (sum[k2] || 0) + (Number(r[2]) || 0); });
+      out.push('     各料 12 店合計：' + Object.keys(sum).slice(0, 20).map(function (k2) { return k2 + ' ' + Math.round(sum[k2] * 10) / 10; }).join('、'));
+      extra.slice(0, 15).forEach(function (r) { out.push('       ' + r.map(norm).join('｜')); });
+    }
+  });
+  out.push(bad ? '❌ 有 ' + bad + ' 張表不符，不要部署' : '✅ 限定檔期五張表＋預覽表 0 差異；多出的列全是常態菜單');
+  Logger.log(out.join('\n'));
+  return out.join('\n');
 }
