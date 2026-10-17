@@ -32,7 +32,7 @@ Flask 單一服務（`server.py`），部署在 Render，同時提供：員工�
 - 「⬅ 回首頁」返回鍵
 - 密碼閘門（`dim_auth`，各頁 `DASH_ID` 不同）
 - 寫入類按鈕一律兩層 confirm
-- 輸入框一定要能打中文（2026-10-17 經營者：多次發生、不可再犯）：邊打邊更新的搜尋／篩選框，打字時只重畫結果區、不可重建輸入框；`compositionstart`～`compositionend`（選字中）不觸發搜尋；驗收要模擬選字＋真打中文詞＋改排序後字還在。細節見 `~/.claude/rules/diybc-context.md`「儀表板輸入框一定要能打中文」
+- 輸入框一定要能打中文（2026-10-17 經營者：多次發生、不可再犯）：邊打邊更新的搜尋／篩選框，打字時只重畫結果區、不可重建輸入框；`compositionstart`～`compositionend`（選字中）不觸發搜尋；驗收要模擬選字＋真打中文詞＋改排序後字還在。細節見 `~/.claude/rules/diybc-context.md`「儀表板輸入框一定要能打中文」。全站 17 頁已在 `<head>` 最前面（meta charset 後）加共用 **IME-GUARD**（與 dashboard-recipe.html 一字不差）；**新增頁面只要有輸入框，就貼同一段，並跑 `python3 tools/check_ime_guard.py` 要 PASS**
 
 ## 紅線
 - 不動未指定的檔案。需要動到範圍外 → 停下問。
