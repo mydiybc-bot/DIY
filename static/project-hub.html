@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<!-- 2026-10-17 新建「專案推動」儀表板（經營者交辦：未來所有新專案都在這裡管理，從「乾料食材改平匙」開始；
+     另加「🥄 平匙換算」工具：選食材、填一平匙＝幾 g，看用到它的甜點、重量、平匙數、可更換率；不是整數或半平匙的都不可更換）。
+     後端：專案推動 API（GAS，綁試算表「專案推動_資料庫」1VE1dsSPk0Bl2dyTWrNo3G_oasD4pCR3ihllNedcOOT4；原始碼 gas/project-hub/）。
+     閘門 DASH_ID=project；寫入（改進度、存匙克數）在伺服器再驗同一組密碼。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>專案推動｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FBF8F5;color:#2A2320;font-size:14px;line-height:1.55}
+  a{color:#8B3A2A}
+  /* 頁首（深藍系：專案推動） */
+  .mt-header{background:linear-gradient(100deg,#23436E,#4F7CB0);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:12.5px;opacity:.92}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-home:hover{background:rgba(255,255,255,.32)}
+  .mt-header .mt-edit{margin-left:auto;font-size:13px;color:#fff;background:rgba(255,255,255,.18);border:none;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:700}
+  .mt-header .mt-edit.on{background:#F4D35E;color:#23436E}
+  .mt-main{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#EEF3FA;border-color:#C9D7EA;color:#23436E}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A3A40;font-size:13px}
+  .dsb-sop.open{display:block}
+  .dsb-sop ol,.dsb-sop ul{margin:0;padding-left:20px}
+  @media(max-width:600px){.dsb-info{margin-left:0}}
+  /* 共用 */
+  .card{background:#fff;border:1px solid #E3DCD6;border-radius:12px;padding:14px 16px;margin:0 0 14px}
+  .muted{color:#77706A;font-size:13px}
+  .btn{font-family:inherit;font-size:13px;font-weight:700;border-radius:8px;padding:6px 12px;cursor:pointer;border:1px solid #23436E;background:#23436E;color:#fff}
+  .btn.ghost{background:#fff;color:#23436E}
+  .btn.warn{background:#fff;color:#A3321F;border-color:#D9A79C}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #F4D35E;outline-offset:1px}
+  .pill{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:1px 9px;white-space:nowrap}
+  .st-未開始{background:#EEECEA;color:#5E5852}.st-進行中{background:#E2ECF8;color:#23436E}.st-完成{background:#E2F2E7;color:#2E6B43}.st-卡關{background:#FBE3DF;color:#A3321F}.st-暫停{background:#FBF0D9;color:#8A5A00}
+  .st-待決定{background:#FBF0D9;color:#8A5A00}.st-已決定{background:#E2F2E7;color:#2E6B43}.st-追蹤中{background:#FBF0D9;color:#8A5A00}.st-已解除{background:#E2F2E7;color:#2E6B43}
+  .late{background:#FBE3DF;color:#A3321F}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+  .pcard{cursor:pointer;display:flex;flex-direction:column;gap:8px;margin:0}
+  .pcard:hover{border-color:#9FB4D3}
+  .pcard h3{margin:0;font-size:17px;color:#23436E}
+  .bar{height:8px;background:#EDE7E2;border-radius:4px;overflow:hidden}.bar>div{height:100%;background:#23436E}
+  .kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:#5E5852}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;border-bottom:2px solid #E3DCD6}
+  .tab{font-family:inherit;font-size:14px;font-weight:700;border:none;background:none;padding:8px 12px;cursor:pointer;color:#77706A;border-bottom:3px solid transparent;margin-bottom:-2px}
+  .tab.on{color:#23436E;border-bottom-color:#23436E}
+  .phead{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
+  .phead h2{margin:0;font-size:20px;color:#23436E}
+  /* 時程 */
+  .gw{overflow-x:auto;border:1px solid #E3DCD6;border-radius:10px;background:#fff;margin:0 0 14px}
+  .gt{display:grid;font-size:12px;font-variant-numeric:tabular-nums;min-width:640px}
+  .gt .h{text-align:center;color:#77706A;padding:5px 0;border-bottom:1px solid #EDE7E2}
+  .gt .we{background:#F4F1EE}.gt .td{background:#FFF6D6}
+  .gt .lb{padding:5px 8px;white-space:nowrap;border-bottom:1px solid #EDE7E2;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+  .gt .c{border-bottom:1px solid #EDE7E2}
+  .gt .b{align-self:center;height:13px;border-radius:3px;margin:0 1px}
+  /* 階段 */
+  .ph{border:1px solid #E3DCD6;border-radius:12px;background:#fff;margin:0 0 12px;overflow:hidden}
+  .ph-h{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px 14px;border-bottom:1px solid #EDE7E2}
+  .ph-no{font-weight:900;color:#23436E;font-size:18px;font-variant-numeric:tabular-nums}
+  .ph-t{font-weight:800;font-size:15.5px}
+  .ph-d{margin-left:auto;font-weight:700;color:#23436E;font-variant-numeric:tabular-nums;font-size:13px}
+  .ph-b{padding:10px 14px;display:grid;grid-template-columns:70px 1fr;gap:6px 10px}
+  .ph-b>div{min-width:0}
+  .ph-b .k{font-size:12.5px;color:#77706A;font-weight:700}
+  .ph-b ul{margin:0;padding-left:18px}
+  .ph-ck{background:#FFF6D6;border-top:1px solid #EDE7E2;padding:9px 14px;display:grid;grid-template-columns:70px 1fr;gap:10px}
+  .ph-ck .k{font-size:12.5px;font-weight:800;color:#8A5A00}
+  .ph-act{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px;border-top:1px solid #EDE7E2;background:#FAF8F6}
+  .chip{font-family:inherit;font-size:12.5px;border:1px solid #CFC6BF;background:#fff;border-radius:999px;padding:3px 10px;cursor:pointer}
+  .chip.on{border-color:#23436E;background:#23436E;color:#fff}
+  @media(max-width:560px){.ph-b,.ph-ck{grid-template-columns:1fr;gap:2px}.ph-d{margin-left:0}}
+  /* 表格 */
+  .tw{overflow-x:auto}
+  table.t{width:100%;border-collapse:collapse;font-size:13px}
+  table.t th,table.t td{text-align:left;padding:7px 9px;border-bottom:1px solid #EDE7E2;vertical-align:top}
+  table.t th{font-size:12.5px;color:#77706A;font-weight:700;background:#FAF8F6;position:sticky;top:0}
+  table.t td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  table.t tr.no td{background:#FFF7F5}
+  table.t tr.sel td{background:#EEF3FA}
+  table.t tr.click{cursor:pointer}
+  /* 平匙換算 */
+  .sp-ctl{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end}
+  .sp-ctl label{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:#5E5852;font-weight:700}
+  .sp-ctl select,.sp-ctl input{font-family:inherit;font-size:15px;padding:6px 8px;border:1px solid #CFC6BF;border-radius:8px;background:#fff;min-width:0}
+  .sp-ctl input[type=number]{width:110px}
+  .sp-big{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}
+  .sp-big>div{flex:1 1 150px;border:1px solid #E3DCD6;border-radius:10px;padding:10px 14px;background:#fff}
+  .sp-big b{display:block;font-size:24px;font-variant-numeric:tabular-nums;color:#23436E}
+  .sp-big .ok b{color:#2E6B43}.sp-big .no b{color:#A3321F}
+  .sp-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px}
+  /* 對話框 */
+  .dlg{position:fixed;inset:0;background:rgba(30,30,40,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9000;padding:40px 16px;overflow:auto}
+  .dlg[hidden]{display:none}
+  .dlg>div{background:#fff;border-radius:14px;max-width:560px;width:100%;padding:18px 20px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+  .dlg h3{margin:0 0 10px;color:#23436E}
+  .fm{display:flex;flex-direction:column;gap:10px}
+  .fm label{display:flex;flex-direction:column;gap:3px;font-size:12.5px;font-weight:700;color:#5E5852}
+  .fm input,.fm textarea,.fm select{font-family:inherit;font-size:14px;padding:7px 9px;border:1px solid #CFC6BF;border-radius:8px}
+  .fm textarea{min-height:90px;resize:vertical}
+  .fm .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .dlg-act{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+  .err{color:#A3321F;font-size:13px;margin-top:6px}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#23436E;color:#fff;padding:9px 16px;border-radius:10px;font-size:14px;z-index:9500;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  .toast[hidden]{display:none}
+  .empty{padding:24px;text-align:center;color:#77706A}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'project';
+  var DASH_NAME = '專案推動';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+<script>
+(function(){
+  document.addEventListener('toggle',function(e){var d=e.target;if(d&&d.id==='uhelp'&&document.body)document.body.classList.toggle('uhelp-on',!!d.open);},true);
+  /* 「最後更新」那一行（#dsbFresh 由各頁檔尾小程式產生；訂位頁是 #dsbTimes）搬到「📖 使用說明」那一列，收起時也看得到（1006 #7：每頁都要看得到最後更新） */
+  function pull(){var u=document.getElementById('uhelp');if(!u)return;var sm=u.querySelector('summary');if(!sm)return;
+    ['dsbFresh','dsbTimes'].forEach(function(id){var el=document.getElementById(id);if(el&&el.parentNode!==sm){el.style.display='inline';el.style.flexBasis='auto';el.style.marginLeft='10px';el.style.fontSize='12px';sm.appendChild(el);}});}
+  function boot(){var u=document.getElementById('uhelp');if(!u)return;pull();try{new MutationObserver(pull).observe(u,{childList:true,subtree:true});}catch(_){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();
+</script>
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>🚀 專案推動</h1>
+  <span class="mt-sub">每個專案的階段、檢查點、待決定事項都在這裡追</span>
+  <button class="mt-edit" id="editBtn" type="button">🔒 進入編輯</button>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 資料存在試算表「專案推動_資料庫」</b>
+    <span>打開就讀最新；改了進度大家重新整理就看得到</span>
+    <span id="dsbFresh">🕒 最後讀取：讀取中…</span>
+    <button class="dsb-info" type="button" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <b>這頁做什麼</b>：所有新專案都建在這裡。每個專案有：階段（日期、負責人、執行內容、檢查點）、待決定事項、風險，有的專案還有自己的工具（例：🥄 平匙換算）。
+      <div style="margin-top:6px"><b>怎麼更新進度</b>：</div>
+      <ol>
+        <li>按右上「🔒 進入編輯」，輸入專案推動的密碼（同進這頁的密碼）</li>
+        <li>在階段卡下面點「未開始／進行中／完成／卡關」，確認後就存進試算表</li>
+        <li>要改文字、加階段、加待決定事項：按「✏️ 修改」或「＋ 新增」</li>
+      </ol>
+      <div style="margin-top:6px"><b>🥄 平匙換算怎麼用</b>：選食材 → 填量匙實測「一平匙＝幾 g」→ 看每支甜點要幾平匙、哪些不能換。只有剛好整數或半平匙（例 1.5 平匙）的才算「可更換」。覺得這個克數可以，按「💾 存成這個食材的設定」。</div>
+    </div>
+  </div>
+  </div></details>
+
+  <div id="app"><div class="empty">讀取中…</div></div>
+</div>
+
+<div class="dlg" id="dlg" hidden><div role="dialog" aria-modal="true" aria-labelledby="dlgT"><h3 id="dlgT"></h3><div id="dlgB"></div><div class="err" id="dlgE"></div><div class="dlg-act" id="dlgA"></div></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+'use strict';
+var API = 'https://script.google.com/macros/s/AKfycbwBSEYcJb3iVwfcRAWQok5_v2EzRL9Lq55R80EtLEvxRSWhPoGfePMZdx7dCcwe4bD9Ig/exec';
+/* 只有本機測試（127.0.0.1／localhost）可以用 ?api= 換成模擬後端；線上網址不受影響 */
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) { var _api = new URLSearchParams(location.search).get('api'); if (_api && _api.charAt(0) === '/') API = _api; }
+var PST = ['未開始','進行中','完成','暫停'], HST = ['未開始','進行中','完成','卡關'], DST = ['待決定','已決定'], RST = ['追蹤中','已解除'];
+var TOOLS = { spoon: '🥄 平匙換算' };
+var S = { b: null, spoon: null, at: '', pw: '', tab: 'plan', ing: '', g: '', maxn: '8', tol: '0', onlyNo: false, sortNo: false };
+try { S.pw = sessionStorage.getItem('ph_pw') || ''; } catch(e){}
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function linkify(s){ return esc(s).replace(/https?:\/\/[^\s<]+/g, function(u){ return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>'; }).replace(/\n/g,'<br>'); }
+function pad(n){ return (n < 10 ? '0' : '') + n; }
+function today(){ var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+function dObj(s){ return new Date(Number(s.slice(0,4)), Number(s.slice(5,7)) - 1, Number(s.slice(8,10))); }
+var WK = '日一二三四五六';
+function md(s){ return s ? Number(s.slice(5,7)) + '/' + Number(s.slice(8,10)) : ''; }
+function mdw(s){ return s ? md(s) + '（' + WK[dObj(s).getDay()] + '）' : ''; }
+function range(a, b){ return !a ? '' : (a === b || !b ? mdw(a) : mdw(a) + ' – ' + mdw(b)); }
+function num(n, d){ return (Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toString(); }
+function toast(m){ var t = $('toast'); t.textContent = m; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(function(){ t.hidden = true; }, 2600); }
+
+/* ---------- 連線 ---------- */
+var jpN = 0;
+function jsonp(url, ms){
+  return new Promise(function(resolve, reject){
+    var cb = '__ph' + (++jpN) + '_' + Date.now(), s = document.createElement('script'), done = false;
+    var end = function(){ done = true; try { delete window[cb]; } catch(e){ window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+    var tm = setTimeout(function(){ if (!done){ end(); reject(new Error('逾時')); } }, ms || 45000);
+    window[cb] = function(d){ clearTimeout(tm); end(); resolve(d); };
+    s.onerror = function(){ clearTimeout(tm); if (!done){ end(); reject(new Error('讀取失敗')); } };
+    s.src = url + (url.indexOf('?') < 0 ? '?' : '&') + 'callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+function get(action){
+  var u = API + '?action=' + action;
+  return jsonp(u, 30000).catch(function(){ return jsonp(u, 60000); }).then(function(r){ if (!r || !r.ok) throw new Error(r && r.error || '讀不到資料'); return r; });
+}
+function post(body){
+  body.pw = S.pw;
+  var once = function(){
+    return fetch(API, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }).then(function(r){ return r.text(); }).then(function(t){
+      try { return JSON.parse(t); } catch(e){ throw new Error('系統忙碌，請再按一次'); }
+    });
+  };
+  return once().catch(function(){ return new Promise(function(r){ setTimeout(r, 1500); }).then(once); }).then(function(r){
+    if (!r || !r.ok) throw new Error(r && r.error || '儲存失敗');
+    return r;
+  });
+}
+
+/* ---------- 對話框（寫入一律第二層確認） ---------- */
+function dlg(title, html, buttons){
+  $('dlgT').textContent = title; $('dlgB').innerHTML = html; $('dlgE').textContent = '';
+  var a = $('dlgA'); a.innerHTML = '';
+  buttons.forEach(function(b){
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'btn' + (b.ghost ? ' ghost' : '') + (b.warn ? ' warn' : ''); x.textContent = b.t;
+    x.onclick = function(){ if (b.fn) b.fn(x); else close(); }; a.appendChild(x);
+  });
+  $('dlg').hidden = false;
+  var f = $('dlgB').querySelector('input,textarea,select'); if (f) setTimeout(function(){ f.focus(); }, 60);
+}
+function close(){ $('dlg').hidden = true; }
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !$('dlg').hidden) close(); });
+function confirmSave(title, summary, run){
+  dlg(title, '<div>' + summary + '</div>', [
+    { t: '取消', ghost: 1 },
+    { t: '確定儲存', fn: function(btn){
+      btn.disabled = true; btn.textContent = '儲存中…';
+      run().then(function(msg){ close(); toast(msg || '已儲存'); }).catch(function(e){ btn.disabled = false; btn.textContent = '確定儲存'; $('dlgE').textContent = e.message; });
+    } }
+  ]);
+}
+
+/* ---------- 編輯模式 ---------- */
+function editing(){ return !!S.pw; }
+function paintEditBtn(){ var b = $('editBtn'); b.textContent = editing() ? '✏️ 編輯中（按這裡離開）' : '🔒 進入編輯'; b.classList.toggle('on', editing()); }
+$('editBtn').onclick = function(){
+  if (editing()) { S.pw = ''; try { sessionStorage.removeItem('ph_pw'); } catch(e){} paintEditBtn(); render(); return; }
+  dlg('🔒 進入編輯', '<div class="fm"><label>專案推動密碼<input id="pwIn" type="password" autocomplete="new-password"></label></div>', [
+    { t: '取消', ghost: 1 },
+    { t: '進入', fn: function(btn){
+      var pw = ($('pwIn').value || '').trim(); if (!pw) { $('dlgE').textContent = '請輸入密碼'; return; }
+      btn.disabled = true; btn.textContent = '確認中…'; S.pw = pw;
+      post({ action: 'auth' }).then(function(){ try { sessionStorage.setItem('ph_pw', pw); } catch(e){} close(); paintEditBtn(); render(); toast('已進入編輯'); })
+        .catch(function(e){ S.pw = ''; btn.disabled = false; btn.textContent = '進入'; $('dlgE').textContent = e.message; });
+    } }
+  ]);
+  setTimeout(function(){ var i = $('pwIn'); if (i) i.onkeydown = function(e){ if (e.key === 'Enter') $('dlgA').lastChild.click(); }; }, 80);
+};
+
+/* ---------- 表單 ---------- */
+var FORMS = {
+  projects: [['name','專案名稱'],['goal','目標（一兩句）','ta'],['owner','專案窗口'],['start','開始日','date'],['due','完成日','date'],['status','狀態','sel',PST],['tools','工具','tools'],['note','備註、連結','ta']],
+  phases: [['no','第幾階段'],['title','項目'],['start','開始','date'],['end','結束','date'],['owners','負責人（用頓號分開）'],['content','執行內容（一行一項）','ta'],['checkpoint','檢查點'],['check_due','檢查點日期','date'],['status','狀態','sel',HST],['done_at','完成日','date'],['note','備註','ta']],
+  decisions: [['no','編號'],['question','要決定的事'],['suggestion','建議','ta'],['answer','決定','ta'],['status','狀態','sel',DST],['decided_at','決定日','date']],
+  risks: [['no','編號'],['risk','風險','ta'],['action','對策','ta'],['status','狀態','sel',RST]]
+};
+var IDC = { projects: 'project_id', phases: 'phase_id', decisions: 'dec_id', risks: 'risk_id' };
+var TNAME = { projects: '專案', phases: '階段', decisions: '待決定事項', risks: '風險' };
+function formHtml(table, row){
+  return '<div class="fm">' + FORMS[table].map(function(f){
+    var k = f[0], v = row[k] == null ? '' : row[k], id = 'f_' + k;
+    if (f[2] === 'ta') return '<label>' + f[1] + '<textarea id="' + id + '">' + esc(v) + '</textarea></label>';
+    if (f[2] === 'date') return '<label>' + f[1] + '<input id="' + id + '" type="date" value="' + esc(v) + '"></label>';
+    if (f[2] === 'sel') return '<label>' + f[1] + '<select id="' + id + '">' + f[3].map(function(o){ return '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>';
+    if (f[2] === 'tools') return '<label>' + f[1] + '<span style="font-weight:400">' + Object.keys(TOOLS).map(function(t){ return '<label style="flex-direction:row;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="f_tool_' + t + '"' + ((v || '').split(',').indexOf(t) >= 0 ? ' checked' : '') + '>' + TOOLS[t] + '</label>'; }).join('') + '</span></label>';
+    return '<label>' + f[1] + '<input id="' + id + '" value="' + esc(v) + '"></label>';
+  }).join('') + '</div>';
+}
+function formRead(table){
+  var o = {};
+  FORMS[table].forEach(function(f){
+    if (f[2] === 'tools') o.tools = Object.keys(TOOLS).filter(function(t){ return $('f_tool_' + t).checked; }).join(',');
+    else o[f[0]] = ($('f_' + f[0]).value || '').trim();
+  });
+  return o;
+}
+function openForm(table, row, extra){
+  var isNew = !row[IDC[table]];
+  dlg((isNew ? '＋ 新增' : '✏️ 修改') + TNAME[table], formHtml(table, row), [
+    { t: '取消', ghost: 1 },
+    { t: '下一步：確認', fn: function(){
+      var o = formRead(table);
+      var need = { projects: 'name', phases: 'title', decisions: 'question', risks: 'risk' }[table];
+      if (!o[need]) { $('dlgE').textContent = '請填「' + FORMS[table].filter(function(f){ return f[0] === need; })[0][1] + '」'; return; }
+      if (!isNew) o[IDC[table]] = row[IDC[table]];
+      Object.keys(extra || {}).forEach(function(k){ o[k] = extra[k]; });
+      confirmSave('確定要' + (isNew ? '新增' : '儲存') + '？', esc(TNAME[table]) + '：<b>' + esc(o[need]) + '</b>', function(){
+        return post({ action: 'save', table: table, row: o }).then(function(r){ upsert(table, r.data); render(); return isNew ? '已新增' : '已儲存'; });
+      });
+    } }
+  ]);
+}
+function upsert(table, row){
+  var arr = S.b[table], k = IDC[table], i = arr.findIndex(function(x){ return x[k] === row[k]; });
+  if (i >= 0) arr[i] = row; else arr.push(row);
+}
+function delRow(table, row){
+  var k = IDC[table], label = row.name || row.title || row.question || row.risk;
+  confirmSave('確定要刪除？', esc(TNAME[table]) + '：<b>' + esc(label) + '</b><div class="muted">（試算表會留紀錄，標成已刪除）</div>', function(){
+    return post({ action: 'del', table: table, id: row[k] }).then(function(){ S.b[table] = S.b[table].filter(function(x){ return x[k] !== row[k]; }); render(); return '已刪除'; });
+  });
+}
+
+/* ---------- 資料 ---------- */
+function load(){
+  return get('bundle').then(function(r){ S.b = r.data; S.at = r.at; $('dsbFresh').textContent = '🕒 最後讀取：' + r.at; render(); })
+    .catch(function(e){ $('app').innerHTML = '<div class="card">讀不到資料：' + esc(e.message) + '　<button class="btn" type="button" id="retry">再試一次</button></div>'; $('retry').onclick = load; });
+}
+function sortNo(a, b){ return (Number(a.no) || 0) - (Number(b.no) || 0); }
+function of(table, pid){ return S.b[table].filter(function(x){ return x.project_id === pid; }).sort(sortNo); }
+function projStats(p){
+  var ph = of('phases', p.project_id), done = ph.filter(function(x){ return x.status === '完成'; }).length, t = today();
+  var late = ph.filter(function(x){ return x.status !== '完成' && x.check_due && x.check_due < t; });
+  var next = ph.filter(function(x){ return x.status !== '完成'; })[0];
+  return { n: ph.length, done: done, late: late, next: next, dec: of('decisions', p.project_id).filter(function(x){ return x.status !== '已決定'; }).length };
+}
+
+/* ---------- 畫面 ---------- */
+function route(){ var m = (location.hash || '').match(/p=([\w-]+)/), t = (location.hash || '').match(/t=(\w+)/); return { pid: m ? m[1] : '', tab: t ? t[1] : 'plan' }; }
+function go(pid, tab){ location.hash = pid ? 'p=' + pid + (tab && tab !== 'plan' ? '&t=' + tab : '') : ''; }
+window.addEventListener('hashchange', render);
+function render(){
+  if (!S.b) return;
+  var r = route(), p = r.pid && S.b.projects.filter(function(x){ return x.project_id === r.pid; })[0];
+  if (r.pid && p) renderProject(p, r.tab); else renderList();
+  window.scrollTo && window.scrollTo(0, window.scrollY);
+}
+function renderList(){
+  var order = { '進行中': 0, '未開始': 1, '暫停': 2, '完成': 3 };
+  var ps = S.b.projects.slice().sort(function(a, b){ return (order[a.status] - order[b.status]) || ((Number(a.sort) || 99) - (Number(b.sort) || 99)) || String(a.due).localeCompare(String(b.due)); });
+  var h = '<div class="phead" style="margin:0 0 12px"><h2>全部專案（' + ps.length + '）</h2>' + (editing() ? '<button class="btn" type="button" id="addP">＋ 新增專案</button>' : '') + '</div>';
+  if (!ps.length) h += '<div class="card empty">還沒有專案。' + (editing() ? '按「＋ 新增專案」建立第一個。' : '按右上「🔒 進入編輯」後可以新增。') + '</div>';
+  h += '<div class="grid">' + ps.map(function(p){
+    var s = projStats(p), pct = s.n ? Math.round(s.done / s.n * 100) : 0;
+    return '<div class="card pcard" role="link" tabindex="0" data-p="' + esc(p.project_id) + '">'
+      + '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><h3>' + esc(p.name) + '</h3><span class="pill st-' + esc(p.status) + '">' + esc(p.status) + '</span>'
+      + (s.late.length ? '<span class="pill late">⚠ ' + s.late.length + ' 個檢查點過期</span>' : '') + '</div>'
+      + '<div class="muted">' + esc(p.goal) + '</div>'
+      + '<div class="bar" aria-label="完成 ' + pct + '%"><div style="width:' + pct + '%"></div></div>'
+      + '<div class="kv"><span>階段 ' + s.done + '/' + s.n + '</span><span>' + range(p.start, p.due) + '</span><span>窗口：' + esc(p.owner || '未定') + '</span>'
+      + (s.dec ? '<span style="color:#8A5A00;font-weight:700">待決定 ' + s.dec + ' 件</span>' : '') + '</div>'
+      + (s.next ? '<div style="font-size:13px">下一個檢查點：<b>' + esc(s.next.checkpoint || s.next.title) + '</b>（' + mdw(s.next.check_due) + '）</div>' : '')
+      + '</div>';
+  }).join('') + '</div>';
+  $('app').innerHTML = h;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-p]'), function(el){
+    el.onclick = function(){ go(el.getAttribute('data-p')); };
+    el.onkeydown = function(e){ if (e.key === 'Enter') go(el.getAttribute('data-p')); };
+  });
+  if ($('addP')) $('addP').onclick = function(){ openForm('projects', { status: '未開始', start: today() }); };
+}
+function renderProject(p, tab){
+  var s = projStats(p), tools = (p.tools || '').split(',').filter(function(t){ return TOOLS[t]; });
+  var tabs = [['plan','📅 進度'],['dec','❓ 待決定' + (s.dec ? '（' + s.dec + '）' : '')],['risk','⚠️ 風險']].concat(tools.map(function(t){ return [t, TOOLS[t]]; }));
+  if (!tabs.some(function(t){ return t[0] === tab; })) tab = 'plan';
+  var h = '<div style="margin:0 0 8px"><a href="#" id="back">← 全部專案</a></div>'
+    + '<div class="card"><div class="phead"><h2>' + esc(p.name) + '</h2><span class="pill st-' + esc(p.status) + '">' + esc(p.status) + '</span>'
+    + (editing() ? '<button class="btn ghost" type="button" id="editP">✏️ 修改專案</button>' : '') + '</div>'
+    + '<div style="margin:6px 0">' + esc(p.goal) + '</div>'
+    + '<div class="kv"><span>期間：' + range(p.start, p.due) + '</span><span>專案窗口：' + esc(p.owner || '未定') + '</span><span>階段完成 ' + s.done + '/' + s.n + '</span>'
+    + (s.late.length ? '<span class="pill late">⚠ 過期檢查點：' + s.late.map(function(x){ return '第 ' + esc(x.no) + ' 階段'; }).join('、') + '</span>' : '') + '</div>'
+    + (p.note ? '<div class="muted" style="margin-top:6px">' + linkify(p.note) + '</div>' : '') + '</div>'
+    + '<div class="tabs" role="tablist">' + tabs.map(function(t){ return '<button class="tab' + (t[0] === tab ? ' on' : '') + '" type="button" role="tab" data-t="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>'
+    + '<div id="tabBody"></div>';
+  $('app').innerHTML = h;
+  $('back').onclick = function(e){ e.preventDefault(); go(''); };
+  if ($('editP')) $('editP').onclick = function(){ openForm('projects', p); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-t]'), function(el){ el.onclick = function(){ go(p.project_id, el.getAttribute('data-t')); }; });
+  if (tab === 'plan') tabPlan(p);
+  else if (tab === 'dec') tabDec(p);
+  else if (tab === 'risk') tabRisk(p);
+  else if (tab === 'spoon') tabSpoon(p);
+}
+
+/* ----- 📅 進度 ----- */
+function gantt(p, ph){
+  var dates = ph.map(function(x){ return x.start; }).concat(ph.map(function(x){ return x.end || x.start; })).concat([p.start, p.due]).filter(Boolean).sort();
+  if (!dates.length) return '';
+  var a = dObj(dates[0]), b = dObj(dates[dates.length - 1]), days = [];
+  for (var d = new Date(a); d <= b && days.length < 120; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  var key = function(d){ return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }, t = today();
+  var idx = {}; days.forEach(function(d, i){ idx[key(d)] = i; });
+  var h = '<div class="gw"><div class="gt" style="grid-template-columns:150px repeat(' + days.length + ',minmax(24px,1fr))"><div class="h"></div>';
+  days.forEach(function(d){ var we = d.getDay() === 0 || d.getDay() === 6, k = key(d); h += '<div class="h' + (k === t ? ' td' : we ? ' we' : '') + '">' + (d.getDate() === 1 || d === days[0] ? '<b>' + (d.getMonth()+1) + '/' + d.getDate() + '</b>' : d.getDate()) + '</div>'; });
+  ph.forEach(function(x, r){
+    var row = r + 2, s = idx[x.start], e = idx[x.end || x.start];
+    h += '<div class="lb" style="grid-row:' + row + '" title="' + esc(x.title) + '">' + esc(x.no) + ' ' + esc(x.title) + '</div>';
+    days.forEach(function(d, i){ var we = d.getDay() === 0 || d.getDay() === 6, k = key(d); h += '<div class="c' + (k === t ? ' td' : we ? ' we' : '') + '" style="grid-row:' + row + ';grid-column:' + (i + 2) + '"></div>'; });
+    if (s != null && e != null) {
+      var col = { '完成': '#3E8E5A', '卡關': '#C4412F', '進行中': '#23436E' }[x.status] || '#9FB4D3';
+      h += '<div class="b" style="grid-row:' + row + ';grid-column:' + (s + 2) + ' / ' + (e + 3) + ';background:' + col + '" title="' + esc(x.status) + '"></div>';
+    }
+  });
+  return h + '</div></div><div class="muted" style="margin:-8px 0 14px">淺藍＝未開始、深藍＝進行中、綠＝完成、紅＝卡關；黃底＝今天、灰底＝週末。</div>';
+}
+function tabPlan(p){
+  var ph = of('phases', p.project_id), t = today();
+  var h = gantt(p, ph);
+  h += ph.map(function(x){
+    var late = x.status !== '完成' && x.check_due && x.check_due < t;
+    var items = String(x.content || '').split(/\n+/).filter(Boolean);
+    return '<div class="ph"><div class="ph-h"><span class="ph-no">' + esc(x.no) + '</span><span class="ph-t">' + esc(x.title) + '</span><span class="pill st-' + esc(x.status) + '">' + esc(x.status) + (x.status === '完成' && x.done_at ? ' ' + md(x.done_at) : '') + '</span><span class="ph-d">' + range(x.start, x.end) + '</span></div>'
+      + '<div class="ph-b"><div class="k">執行內容</div><div>' + (items.length ? '<ul>' + items.map(function(i){ return '<li>' + esc(i) + '</li>'; }).join('') + '</ul>' : '<span class="muted">（未填）</span>') + '</div>'
+      + '<div class="k">負責</div><div>' + esc(x.owners || '未定') + '</div>'
+      + (x.note ? '<div class="k">備註</div><div>' + linkify(x.note) + '</div>' : '') + '</div>'
+      + '<div class="ph-ck"><div class="k">檢查點</div><div><b>' + mdw(x.check_due) + '</b>　' + esc(x.checkpoint) + (late ? '　<span class="pill late">已過期</span>' : '') + '</div></div>'
+      + (editing() ? '<div class="ph-act">' + HST.map(function(st){ return '<button class="chip' + (st === x.status ? ' on' : '') + '" type="button" data-st="' + st + '" data-ph="' + esc(x.phase_id) + '">' + st + '</button>'; }).join('')
+        + '<span style="flex:1"></span><button class="chip" type="button" data-ed="' + esc(x.phase_id) + '">✏️ 修改</button><button class="chip" type="button" data-del="' + esc(x.phase_id) + '">🗑 刪除</button></div>' : '')
+      + '</div>';
+  }).join('');
+  if (!ph.length) h += '<div class="card empty">還沒有階段。</div>';
+  if (editing()) h += '<button class="btn" type="button" id="addPh">＋ 新增階段</button>';
+  $('tabBody').innerHTML = h;
+  var find = function(id){ return ph.filter(function(x){ return x.phase_id === id; })[0]; };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-st]'), function(el){
+    el.onclick = function(){
+      var x = find(el.getAttribute('data-ph')), st = el.getAttribute('data-st'); if (st === x.status) return;
+      var row = { phase_id: x.phase_id, status: st, done_at: st === '完成' ? today() : '' };
+      confirmSave('確定要改狀態？', '第 ' + esc(x.no) + ' 階段「' + esc(x.title) + '」：' + esc(x.status) + ' → <b>' + st + '</b>', function(){
+        return post({ action: 'save', table: 'phases', row: row }).then(function(r){ upsert('phases', r.data); render(); return '已改成「' + st + '」'; });
+      });
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ed]'), function(el){ el.onclick = function(){ openForm('phases', find(el.getAttribute('data-ed'))); }; });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(el){ el.onclick = function(){ delRow('phases', find(el.getAttribute('data-del'))); }; });
+  if ($('addPh')) $('addPh').onclick = function(){ openForm('phases', { no: String(ph.length + 1), status: '未開始' }, { project_id: p.project_id }); };
+}
+/* ----- ❓ 待決定、⚠️ 風險 ----- */
+function listTab(p, table, cols, emptyMsg){
+  var rows = of(table, p.project_id), open = { decisions: '待決定', risks: '追蹤中' }[table];
+  rows.sort(function(a, b){ return ((a.status === open ? 0 : 1) - (b.status === open ? 0 : 1)) || sortNo(a, b); });
+  var h = '<div class="card tw"><table class="t"><thead><tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + (editing() ? '<th></th>' : '') + '</tr></thead><tbody>'
+    + rows.map(function(x){
+      return '<tr>' + cols.map(function(c){ return '<td>' + (c[0] === 'status' ? '<span class="pill st-' + esc(x.status) + '">' + esc(x.status) + '</span>' : c[0] === 'decided_at' ? md(x.decided_at) : linkify(x[c[0]])) + '</td>'; }).join('')
+        + (editing() ? '<td style="white-space:nowrap"><button class="chip" type="button" data-ed="' + esc(x[IDC[table]]) + '">✏️</button> <button class="chip" type="button" data-del="' + esc(x[IDC[table]]) + '">🗑</button></td>' : '') + '</tr>';
+    }).join('') + '</tbody></table>' + (rows.length ? '' : '<div class="empty">' + emptyMsg + '</div>') + '</div>';
+  if (editing()) h += '<button class="btn" type="button" id="addRow">＋ 新增</button>';
+  $('tabBody').innerHTML = h;
+  var find = function(id){ return rows.filter(function(x){ return x[IDC[table]] === id; })[0]; };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ed]'), function(el){ el.onclick = function(){ openForm(table, find(el.getAttribute('data-ed'))); }; });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(el){ el.onclick = function(){ delRow(table, find(el.getAttribute('data-del'))); }; });
+  if ($('addRow')) $('addRow').onclick = function(){ openForm(table, { no: String(rows.length + 1), status: open }, { project_id: p.project_id }); };
+}
+function tabDec(p){ listTab(p, 'decisions', [['no','#'],['question','要決定的事'],['suggestion','建議'],['answer','決定'],['status','狀態'],['decided_at','決定日']], '沒有待決定的事。'); }
+function tabRisk(p){ listTab(p, 'risks', [['no','#'],['risk','風險'],['action','對策'],['status','狀態']], '還沒有列風險。'); }
+
+/* ----- 🥄 平匙換算 ----- */
+/* 判斷：平匙數＝重量 ÷ 一平匙克數；剛好整數或 .5（容許誤差 0% 時要完全相等）才「可更換」；超過最多幾匙、不到半匙都不可更換 */
+function judge(grams, g, maxn, tol){
+  var n = grams / g, h = Math.round(n * 2) / 2, diff = h > 0 ? (h * g - grams) / grams : -1;
+  var hit = Math.abs(n - h) < 1e-6 || (tol > 0 && Math.abs(diff) <= tol / 100 + 1e-9);
+  if (h < 0.5) return { n: n, h: h, ok: false, why: '不到半平匙' };
+  if (!hit) return { n: n, h: h, diff: diff, ok: false, why: '不是整數或半平匙' };
+  if (maxn > 0 && h > maxn) return { n: n, h: h, diff: diff, ok: false, why: '超過 ' + maxn + ' 平匙，太多' };
+  return { n: n, h: h, diff: diff, ok: true };
+}
+function rate(lines, g, maxn, tol){ var ok = 0; lines.forEach(function(l){ if (judge(Number(l.grams), g, maxn, tol).ok) ok++; }); return lines.length ? ok / lines.length : 0; }
+function spoonSetOf(ing){ return (S.spoon.set || []).filter(function(x){ return x.ingredient === ing; })[0]; }
+function tabSpoon(p){
+  if (!S.spoon) {
+    $('tabBody').innerHTML = '<div class="card empty">讀取食譜用量中…</div>';
+    get('spoon').then(function(r){ S.spoon = r.data; if (route().tab === 'spoon') tabSpoon(p); })
+      .catch(function(e){ $('tabBody').innerHTML = '<div class="card">讀不到：' + esc(e.message) + '</div>'; });
+    return;
+  }
+  var by = {};
+  S.spoon.lines.forEach(function(l){ (by[l.ingredient] = by[l.ingredient] || []).push(l); });
+  var ings = Object.keys(by).sort(function(a, b){ return by[b].length - by[a].length; });
+  if (!S.ing || !by[S.ing]) { S.ing = ings[0]; S.g = ''; }
+  var set = spoonSetOf(S.ing);
+  if (S.g === '') { S.g = set ? set.g_per_spoon : ''; S.maxn = set && set.max_spoons !== '' ? set.max_spoons : '8'; S.tol = set ? (set.tol_pct || '0') : '0'; }
+  var g = Number(S.g), maxn = Number(S.maxn) || 0, tol = Number(S.tol) || 0, lines = by[S.ing];
+  var h = '<div class="card"><div class="sp-ctl">'
+    + '<label>食材<select id="spIng">' + ings.map(function(i){ var st = spoonSetOf(i); return '<option value="' + esc(i) + '"' + (i === S.ing ? ' selected' : '') + '>' + esc(i) + '（' + by[i].length + ' 項）' + (st ? '｜存 ' + esc(st.g_per_spoon) + ' g' : '') + '</option>'; }).join('') + '</select></label>'
+    + '<label>一平匙＝幾 g<input id="spG" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(S.g) + '" placeholder="例 9.6"></label>'
+    + '<label>一項最多幾平匙<select id="spMax">' + [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10'],['12','12'],['15','15']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.maxn) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
+    + '<label>容許誤差<select id="spTol">' + [['0','0%（要剛好）'],['2','±2%'],['3','±3%'],['5','±5%']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.tol) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
+    + (editing() ? '<button class="btn" type="button" id="spSave"' + (g > 0 ? '' : ' disabled') + '>💾 存成「' + esc(S.ing) + '」的設定</button>' : '')
+    + '</div>'
+    + '<div class="muted" style="margin-top:8px">' + (set ? '目前存的設定：一平匙 ' + esc(set.g_per_spoon) + ' g、最多 ' + (Number(set.max_spoons) ? esc(set.max_spoons) + ' 平匙' : '不限') + '、誤差 ' + esc(set.tol_pct || 0) + '%（' + esc(set.note || '') + '，' + esc(set.saved_at || '') + '）' : '這個食材還沒存設定。') + '</div></div>';
+  if (g > 0) {
+    var res = lines.map(function(l){ return { l: l, j: judge(Number(l.grams), g, maxn, tol) }; });
+    var okN = res.filter(function(x){ return x.j.ok; }).length, noN = res.length - okN;
+    var why = {}; res.forEach(function(x){ if (!x.j.ok) why[x.j.why] = (why[x.j.why] || 0) + 1; });
+    var recipes = {}; res.forEach(function(x){ recipes[x.l.recipe] = 1; });
+    h += '<div class="sp-big"><div><span class="muted">可更換率</span><b>' + Math.round(okN / res.length * 100) + '%</b><span class="muted">' + okN + ' / ' + res.length + ' 項（' + Object.keys(recipes).length + ' 支甜點）</span></div>'
+      + '<div class="ok"><span class="muted">可更換</span><b>' + okN + ' 項</b><span class="muted">剛好整數或半平匙</span></div>'
+      + '<div class="no"><span class="muted">不可更換</span><b>' + noN + ' 項</b><span class="muted">' + (Object.keys(why).map(function(k){ return esc(k) + ' ' + why[k]; }).join('、') || '—') + '</span></div></div>';
+    /* 最適合的克數：0.1 g 一格掃過，找可更換率最高的（同率取大匙，客人舀得少） */
+    var top = Math.max.apply(null, lines.map(function(l){ return Number(l.grams); })), cand = [];
+    for (var s = 0.5; s <= top + 1e-9; s = Math.round((s + 0.1) * 10) / 10) cand.push({ s: s, r: rate(lines, s, maxn, tol) });
+    cand.sort(function(a, b){ return (b.r - a.r) || (b.s - a.s); });
+    h += '<div class="sp-sug"><span class="muted">這個食材可更換率最高的一平匙克數：</span>' + cand.slice(0, 5).map(function(c){ return '<button class="chip" type="button" data-g="' + c.s + '">' + num(c.s, 1) + ' g → ' + Math.round(c.r * 100) + '%</button>'; }).join('') + '</div>';
+    var rows = res.slice();
+    if (S.sortNo) rows.sort(function(a, b){ return (a.j.ok ? 1 : 0) - (b.j.ok ? 1 : 0); });
+    if (S.onlyNo) rows = rows.filter(function(x){ return !x.j.ok; });
+    h += '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:0 0 8px"><b>用到「' + esc(S.ing) + '」的甜點</b>'
+      + '<label style="font-size:13px"><input type="checkbox" id="spNo"' + (S.onlyNo ? ' checked' : '') + '> 只看不可更換</label>'
+      + '<label style="font-size:13px"><input type="checkbox" id="spSort"' + (S.sortNo ? ' checked' : '') + '> 不可更換的排前面</label></div>'
+      + '<div class="tw"><table class="t"><thead><tr><th>甜點食譜名稱</th><th style="text-align:right">食材重量</th><th style="text-align:right">平匙數量</th><th>可否更換</th><th>說明</th></tr></thead><tbody>'
+      + rows.map(function(x){
+        var j = x.j, note = j.ok ? (Math.abs(j.n - j.h) < 1e-6 ? '剛好' : '換算 ' + num(j.n, 2) + ' 平匙，在誤差內（' + num(j.h * g, 1) + ' g）') : (j.h >= 0.5 && j.why !== '不到半平匙' ? '最接近 ' + num(j.h, 1) + ' 平匙＝' + num(j.h * g, 1) + ' g（差 ' + (j.diff > 0 ? '+' : '') + num(j.diff * 100, 1) + '%）' : '');
+        return '<tr class="' + (j.ok ? '' : 'no') + '"><td>' + esc(x.l.recipe) + '</td><td class="n">' + esc(x.l.grams) + ' g</td><td class="n">' + (j.ok ? '<b>' + num(j.h, 1) + '</b>' : num(j.n, 2)) + '</td><td>' + (j.ok ? '<span class="pill st-完成">✅ 可更換</span>' : '<span class="pill late">❌ ' + esc(j.why) + '</span>') + '</td><td class="muted">' + note + '</td></tr>';
+      }).join('') + '</tbody></table>' + (rows.length ? '' : '<div class="empty">全部都可更換。</div>') + '</div></div>';
+  } else h += '<div class="card empty">填入「一平匙＝幾 g」就會算出每支甜點要幾平匙。</div>';
+  /* 全部食材總覽（用各自存的設定） */
+  h += '<div class="card"><b>全部食材總覽</b><span class="muted">（用各食材存的設定計算；點一列就切過去）</span><div class="tw" style="margin-top:8px"><table class="t"><thead><tr><th>食材</th><th style="text-align:right">用到幾項</th><th style="text-align:right">一平匙</th><th style="text-align:right">最多</th><th style="text-align:right">可更換率</th><th>備註</th></tr></thead><tbody>'
+    + ings.map(function(i){
+      var st = spoonSetOf(i), r = st && Number(st.g_per_spoon) > 0 ? rate(by[i], Number(st.g_per_spoon), Number(st.max_spoons) || 0, Number(st.tol_pct) || 0) : null;
+      return '<tr class="click' + (i === S.ing ? ' sel' : '') + '" data-ing="' + esc(i) + '"><td>' + esc(i) + '</td><td class="n">' + by[i].length + '</td><td class="n">' + (st ? esc(st.g_per_spoon) + ' g' : '—') + '</td><td class="n">' + (st ? (Number(st.max_spoons) ? esc(st.max_spoons) : '不限') : '') + '</td><td class="n">' + (r == null ? '—' : '<b>' + Math.round(r * 100) + '%</b>') + '</td><td class="muted">' + esc(st ? st.note : '') + '</td></tr>';
+    }).join('') + '</tbody></table></div>'
+    + '<div class="muted" style="margin-top:8px">資料：' + esc(S.spoon.source) + '，' + esc(S.spoon.snap_date) + ' 快照（共 ' + S.spoon.lines.length + ' 項）。食譜有改要更新，請 Claude 重新讀門市食譜後台。</div></div>';
+  $('tabBody').innerHTML = h;
+  var re = function(){ tabSpoon(p); };
+  $('spIng').onchange = function(){ S.ing = this.value; S.g = ''; re(); };
+  var gi = $('spG');
+  gi.oninput = function(){ S.g = this.value; clearTimeout(gi.t); gi.t = setTimeout(function(){ var pos = gi.selectionStart; re(); var n = $('spG'); n.focus(); try { n.setSelectionRange(pos, pos); } catch(e){} }, 350); };
+  $('spMax').onchange = function(){ S.maxn = this.value; re(); };
+  $('spTol').onchange = function(){ S.tol = this.value; re(); };
+  if ($('spNo')) $('spNo').onchange = function(){ S.onlyNo = this.checked; re(); };
+  if ($('spSort')) $('spSort').onchange = function(){ S.sortNo = this.checked; re(); };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-g]'), function(el){ el.onclick = function(){ S.g = el.getAttribute('data-g'); re(); }; });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-ing]'), function(el){ el.onclick = function(){ S.ing = el.getAttribute('data-ing'); S.g = ''; re(); window.scrollTo(0, 0); }; });
+  if ($('spSave')) $('spSave').onclick = function(){
+    var gg = Number(S.g); if (!(gg > 0)) return;
+    var cur = spoonSetOf(S.ing);
+    dlg('💾 存成「' + S.ing + '」的設定', '<div class="fm"><div>一平匙 <b>' + num(gg, 2) + ' g</b>、最多 ' + (maxn ? maxn + ' 平匙' : '不限') + '、容許誤差 ' + tol + '%' + (cur ? '<div class="muted">原本：' + esc(cur.g_per_spoon) + ' g（' + esc(cur.note || '') + '）</div>' : '') + '</div><label>備註（例：量匙品牌、誰實測、幾次）<input id="spNote" value=""></label></div>', [
+      { t: '取消', ghost: 1 },
+      { t: '下一步：確認', fn: function(){
+        var note = ($('spNote').value || '').trim() || '專案推動頁存檔';
+        confirmSave('確定要儲存？', '「' + esc(S.ing) + '」一平匙 ' + num(gg, 2) + ' g', function(){
+          return post({ action: 'spoonSave', ingredient: S.ing, g_per_spoon: gg, max_spoons: maxn, tol_pct: tol, note: note }).then(function(r){
+            var arr = S.spoon.set, i = arr.findIndex(function(x){ return x.ingredient === r.data.ingredient; }); if (i >= 0) arr[i] = r.data; else arr.push(r.data); re(); return '已儲存';
+          });
+        });
+      } }
+    ]);
+  };
+}
+
+paintEditBtn();
+load();
+})();
+</script>
+</body>
+</html>
