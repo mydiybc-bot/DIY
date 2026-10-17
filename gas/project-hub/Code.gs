@@ -287,12 +287,7 @@ function reminderPreview() {
   var r = remindBuild_();
   Logger.log(JSON.stringify({ today: r.today, until: r.until, items: r.items.map(function (i) { return [i.sev, i.date, i.tag, i.text, i.who]; }), noDue: r.noDue, recipients: remindRecipients_(r).map(function (x) { return x.name + (x.email ? '' : '（沒 email）') + ' ' + x.items.length + ' 項'; }) }));
 }
-/* 編輯器用：建立／重建每天 08:00 的排程（先刪舊的同名排程） */
-function setupTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (tr) { if (tr.getHandlerFunction() === 'dailyReminder') ScriptApp.deleteTrigger(tr); });
-  ScriptApp.newTrigger('dailyReminder').timeBased().everyDays(1).atHour(8).nearMinute(0).inTimezone('Asia/Taipei').create();
-  Logger.log('已建立排程：dailyReminder 每天 08:00（Asia/Taipei）');
-}
+/* 排程不用程式建（避免多要 script.scriptapp 權限）：Apps Script 編輯器左側「觸發條件」→ 新增 → 函式 dailyReminder、時間驅動、日計時器、上午 8 點至 9 點（2026-10-18 建）。 */
 
 /* ---------------- 密碼：問權限中心 verify（dim_auth 的 project），成功快取 2 小時（key＝雜湊，不存明文） ---------------- */
 function hash_(s) { return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)).slice(0, 32); }
@@ -329,8 +324,8 @@ function authorize() {
   var n = ss_().getSheets().length;
   UrlFetchApp.fetch(AUTH_API + '?action=ping', { muteHttpExceptions: true });
   SpreadsheetApp.openById(AUTHC_SS_ID).getName();
-  var q = MailApp.getRemainingDailyQuota(), tr = ScriptApp.getProjectTriggers().length;
-  Logger.log('授權完成：試算表分頁 ' + n + ' 張、權限中心連得到、今日還可寄 ' + q + ' 封信、排程 ' + tr + ' 個');
+  var q = MailApp.getRemainingDailyQuota();
+  Logger.log('授權完成：試算表分頁 ' + n + ' 張、權限中心連得到、今日還可寄 ' + q + ' 封信');
 }
 /* 建好全部分頁並放入第一批資料（只在分頁不存在時建；已存在就補缺的欄位） */
 function setupTables() {
