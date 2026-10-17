@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
+<!-- 2026-10-17 新分頁「🧬 食譜演化」（LineageMod，經營者：後台 1000 多支食譜一代一代演化，想看家族樹＋時間軸；每天凌晨 1～2 點自動更新）：讀申請單 API 動作 lineage（免身分密碼、只讀；分頁 recipe_lineage 由 gas/recipe-req/lineage.gs 在公版掃描後重算）。只讀，不寫任何資料。 -->
 <!-- 2026-10-07 經營者「儀表板待處理問題 1007」：①加速——檔期清單先顯示上次的、開頁就讀；讀取 4/12 秒補送、寫入 9/22 秒補送（同回條只寫一次）；密碼跟動作一趟送出（credRun）；送簽「存檔＋送簽」一個請求 ②送簽改 104 公告（標題／內容／連結一鍵複製，取代 LINE 文字）；簽核連結帶通行碼 k，點開免 PIN 看整張申請單；簽核人點名字、第一次自設 PIN、手機記住 ③💬 意見交流（申請表與簽核頁共用，留言＋簽核意見照時間排）④新單位（例：糖粉 平匙）不再紅字錯誤：表一填「1 平匙≈幾 g」、成本照換算算，核准後自動加進採購系統 dim_unitconv（採購確認）。申請單 API v10。 -->
 <!-- 2026-09-29 E 階段：「新增食材/器模具」表二品項後多「廠商品名」（NI_KEYS vname；payload lines.vname；能改進貨廠商的身分就能改，P_DERIVED）。新品通知＝採購系統「🆕 檔期新品」的「新增品名」欄顯示它；核准寫主檔時附在來源欄。「複製新增食材/器模具表」仍 19 格不變 -->
 <!-- 2026-09-29 C 階段：核准 → 自動寫入採購系統 BOM 本（申請單 API recipe-req-v3，部署 @8）。「✍️ 送簽核」卡：送簽前「🔍 預覽」會寫什麼（pushPreview）；
@@ -921,6 +922,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
     <button class="tab-btn active" data-tab="apply">📝 新品申請表</button>
     <button class="tab-btn" data-tab="semi">🧪 半成品/材料包</button>
     <button class="tab-btn" data-tab="bom">📚 BOM 管理</button>
+    <button class="tab-btn" data-tab="lineage">🧬 食譜演化</button>
   </div>
 
   <!-- ===== 食譜成本分析畫面已刪（2026-09-29）；只留隱藏容器給 RecipeMod 引擎寫狀態，不是分頁、沒有按鈕 ===== -->
@@ -952,6 +954,12 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
   <div id="bmRoot" style="display:none"></div>
   </div>
 
+  <!-- ===== TAB: 🧬 食譜演化（LineageMod，2026-10-17）：後台食譜的家族樹＋時間軸（只讀） ===== -->
+  <div class="tab-panel" id="tab-lineage">
+  <div class="ap-panel-head"><h2 class="ap-panel-title">🧬 食譜演化 <span class="ap-sub">門市食譜後台的食譜，哪一款是從哪一款複製改來的、傳了幾代、每一版哪天出生、現在還有沒有啟用</span></h2></div>
+  <div id="lgRoot"></div>
+  </div>
+
 </div>
 
 <script>
@@ -967,6 +975,7 @@ function activateTab(tab, fromHash){
   if(tab==='apply' && window.ApplyMod) ApplyMod.ensureInit();
   if(tab==='semi' && window.SemiMod) SemiMod.ensureInit();
   if(tab==='bom' && window.BomMod) BomMod.ensureInit();   /* 2026-10-01 需求 7 */
+  if(tab==='lineage' && window.LineageMod) LineageMod.ensureInit();   /* 2026-10-17 🧬 食譜演化 */
   if(!fromHash){ try{ history.replaceState(null,'', '#'+tab); }catch(e){} }
 }
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>activateTab(btn.dataset.tab)));
@@ -5875,6 +5884,177 @@ return {start:start};
   fire();
   timers.push(setTimeout(fire, 8000), setTimeout(fire, 20000), setTimeout(function(){ done(null); }, 75000));
 })();
+</script>
+
+<!-- ===== 🧬 食譜演化（LineageMod，2026-10-17）=====
+     經營者：「後台 1000 多支食譜很多是一代一代演化來的，想在新品申請表加一個功能頁看演化」——選「家族樹＋時間軸」、每天凌晨 1～2 點自動更新。
+     資料：申請單 API 動作 lineage（免身分密碼、只讀）＝分頁 recipe_lineage，由 gas/recipe-req/lineage.gs 每天公版掃描做完後重算。
+     「款」＝名稱去掉期別／版本／英文名後相同的食譜（中英文版、備份、匙版都算同一款）；「家族」＝款與款之間有複製關係（沿用同一批步驟圖片影片）。
+     本模組只讀，不寫任何資料；class／id 前綴 lg-。 -->
+<style>
+  .lg-wrap{display:grid;grid-template-columns:minmax(260px,330px) 1fr;gap:16px;align-items:start}
+  @media(max-width:900px){.lg-wrap{grid-template-columns:1fr}}
+  .lg-wrap>div{min-width:0}
+  .lg-bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:0 0 12px}
+  .lg-bar input[type=search]{font-family:inherit;font-size:14px;padding:7px 10px;border:1px solid #D6CCC4;border-radius:8px;min-width:220px;flex:1 1 220px}
+  .lg-bar select{font-family:inherit;font-size:13px;padding:6px 8px;border:1px solid #D6CCC4;border-radius:8px;background:#fff}
+  .lg-bar label{font-size:13px;color:#5E564F;display:flex;align-items:center;gap:4px;cursor:pointer}
+  .lg-stats{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 12px}
+  .lg-stat{background:#fff;border:1px solid #E6D8CF;border-radius:10px;padding:8px 12px;min-width:110px}
+  .lg-stat b{display:block;font-size:20px;color:#00695C;font-variant-numeric:tabular-nums}
+  .lg-stat span{font-size:12px;color:#7A6A60}
+  .lg-list{max-height:70vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:2px}
+  .lg-fam{background:#fff;border:1px solid #E6D8CF;border-radius:10px;padding:9px 12px;cursor:pointer;text-align:left;font-family:inherit;font-size:13px;color:#2A2320}
+  .lg-fam:hover{border-color:#4DB6AC}
+  .lg-fam.on{border-color:#00796B;box-shadow:0 0 0 2px #B2DFDB}
+  .lg-fam b{font-size:14.5px;color:#00695C}
+  .lg-fam .m{color:#7A6A60;font-size:12px;margin-top:2px}
+  .lg-card{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:14px 16px;margin:0 0 14px}
+  .lg-h{font-size:16px;font-weight:800;color:#00695C;margin:0 0 6px}
+  .lg-muted{color:#7A6A60;font-size:13px}
+  .lg-pill{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:0 8px;margin-left:4px;white-space:nowrap}
+  .lg-on{background:#E2F2E7;color:#2E6B43}.lg-off{background:#EEECEA;color:#6E6660}.lg-gen{background:#E0F2F1;color:#00695C}
+  .lg-tree{list-style:none;margin:0;padding:0}
+  .lg-tree ul{list-style:none;margin:0 0 0 18px;padding:0 0 0 12px;border-left:2px solid #B2DFDB}
+  .lg-node{margin:6px 0}
+  .lg-kn{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:6px 10px;border:1px solid #E6D8CF;border-radius:8px;background:#FBF8F5;cursor:pointer;font-family:inherit;font-size:13px;text-align:left;width:100%;color:#2A2320}
+  .lg-kn:hover{border-color:#4DB6AC}
+  .lg-kn .nm{font-weight:800;font-size:14px}
+  .lg-kn .dt{color:#7A6A60;font-size:12px;font-variant-numeric:tabular-nums}
+  .lg-kn.hit{background:#FFF6D6;border-color:#E9C94F}
+  .lg-vers{margin:4px 0 2px 10px;overflow-x:auto}
+  table.lg-t{border-collapse:collapse;font-size:12.5px;min-width:640px;width:100%}
+  table.lg-t th,table.lg-t td{text-align:left;padding:5px 8px;border-bottom:1px solid #EFE7E1;vertical-align:top}
+  table.lg-t th{color:#7A6A60;font-weight:700;background:#FAF8F6}
+  table.lg-t td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .lg-tl{overflow-x:auto;border:1px solid #E6D8CF;border-radius:10px;background:#fff}
+  .lg-tlg{position:relative;min-width:720px;font-size:12px}
+  .lg-tlr{display:grid;grid-template-columns:150px 1fr;border-bottom:1px solid #F1EAE4;min-height:26px;align-items:center}
+  .lg-tlr .lb{padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+  .lg-trk{position:relative;height:26px}
+  .lg-dot{position:absolute;top:8px;width:10px;height:10px;border-radius:50%;margin-left:-5px;border:2px solid #fff;box-shadow:0 0 0 1px #9E9E9E;background:#BDBDBD}
+  .lg-dot.on{background:#2E7D32;box-shadow:0 0 0 1px #2E7D32}
+  .lg-dot.root{width:12px;height:12px;top:7px;margin-left:-6px}
+  .lg-yr{position:absolute;top:0;bottom:0;border-left:1px dashed #E0D6CF}
+  .lg-yrl{position:absolute;top:2px;font-size:12px;color:#9A8A80;margin-left:3px}
+  .lg-axis{height:22px;position:relative;border-bottom:1px solid #E6D8CF}
+</style>
+<script>
+window.LineageMod=(function(){
+  'use strict';
+  var API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+  var BACK='https://diybc.azurewebsites.net/Recipes/Edit/';
+  var S={inited:false,data:null,fams:[],sel:'',q:'',onlyOn:false,sort:'size',open:{}};
+  function $(id){return document.getElementById(id)}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function yr(d){return String(d||'').slice(0,4)}
+  /* ---- 讀資料：先畫上次存的（IndexedDB），再向系統要最新；Google 偶爾回錯動作或逾時 → 自動再試 ---- */
+  function idb(fn){try{var r=indexedDB.open('diybc_lineage',1);r.onupgradeneeded=function(){r.result.createObjectStore('kv')};r.onsuccess=function(){try{fn(r.result)}catch(e){}};r.onerror=function(){}}catch(e){}}
+  function cacheGet(cb){var done=false;setTimeout(function(){if(!done){done=true;cb(null)}},1500);idb(function(db){var q=db.transaction('kv').objectStore('kv').get('v1');q.onsuccess=function(){if(!done){done=true;cb(q.result||null)}};q.onerror=function(){if(!done){done=true;cb(null)}}})}
+  function cachePut(v){idb(function(db){try{db.transaction('kv','readwrite').objectStore('kv').put(v,'v1')}catch(e){}})}
+  function fetchOnce(ms){
+    var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms):0;
+    return fetch(API,{method:'POST',body:JSON.stringify({action:'lineage'}),redirect:'follow',signal:ctl?ctl.signal:undefined}).then(function(r){return r.text()}).then(function(t){
+      clearTimeout(tm);var j;try{j=JSON.parse(t)}catch(e){throw new Error('系統回應看不懂')}
+      if(!j||j.act!=='lineage'||!j.ok||!j.data)throw new Error((j&&j.msg)||'系統忙碌');return j.data});
+  }
+  function load(){
+    var tries=0,go=function(){tries++;return fetchOnce(tries<3?45000:70000).catch(function(e){if(tries<4)return new Promise(function(r){setTimeout(r,1500)}).then(go);throw e})};
+    return go();
+  }
+  function shape(d){   /* 陣列 → 物件；整理成家族→款→版本 */
+    var H=d.head||[],ix={};H.forEach(function(h,i){ix[h]=i});
+    var rows=(d.rows||[]).map(function(r){var o={};H.forEach(function(h){o[h]=r[ix[h]]});o.gen=Number(o.gen)||1;o.ver=Number(o.ver)||1;o.shared=Number(o.shared)||0;return o});
+    var F={};
+    rows.forEach(function(o){var f=F[o.family_id]=F[o.family_id]||{id:o.family_id,kuans:{},n:0,on:0,last:'',maxGen:1};
+      var k=f.kuans[o.kuan]=f.kuans[o.kuan]||{key:o.kuan,birth:o.kuan_birth,parent:o.parent_kuan,gen:o.gen,shared:o.shared,vers:[],on:0};
+      k.vers.push(o);f.n++;if(o.status==='Active'){f.on++;k.on++}if(o.birth>f.last)f.last=o.birth;if(o.gen>f.maxGen)f.maxGen=o.gen});
+    var fams=Object.keys(F).map(function(id){var f=F[id];f.kList=Object.keys(f.kuans).map(function(k){return f.kuans[k]});
+      f.kList.forEach(function(k){k.vers.sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))||String(a.upd).localeCompare(String(b.upd))})});
+      f.first=f.kList.reduce(function(m,k){return !m||k.birth<m?k.birth:m},'');return f});
+    return {meta:d.meta||{},rows:rows,fams:fams};
+  }
+  /* ---- 畫面 ---- */
+  function ensureInit(){
+    if(S.inited)return;S.inited=true;
+    $('lgRoot').innerHTML='<div class="lg-muted" style="padding:16px 0">⏳ 讀取食譜演化資料…（系統回應有時要等 10～60 秒）</div>';
+    cacheGet(function(c){if(c&&c.rows&&!S.data){S.data=shape(c);S.stale=true;render()}
+      load().then(function(d){S.data=shape(d);S.stale=false;cachePut(d);render()}).catch(function(e){
+        if(S.data){S.stale=true;render();var n=$('lgNote');if(n)n.textContent='⚠ 沒讀到最新（'+e.message+'），先顯示上次的資料'}
+        else $('lgRoot').innerHTML='<div class="lg-card">讀不到食譜演化資料：'+esc(e.message)+'　<button class="ap-btn2" type="button" id="lgRetry">再試一次</button></div>',$('lgRetry').onclick=function(){S.inited=false;ensureInit()}})});
+  }
+  function famMatch(f,q){if(!q)return null;var hit={};f.kList.forEach(function(k){if(k.key.toLowerCase().indexOf(q)>=0||k.vers.some(function(v){return String(v.name).toLowerCase().indexOf(q)>=0}))hit[k.key]=1});return Object.keys(hit).length?hit:false}
+  function famList(){
+    var q=S.q.trim().toLowerCase(),list=S.data.fams.filter(function(f){if(S.onlyOn&&!f.on)return false;if(q&&!famMatch(f,q))return false;return true});
+    var by={size:function(a,b){return b.kList.length-a.kList.length||b.n-a.n},gen:function(a,b){return b.maxGen-a.maxGen||b.kList.length-a.kList.length},recent:function(a,b){return String(b.last).localeCompare(String(a.last))},name:function(a,b){return a.id.localeCompare(b.id,'zh-Hant')}}[S.sort];
+    return list.sort(by);
+  }
+  function render(){
+    var D=S.data,m=D.meta||{},nK=0;D.fams.forEach(function(f){nK+=f.kList.length});
+    var multi=D.fams.filter(function(f){return f.kList.length>1});
+    var h='<div class="lg-stats"><div class="lg-stat"><b>'+D.rows.length+'</b><span>支食譜（後台）</span></div><div class="lg-stat"><b>'+nK+'</b><span>款甜點</span></div><div class="lg-stat"><b>'+D.fams.length+'</b><span>個家族（'+multi.length+' 個有演化）</span></div><div class="lg-stat"><b>'+D.fams.reduce(function(x,f){return Math.max(x,f.maxGen)},1)+'</b><span>最多傳了幾代</span></div></div>';
+    h+='<div class="lg-bar"><input type="search" id="lgQ" placeholder="搜甜點名稱（例：小黑炭、提拉米蘇）" value="'+esc(S.q)+'">'
+      +'<select id="lgSort"><option value="size">家族最大的先</option><option value="gen">代數最多的先</option><option value="recent">最近有新版的先</option><option value="name">依名稱</option></select>'
+      +'<label><input type="checkbox" id="lgOn"'+(S.onlyOn?' checked':'')+'> 只看還有啟用的</label>'
+      +'<span class="lg-muted" id="lgNote">'+(S.stale?'⏳ 先顯示上次的資料，正在讀最新…':'')+'</span></div>';
+    var list=famList();
+    if(!S.sel||!list.some(function(f){return f.id===S.sel}))S.sel=list[0]?list[0].id:'';
+    h+='<div class="lg-wrap"><div><div class="lg-muted" style="margin:0 0 6px">'+list.length+' 個家族</div><div class="lg-list" id="lgList">'+list.slice(0,300).map(function(f){
+      var root=f.kList.filter(function(k){return k.gen===1})[0]||f.kList[0];
+      return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
+        +'<div class="m">'+f.kList.length+' 款・'+f.n+' 支・傳到第 '+f.maxGen+' 代・'+yr(f.first)+'～'+yr(f.last)+'</div></button>'}).join('')
+      +(list.length>300?'<div class="lg-muted">只列前 300 個，請用搜尋縮小</div>':'')+(list.length?'':'<div class="lg-muted">找不到符合的家族</div>')+'</div></div><div id="lgDetail"></div></div>';
+    h+='<div class="lg-muted" style="margin-top:12px">資料最後更新：'+esc(m.at||'—')+'（每天凌晨 1～2 點自動更新；只讀，不會改後台）'+(m.error?'　<b style="color:#A3321F">上次更新失敗：'+esc(m.error)+'</b>':'')+'</div>';
+    $('lgRoot').innerHTML=h;
+    $('lgSort').value=S.sort;
+    var qi=$('lgQ');qi.oninput=function(){clearTimeout(qi.t);qi.t=setTimeout(function(){var p=qi.selectionStart;S.q=qi.value;S.sel='';render();var n=$('lgQ');n.focus();try{n.setSelectionRange(p,p)}catch(e){}},300)};
+    $('lgSort').onchange=function(){S.sort=this.value;render()};
+    $('lgOn').onchange=function(){S.onlyOn=this.checked;render()};
+    Array.prototype.forEach.call(document.querySelectorAll('#lgList [data-f]'),function(b){b.onclick=function(){S.sel=b.getAttribute('data-f');S.open={};render();var d=$('lgDetail');if(d&&window.innerWidth<900)d.scrollIntoView({behavior:'smooth'})}});
+    renderFam();
+  }
+  function renderFam(){
+    var f=S.data.fams.filter(function(x){return x.id===S.sel})[0],el=$('lgDetail');if(!el)return;
+    if(!f){el.innerHTML='';return}
+    var q=S.q.trim().toLowerCase(),hit=famMatch(f,q)||{};
+    var kids={};f.kList.forEach(function(k){if(k.parent&&f.kuans[k.parent])(kids[k.parent]=kids[k.parent]||[]).push(k)});
+    Object.keys(kids).forEach(function(p){kids[p].sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))})});
+    var roots=f.kList.filter(function(k){return !k.parent||!f.kuans[k.parent]}).sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))});
+    var order=[];
+    function node(k){order.push(k);var open=S.open[k.key]||hit[k.key];
+      var s='<li class="lg-node"><button type="button" class="lg-kn'+(hit[k.key]?' hit':'')+'" data-k="'+esc(k.key)+'"><span class="nm">'+(open?'▾ ':'▸ ')+esc(k.key)+'</span><span class="lg-pill lg-gen">第 '+k.gen+' 代</span>'
+        +(k.on?'<span class="lg-pill lg-on">'+k.on+' 支啟用</span>':'<span class="lg-pill lg-off">停用</span>')
+        +'<span class="dt">出生 '+esc(k.birth||'—')+'・'+k.vers.length+' 個版本'+(k.parent&&k.shared?'・沿用「'+esc(k.parent)+'」'+k.shared+' 個圖片影片':'')+'</span></button>';
+      if(open)s+='<div class="lg-vers"><table class="lg-t"><thead><tr><th>#</th><th>食譜名稱</th><th>狀態</th><th>語言</th><th>類別</th><th>店別</th><th>出生</th><th>最後更新</th><th>步驟</th><th></th></tr></thead><tbody>'
+        +k.vers.map(function(v,i){return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(v.name)+'</td><td>'+(v.status==='Active'?'<span class="lg-pill lg-on">啟用</span>':'<span class="lg-pill lg-off">停用</span>')+'</td><td>'+esc(v.lang)+'</td><td>'+esc(v.cat)+'</td><td>'+esc(v.store)+'</td><td class="n">'+esc(v.birth)+(v.birth_src==='upd'?'*':'')+'</td><td class="n">'+esc(v.upd)+'</td><td class="n">'+esc(v.steps)+'</td><td><a href="'+BACK+esc(v.recipe_id)+'" target="_blank" rel="noopener">後台 ↗</a></td></tr>'}).join('')
+        +'</tbody></table><div class="lg-muted" style="margin:4px 0 0">出生日＝這支自己第一次上傳圖片影片或封面的日子；有 * 的是查不到上傳日，先用最後更新日。</div></div>';
+      var c=kids[k.key]||[];if(c.length)s+='<ul>'+c.map(node).join('')+'</ul>';
+      return s+'</li>'}
+    var tree='<ul class="lg-tree">'+roots.map(node).join('')+'</ul>';
+    var root=roots[0];
+    var h='<div class="lg-card"><div class="lg-h">🌳 '+esc(root?root.key:f.id)+' 家族</div><div class="lg-muted" style="margin:0 0 8px">'+f.kList.length+' 款・'+f.n+' 支食譜・傳到第 '+f.maxGen+' 代・'+f.on+' 支啟用中。點一款可以展開它的各個版本。'
+      +'<button type="button" class="ap-btn2 ap-mini" id="lgAll" style="margin-left:8px">全部展開</button></div>'+tree+'</div>';
+    h+='<div class="lg-card"><div class="lg-h">📅 時間軸</div><div class="lg-muted" style="margin:0 0 8px">每一列是一款，點＝那個版本出生的日子；綠點＝目前啟用，灰點＝停用，大點＝這款的第一版。</div>'+timeline(order)+'</div>';
+    el.innerHTML=h;
+    Array.prototype.forEach.call(el.querySelectorAll('[data-k]'),function(b){b.onclick=function(){var k=b.getAttribute('data-k');S.open[k]=!(S.open[k]||hit[k]);if(hit[k]&&!S.open[k])delete hit[k];renderFam()}});
+    $('lgAll').onclick=function(){f.kList.forEach(function(k){S.open[k.key]=true});renderFam()};
+  }
+  function timeline(order){
+    var ds=[];order.forEach(function(k){k.vers.forEach(function(v){if(/^\d{4}\/\d{2}\/\d{2}$/.test(v.birth))ds.push(v.birth)})});
+    if(!ds.length)return '<div class="lg-muted">沒有日期資料</div>';
+    ds.sort();var t0=new Date(ds[0].replace(/\//g,'-')),t1=new Date(),span=Math.max(1,t1-t0);
+    var x=function(d){return Math.max(0,Math.min(100,(new Date(d.replace(/\//g,'-'))-t0)/span*100))};
+    var yrs='';for(var y=t0.getFullYear()+1;y<=t1.getFullYear();y++){var p=x(y+'/01/01');yrs+='<div class="lg-yr" style="left:'+p+'%"></div><span class="lg-yrl" style="left:'+p+'%">'+y+'</span>'}
+    var h='<div class="lg-tl"><div class="lg-tlg"><div class="lg-tlr"><div class="lb"></div><div class="lg-axis">'+yrs+'</div></div>';
+    order.forEach(function(k){
+      h+='<div class="lg-tlr"><div class="lb" title="'+esc(k.key)+'">'+'　'.repeat(Math.min(k.gen-1,4))+esc(k.key)+'</div><div class="lg-trk">'+yrs.replace(/<span[^>]*>\d+<\/span>/g,'')
+        +k.vers.map(function(v,i){if(!/^\d{4}\/\d{2}\/\d{2}$/.test(v.birth))return '';return '<span class="lg-dot'+(v.status==='Active'?' on':'')+(i===0?' root':'')+'" style="left:'+x(v.birth)+'%" title="'+esc(v.name+'｜'+v.birth+'｜'+(v.status==='Active'?'啟用':'停用'))+'"></span>'}).join('')+'</div></div>'});
+    return h+'</div></div>';
+  }
+  return {ensureInit:ensureInit};
+})();
+/* 打開網址就是 #lineage 時，分頁切換比本模組早跑 → 這裡補叫一次 */
+(function(){var p=document.getElementById('tab-lineage');if(p&&p.classList.contains('active'))LineageMod.ensureInit()})();
 </script>
 </body>
 </html>

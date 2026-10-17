@@ -10,7 +10,7 @@
 var NM_SCAN = 'media_scan', NM_POOL = 'media_pool', NM_TITLES = 'media_titles', NM_META = 'media_meta';
 var NM_BUDGET_MS = 240000;        /* 每次觸發最多掃 4 分鐘（GAS 上限 6 分鐘） */
 var NM_RECENT_MONTHS = 15;        /* 「近期」＝更新日在 15 個月內 */
-var NM_DAILY_HOUR = 3;            /* 每天這個小時以後做一次清單比對 */
+var NM_DAILY_HOUR = 1;            /* 每天這個小時以後做一次清單比對（2026-10-17 3→1：經營者要 🧬 食譜演化每天凌晨 1～2 點更新，掃完接著算 lineage.gs） */
 var NM_BLOB_LIST = 'https://diybcstorage.blob.core.windows.net/stepmedias?restype=container&comp=list&maxresults=5000';
 var NM_MAX_MB = 5;
 var NM_SCAN_HEAD = ['recipe_id', 'name', 'lang', 'status', 'upd', 'scanned_at', 'err', 'steps_json'];
@@ -26,7 +26,8 @@ function nmSetup() {   /* 編輯器執行一次：建每 10 分鐘的觸發器�
 function nmTick() {   /* 觸發器進入點：有待掃的就掃；沒有就看今天是否該做清單比對；都沒有就結束 */
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
-  try { nmRun_(NM_BUDGET_MS, false); } finally { lock.releaseLock(); }
+  var t0 = Date.now();
+  try { nmRun_(NM_BUDGET_MS, false); try { lgMaybe_(t0); } catch (e) {} } finally { lock.releaseLock(); }   /* 2026-10-17：掃完接著算 🧬 食譜演化（lineage.gs，一天一次） */
 }
 function nmRun_(budget, force) {
   var t0 = Date.now(), P = PropertiesService.getScriptProperties();
