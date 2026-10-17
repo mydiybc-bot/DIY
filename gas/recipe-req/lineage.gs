@@ -9,7 +9,7 @@
    誰是誰的上一代：家族內依出生日排，每支找「比它早出生、跟它共用最多檔」的那支當上一代（名稱相同加分、步驟標題相近加分）。
    只讀：不寫後台；只寫本試算表的 recipe_lineage／lineage_meta 分頁（每次整張重寫）。 */
 var LG_TAB = 'recipe_lineage', LG_META = 'lineage_meta';
-var LG_HEAD = ['recipe_id', 'name', 'lang', 'region', 'status', 'cat', 'store', 'upd', 'birth', 'birth_src', 'kuan', 'kuan_birth', 'kuan_size', 'ver', 'family_id', 'family_kuans', 'family_size', 'parent_kuan', 'gen', 'shared', 'steps', 'media_steps'];
+var LG_HEAD = ['recipe_id', 'name', 'lang', 'region', 'status', 'cat', 'store', 'upd', 'birth', 'birth_src', 'kuan', 'kuan_birth', 'kuan_size', 'ver', 'family_id', 'family_kuans', 'family_size', 'parent_kuan', 'gen', 'shared', 'steps', 'media_steps', 'cover', 'cover_kb'];   /* cover：封面圖在 recipeimages/ 下的路徑（2026-10-17 晚加，頁面每款挑一張當代表圖） */
 var LG_HOUR = 1;              /* 每天 1 點以後、公版掃描做完，算一次 */
 var LG_COMMON = 20;           /* 超過這麼多「款」都在用的檔（教學影片等）不拿來認親 */
 var LG_MIN_SHARED = 3;        /* 兩款共用幾個非通用檔以上算有親戚關係（或共用 2 個且佔較少那款的一半以上） */
@@ -100,7 +100,7 @@ function lgCompute_(recipes, dates, covers) {
 }
 
 /* ---------- 讀資料、算、寫分頁 ---------- */
-function lgBlobDates_(listUrl, prefixLen) {
+function lgBlobDates_(listUrl, sizes) {   /* sizes：有給就順便記每個檔幾 KB */
   var map = {}, marker = '', pages = 0;
   while (pages++ < 12) {
     var r = UrlFetchApp.fetch(listUrl + (marker ? '&marker=' + encodeURIComponent(marker) : ''), { muteHttpExceptions: true });
@@ -110,6 +110,7 @@ function lgBlobDates_(listUrl, prefixLen) {
       var b = m[1], name = (b.match(/<Name>([^<]*)<\/Name>/) || ['', ''])[1];
       var t = (b.match(/<Creation-Time>([^<]*)<\/Creation-Time>/) || b.match(/<Last-Modified>([^<]*)<\/Last-Modified>/) || ['', ''])[1];
       if (name && t) { var d = new Date(t); if (!isNaN(d)) map[name] = Utilities.formatDate(d, TZ, 'yyyy/MM/dd'); }
+      if (sizes && name) sizes[name] = Math.round(Number((b.match(/<Content-Length>(\d+)<\/Content-Length>/) || ['', '0'])[1]) / 1024);
     }
     marker = (x.match(/<NextMarker>([^<]*)<\/NextMarker>/) || ['', ''])[1];
     if (!marker) break;
@@ -133,9 +134,13 @@ function lgRun_() {
   var rows = sh.getRange(2, 1, sh.getLastRow() - 1, NM_SCAN_HEAD.length).getDisplayValues();   /* 顯示值：更新日是日期格子時 getValues 會變成 Date 物件 */
   var sess = rbSession_(), meta = lgListMeta_(rbAuthedGet_(sess, '/Recipes').text); rbSaveSession_(sess);
   if (Object.keys(meta).length < 100) throw fail_('後台食譜清單只讀到 ' + Object.keys(meta).length + ' 支，先不算', 'rbpage');
-  var dates = lgBlobDates_(NM_BLOB_LIST), covAll = lgBlobDates_(LG_COVER_LIST), covers = {};
+  var dates = lgBlobDates_(NM_BLOB_LIST), covKb = {}, covAll = lgBlobDates_(LG_COVER_LIST, covKb), covers = {};
   Object.keys(dates).forEach(function (k) { if (!/^[0-9a-f-]{36}\/[0-9a-f-]{36}\./i.test(k)) delete dates[k]; });
-  Object.keys(covAll).forEach(function (k) { var id = k.split('/')[0].toLowerCase(), d = covAll[k]; if (!covers[id] || d < covers[id]) covers[id] = d; });
+  var coverPath = {};
+  Object.keys(covAll).forEach(function (k) {
+    var id = k.split('/')[0].toLowerCase(), d = covAll[k]; if (!covers[id] || d < covers[id]) covers[id] = d;
+    if (new RegExp('^' + id + '/' + id + '\\.(jpe?g|png|gif|webp)$', 'i').test(k)) coverPath[id] = k;   /* 封面＝{食譜id}/{食譜id}.jpg（wi/ 底下是說明內嵌圖，不算） */
+  });
   var recipes = [];
   rows.forEach(function (r) {
     var id = String(r[0]).toLowerCase(); if (!id) return;
@@ -144,6 +149,7 @@ function lgRun_() {
     recipes.push({ id: id, name: String(r[1]), lang: String(r[2]), status: String(r[3]), upd: String(r[4]), region: mm.region || '', cat: mm.cat || '', store: mm.store || '', steps: steps });
   });
   var out = lgCompute_(recipes, dates, covers);
+  out.forEach(function (o) { o.cover = coverPath[o.recipe_id] || ''; o.cover_kb = o.cover ? (covKb[o.cover] || 0) : ''; });
   var vals = out.map(function (o) { return LG_HEAD.map(function (h) { return o[h] == null ? '' : String(o[h]); }); });
   var ss = ss_(), lt = ss.getSheetByName(LG_TAB) || ss.insertSheet(LG_TAB);
   lt.clear(); lt.getRange(1, 1, Math.max(vals.length + 1, 2), LG_HEAD.length).setNumberFormat('@');

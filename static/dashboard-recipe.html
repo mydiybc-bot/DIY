@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
+<!-- 2026-10-17 晚 🧬 食譜演化：每款甜點一張代表圖（有啟用的版本優先、最新那支的封面 recipeimages/{id}/{id}.jpg；點圖開大圖）；家族清單也帶始祖款的圖。申請單 API lineage 多回 cover 欄。 -->
 <!-- 2026-10-17 新分頁「🧬 食譜演化」（LineageMod，經營者：後台 1000 多支食譜一代一代演化，想看家族樹＋時間軸；每天凌晨 1～2 點自動更新）：讀申請單 API 動作 lineage（免身分密碼、只讀；分頁 recipe_lineage 由 gas/recipe-req/lineage.gs 在公版掃描後重算）。只讀，不寫任何資料。 -->
 <!-- 2026-10-07 經營者「儀表板待處理問題 1007」：①加速——檔期清單先顯示上次的、開頁就讀；讀取 4/12 秒補送、寫入 9/22 秒補送（同回條只寫一次）；密碼跟動作一趟送出（credRun）；送簽「存檔＋送簽」一個請求 ②送簽改 104 公告（標題／內容／連結一鍵複製，取代 LINE 文字）；簽核連結帶通行碼 k，點開免 PIN 看整張申請單；簽核人點名字、第一次自設 PIN、手機記住 ③💬 意見交流（申請表與簽核頁共用，留言＋簽核意見照時間排）④新單位（例：糖粉 平匙）不再紅字錯誤：表一填「1 平匙≈幾 g」、成本照換算算，核准後自動加進採購系統 dim_unitconv（採購確認）。申請單 API v10。 -->
 <!-- 2026-09-29 E 階段：「新增食材/器模具」表二品項後多「廠商品名」（NI_KEYS vname；payload lines.vname；能改進貨廠商的身分就能改，P_DERIVED）。新品通知＝採購系統「🆕 檔期新品」的「新增品名」欄顯示它；核准寫主檔時附在來源欄。「複製新增食材/器模具表」仍 19 格不變 -->
@@ -5938,12 +5939,25 @@ return {start:start};
   .lg-yr{position:absolute;top:0;bottom:0;border-left:1px dashed #E0D6CF}
   .lg-yrl{position:absolute;top:2px;font-size:12px;color:#9A8A80;margin-left:3px}
   .lg-axis{height:22px;position:relative;border-bottom:1px solid #E6D8CF}
+  /* 2026-10-17 晚：每款一張代表圖（封面） */
+  .lg-row{display:flex;gap:8px;align-items:stretch}
+  .lg-row>.lg-kn{flex:1;min-width:0}
+  .lg-imgw{flex:0 0 auto;display:block;width:64px;height:64px;border-radius:8px;overflow:hidden;background:#F3EDE8;border:1px solid #E6D8CF}
+  .lg-imgw img{width:100%;height:100%;object-fit:cover;display:block}
+  .lg-noimg{flex:0 0 auto;width:64px;height:64px;border-radius:8px;background:#F3EDE8;border:1px dashed #D6CCC4;display:flex;align-items:center;justify-content:center;font-size:12px;color:#9A8A80;text-align:center}
+  .lg-fam{display:flex;gap:10px;align-items:center}
+  .lg-fam .ft{min-width:0;flex:1}
+  .lg-fam img,.lg-fam .lg-fi0{width:46px;height:46px;border-radius:7px;object-fit:cover;flex:0 0 auto;background:#F3EDE8}
+  .lg-fam .lg-fi0{display:flex;align-items:center;justify-content:center;font-size:20px}
+  @media(max-width:600px){.lg-tree ul{margin-left:6px;padding-left:6px}.lg-imgw,.lg-noimg{width:42px;height:42px;font-size:12px}.lg-kn{padding:5px 7px}.lg-kn .lg-pill{white-space:normal}.lg-card{padding:12px 10px}}
 </style>
 <script>
 window.LineageMod=(function(){
   'use strict';
   var API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
   var BACK='https://diybc.azurewebsites.net/Recipes/Edit/';
+  var IMG='https://diybcstorage.blob.core.windows.net/recipeimages/';   /* 封面圖（公開） */
+  var IMG_KB=1500, IMG_BIG=3000;   /* 封面有的到 19MB：代表圖先挑 1.5MB 以下的；超過 3MB 的不直接載入，改成「點開看」 */
   var S={inited:false,data:null,fams:[],sel:'',q:'',onlyOn:false,sort:'size',open:{}};
   function $(id){return document.getElementById(id)}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -5971,6 +5985,8 @@ window.LineageMod=(function(){
       k.vers.push(o);f.n++;if(o.status==='Active'){f.on++;k.on++}if(o.birth>f.last)f.last=o.birth;if(o.gen>f.maxGen)f.maxGen=o.gen});
     var fams=Object.keys(F).map(function(id){var f=F[id];f.kList=Object.keys(f.kuans).map(function(k){return f.kuans[k]});
       f.kList.forEach(function(k){k.vers.sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))||String(a.upd).localeCompare(String(b.upd))})});
+      f.kList.forEach(function(k){var c=k.vers.filter(function(v){return v.cover}),sm=c.filter(function(v){var n=Number(v.cover_kb);return n>0&&n<=IMG_KB}),pool=sm.length?sm:c,a=pool.filter(function(v){return v.status==='Active'});
+        var p=(a.length?a:pool).slice().sort(function(x,y){return String(y.birth).localeCompare(String(x.birth))||String(y.upd).localeCompare(String(x.upd))})[0];k.img=p?IMG+p.cover:'';k.imgName=p?p.name:'';k.imgKb=p?Number(p.cover_kb)||0:0});   /* 代表圖：先挑檔案不大（≤1.5MB）的，再以有啟用的版本優先、最新出生的那支封面 */
       f.first=f.kList.reduce(function(m,k){return !m||k.birth<m?k.birth:m},'');return f});
     return {meta:d.meta||{},rows:rows,fams:fams};
   }
@@ -6001,8 +6017,8 @@ window.LineageMod=(function(){
     if(!S.sel||!list.some(function(f){return f.id===S.sel}))S.sel=list[0]?list[0].id:'';
     h+='<div class="lg-wrap"><div><div class="lg-muted" style="margin:0 0 6px">'+list.length+' 個家族</div><div class="lg-list" id="lgList">'+list.slice(0,300).map(function(f){
       var root=f.kList.filter(function(k){return k.gen===1})[0]||f.kList[0];
-      return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
-        +'<div class="m">'+f.kList.length+' 款・'+f.n+' 支・傳到第 '+f.maxGen+' 代・'+yr(f.first)+'～'+yr(f.last)+'</div></button>'}).join('')
+      return '<button type="button" class="lg-fam'+(f.id===S.sel?' on':'')+'" data-f="'+esc(f.id)+'">'+(root.img&&root.imgKb<=IMG_BIG?'<img loading="lazy" alt="" src="'+esc(root.img)+'">':'<span class="lg-fi0">🍰</span>')+'<span class="ft"><b>'+esc(root.key)+'</b>'+(f.on?'<span class="lg-pill lg-on">'+f.on+' 支啟用</span>':'<span class="lg-pill lg-off">都停用</span>')
+        +'<div class="m">'+f.kList.length+' 款・'+f.n+' 支・傳到第 '+f.maxGen+' 代・'+yr(f.first)+'～'+yr(f.last)+'</div></span></button>'}).join('')
       +(list.length>300?'<div class="lg-muted">只列前 300 個，請用搜尋縮小</div>':'')+(list.length?'':'<div class="lg-muted">找不到符合的家族</div>')+'</div></div><div id="lgDetail"></div></div>';
     h+='<div class="lg-muted" style="margin-top:12px">資料最後更新：'+esc(m.at||'—')+'（每天凌晨 1～2 點自動更新；只讀，不會改後台）'+(m.error?'　<b style="color:#A3321F">上次更新失敗：'+esc(m.error)+'</b>':'')+'</div>';
     $('lgRoot').innerHTML=h;
@@ -6022,9 +6038,9 @@ window.LineageMod=(function(){
     var roots=f.kList.filter(function(k){return !k.parent||!f.kuans[k.parent]}).sort(function(a,b){return String(a.birth).localeCompare(String(b.birth))});
     var order=[];
     function node(k){order.push(k);var open=S.open[k.key]||hit[k.key];
-      var s='<li class="lg-node"><button type="button" class="lg-kn'+(hit[k.key]?' hit':'')+'" data-k="'+esc(k.key)+'"><span class="nm">'+(open?'▾ ':'▸ ')+esc(k.key)+'</span><span class="lg-pill lg-gen">第 '+k.gen+' 代</span>'
+      var s='<li class="lg-node"><div class="lg-row">'+(k.img?(k.imgKb>IMG_BIG?'<a class="lg-imgw lg-noimg" href="'+esc(k.img)+'" target="_blank" rel="noopener" title="'+esc(k.imgName)+'">📷 點開看<br>'+(Math.round(k.imgKb/102.4)/10)+' MB</a>':'<a class="lg-imgw" href="'+esc(k.img)+'" target="_blank" rel="noopener" title="'+esc(k.imgName)+'（點開看大圖）"><img loading="lazy" alt="'+esc(k.key)+'" src="'+esc(k.img)+'"></a>'):'<span class="lg-noimg">沒有<br>封面圖</span>')+'<button type="button" class="lg-kn'+(hit[k.key]?' hit':'')+'" data-k="'+esc(k.key)+'"><span class="nm">'+(open?'▾ ':'▸ ')+esc(k.key)+'</span><span class="lg-pill lg-gen">第 '+k.gen+' 代</span>'
         +(k.on?'<span class="lg-pill lg-on">'+k.on+' 支啟用</span>':'<span class="lg-pill lg-off">停用</span>')
-        +'<span class="dt">出生 '+esc(k.birth||'—')+'・'+k.vers.length+' 個版本'+(k.parent&&k.shared?'・沿用「'+esc(k.parent)+'」'+k.shared+' 個圖片影片':'')+'</span></button>';
+        +'<span class="dt">出生 '+esc(k.birth||'—')+'・'+k.vers.length+' 個版本'+(k.parent&&k.shared?'・沿用「'+esc(k.parent)+'」'+k.shared+' 個圖片影片':'')+'</span></button></div>';
       if(open)s+='<div class="lg-vers"><table class="lg-t"><thead><tr><th>#</th><th>食譜名稱</th><th>狀態</th><th>語言</th><th>類別</th><th>店別</th><th>出生</th><th>最後更新</th><th>步驟</th><th></th></tr></thead><tbody>'
         +k.vers.map(function(v,i){return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(v.name)+'</td><td>'+(v.status==='Active'?'<span class="lg-pill lg-on">啟用</span>':'<span class="lg-pill lg-off">停用</span>')+'</td><td>'+esc(v.lang)+'</td><td>'+esc(v.cat)+'</td><td>'+esc(v.store)+'</td><td class="n">'+esc(v.birth)+(v.birth_src==='upd'?'*':'')+'</td><td class="n">'+esc(v.upd)+'</td><td class="n">'+esc(v.steps)+'</td><td><a href="'+BACK+esc(v.recipe_id)+'" target="_blank" rel="noopener">後台 ↗</a></td></tr>'}).join('')
         +'</tbody></table><div class="lg-muted" style="margin:4px 0 0">出生日＝這支自己第一次上傳圖片影片或封面的日子；有 * 的是查不到上傳日，先用最後更新日。</div></div>';
