@@ -2008,8 +2008,8 @@ function skuOf(n){return R.skuOf(n)}
 function isNewItem(l){return !!(l.m&&!skuOf(l.m))}
 /* 2026-10-17 經營者「自選內餡」：同一組（og，例：內餡）裡客人只選一個選項（oo，可由好幾列組成，例：焦糖鮮奶油＋三色脆球），選項各填預估比例 op（%）。
    比例：有填的照填；沒填的平分剩下的（100−已填）；加總不是 100 → 照比例換算成 100%（提醒）。成本＝每組最貴的選項；寫進採購 BOM＝每份用量 × 比例（器具模具不乘）。 */
-function optModel(){var G={},order=[];
-  AP.lines.forEach(function(l,i){var g=String(l.og||'').trim();if(!g||!String(l.m||'').trim())return;var o=String(l.oo||'').trim()||String(l.m).trim();
+function optModel(LS){LS=LS||AP.lines;var G={},order=[];
+  LS.forEach(function(l,i){var g=String(l.og||'').trim();if(!g||!String(l.m||'').trim())return;var o=String(l.oo||'').trim()||String(l.m).trim();
     if(!G[g]){G[g]={name:g,opts:{},order:[],warn:[]};order.push(g)}
     var O=G[g].opts[o];if(!O){O=G[g].opts[o]={name:o,idx:[],pct:null};G[g].order.push(o)}
     O.idx.push(i);var p=parseFloat(l.op);if(p>0&&O.pct===null)O.pct=p});
@@ -2035,6 +2035,41 @@ function optRowHTML(l,i,c){if(lockedReq())return String(l.og||'').trim()?'<div c
   return '<div class="ap-opt">🔀 組<input type="text" data-lf="og" value="'+esc(l.og)+'" placeholder="內餡"> 選項<input type="text" data-lf="oo" value="'+esc(l.oo)+'" placeholder="'+esc(l.m)+'" title="同一個選項有好幾列（例：焦糖鮮奶油＋三色脆球）就填同一個選項名"> 比例<input type="number" step="any" min="0" data-lf="op" value="'+esc(l.op)+'" placeholder="平分">%'
     +' <button type="button" class="ap-x" data-optclr="'+i+'" title="取消選項（回到每份都用）">✕</button>'
     +(O?'<div>'+(gg.best&&gg.best===O.name?'<b style="color:#B26A00">最貴選項，計入成本</b>':'<span class="ap-muted">不是最貴的選項，不計入成本</span>')+(tool?'':'；寫進採購：每份 '+r2(num(l.q)*O.share)+' '+esc(l.u||'')+'（'+r1(O.share*100)+'%）')+'</div>':'')+'</div>'}
+/* 2026-10-17 經營者：🔀 調整選項比例（已寫入採購的單）：輸入新比例 → 預覽 BOM 每份用量改前改後 → optAdjust（主廚密碼；只改寫用量會變的列、先比對、可「↩ 還原比例調整」） */
+var OADJ={};   /* 畫面上輸入的新比例 {組|選項: 字串} */
+function oaLines(np){return AP.lines.map(function(l){var o={};for(var k in l)o[k]=l[k];var g=String(l.og||'').trim();if(g){var key=g+'|'+(String(l.oo||'').trim()||String(l.m).trim());if(np.hasOwnProperty(key))o.op=np[key]}return o})}
+function oaBom(LS){var M=optModel(LS),agg={},order=[];LS.forEach(function(l){var nm=String(l.m||'').trim(),q=num(l.q);if(!nm||!(q>0))return;var u=String(l.u||'').trim()||'g',k=nm+'|'+u,tool=isToolLine(l);
+  var sh=1;var g=String(l.og||'').trim();if(g&&!tool){var gg=M.G[g],O=gg&&gg.opts[String(l.oo||'').trim()||nm];if(O)sh=O.share}
+  if(!agg[k]){agg[k]={m:nm,u:u,q:0,tool:tool};order.push(k)}agg[k].q=tool?Math.max(agg[k].q,q):agg[k].q+q*sh});return {agg:agg,order:order,M:M}}
+function oaDiff(){var np={};Object.keys(OADJ).forEach(function(k){np[k]=OADJ[k]});var A0=oaBom(AP.lines),A1=oaBom(oaLines(np));
+  return {rows:A1.order.filter(function(k){return A0.agg[k]&&!A1.agg[k].tool&&Math.abs(r4(A1.agg[k].q)-r4(A0.agg[k].q))>1e-9}).map(function(k){return [A1.agg[k].m,r4(A0.agg[k].q),r4(A1.agg[k].q),A1.agg[k].u]}),M1:A1.M}}
+function optAdjHTML(pw){var M=optModel();if(!M.order.length)return '';var adj=(pw&&pw.adj)||[],D=oaDiff();
+  var x='<div class="ap-optsum" style="margin:8px 0 0"><b>🔀 調整選項比例</b>　<span class="ap-muted">上線後發現比例和估的不同：填新比例（空白＝平分剩下的）→ 看下面會改哪幾列 → 套用。只改寫採購系統 BOM 表這支甜點裡用量會變的列，改之前會比對、可以還原。</span>';
+  M.order.forEach(function(g){var gg=M.G[g];x+='<div style="margin-top:4px"><b>'+esc(g)+'</b>：'+gg.order.map(function(n){var O=gg.opts[n],key=g+'|'+n;
+    return esc(n)+' 現在 '+r1(O.share*100)+'% → <input type="number" step="any" min="0" data-oa="'+esc(key)+'" value="'+esc(OADJ.hasOwnProperty(key)?OADJ[key]:(O.pct!==null?String(O.pct):''))+'" placeholder="平分" style="width:60px">%'}).join('｜')+'</div>'});
+  x+='<div id="apOaPv" style="margin-top:4px">'+oaPvHTML(D)+'</div>';
+  x+='<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apOaGo" type="button">🔀 套用新比例</button>'+(adj.length?'<button class="ap-btn2" id="apOaUndo" type="button">↩ 還原比例調整（'+esc(adj[adj.length-1].ts)+'）</button>':'')+'</div></div>';
+  return x}
+function oaPvHTML(D){D=D||oaDiff();var t=D.M1.order.map(function(g){var gg=D.M1.G[g];return esc(g)+'：'+gg.order.map(function(n){return esc(n)+' '+r1(gg.opts[n].share*100)+'%'}).join('、')+(gg.warn.length?' <span class="ap-bad">⚠ '+gg.warn.map(esc).join('；')+'</span>':'')}).join('｜');
+  return '<div class="ap-muted">新比例：'+t+'</div>'+(D.rows.length?pvTable(['BOM 品項','每份用量（現在）','改成','單位'],D.rows):'<div class="ap-muted">用量沒有變化。</div>')}
+function oaFlow(){if(_busy)return;var rid=AP.head.req_id;if(!rid)return;var D=oaDiff();if(!D.rows.length){alert('新比例和現在一樣，沒有要改的用量。');return}
+  var pct={};Object.keys(OADJ).forEach(function(k){var i=k.indexOf('|'),g=k.slice(0,i),o=k.slice(i+1);(pct[g]=pct[g]||{})[o]=String(OADJ[k]).trim()});
+  if(!confirm('調整選項比例，採購系統 BOM 表會改這幾列：\n\n'+D.rows.map(function(r){return '・'+r[0]+'：每份 '+r[1]+' → '+r[2]+' '+r[3]}).join('\n')+'\n\n確定？'))return;
+  if(!confirm('再確認一次：改寫採購系統 BOM 表上面這 '+D.rows.length+' 列（可以按「↩ 還原比例調整」改回來）。'))return;
+  withCred('主廚','調整比例要「主廚」或「管理者」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">調整中…（約 10～40 秒）</span>';updSendUI();
+    apiPost({action:'optAdjust',role:cr.role,password:cr.pw,req_id:rid,pct:pct,rq:rqToken()}).then(function(r){
+      return fetchReq(cr,rid).then(function(g){_busy=false;var ok2=g&&g.ok&&applyLoaded(g.data);
+        if(!r.ok){if(r.code==='auth')setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg||'調整失敗')+'</span>';updSendUI();return}
+        OADJ={};var ch=(r.data||{}).changes||[];SENDMSG='<span class="ap-okline">🔀 已調整比例：'+esc(ch.map(function(c){return c.m+' '+c.from+'→'+c.to+' '+c.u}).join('、')||'用量沒有變化')+'</span>'+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');render();updSendUI()})})})}
+function oaUndoFlow(){if(_busy)return;var rid=AP.head.req_id;if(!rid)return;
+  if(!confirm('把最近一次的比例調整還原（BOM 表那幾列改回調整前的用量、申請單比例也改回來）？'))return;
+  withCred('主廚','還原要「主廚」或「管理者」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">還原中…</span>';updSendUI();
+    apiPost({action:'optAdjustUndo',role:cr.role,password:cr.pw,req_id:rid,rq:rqToken()}).then(function(r){
+      return fetchReq(cr,rid).then(function(g){_busy=false;var ok2=g&&g.ok&&applyLoaded(g.data);
+        if(!r.ok){if(r.code==='auth')setCred(null,cr.role);SENDMSG='<span class="ap-bad">✕ '+esc(r.msg||'還原失敗')+'</span>';updSendUI();return}
+        OADJ={};SENDMSG='<span class="ap-okline">↩ '+esc(r.msg||'已還原比例調整')+'</span>'+(ok2?'':'<span class="ap-muted">（畫面沒更新，請按「🔄 重新整理」）</span>');render();updSendUI()})})})}
+function wireOa(root){(root||document).querySelectorAll('[data-oa]').forEach(function(el){el.oninput=function(){OADJ[el.dataset.oa]=el.value;var b=document.getElementById('apOaPv');if(b)b.innerHTML=oaPvHTML()}});
+  var g=document.getElementById('apOaGo');if(g)g.onclick=oaFlow;var u=document.getElementById('apOaUndo');if(u)u.onclick=oaUndoFlow}
 /* 2026-10-17 經營者：🆕 新品項和主檔「類似」（例：圈圈軟糖 ↔ 主檔 F290「圈圈軟糖(500g/包) (2026夏季)」停售）→ 一定要警告、主廚確認。
    比法：品名與 BOM別名去掉括號內容、規格數字（500g／10支）、符號空白後 ①一樣 ②一個包含另一個（短的至少 2 字）③兩兩字組重疊 ≥ 50%。
    主廚按「改用這個」＝換成主檔品項；按「都不是」＝記下確認過的 sku_id（l.simok）；主檔多出新的類似品項要再確認一次。 */
@@ -3400,7 +3435,7 @@ function simpleCardHTML(){var h=AP.head,s=AP.sub||{},st=s.status||'',rid=h.req_i
   x+='<div class="ap-step"><div class="ap-stepn">2</div><div class="ap-stepb"><b>簽核通過，上傳更新採購系統</b>';
   if(!rid)x+='<div class="ap-muted">先做 ①，這支存進系統之後才能上傳。</div>';
   else if(st==='已寫入採購'){var pw=pushInfo();
-    x+='<div class="ap-okline">✅ 已上傳採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+pushDoneHTML(pw)
+    x+='<div class="ap-okline">✅ 已上傳採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+pushDoneHTML(pw)+optAdjHTML(pw)
       +'<div class="ap-muted">下一步（採購）：到採購系統「主檔」頁 →「🆕 待確認」補單價、單位換算、適用店。各店在採購系統「🆕 檔期新品」看得到這支新品。<a href="dashboard-purchase.html" target="_blank" rel="noopener">打開採購系統 ↗</a></div>'
       +(semiTodo().length?'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2 ap-mini" id="apSemiRe" type="button">🧪 再寫一次半成品配方</button><span class="ap-muted">上傳時已一起寫；沒寫成功或改過配方時再按</span></div>':'')
       +'<details style="margin-top:4px"><summary class="ap-muted" style="cursor:pointer">寫錯要還原？（管理者）</summary><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apRbBtn" type="button">↩ 還原採購寫入（管理者）</button></div></details>'}
@@ -3697,7 +3732,7 @@ function signCardHTML(){var h=AP.head,s=AP.sub||{};if(!h.req_id||unitMode())retu
     else x+='<div class="ap-muted">這張單已核准，還沒有寫入採購系統'+(pi&&(pi.history||[]).some(function(o){return o.action==='rollback'})?'（先前的寫入已由管理者還原）':'')+'。</div>';
     x+='<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn" id="apPushBtn" type="button">📦 寫入採購系統</button><button class="ap-btn2" id="apPvBtn" type="button">🔍 預覽會寫什麼</button><button class="ap-btn2" id="apSgRefresh" type="button">🔄 重新整理</button></div>'+pushPvHTML()}
   else if(st==='已寫入採購'){var pw=pushInfo();
-    x+='<div class="ap-okline">✅ 已核准，已寫入採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+progressHTML(p)+pushDoneHTML(pw)
+    x+='<div class="ap-okline">✅ 已核准，已寫入採購系統'+(pw&&pw.ts?'（'+esc(pw.ts)+'）':'')+'</div>'+progressHTML(p)+pushDoneHTML(pw)+optAdjHTML(pw)
       +'<div class="ap-muted">下一步（採購）：到採購系統「主檔」頁 →「🆕 待確認」補單價、單位換算、適用店'+((pw&&(pw.written||[]).some(function(d){return d.table==='conv'}))?'；新單位換算在「單位對照」，備註寫「自動草稿…請採購確認」的那幾列要確認數字':'')+'。產品名稱對照表明天 07:05 同步到採購系統，開賣前 14 天起各店會看到新品備料。</div>'
       +'<div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" id="apSgRefresh" type="button">🔄 重新整理</button><button class="ap-btn2" id="apRbBtn" type="button" title="只有管理者可以：把這張單寫進採購系統的列刪掉">↩ 還原採購寫入（管理者）</button></div>'}
   else if(LOCK_ST[st]){x+='<div class="ap-muted">這張單目前是「'+esc(st)+'」。</div>'+progressHTML(p)}
@@ -4131,6 +4166,7 @@ function applyLock(root){if(!lockedReq())return;
   var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apLmChef:1,apSemiAll:1,apSemiRe:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apRbLink:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-lmgo')||el.hasAttribute('data-copy')||el.hasAttribute('data-copy104')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
+    if(el.id==='apOaGo'||el.id==='apOaUndo'||el.hasAttribute('data-oa'))return;   /* 2026-10-17：🔀 調整選項比例（已寫入採購的單才出現） */
     if(el.closest&&el.closest('#apCampCard'))return;   /* 🗂 整檔送簽核卡管整個檔期（畫面上這支鎖住時，別支照樣可以送） */
     el.disabled=true})}
 /* 2026-09-28：重畫一律經 UiKeep——使用者還在點、選單開著、中文選字中就先排隊；重畫時保住游標所在格子與捲動位置。
@@ -4352,6 +4388,7 @@ function wire(){var root=document.getElementById('apRoot');
   var bSr=document.getElementById('apSgRefresh');if(bSr)bSr.onclick=refreshSign;
   var bPv=document.getElementById('apPvBtn');if(bPv)bPv.onclick=pushPreviewFlow;
   var bPu=document.getElementById('apPushBtn');if(bPu)bPu.onclick=pushFlow;
+  wireOa();   /* 2026-10-17 調整選項比例 */
   var bRb=document.getElementById('apRbBtn');if(bRb)bRb.onclick=rollbackFlow;
   var bSw=document.getElementById('apSgWithdraw');if(bSw)bSw.onclick=withdrawFlow;
   var bRo=document.getElementById('apRbOpen');if(bRo)bRo.onclick=function(){rbOpen(false)};   /* 2026-10-06：🍰 匯入自己做食譜系統（2026-10-08 起畫面不再出現，舊紀錄的接續／重新匯入仍可用） */

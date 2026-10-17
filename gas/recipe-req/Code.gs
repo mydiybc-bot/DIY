@@ -18,11 +18,12 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v19＝2026-10-17 經營者：🔀 調整選項比例（optAdjust／optAdjustUndo；已寫入採購的單只改寫 BOM 用量會變的列、比對、讀回、記 fact_push optadj；有沒還原的調整時擋還原採購寫入）；BOM 合併抽成 bomAgg_。 */
 /* v18＝2026-10-17 經營者「自選內餡」：用料 opt_group／opt_name／opt_pct（客人選一），核准寫 BOM 時選項用量 × 預估比例（optShares_）。 */
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v18';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v19';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -261,7 +262,7 @@ function doGet(e) {
 var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_, saveUnit: saveUnit_, getCampaign: getCampaign_, getReq: getReq_,
   adminList: adminList_, adminSaveSigner: adminSaveSigner_, adminDeleteSigner: adminDeleteSigner_, adminSetPassword: adminSetPassword_,
   listSigners: listSigners_, patchReq: patchReq_, submitSign: submitSign_, withdrawSign: withdrawSign_, signView: signView_, sign: sign_,
-  pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_,
+  pushPreview: pushPreview_, pushPurchase: pushPurchase_, rollbackPurchase: rollbackPurchase_, optAdjust: optAdjust_, optAdjustUndo: optAdjustUndo_,
   /* 2026-10-07：簽核連結（帶通行碼 k）免 PIN 看申請單、本人第一次自設 PIN、意見交流 */
   signOpen: signOpen_, signSetPin: signSetPin_, commentAdd: commentAdd_,
   /* 2026-10-07 晚：整檔一次送簽／一次簽完 */
@@ -276,7 +277,7 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   rbStatus: function (p, a) { return rbStatus_(p, a); }, rbSetCred: function (p, a) { return rbSetCred_(p, a); },
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
-  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
+  patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, optAdjust: 1, optAdjustUndo: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
   adminSetRoleEmail: 1, adminTestMail: 1, formPatch: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
 var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1 };
@@ -297,7 +298,7 @@ var AUDIT_READS = { adminList: 1 };
    同一張單不重複跑由 rbImport_ 自己用 CacheService 擋，寫紀錄分頁時才短暫拿鎖 */
 var SELFLOCK = { rbImport: 1 };
 /* 會動到 BOM 本「BOM表／產品名稱對照表」的動作：做完（成功或失敗都算，失敗可能已寫一半又寫回）就讓 bomMeta／mapGet 的暫存失效 */
-var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, signCamp: 1, pushPurchase: 1, rollbackPurchase: 1 };
+var BOM_TOUCH = { bomSave: 1, bomDelete: 1, bomRename: 1, mapSave: 1, mapDelete: 1, bomUndo: 1, sign: 1, signCamp: 1, pushPurchase: 1, rollbackPurchase: 1, optAdjust: 1, optAdjustUndo: 1 };
 
 function doPost(e) {
   var p;
@@ -1390,6 +1391,23 @@ function dss_() {
 function ptName_(v) { return str_(v).trim(); }
 /* 2026-10-17 經營者「自選內餡」（同前端 optModel）：同一組 og 裡客人選一個選項 oo（可多列），op＝預估比例%；
    有填照填、沒填平分剩下的（100−已填）、加總≠100 照比例換算成 100%。每列寫上 l.share（器具模具＝1：只取最大）；回傳說明文字 */
+/* BOM 表合併（planPush_、調整選項比例共用）：同品項＋同單位合併；只收數量 > 0；食材耗材加總（客人選一 × 比例）、器具模具取最大 */
+function bomAgg_(lines) {
+  var agg = {}, order = [];
+  lines.forEach(function (l) {
+    if (!(l.qty > 0)) return;
+    var u = l.unit || 'g', key = l.name + '|' + u, tool = l.cat === '器具' || l.cat === '模具';
+    if (!agg[key]) { agg[key] = { m: l.name, u: u, q: 0, tool: tool }; order.push(key); }
+    agg[key].q = tool ? Math.max(agg[key].q, l.qty) : agg[key].q + l.qty * (l.share === undefined ? 1 : l.share);   /* 2026-10-17：客人選一的選項 × 比例 */
+  });
+  return { agg: agg, order: order };
+}
+/* payload lines → 計算用的列（optAdjust_ 用；欄位同 planPush_） */
+function optLines_(j) {
+  return (j.lines || []).map(function (l) {
+    return { name: ptName_(l.name), qty: Number(l.qty) || 0, unit: ptName_(l.unit), cat: ptName_(l.cat), og: ptName_(l.opt_group), oo: ptName_(l.opt_name), op: parseFloat(l.opt_pct) };
+  }).filter(function (l) { return l.name; });
+}
 function optShares_(lines) {
   var G = {}, order = [], text = [];
   lines.forEach(function (l) {
@@ -1600,13 +1618,7 @@ function planPush_(rid) {
   }
 
   /* ② BOM表：同品項＋同單位合併（同前端「複製 BOM 表貼上列」）；只收數量 > 0 */
-  var agg = {}, order = [];
-  lines.forEach(function (l) {
-    if (!(l.qty > 0)) return;
-    var u = l.unit || 'g', key = l.name + '|' + u, tool = l.cat === '器具' || l.cat === '模具';
-    if (!agg[key]) { agg[key] = { m: l.name, u: u, q: 0, tool: tool }; order.push(key); }
-    agg[key].q = tool ? Math.max(agg[key].q, l.qty) : agg[key].q + l.qty * (l.share === undefined ? 1 : l.share);   /* 2026-10-17：客人選一的選項 × 比例 */
-  });
+  var ag = bomAgg_(lines), agg = ag.agg, order = ag.order;
   var bomRows = order.map(function (k) { var a = agg[k]; return [name, a.m, r4_(a.q), a.u, cont[a.m] || '']; });
   var bomIdx = [];
   P.bom.vals.forEach(function (r, i) { if (ptName_(r[0]) === name) bomIdx.push(i); });
@@ -1898,6 +1910,7 @@ function pushToPurchase_(rid, who) {
   return v;
 }
 function rollbackPush_(rid, who) {
+  if (optAdjLive_(rid).length) throw fail_('這張單之後調整過選項比例：請先按「↩ 還原比例調整」（還原到寫入時的比例），再還原採購寫入', 'optadj');
   var st = pushState_(rid);
   if (!st.live) throw fail_('這張單沒有「已寫入、未還原」的採購系統紀錄', 'none');
   var res = [], now = now_(), bkDig = {};
@@ -2005,9 +2018,110 @@ function rollbackReq(rid) {
   } finally { lock.releaseLock(); }
 }
 
+/* ================= 2026-10-17 經營者：🔀 調整選項比例（已寫入採購的單）=================
+   輸入新比例 → 用申請單內容算「舊比例的 BOM 用量」和「新比例的 BOM 用量」，只改寫 BOM 表這支甜點裡用量會變的那幾列（數量欄）；
+   改之前比對 BOM 表現在的數字＝舊比例算出來的（不同＝有人在 BOM 管理改過 → 一列都不改）；寫完讀回；申請單內容的比例跟著更新。
+   fact_push 記 action optadj（detail：甜點名、每列 品項／單位／改前／改後、舊比例、新比例）；「↩ 還原比例調整」一次倒回最近一次（optadjundo）。
+   有沒還原的比例調整時，不能「還原採購寫入」（先還原比例）。 */
+function optAdjLive_(rid) {
+  var rows = safeRows_('fact_push', (function () { var o = {}; o[rid] = 1; return o; })()), live = [];
+  rows.forEach(function (r) {
+    if (r.ok !== 'Y') return;
+    if (r.action === 'optadj') { var d = {}; try { d = JSON.parse(r.detail); } catch (e) { } live.push({ batch: r.batch, ts: r.ts, d: d, msg: r.msg }); }
+    else if (r.action === 'optadjundo') live = live.filter(function (x) { return x.batch !== r.batch; });
+    else if (r.action === 'rollback') live = [];
+  });
+  return live;
+}
+function optPctMap_(lines) {   /* {組:{選項:原始比例字串}} */
+  var m = {};
+  lines.forEach(function (l) { if (!l.og) return; var o = l.oo || l.name; m[l.og] = m[l.og] || {}; if (m[l.og][o] === undefined || m[l.og][o] === '') m[l.og][o] = l.op > 0 ? String(l.op) : ''; });
+  return m;
+}
+function optApplyPct_(j, pct) {   /* 把新比例寫進申請單內容（同一選項每一列都寫） */
+  (j.lines || []).forEach(function (l) {
+    var g = ptName_(l.opt_group); if (!g || !pct[g]) return;
+    var o = ptName_(l.opt_name) || ptName_(l.name);
+    if (pct[g].hasOwnProperty(o)) { var v = parseFloat(pct[g][o]); l.opt_pct = v > 0 ? String(v) : ''; }
+  });
+}
+function optBomSet_(name, changes, dir) {   /* changes [{m,u,from,to}]；dir 'fwd'＝from→to、'back'＝to→from；回 [{m,u,row}]，不符就丟錯（一列都不改） */
+  var tab = ptRead_('bom'), plan = [];
+  changes.forEach(function (c) {
+    var want = dir === 'fwd' ? c.from : c.to, put = dir === 'fwd' ? c.to : c.from, hit = [];
+    tab.vals.forEach(function (r, i) { if (ptName_(r[0]) === name && ptName_(r[1]) === c.m && (ptName_(r[3]) || 'g') === c.u) hit.push(i + 2); });
+    if (hit.length !== 1) throw fail_('BOM 表「' + name + '」的「' + c.m + '（' + c.u + '）」' + (hit.length ? '有 ' + hit.length + ' 列' : '找不到') + '，這次沒有改（請到 📚 BOM 管理處理）', 'busy');
+    var cur = tab.vals[hit[0] - 2][2];
+    if (!ptSame_(r4_(Number(cur)), r4_(want))) throw fail_('BOM 表「' + name + '」的「' + c.m + '」現在是 ' + ptNorm_(cur) + ' ' + c.u + '，不是預期的 ' + r4_(want) + '（可能有人在 📚 BOM 管理改過）：這次一列都沒有改', 'busy');
+    plan.push({ m: c.m, u: c.u, row: hit[0], put: r4_(put), was: cur });
+  });
+  plan.forEach(function (x) { tab.sh.getRange(x.row, 3).setValue(x.put); });
+  SpreadsheetApp.flush();
+  var bad = plan.filter(function (x) { return !ptSame_(tab.sh.getRange(x.row, 3).getValue(), x.put); });
+  if (bad.length) {
+    plan.forEach(function (x) { try { tab.sh.getRange(x.row, 3).setValue(x.was); } catch (e) { } });
+    SpreadsheetApp.flush();
+    throw fail_('BOM 表讀回不一致（' + bad.map(function (x) { return x.m; }).join('、') + '），已倒回原本的數字', 'verify');
+  }
+  return plan;
+}
+function optWritePayload_(t, row, j, who) {
+  var pl2 = JSON.stringify(j), segs = split_(pl2), obj = { updated_at: now_(), updated_by: who };
+  for (var i = 0; i < SEG_N; i++) obj['payload_' + (i + 1)] = segs[i] || '';
+  putCols_(t, row._row, obj, function (h) { return h.indexOf('payload_') === 0 || h === 'updated_at' || h === 'updated_by'; });
+}
+function optAdjust_(p, auth) {
+  if (!canPush_(auth)) throw fail_('只有主廚或管理者可以調整比例', 'perm');
+  var rid = str_(p.req_id).trim(); if (!rid) throw fail_('缺申請單號');
+  var pct = p.pct || {}; if (typeof pct !== 'object') throw fail_('比例格式不對');
+  var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
+  if (!row) throw fail_('找不到申請單 ' + rid, 'notfound');
+  if (str_(row.status) !== PUSH_OK) throw fail_('這張單還沒寫入採購系統（目前「' + str_(row.status) + '」）：還沒寫入前直接改申請表的比例就好', 'locked');
+  var j; try { j = JSON.parse(readPayload_(t, row._row)); } catch (e) { throw fail_('申請單內容讀不出來'); }
+  var h = j.head || {}, name = ptName_(h.fname) || ptName_(h.name) || ptName_(row['商品正式名稱']) || ptName_(row['商品暫定名稱']);
+  var L0 = optLines_(j), oldPct = optPctMap_(L0);
+  if (!Object.keys(oldPct).length) throw fail_('這張單沒有「客人選一」的選項', 'bad');
+  Object.keys(pct).forEach(function (g) {
+    if (!oldPct[g]) throw fail_('沒有這個選項組：「' + g + '」', 'bad');
+    Object.keys(pct[g] || {}).forEach(function (o) {
+      if (!oldPct[g].hasOwnProperty(o)) throw fail_('「' + g + '」沒有這個選項：「' + o + '」', 'bad');
+      var v = String(pct[g][o]).trim(); if (v !== '' && !(parseFloat(v) >= 0)) throw fail_('「' + o + '」的比例要填數字或留空', 'bad');
+    });
+  });
+  optShares_(L0); var A0 = bomAgg_(L0).agg;
+  var j1 = JSON.parse(JSON.stringify(j)); optApplyPct_(j1, pct);
+  var L1 = optLines_(j1), info1 = optShares_(L1), A1 = bomAgg_(L1).agg, newPct = optPctMap_(L1);
+  var changes = Object.keys(A1).filter(function (k) { return A0[k] && !A1[k].tool && Math.abs(r4_(A1[k].q) - r4_(A0[k].q)) > 1e-9; })
+    .map(function (k) { return { m: A1[k].m, u: A1[k].u, from: r4_(A0[k].q), to: r4_(A1[k].q) }; });
+  if (!changes.length) return { id: rid, data: { changes: [], text: info1.text }, msg: '新比例和現在一樣，沒有要改的用量' };
+  var batch = stamp_() + '-' + Utilities.getUuid().slice(0, 4), now = now_(), plan;
+  try { plan = optBomSet_(name, changes, 'fwd'); }
+  catch (e) { pushLog_({ ts: now, req_id: rid, batch: batch, action: 'optadj', table: 'bom', rows: '0', detail: JSON.stringify({ name: name, changes: changes }), backup: '', ok: 'N', msg: (auth.role || '') + '｜' + errMsg_(e) }); throw e; }
+  optWritePayload_(t, row, j1, auth.role);
+  pushLog_({ ts: now, req_id: rid, batch: batch, action: 'optadj', table: 'bom', rows: String(changes.length),
+    detail: JSON.stringify({ name: name, changes: changes, oldPct: oldPct, newPct: newPct }), backup: '', ok: 'Y',
+    msg: (auth.role || '') + '｜調整選項比例：' + info1.text.join('；') + '｜BOM ' + changes.map(function (c) { return c.m + ' ' + c.from + '→' + c.to + ' ' + c.u; }).join('、') });
+  log_(auth.role, 'optAdjust', rid, true, info1.text.join('；'));
+  return { id: rid, data: { changes: changes, text: info1.text, batch: batch }, msg: '已調整選項比例：BOM ' + changes.length + ' 列' };
+}
+function optAdjustUndo_(p, auth) {
+  if (!canPush_(auth)) throw fail_('只有主廚或管理者可以還原', 'perm');
+  var rid = str_(p.req_id).trim(); if (!rid) throw fail_('缺申請單號');
+  var live = optAdjLive_(rid); if (!live.length) throw fail_('這張單沒有可以還原的比例調整', 'none');
+  var last = live[live.length - 1], d = last.d || {};
+  var t = load_('fact_recipe_req', true), row = reqRow_(t, rid);
+  if (!row) throw fail_('找不到申請單 ' + rid, 'notfound');
+  optBomSet_(d.name, d.changes || [], 'back');
+  var j; try { j = JSON.parse(readPayload_(t, row._row)); } catch (e) { throw fail_('申請單內容讀不出來'); }
+  optApplyPct_(j, d.oldPct || {}); optWritePayload_(t, row, j, auth.role);
+  pushLog_({ ts: now_(), req_id: rid, batch: last.batch, action: 'optadjundo', table: 'bom', rows: String((d.changes || []).length), detail: '{}', backup: '', ok: 'Y',
+    msg: (auth.role || '') + '｜還原比例調整（' + last.ts + '）：BOM ' + (d.changes || []).map(function (c) { return c.m + ' ' + c.to + '→' + c.from; }).join('、') });
+  return { id: rid, data: { undone: last.batch, changes: d.changes || [] }, msg: '已還原 ' + last.ts + ' 的比例調整' };
+}
 function pushInfo_(rid) {
   var st = pushState_(rid), rows = st.rows || [];
-  return { live: st.live, ts: st.ts || '', backup: st.backup || '',
+  var adj = []; try { adj = optAdjLive_(rid).map(function (x) { return { ts: x.ts, batch: x.batch, changes: (x.d || {}).changes || [], newPct: (x.d || {}).newPct || {} }; }); } catch (e) { }
+  return { live: st.live, ts: st.ts || '', backup: st.backup || '', adj: adj,
     written: st.live ? Object.keys(st.tables).filter(function (k) { return PT[k]; }).map(function (k) { var d = st.tables[k] || {}; return { table: k, name: PT[k] + (d.replace ? '（改版，換掉舊配方 ' + (d.old || []).length + ' 列）' : ''), start: d.start, n: (d.rows || []).length, show: d.show || [], replace: !!d.replace, old: (d.old || []).length }; }) : [],
     history: rows.map(function (r) { return { ts: r.ts, action: r.action, table: r.table, rows: r.rows, ok: r.ok, msg: r.msg }; }) };
 }
