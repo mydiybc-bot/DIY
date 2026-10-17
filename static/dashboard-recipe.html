@@ -2134,7 +2134,7 @@ function needConv(l){var u=String(l.u||'').trim();if(!u||!String(l.m||'').trim()
   if(s)return unitOK(l)?null:{base:String(s.useUnit||'g').trim()||'g'};
   if(!CONV_UNIT.test(u))return null;
   return {base:/ml|毫升|ML|cc|L\b|公升/.test(String(l.pkgSpec||''))?'ml':'g'}}
-function convOf(l){var n=needConv(l);if(!n)return null;var v=num(l.conv);return v>0?{base:n.base,v:v}:{base:n.base,v:null}}
+function convOf(l){var n=needConv(l);if(!n)return null;return {base:n.base,v:null}}   /* 2026-10-17 經營者：申請表不再填換算（換算交給專案推動的平匙換算專案）→ 一律待換算，成本先不算 */
 /* 搜尋：比 品名／BOM別名／sku_id／品類別，不分大小寫，空白分隔多關鍵字都要命中（同採購系統 matchQ） */
 function search(q){q=String(q||'').trim().toLowerCase();if(!q)return [];
   var ks=q.split(/\s+/).filter(Boolean),out=[],S=R.skus();
@@ -2163,7 +2163,7 @@ function qtyInputOf(key){var m;
 /* ---- 成本卡：非 🆕 列走同一套 costLines 引擎；🆕 列由本表推算（原包裝成本 ÷ 規格數字 × 每份使用量）；半成品用料不進成本卡 ---- */
 function validLines(){return AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0})}
 function newCostOf(l){var pc=num(l.pkgCost),pn=packNum(l.pkgSpec),q=num(l.q),cv=convOf(l);
-  if(cv&&!cv.v)return {cost:null,s:'估？（新單位「'+String(l.u||'').trim()+'」：請在表一填 1 '+String(l.u||'').trim()+' ≈ 幾 '+cv.base+'）'};
+  if(cv&&!cv.v)return {cost:null,s:'估？（單位「'+String(l.u||'').trim()+'」還沒有換成 '+cv.base+' 的換算，成本先不算）'};
   var qe=cv?q*cv.v:q;
   if(pc>0&&pn&&q>0)return {cost:pc/pn*qe,s:'🆕 原包裝成本 '+pc+' ÷ 規格 '+pn+' × 每份 '+(cv?q+' '+String(l.u||'').trim()+'（≈'+r2(qe)+' '+cv.base+'）':q)};
   return {cost:null,s:'估？（🆕 需填原包裝成本與含數字的規格才能推算）'}}
@@ -2174,7 +2174,7 @@ function computeCost(){
       if(isToolLine(l)){tools.push({m:nm,q:num(l.q),u:l.u});return}
       var nc=newCostOf(l);newRows.push({m:nm,q:num(l.q),u:l.u,cat:(l.cat==='耗材'?'耗材':'食材'),cost:nc.cost,t:nc.cost===null?'X':'C',s:nc.s,warn:'',isNew:true});return}
     var cv=convOf(l);   /* 2026-10-07：新單位——有填換算就換成主檔單位再算；沒填＝待換算（不再當 1 g 算，避免成本偏低） */
-    if(cv&&!cv.v){newRows.push({m:nm,q:num(l.q),u:l.u,cat:(lineCat(l)==='耗材'?'耗材':'食材'),cost:null,t:'X',s:'待換算（新單位「'+String(l.u||'').trim()+'」：請填 1 '+String(l.u||'').trim()+' ≈ 幾 '+cv.base+'）',warn:'',isNew:false,conv:true});return}
+    if(cv&&!cv.v){newRows.push({m:nm,q:num(l.q),u:l.u,cat:(lineCat(l)==='耗材'?'耗材':'食材'),cost:null,t:'X',s:'待換算（單位「'+String(l.u||'').trim()+'」採購系統還沒有換成 '+cv.base+' 的換算；換算建好後成本才算得出來）',warn:'',isNew:false,conv:true});return}
     toCost.push(cv?{m:nm,q:num(l.q)*cv.v,u:cv.base}:{m:nm,q:num(l.q),u:String(l.u||'').trim()||'g'})});
   var r=R.costOf(toCost);
   var rows=r.rows.map(function(x){return {m:x.m,q:x.q,u:x.u,cat:x.cat,cost:x.cost,t:x.t,s:x.s,warn:x.warn||'',isNew:false}}).concat(newRows);
@@ -2373,7 +2373,7 @@ function validate(){var e=[],h=AP.head;
     if(isNewItem(l)&&simPending(l).length)e.push('「'+l.m+'」主檔有類似品項（'+simPending(l).map(function(x){return x.o.id+' '+x.o.name}).join('、')+'），請在表一確認是不是同一樣');
     if(isNewItem(l)&&!String(l.zone||'').trim())e.push('「'+l.m+'」區域（表二；🆕 新品項建主檔要用）');
     if(isNewItem(l)&&isToolLine(l)&&!(num(l.perStore)>0))e.push('「'+l.m+'」每店要幾個（表二；新器具／模具核准後會變成各店標配）');
-    var cv=convOf(l);if(cv&&!cv.v)e.push('「'+l.m+'」新單位：1 '+String(l.u||'').trim()+' ≈ 幾 '+cv.base+'（表一，可以先估）')});
+  });
   AP.semis.forEach(function(s,i){var nm=semiName(s)||('半成品 '+(i+1));
     if(!String(s.name||'').trim())e.push('半成品 '+(i+1)+' 食譜名稱');
     if(s.maker==='出貨中心')return;
@@ -2451,7 +2451,7 @@ function summaryText(c){var h=AP.head,rid=reqNo(),p=num(h.price),rate=rateOf(c),
   AP.lines.filter(function(l){return String(l.m||'').trim()}).forEach(function(l,i){
     var tool=isToolLine(l),nw=isNewItem(l);var row=rowOf(c,l);
     var cv=convOf(l);
-    L.push((i+1)+'. '+l.m+' '+l.q+' '+(l.u||'')+(cv?(cv.v?'（新單位：1 '+l.u+'≈'+cv.v+' '+cv.base+'）':'（新單位，換算待填）'):'')
+    L.push((i+1)+'. '+l.m+' '+l.q+' '+(l.u||'')+(cv?'（單位換算待建）':'')
       +(tool?'　不計價':(row?('　'+(row.cost===null?(nw?'估？':'缺價'):fm(row.cost)+' 元'+(row.t==='C'?'(估)':'')+(row.optOut?'（非最貴選項，不計入）':''))):''))+(nw?'　🆕需建主檔':'')+(staleOf(l)?'　⚠'+staleOf(l):'')
       +(String(l.og||'').trim()?'　🔀客人選一：'+String(l.og).trim()+'／'+(String(l.oo||'').trim()||l.m)+' '+r1(optShareOf(l)*100)+'%':''))});
   if(c.tools.length)L.push('','器具／模具：'+c.tools.map(function(t){return t.m+(t.q===1?'':' ×'+t.q)}).join('、'));
@@ -2477,7 +2477,7 @@ function jsonObj(c){var d=new Date(),p=num(AP.head.price),rate=rateOf(c);
       items:semiItemsOf(s).map(function(it,k){var q=num(it.q);var yq=num(s.yq);return {seq:k+1,name:String(it.m).trim(),unit:it.u||'',qty_batch:q,per_unit:yq>0?r3(q/yq):null,qty4:q,in_master:!!skuOf(it.m)}})}}),
     lines:AP.lines.filter(function(l){return String(l.m||'').trim()}).map(function(l,i){var row=rowOf(c,l);var nw=isNewItem(l);
       return {seq:i+1,sku_id:l.id||'',name:String(l.m).trim(),is_new:nw,pinned:!!l.pin,sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packNum(l.pkgSpec):null,
-        qty:num(l.q),unit:l.u||'',conv:(convOf(l)&&convOf(l).v)||null,conv_base:convOf(l)?convOf(l).base:'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
+        qty:num(l.q),unit:l.u||'',conv:null,conv_base:'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
         per_store:(nw&&isToolLine(l)&&num(l.perStore)>0)?Math.round(num(l.perStore)):null,
         sim_ok:nw?String(l.simok||''):'',
         opt_group:String(l.og||'').trim(),opt_name:String(l.og||'').trim()?(String(l.oo||'').trim()||String(l.m).trim()):'',opt_pct:String(l.og||'').trim()?String(l.op||'').trim():'',opt_share:optShareOf(l),   /* 2026-10-17 客人選一 */
@@ -2583,14 +2583,12 @@ function costText(l,row){var tool=isToolLine(l),nw=isNewItem(l);
   if(row&&row.optOut&&row.cost!==null)return fm(row.cost)+'（不計）';   /* 2026-10-17 非最貴選項 */
   return tool?'不計價':(!l.m?'':row?(row.cost===null?(nw?'估？':(row.conv?'待換算':'缺')):fm(row.cost)+' '+(row.t==='A'?'實':row.t==='B'?'換':'估')):'—')}
 /* 表一「單位」下方：新單位換算框（不是錯誤；核准後自動加進採購系統、由採購確認） */
-function convBoxHTML(l,i){var cv=convOf(l);if(!cv)return '';var u=String(l.u||'').trim();
-  return '<div class="ap-conv'+(cv.v?' ok':'')+'" data-convbox="'+i+'">'+(cv.v?'✓ ':'🆕 ')+'新單位：1 '+esc(u)+' ≈<input type="number" step="any" min="0" data-lf="conv" value="'+esc(l.conv)+'" placeholder="?">'+esc(cv.base)
-    +'　<span>'+(cv.v?'核准後自動加進採購系統（採購確認）':'先估一個數字，成本才算得準；核准後自動加進採購系統，由採購確認')+'</span></div>'}
+function convNoteHTML(l){var cv=convOf(l);if(!cv)return '';return '<div class="ap-warn">⚠ 單位「'+esc(String(l.u||'').trim())+'」採購系統還沒有換成 '+esc(cv.base)+' 的換算：成本先不算（換算由「平匙換算」專案建立）</div>'}   /* 2026-10-17：原「新單位：1 平匙≈幾 g」輸入框拿掉 */
 function costClass(row){return row?(row.cost===null?'ap-tX':'ap-t'+row.t):''}
 function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=unitOK(l),key='l'+i,row=rowOf(c,l);
   var h='<tr data-ln="'+i+'">';
   h+='<td><div class="ap-sc"><input type="text" data-lf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
-    +(l.m?('<div class="ap-src">'+(s?esc(s.id)+' · '+esc(lineCat(l))+(s.vendor?' · '+esc(s.vendor):''):'主檔查無此品項')+(stale?' <span class="ap-warn">⚠ '+esc(stale)+'</span>':'')+'</div>'):'')+simBoxHTML(l,i)+convBoxHTML(l,i)+optRowHTML(l,i,c)+'</td>';   /* 2026-10-07：新單位換算框放在較寬的品項欄 */
+    +(l.m?('<div class="ap-src">'+(s?esc(s.id)+' · '+esc(lineCat(l))+(s.vendor?' · '+esc(s.vendor):''):'主檔查無此品項')+(stale?' <span class="ap-warn">⚠ '+esc(stale)+'</span>':'')+'</div>'):'')+simBoxHTML(l,i)+convNoteHTML(l)+optRowHTML(l,i,c)+'</td>';   /* 2026-10-07：新單位換算框放在較寬的品項欄 */
   h+='<td><input type="number" step="any" min="0" data-lf="q" value="'+esc(l.q)+'" placeholder="數量"></td>';
   h+='<td><input type="text" data-lf="u" value="'+esc(l.u)+'" placeholder="'+esc(s?(s.useUnit||'g'):'單位')+'"></td>';
   h+='<td class="ap-money" data-cost1="'+i+'"><b class="'+costClass(row)+'">'+esc(costText(l,row))+'</b>'+(row&&row.warn?'<div class="ap-bad">⚠ '+esc(row.warn)+'</div>':'')+'</td>';
@@ -4302,7 +4300,6 @@ function wire(){var root=document.getElementById('apRoot');
           if(s){l.id=s.id;if(!l.u)l.u=s.useUnit||'g';if(!l.zone)l.zone=defaultZone(s.name,s.cat)}else if(l.m&&!l.zone)l.zone=defaultZone(l.m,l.cat||'');simAlert(i)})}
       else if(f==='u'){el.oninput=function(){AP.lines[i].u=el.value;OUT=null;saveDraft();refreshCost()};el.onchange=function(){renderSoon()}}
       else if(f==='og'||f==='oo'||f==='op'){el.oninput=function(){AP.lines[i][f]=el.value;OUT=null;saveDraft()};el.onchange=function(){AP.lines[i][f]=el.value;OUT=null;saveDraft();renderSoon()}}   /* 2026-10-17 客人選一 */
-      else if(f==='conv'){el.oninput=function(){AP.lines[i].conv=el.value;OUT=null;saveDraft();refreshCost();var b=el.closest('.ap-conv');if(b)b.classList.toggle('ok',num(el.value)>0)}}
       else if(f==='q'){el.oninput=function(){AP.lines[i].q=el.value;OUT=null;saveDraft();refreshCost();
           var m=document.querySelector('tr[data-n2="'+i+'"] td:nth-child(5)');if(m){m.textContent=el.value||'—';m.title=el.value}}}})});
   root.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){AP.lines.splice(+b.dataset.del,1);if(!AP.lines.length)AP.lines=[newLine()];OUT=null;saveDraft();render()}});
