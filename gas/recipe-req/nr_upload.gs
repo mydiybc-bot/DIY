@@ -548,7 +548,7 @@ function nrRunOver_(uid, job, auth, t0, media, skip) {
     try {
       var pg = rbRecipeEditPage_(sess, bid), mm = job.steps.map(function (s) { return nrMatchStep_(getSp().ings, s); });
       var oldNote = rbFieldGet_(pg.fields, 'Note') || '', note = nrNote_(job, mm);
-      if (oldNote && !/^【(新食譜上傳|食譜系統匯入)】/.test(oldNote)) note = (note + '\n—— 原本的備註 ——\n' + oldNote).slice(0, 4000);   /* 夥伴自己寫的備註留著 */
+      if (oldNote && !/^【(新食譜上傳|食譜系統匯入|新品申請表匯入)】/.test(oldNote)) note = (note + '\n—— 原本的備註 ——\n' + oldNote).slice(0, 4000);   /* 夥伴自己寫的備註留著 */
       var meta = rbCreateMeta_(rbAuthedGet_(sess, '/Recipes/Create').text);
       var storeIds = job.stores.map(function (n) { var o = meta.stores.filter(function (x) { return x.name === n; })[0]; return o ? o.id : ''; }).filter(String);
       var cats = job.cats.filter(function (id) { return meta.cates.some(function (c) { return c.id === id; }); });

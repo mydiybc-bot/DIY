@@ -257,7 +257,7 @@ function rbInfo_(rid) {
 
 /* ---------- 匯入（分段） ---------- */
 function rbNote_(rid, job, mm) {
-  var L = ['【食譜系統匯入】新品申請 ' + rid + '｜匯入編號 ' + job.imp_id + '｜' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '｜' + (job.by || ''),
+  var L = ['【新品申請表匯入】新品申請 ' + rid + '｜匯入編號 ' + job.imp_id + '｜' + Utilities.formatDate(new Date(), TZ, 'yyyy/MM/dd HH:mm') + '｜' + (job.by || ''),
     '食譜檔：' + (job.file || '（未記錄）') + (job.docName ? '（' + job.docName + '）' : '')];
   var miss = [], notes = [];
   mm.forEach(function (m, i) {

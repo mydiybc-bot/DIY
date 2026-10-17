@@ -18,12 +18,13 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v20＝2026-10-17 經營者：儀表板改名「新品申請表」——通知信寄件人／標題、測試信、後台匯入備註標籤（舊標籤照樣認得）改字。 */
 /* v19＝2026-10-17 經營者：🔀 調整選項比例（optAdjust／optAdjustUndo；已寫入採購的單只改寫 BOM 用量會變的列、比對、讀回、記 fact_push optadj；有沒還原的調整時擋還原採購寫入）；BOM 合併抽成 bomAgg_。 */
 /* v18＝2026-10-17 經營者「自選內餡」：用料 opt_group／opt_name／opt_pct（客人選一），核准寫 BOM 時選項用量 × 預估比例（optShares_）。 */
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v19';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v20';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -553,8 +554,8 @@ function adminTestMail_(p, auth) {
   var to = emailList_(p.email, true), nm = str_(p.name).trim().slice(0, 40);
   if (!to.length) throw fail_('請先填 Email');
   if (MailApp.getRemainingDailyQuota() < to.length) throw fail_('今天 Gmail 寄信額度用完了（一天 100 封），明天再試', 'quota');
-  var txt = (nm ? nm + ' 你好：\n\n' : '') + '這是「自己做 食譜系統」的測試信。\n之後新品申請輪到你簽核時，系統會寄通知到這個信箱，信裡附簽核連結，點開就能簽。\n\n收到這封就代表設定成功，不用回信。\n自己做 食譜系統';
-  MailApp.sendEmail({ to: to.join(','), subject: '【食譜系統】測試信：之後輪到你簽核時會寄到這個信箱', body: txt, htmlBody: mailHtml_(txt, '', ''), name: NOTIFY_FROM });
+  var txt = (nm ? nm + ' 你好：\n\n' : '') + '這是「自己做 新品申請表」的測試信。\n之後新品申請輪到你簽核時，系統會寄通知到這個信箱，信裡附簽核連結，點開就能簽。\n\n收到這封就代表設定成功，不用回信。\n自己做 新品申請表';
+  MailApp.sendEmail({ to: to.join(','), subject: '【新品申請表】測試信：之後輪到你簽核時會寄到這個信箱', body: txt, htmlBody: mailHtml_(txt, '', ''), name: NOTIFY_FROM });
   return { id: nm || '測試信', data: { to: to.length }, msg: '測試信 → ' + (nm || '') + '（' + to.length + ' 個信箱）' };
 }
 
@@ -1224,7 +1225,7 @@ function signInfo_(rid) {
    ‧ 沒填 Email 的人不寄，回覆裡列出來（畫面提醒主廚改用 104 通知）；Gmail 一般帳號一天最多寄 100 封
    ‧ 需要 Gmail 寄信權限（appsscript.json script.send_mail）：第一次要經營者授權（編輯器執行 notifyAuthorize） */
 var NOTIFY_URL = 'https://diybc-training.onrender.com/static/dashboard-recipe.html';
-var NOTIFY_FROM = '自己做 食譜系統';
+var NOTIFY_FROM = '自己做 新品申請表';   /* 2026-10-17 經營者：儀表板改名「新品申請表」（跟門市後台「自己做食譜系統」分開） */
 var CHEF_ROLE = '主廚';
 var _nq = [], _nctx = null;   /* 這次請求要寄的通知；_nctx.camp＝整檔簽核中（給整檔連結） */
 var EMAIL_RE = /^[^@\s,，;；<>"']+@[^@\s,，;；<>"']+\.[A-Za-z]{2,}$/;
@@ -1267,7 +1268,7 @@ function mailTurn_(g, camps) {
   var txt = g.name + ' 你好：\n\n' + (first ? '主廚送出' + (cn ? '「' + cn + '」' : '') + '的新品申請，請你簽核' : (cn ? '「' + cn + '」' : '') + '新品申請的前一批簽核人已經全部同意，現在輪到你簽核') + '（你是第 ' + g.batch + ' 批）：\n'
     + ds.map(function (d) { return '・' + d; }).join('\n') + '\n\n點這裡看內容、簽核：\n' + link + '\n\n'
     + '第一次簽核要先設定 4～8 位數字的 PIN（自己設，記住就好）。\n這封是系統自動寄出的通知，不用回信。\n' + NOTIFY_FROM;
-  return { subject: '【食譜系統】輪到你簽核：' + (cn ? cn + ' ' : '') + (ds.length > 1 ? ds.length + ' 支新品' : ds[0]), text: txt, html: mailHtml_(txt, link, '打開簽核頁') };
+  return { subject: '【新品申請表】輪到你簽核：' + (cn ? cn + ' ' : '') + (ds.length > 1 ? ds.length + ' 支新品' : ds[0]), text: txt, html: mailHtml_(txt, link, '打開簽核頁') };
 }
 function mailChef_(g, camps) {
   var rj = g.items.filter(function (e) { return e.kind === 'reject'; }), dn = g.items.filter(function (e) { return e.kind === 'done'; });
@@ -1277,7 +1278,7 @@ function mailChef_(g, camps) {
   var head = [rj.length ? rj.length + ' 支被退回' : '', dn.length ? dn.length + ' 支已核准' : ''].filter(Boolean).join('、');
   var txt = '主廚你好：\n\n' + (cn ? '「' + cn + '」' : '') + '新品申請的簽核結果：\n' + lines.join('\n') + '\n\n'
     + (rj.length ? '被退回的請到新品申請表「📂 從檔期載入」修改後重新送簽。\n' : '') + '新品申請表：\n' + link + '\n\n這封是系統自動寄出的通知，不用回信。\n' + NOTIFY_FROM;
-  return { subject: '【食譜系統】' + (cn ? cn + ' ' : '') + head + (dn.length === 1 && !rj.length ? '：' + dn[0].dessert : '') + (rj.length === 1 && !dn.length ? '：' + rj[0].dessert : ''), text: txt, html: mailHtml_(txt, link, '打開新品申請表') };
+  return { subject: '【新品申請表】' + (cn ? cn + ' ' : '') + head + (dn.length === 1 && !rj.length ? '：' + dn[0].dessert : '') + (rj.length === 1 && !dn.length ? '：' + rj[0].dessert : ''), text: txt, html: mailHtml_(txt, link, '打開新品申請表') };
 }
 /* doPost 尾端呼叫：把 _nq 依收件人合併成一封封信寄出；回 { sent:[名字], noemail:[名字], fail:[說明] }（不含 Email 地址） */
 function flushNotify_() {
