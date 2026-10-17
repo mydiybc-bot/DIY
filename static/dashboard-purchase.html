@@ -2882,14 +2882,17 @@ function campWeeks(c){
   var tot=Math.max(1,Math.round((d1-d0)/864e5)+1);
   var pass=Math.min(tot,Math.max(0,Math.round((TODAY-d0)/864e5)+1));
   return {totD:tot,passD:pass,leftD:tot-pass,totW:tot/7,passW:pass/7,leftW:(tot-pass)/7};}
-function campOrdered(st,s,c){
-  var rows=SHIST[String(st)];if(!rows)return null;
+function campOrdered(st,s,c){   /* 2026-10-18 Shopline 停用專案：大平台＋出貨中心訂單（10/20 起門市只在系統下單，只算大平台會誤報「可能不足」） */
+  var rows=SHIST[String(st)];if(!rows||!dcohReady(st))return null;
+  rows=rows.concat(dcohOf(st));
   var from=ymd(new Date(new Date(c.from+"T00:00:00").getTime()-CAMP_LEAD*864e5)),today=ymd(TODAY);
+  var pq=pqOf(st,s),spec=!(!(pq>1)&&String(s.buyUnit||"")===String(s.useUnit||"")),cv=(spec&&pq>0)?pq:1;   /* 與 campCalc 同口徑 */
   var q=0,names={};
   rows.forEach(function(r){
     if(!r.date||r.date<from||r.date>today)return;
-    if(!anPlatMatch(r.name,s))return;
-    q+=num(r.qty);names[r.name]=(names[r.name]||0)+num(r.qty);});
+    if(!ordMatch(r,s))return;
+    var n=r.dco?num(r.qty)*ordUnit(st,s,r).g/cv:num(r.qty),k=ordKey(r);   /* 出貨中心訂單：採購單位（或使用單位）換成本卡的單位；大平台照舊 */
+    q+=n;names[k]=(names[k]||0)+n;});
   return {qty:q,names:names};}
 function campCalc(st,s){
   var c=campOf(s);if(!c)return null;
@@ -2916,6 +2919,7 @@ function campBanner(st){
   var cand=liveItems(st).filter(function(s){return !!campOf(s);});
   if(!cand.length)return '';
   if(!SHIST[String(st)]&&!SHLOAD[String(st)])loadShist(st).then(function(){render();});
+  if(!dcohReady(st)&&!DCOH.ld[String(st)])dcohLoad(st).then(function(){render();});   /* 2026-10-18：出貨中心訂單一起載 */
   var rows=cand.map(function(s){return {s:s,k:campCalc(st,s)};})
     .filter(function(x){return x.k&&(x.k.weekly>0||num(x.k.ordered)>0);});
   if(!rows.length)return '';
@@ -2943,7 +2947,7 @@ function campBanner(st){
       else if(k.cover>1.3)h+='<div class="sub" style="color:'+lv.c+'">剩下的檔期只需要約 <b>'+dec(k.left)+' '+k.unit+'</b>，手上已經有 '+dec(k.onHand)+'。<b>本次建議不訂</b>；多的請回報總部調撥給不足的門市。</div>';
       else if(k.cover<0.8)h+='<div class="sub" style="color:'+lv.c+'">剩下的檔期還需要約 <b>'+dec(k.left)+' '+k.unit+'</b>，手上只有 '+dec(k.onHand)+'。請確認是否要補。</div>';
       else h+='<div class="sub" style="color:'+lv.c+'">訂量與需求相符，剩下的檔期約再需要 '+dec(k.left)+' '+k.unit+'。</div>';
-      if(k.names&&Object.keys(k.names).length)h+='<div class="sub muted">大平台品名：'+Object.keys(k.names).map(function(n){return shEsc(n)+' ×'+fmt(k.names[n]);}).join('、')+'</div>';
+      if(k.names&&Object.keys(k.names).length)h+='<div class="sub muted">下單品名：'+Object.keys(k.names).map(function(n){return shEsc(n)+' ×'+fmt(k.names[n]);}).join('、')+'</div>';
     }
     h+='</div>';});
   h+='<div class="sub muted" style="margin-top:6px">週用量是系統依 POS×配方推算的近 4 週平均；檔期起訖取自「產品名稱對照表」。若本店已接包館或另有推廣計畫，以你的判斷為準。</div></div>';
