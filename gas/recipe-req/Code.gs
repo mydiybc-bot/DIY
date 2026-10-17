@@ -18,10 +18,11 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
+/* v18＝2026-10-17 經營者「自選內餡」：用料 opt_group／opt_name／opt_pct（客人選一），核准寫 BOM 時選項用量 × 預估比例（optShares_）。 */
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v17';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v18';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -1387,6 +1388,35 @@ function dss_() {
   return _dss;
 }
 function ptName_(v) { return str_(v).trim(); }
+/* 2026-10-17 經營者「自選內餡」（同前端 optModel）：同一組 og 裡客人選一個選項 oo（可多列），op＝預估比例%；
+   有填照填、沒填平分剩下的（100−已填）、加總≠100 照比例換算成 100%。每列寫上 l.share（器具模具＝1：只取最大）；回傳說明文字 */
+function optShares_(lines) {
+  var G = {}, order = [], text = [];
+  lines.forEach(function (l) {
+    l.share = 1;
+    if (!l.og) return;
+    var o = l.oo || l.name;
+    if (!G[l.og]) { G[l.og] = { opts: {}, order: [] }; order.push(l.og); }
+    var O = G[l.og].opts[o];
+    if (!O) { O = G[l.og].opts[o] = { lines: [], pct: null }; G[l.og].order.push(o); }
+    O.lines.push(l);
+    if (l.op > 0 && O.pct === null) O.pct = l.op;
+  });
+  order.forEach(function (g) {
+    var gg = G[g], ns = gg.order, fill = 0, blank = 0;
+    ns.forEach(function (n) { var p = gg.opts[n].pct; if (p !== null) fill += p; else blank++; });
+    var rest = Math.max(0, 100 - fill);
+    ns.forEach(function (n) { var O = gg.opts[n]; O.ratio = O.pct !== null ? O.pct : (blank ? rest / blank : 0); });
+    var sum = ns.reduce(function (a, n) { return a + gg.opts[n].ratio; }, 0);
+    ns.forEach(function (n) {
+      var O = gg.opts[n], sh = sum > 0 ? O.ratio / sum : 1 / ns.length;
+      O.lines.forEach(function (l) { l.share = (l.cat === '器具' || l.cat === '模具') ? 1 : sh; });
+      O.share = sh;
+    });
+    text.push(g + '：' + ns.map(function (n) { return n + ' ' + Math.round(gg.opts[n].share * 1000) / 10 + '%'; }).join('、') + (ns.length < 2 ? '（只有 1 個選項）' : ''));
+  });
+  return { groups: G, order: order, text: text };
+}
 function ptRead_(key) {
   var sh = key === 'sku2' ? dss_().getSheetByName('dim_sku') : key === 'par2' ? dss_().getSheetByName('dim_store_par') : pss_().getSheetByName(PT[key]);
   if (!sh) throw fail_((key === 'sku2' || key === 'par2' ? '儀表板專用檔' : 'BOM 本') + '找不到分頁「' + PT[key] + '」', 'purchase');
@@ -1452,8 +1482,11 @@ function planPush_(rid) {
       pkgCost: Number(l.pkg_cost) || 0, pkgSpec: ptName_(l.pkg_spec), pack: Number(l.pack) || 0, zone: ptName_(l.zone),
       shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname), supply: ptName_(l.supply),
       perStore: Number(l.per_store) > 0 ? Math.round(Number(l.per_store)) : 0,   /* 2026-10-07 晚：新器具／模具每店要幾個 */
-      conv: Number(l.conv) > 0 ? Number(l.conv) : 0, cbase: ptName_(l.conv_base) };   /* 2026-10-07：新單位換算（1 unit ≈ conv cbase） */
+      conv: Number(l.conv) > 0 ? Number(l.conv) : 0, cbase: ptName_(l.conv_base),   /* 2026-10-07：新單位換算（1 unit ≈ conv cbase） */
+      og: ptName_(l.opt_group), oo: ptName_(l.opt_name), op: parseFloat(l.opt_pct) };   /* 2026-10-17 客人選一 */
   }).filter(function (l) { return l.name; });
+  var optInfo = optShares_(lines);
+  if (optInfo.text.length) warn.push('客人選一（BOM 用量已乘預估比例）：' + optInfo.text.join('；'));
   var P = { map: ptRead_('map'), bom: ptRead_('bom'), sku: ptRead_('sku'), sku2: null, conv: null };
   try { P.sku2 = ptRead_('sku2'); } catch (e) { P.sku2 = null; P.sku2err = errMsg_(e); }
   /* 單位換算表讀不到（分頁改名、表頭不對）→ 不擋核准寫入，只提醒「新單位要請採購手動加」 */
@@ -1572,7 +1605,7 @@ function planPush_(rid) {
     if (!(l.qty > 0)) return;
     var u = l.unit || 'g', key = l.name + '|' + u, tool = l.cat === '器具' || l.cat === '模具';
     if (!agg[key]) { agg[key] = { m: l.name, u: u, q: 0, tool: tool }; order.push(key); }
-    agg[key].q = tool ? Math.max(agg[key].q, l.qty) : agg[key].q + l.qty;
+    agg[key].q = tool ? Math.max(agg[key].q, l.qty) : agg[key].q + l.qty * (l.share === undefined ? 1 : l.share);   /* 2026-10-17：客人選一的選項 × 比例 */
   });
   var bomRows = order.map(function (k) { var a = agg[k]; return [name, a.m, r4_(a.q), a.u, cont[a.m] || '']; });
   var bomIdx = [];
