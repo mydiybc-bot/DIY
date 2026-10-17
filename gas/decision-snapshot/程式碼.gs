@@ -35,7 +35,9 @@ var SRC = {
   REV_SS:  '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw',   // Google評論_每日新增（只讀 C 欄評論時間，取資料最新日）
   MEM_SS:  '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ',   // 自己人消費記錄分析（2026 各店新增自己人、agg_store_kpi_365）
   PUR_DASH:'1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0',   // 採購儀表板專用檔
-  PUR_MONTH:'19tG-AMYtiZPTYQcz85TGiGS2G4M5U1gZw9Mab2UFFU0'   // 採購月檔（fact_shopline）
+  PUR_MONTH:'19tG-AMYtiZPTYQcz85TGiGS2G4M5U1gZw9Mab2UFFU0',   // 採購月檔（fact_shopline）
+  DCO_API: 'https://script.google.com/macros/s/AKfycbz_3-R1xG6RQmBsm3KOIWzkU_XkpHe4DnJpnrMzb7QtdgOQkIsA8NVo5TnsB2Sf5f5MvA/exec',   // 出貨中心訂單（diybc-dcorder-api，只讀 action=orders）；2026-10-18 Shopline 停用專案
+  DCO_TOKEN: 'dbc-dco-Rw8pZ3'   // 與採購頁 DCO_TOKEN 相同（公開讀取用）
 };
 
 var TAB = { LATEST:'snap_latest', HIST:'snap_history', ALERTS:'alerts', RULE:'dim_rule', MAP:'dim_store_map', META:'meta', STAGE:'_stage', AHIST:'alerts_history', LY:'cache_ly', TRACE:'_trace', SERIES:'snap_series' };
@@ -98,7 +100,7 @@ var RULE_DEFAULTS = [
   ['MEM_STALE_DAYS','E 自己人','年表本月新增數連續幾天沒變 → 🟡「年表可能停更」（列在 0 資料）',2,'天'],
   ['FRESH_SALES_LAG_DAYS','0 資料','排班日營收或 POS 最新日，比今天早超過幾天 → 🟡（1＝早於昨天就亮）',1,'天'],
   ['FRESH_FUT_LAG_DAYS','0 資料','未來訂位資料最早日期，比今天早超過幾天 → 🟡「未來訂位停更」（0＝早於今天就亮）',0,'天'],
-  ['FRESH_SHOP_LAG_DAYS','0 資料','大平台下單（fact_shopline）最新日落後超過幾天 → 🟡',3,'天'],
+  ['FRESH_SHOP_LAG_DAYS','0 資料','門市下單資料（大平台 fact_shopline＋出貨中心訂單）最新日落後超過幾天 → 🟡',3,'天'],
   ['FRESH_REV_LAG_DAYS','0 資料','評論最新日，比今天早超過幾天 → 🟡（2＝早於前天就亮）',2,'天'],
   ['RUN_SPLIT_SEC','系統','（d2 起停用，改用 RUN_BUDGET_SEC 與 EST_A～EST_E；保留列不刪）',270,'秒'],
   ['RUN_BUDGET_SEC','系統','每段時間預算：已用秒數＋下一類預估秒數超過此值就不開始，交給 1 分鐘後的接續段（讀資料前的檢查線 270 秒，GAS 上限 360 秒）',240,'秒'],
@@ -347,11 +349,20 @@ function campHQShipped(ev,s,rows){   /* 該店該品項在視窗內的大平台�
   var ws=EVCV[ev]||[],lead=campLead(s);
   var from=ws.length?ymd(new Date(new Date(ws[0].cFrom+"T00:00:00").getTime()-lead*864e5)):"";
   var g=0,packs=0,names={},preG=0,prePacks=0,preFirst="";
-  (rows||[]).forEach(function(r){if(!anPlatMatch(r.name,s))return;
-    var u=shipUnitG(String(r.st),{unit:s.useUnit,sku:s},r.name);
+  (rows||[]).forEach(function(r){if(!ordMatch(r,s))return;   /* 2026-10-18：照採購頁 2026-10-07 版改用 ordMatch／ordUnit（大平台＋出貨中心訂單） */
+    var u=ordUnit(String(r.st),s,r);
     if(from&&r.date<from){preG+=num(r.qty)*u.g;prePacks+=num(r.qty);if(!preFirst||r.date<preFirst)preFirst=r.date;return;}
-    g+=num(r.qty)*u.g;packs+=num(r.qty);names[r.name]=1;});
+    g+=num(r.qty)*u.g;packs+=num(r.qty);names[ordKey(r)]=1;});
   return {g:g,packs:packs,from:from,lead:lead,preG:preG,prePacks:prePacks,preFirst:preFirst,names:Object.keys(names)};}
+// ---- 照抄：dashboard-purchase.html ｜ DIY main 2d97827 ｜ dcohRows、ordMatch、ordUnit、ordKey（2026-10-07 出貨中心訂單併入下單紀錄；邏輯一字不改）----
+function dcohRows(orders){var out=[];(orders||[]).forEach(function(o){if(!o||o.status==="已取消"||!o.lines)return;var d=String(o.time||"").slice(0,10);if(!d)return;
+  o.lines.forEach(function(l){var q=(o.status==="已出貨"&&l.ship!=null)?num(l.ship):num(l.qty);if(!(q>0)||!l.sku_id)return;
+    out.push({st:String(o.store),date:d,ord:String(o.id||""),name:String(l.name||""),cat:"",qty:q,price:num(l.price),sku:String(l.sku_id),unit:String(l.unit||""),dco:1});});});
+  out.sort(function(a,b){return a.date<b.date?-1:(a.date>b.date?1:0);});return out;}
+function ordMatch(r,s){return r.sku?(!!s&&r.sku===s.id):anPlatMatch(r.name,s);}
+function ordUnit(st,s,r){if(!r.sku)return shipUnitG(st,{unit:s.useUnit,sku:s},r.name);var pq=pqOf(st,s);
+  var g=(r.unit&&r.unit===s.useUnit&&s.useUnit!==s.buyUnit)?1:(pq>0?pq:1);return {g:g,src:"dco",hq:pq,mis:false};}
+function ordKey(x){return x.dco?("📤 出貨中心訂單（"+(x.unit||"")+"）"):x.name;}
 
 // ---- 照抄：dashboard-purchase.html ｜ md5 3a922ade73669ad4ebdff1ac34e7f045 ｜ 原行號 L2094、L2109–L2179 ｜ 採購：anNorm、大平台品名配對（anPlatScore／anPlatOwn／anPlatMatch）（邏輯一字不改）----
 function anNorm(x){return String(x||"").replace(/[\s（）()\[\]【】\/／\-－_·．.｜|,，、]/g,"").toLowerCase();}
@@ -860,7 +871,8 @@ function freshAlerts_(results, rule, map) {
   if (a.lastSales && daysBetween_(a.lastSales, today) > rule.FRESH_SALES_LAG_DAYS) push('🟡', '排班分析的每日營收只到 ' + a.lastSales + '（今天 ' + today + '），比預期晚；人力營收的數字少了最近幾天', a.lastSales, '早於今天 ' + rule.FRESH_SALES_LAG_DAYS + ' 天以上');
   if (a.posLatest && daysBetween_(a.posLatest, today) > rule.FRESH_SALES_LAG_DAYS) push('🟡', 'POS 銷售資料只到 ' + a.posLatest + '（今天 ' + today + '），POS 同步可能延遲', a.posLatest, '早於今天 ' + rule.FRESH_SALES_LAG_DAYS + ' 天以上');
   var b = f('B');
-  if (b.shopLatest && daysBetween_(b.shopLatest, today) > rule.FRESH_SHOP_LAG_DAYS) push('🟡', '大平台下單資料（fact_shopline）只到 ' + b.shopLatest + '，已落後 ' + daysBetween_(b.shopLatest, today) + ' 天；檔期「已出貨」會偏少，請上傳最新的大平台報表', b.shopLatest, '落後超過 ' + rule.FRESH_SHOP_LAG_DAYS + ' 天');
+  if (b.dcoErr) push('🟡', '出貨中心訂單讀取失敗，檔期「已出貨」只算到大平台（Shopline）的單。原因：' + shortErr_(b.dcoErr), '讀取失敗', '');
+  if (b.shopLatest && daysBetween_(b.shopLatest, today) > rule.FRESH_SHOP_LAG_DAYS) push('🟡', '門市下單資料（大平台＋出貨中心訂單）只到 ' + b.shopLatest + '，已落後 ' + daysBetween_(b.shopLatest, today) + ' 天；檔期「已出貨」會偏少，請確認出貨中心訂單系統', b.shopLatest, '落後超過 ' + rule.FRESH_SHOP_LAG_DAYS + ' 天');
   var c2 = f('C');
   if (c2.futMin && daysBetween_(c2.futMin, today) > rule.FRESH_FUT_LAG_DAYS) push('🟡', '未來訂位停更：未來訂位表最早日期是 ' + c2.futMin + '（應該是今天 ' + today + '），訂位頁的每日重建可能沒跑', c2.futMin, '早於今天');
   if (c2.gbState === '未設定') push('🟡', '團體訂位通關碼還沒設定：未選甜點／未付足訂金／需立即處理三欄寫「未設定」。請經營者到本專案「指令碼屬性」新增 GB_PASSCODE', '未設定', '');
@@ -1128,7 +1140,8 @@ function briefKindOf_(r, map, rule) {
     if ((m = d.match(/^(.+?)（([A-E]) 類）這次讀取失敗/))) return { id: '0_fail_' + m[2], system: '系統：' + m[1] + '（' + m[2] + ' 類）今天沒有算完，數字是上一次的' };
     if (/排班分析的每日營收只到/.test(d)) return { id: '0_sales', single: '排班每日營收只到 ' + v + '，人力營收少了最近幾天' };
     if (/POS 銷售資料只到/.test(d)) return { id: '0_pos', single: 'POS 銷售資料只到 ' + v + '，POS 同步可能延遲' };
-    if ((m = d.match(/大平台下單資料.*只到 (\S+)，已落後 (\d+) 天/))) return { id: '0_shop', single: '大平台下單資料只到 ' + m[1] + '，落後 ' + m[2] + ' 天，請上傳最新報表' };
+    if ((m = d.match(/下單資料.*只到 (\S+)，已落後 (\d+) 天/))) return { id: '0_shop', single: '門市下單資料只到 ' + m[1] + '，落後 ' + m[2] + ' 天，請確認出貨中心訂單系統' };
+    if (/出貨中心訂單讀取失敗/.test(d)) return { id: '0_dco', single: '出貨中心訂單讀取失敗，檔期已出貨只算到大平台的單' };
     if (/未來訂位停更/.test(d)) return { id: '0_fut', single: '未來訂位停更：最早日期是 ' + v + '，訂位頁每日重建可能沒跑' };
     if (/通關碼還沒設定/.test(d)) return { id: '0_gb_unset', single: '團體通關碼還沒設定，團體三欄沒有數字' };
     if (/通關碼不正確/.test(d)) return { id: '0_gb_wrong', single: '團體通關碼不正確，團體三欄沒有數字' };
@@ -1836,9 +1849,21 @@ function calcB_(out, rule, map) {
     return { st: String(r["店號"] == null ? "" : r["店號"]).trim(), date: d ? ymd(d) : String(r["日期"] || "").slice(0, 10), ord: String(r["訂單號碼"] || ""), name: String(r["品項"] || ""), cat: String(r["分類"] || ""), qty: num(r["數量"]), price: num(r["單價"]) };
   }).filter(function (r) { return r.date && r.ord && r.st && r.st !== "13"; });
   rowsAll.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
-  var shopLatest = rowsAll.length ? rowsAll[rowsAll.length - 1].date : '';
-  setMetaLatest_('B', 'fact_shopline', shop.length, shopLatest);
-  RUN.fresh.B = { shopLatest: shopLatest };
+  var slLatest = rowsAll.length ? rowsAll[rowsAll.length - 1].date : '';
+  setMetaLatest_('B', 'fact_shopline', shop.length, slLatest);
+  // 2026-10-18 Shopline 停用專案：出貨中心訂單（10/20 起門市只在採購系統下單）一起算；讀不到不擋，只算大平台並亮 🟡
+  var dcoRows = [], dcoErr = '';
+  try {
+    var dj = fetchJson_('B', '出貨中心訂單', SRC.DCO_API + '?action=orders&token=' + encodeURIComponent(SRC.DCO_TOKEN) + '&from=' + ymd(new Date(TODAY.getTime() - 200 * 864e5)));
+    if (!dj || !dj.ok) throw new Error((dj && dj.error) || '回應不是 ok');
+    dcoRows = dcohRows(dj.orders).filter(function (r) { return r.st && r.st !== '13' && r.st !== '99'; });   // 13 歇業、99 測試店
+  } catch (e) { if (isDefer_(e)) throw e; dcoErr = String(e && e.message || e); }
+  var dcoLatest = dcoRows.length ? dcoRows[dcoRows.length - 1].date : '';
+  setMetaLatest_('B', '出貨中心訂單', dcoRows.length, dcoLatest);
+  rowsAll = rowsAll.concat(dcoRows);
+  rowsAll.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+  var shopLatest = rowsAll.length ? rowsAll[rowsAll.length - 1].date : '';   // 下單資料最新日＝大平台與出貨中心訂單取較新的
+  RUN.fresh.B = { shopLatest: shopLatest, slLatest: slLatest, dcoLatest: dcoLatest, dcoErr: dcoErr };
   var evUpd = rs.reduce(function (m, r) { var d = gvDate(r['更新日']); return d && ymd(d) > m ? ymd(d) : m; }, '');
   setMetaLatest_('B', 'agg_evneed', rs.length, evUpd);
 
@@ -1941,9 +1966,9 @@ function calcB_(out, rule, map) {
   });
   rec_(out, ALL_ROW, 'B3_stale_stores', tdy, nStale, '', '超過門檻或從未盤點的店數（全公司列的「距上次盤點天數」留空）', invLatest, '', '');
 
-  // ---- B4 大平台下單資料最新日 ----
+  // ---- B4 門市下單資料最新日（大平台＋出貨中心訂單；鍵名沿用 B4_shopline_latest，前端不用改）----
   var lag = shopLatest ? Math.round((new Date(tdy + 'T00:00:00') - new Date(shopLatest + 'T00:00:00')) / 864e5) : '';
-  rec_(out, ALL_ROW, 'B4_shopline_latest', tdy, shopLatest, lag, '落後天數', shopLatest, '', 'B 大平台下單資料最新日');
+  rec_(out, ALL_ROW, 'B4_shopline_latest', tdy, shopLatest, lag, '落後天數', shopLatest, '', 'B 大平台下單資料最新日');   // 欄名不改（snap_latest／snap_history 以欄名對應，月會頁也讀這個欄名）；值已是兩邊合併的最新日
 }
 
 // ============================================================
