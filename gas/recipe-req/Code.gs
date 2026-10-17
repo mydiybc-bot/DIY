@@ -18,7 +18,8 @@
  * 第一次使用：編輯器選 setup → 執行 → 授權（建立試算表、分頁、表頭、各角色初始密碼）。
  */
 
-var VERSION = 'recipe-req-v14';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+/* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
+var VERSION = 'recipe-req-v15';   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -1307,7 +1308,9 @@ function notifyAuthorize() { var n = MailApp.getRemainingDailyQuota(); Logger.lo
           fact_push 分頁逐表記錄；同一張單寫過且未還原 → 不重寫；rollbackReq(單號)／管理者「還原」只刪這張單寫的列 */
 var PURCHASE_ID_DEFAULT = '1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao';   /* BOM 本；指令碼屬性 PURCHASE_ID 有值時改用它（測試副本用） */
 var DASH_ID_DEFAULT = '1FF7lW3JINR0-Id7MMYSRkoRzA1BYdqktO94NbzAFYG0';       /* 儀表板專用檔（只寫 dim_sku）；指令碼屬性 DASH_PURCHASE_ID 可覆蓋 */
-var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv', par: 'dim_store_par', par2: 'dim_store_par（儀表板專用檔）' };
+var PT = { map: '產品名稱對照表', bom: 'BOM表', sku: 'dim_sku', sku2: 'dim_sku（儀表板專用檔）', conv: 'dim_unitconv', par: 'dim_store_par', par2: 'dim_store_par（儀表板專用檔）',
+  skuSt: 'dim_sku 停售改回在用', skuSt2: 'dim_sku 停售改回在用（儀表板專用檔）' };   /* 2026-10-17：skuSt／skuSt2 不是分頁，是「改主檔狀態欄」的紀錄名（ptRead_ 不讀它們） */
+var REACT_FROM = '停售';   /* 2026-10-17 經營者：核准寫入時，申請單用到、主檔是「停售」的品項改回在用（狀態欄清空）；「不盤點」不動 */
 var PAR_NEED = ['店號', 'sku_id', '標配數量'];   /* 2026-10-07 晚：新器具／模具每店標配（店別參數只寫這三欄，其餘留空＝用預設） */
 var BRAND_STORES = { '自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], '吳寶春自己做': [11, 12], '自己做＆吳寶春自己做': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] };   /* 同採購系統 EventLayer EV_BRAND_STORES */
 function brandStores_(b) { b = ptName_(b); return (BRAND_STORES[b] || BRAND_STORES['自己做＆吳寶春自己做']).slice(); }
@@ -1442,12 +1445,27 @@ function planPush_(rid) {
     });
   });
   var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'), skuRows = [], seen = {}, existing = [], used = {};
+  /* 2026-10-17：主檔同品名的列（找「停售」要改回在用的）；同名只有一列且是停售才改，同名有在用的列＝不用改，同名多列都不是在用＝提醒採購 */
+  var cSt = S.col['狀態'], cId = S.col['sku_id'], cCat = S.col['品類別'], byName = {}, react = [], reactSeen = {};
+  if (cSt !== undefined) S.vals.forEach(function (r) { var n = ptName_(r[cN]); if (n) (byName[n] = byName[n] || []).push(r); });
+  else warn.push('主檔 dim_sku 找不到「狀態」欄：停售品項沒辦法自動改回在用，請採購到主檔頁確認');
   lines.forEach(function (l) { if (l.qty > 0) used[l.name] = 1; });   /* 只建 BOM 會用到的（數量 > 0），不然主檔會多出沒人用的孤兒 */
   lines.forEach(function (l) {
     if (seen[l.name] || !used[l.name]) return; seen[l.name] = 1;
     var k = known[l.name];
     if (k) {
       existing.push(l.name);
+      var same = byName[k.name] || [];
+      if (cSt !== undefined && same.length && !reactSeen[k.name] && !same.some(function (r) { return ptName_(r[cSt]) === ''; })) {
+        var stop = same.filter(function (r) { return ptName_(r[cSt]) === REACT_FROM; });
+        if (same.length === 1 && stop.length === 1) {
+          reactSeen[k.name] = 1;
+          react.push({ sku_id: ptName_(stop[0][cId]), name: k.name, line: l.name, cat: ptName_(stop[0][cCat]) });
+        } else if (stop.length) {
+          reactSeen[k.name] = 1;
+          warn.push('主檔有 ' + same.length + ' 列都叫「' + k.name + '」（' + same.map(function (r) { return ptName_(r[cId]) + ' ' + (ptName_(r[cSt]) || '在用'); }).join('、') + '），沒有自動改回在用：請採購到主檔頁決定要用哪一列');
+        }
+      }
       /* 2026-10-07：主廚在申請表填了「1 平匙≈幾 g」→ 核准時新增一列 dim_unitconv（備註「自動草稿…請採購確認」）；沒填才提醒 */
       if (convNeeded(l.unit, k.unit) && !convHas([l.name, k.name], l.unit)) {
         if (l.conv > 0 && (!l.cbase || l.cbase === k.unit) && P.conv) convAdd(l, k.unit);
@@ -1546,17 +1564,18 @@ function planPush_(rid) {
   var map = { row: [name, name, '', '', ymd_(d1), ymd_(d2), main, sub], show: [name, name, d1, d2, main, sub],
     skip: mapHave ? '對照表已經有「' + name + '」（' + normDate_(mapHave[4]) + '～' + normDate_(mapHave[5]) + '），沒有新增（重新上架請到對照表改日期）' : '' };
   if (skuRows.length && !P.sku2) warn.push('儀表板專用檔讀不到（' + P.sku2err + '）：主檔新品項只寫 BOM 本、明天 07:05 同步；這段期間請不要在採購系統主檔頁新增品項（會撞號）');
-  if (!skuRows.length && bom.skip && map.skip && !convRows.length) warn.push('三張表都不用寫（都已經有了）');
+  if (!skuRows.length && bom.skip && map.skip && !convRows.length && !react.length) warn.push('三張表都不用寫（都已經有了）');
   if (convRows.length) warn.push('新單位換算 ' + convRows.length + ' 筆會加進 dim_unitconv（備註「' + DRAFT_TAG + '…請採購確認」）：' + convRows.map(function (c) { return c[0] + ' 1 ' + c[1] + '≈' + c[3] + ' ' + c[2]; }).join('、') + '，請採購到採購系統「單位對照」確認數字');
   return { rid: rid, name: name, campaign: campName, from: d1, to: d2, sku: { rows: skuRows, existing: existing }, bom: bom, map: map, conv: { rows: convRows },
-    par: { rows: parRows, rows2: parRows2, show: parShow }, warn: warn, P: P };
+    par: { rows: parRows, rows2: parRows2, show: parShow }, react: react, warn: warn, P: P };
 }
 function planView_(pl) {
   return { req_id: pl.rid, name: pl.name, campaign: pl.campaign, from: pl.from, to: pl.to, warn: pl.warn, dash: !!pl.P.sku2,
     sku: pl.sku.rows.map(function (r) { return { sku_id: r.sku_id, name: r.name, vname: r.vname || '', cat: r.cat, vendor: r.vendor, unit: r.unit, buy: r.buy, pack: r.pack, price: r.price, semi: r.semi }; }),
     existing: pl.sku.existing, bom: pl.bom.rows, bomSkip: pl.bom.skip, map: pl.map.show, mapSkip: pl.map.skip,
     conv: (pl.conv ? pl.conv.rows : []).map(function (r) { return r.slice(0, 4).map(ptNorm_); }),
-    par: (pl.par ? pl.par.show : []).map(function (r) { return r.map(ptNorm_); }) };
+    par: (pl.par ? pl.par.show : []).map(function (r) { return r.map(ptNorm_); }),
+    react: (pl.react || []).map(function (r) { return { sku_id: r.sku_id, name: r.name, line: r.line, cat: r.cat }; }) };
 }
 
 /* 寫入紀錄：這張單最近一批是否「寫了、還沒還原」 */
@@ -1625,6 +1644,45 @@ function ptRemove_(tab, rec) {
   if (hit.length) SpreadsheetApp.flush();
   return { removed: hit.length, miss: miss };
 }
+/* 2026-10-17：改主檔「狀態」欄（停售 → 在用＝清空；還原時倒過來）。用 sku_id＋品名找列（不靠列號，期間有人插刪列也找得到），
+   改之前再讀一次那一格要是 from；已經是 to＝不用改（專用檔可能已同步過）；改完讀回比對，讀回不符 → 把這次改的倒回去再丟錯 */
+function ptStatusSet_(key, items, from, to) {
+  var tab = ptRead_(key), ci = tab.col['sku_id'], cn = tab.col['品名'], cs = tab.col['狀態'];
+  if (cs === undefined) throw fail_(PT[key] + ' 找不到欄位「狀態」', 'purchase');
+  var done = [], miss = [];
+  items.forEach(function (it) {
+    var rn = -1;
+    for (var i = 0; i < tab.vals.length; i++) if (ptName_(tab.vals[i][ci]) === it.sku_id && ptName_(tab.vals[i][cn]) === it.name) { rn = i + 2; break; }
+    if (rn < 0) { miss.push(it.name + '（找不到 ' + it.sku_id + '）'); return; }
+    var cell = tab.sh.getRange(rn, cs + 1), cur = ptName_(cell.getValue());
+    if (cur === to) return;
+    if (cur !== from) { miss.push(it.name + '（狀態已經是「' + (cur || '在用') + '」，沒有動）'); return; }
+    cell.setValue(to);
+    done.push({ sku_id: it.sku_id, name: it.name, row: rn, from: from, to: to });
+  });
+  if (done.length) {
+    SpreadsheetApp.flush();
+    var bad = done.filter(function (d) { return ptName_(tab.sh.getRange(d.row, cs + 1).getValue()) !== to; });
+    if (bad.length) {
+      done.forEach(function (d) { try { tab.sh.getRange(d.row, cs + 1).setValue(from); } catch (e) { } });
+      SpreadsheetApp.flush();
+      throw fail_('「' + PT[key] + '」' + bad.map(function (d) { return d.name; }).join('、') + ' 的狀態欄讀回不一致，已把這次改的倒回「' + (from || '在用') + '」', 'verify');
+    }
+  }
+  return { done: done, miss: miss };
+}
+/* 寫入紀錄（ptAppend_ 同形狀）：rows＝[sku_id, 品名, 列號, 改前, 改後] */
+function ptStatusRec_(key, res) {
+  return { table: key === 'sku' ? 'skuSt' : 'skuSt2', start: res.done.length ? res.done[0].row : 0, status: true,
+    rows: res.done.map(function (d) { return [d.sku_id, d.name, d.row, d.from, d.to]; }) };
+}
+/* 倒回（失敗收尾、管理者還原共用）：只倒「現在還是當初改後的值」的 */
+function ptStatusUndo_(rec) {
+  var key = rec.table === 'skuSt' ? 'sku' : 'sku2', rows = rec.rows || [];
+  if (!rows.length) return { removed: 0, miss: [] };
+  var res = ptStatusSet_(key, rows.map(function (r) { return { sku_id: String(r[0]), name: String(r[1]) }; }), String(rows[0][4]), String(rows[0][3]));
+  return { removed: res.done.length, miss: res.miss };
+}
 function backupTab_(pl, batch) {
   var ss = ss_(), base = 'backup_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd') + '_' + pl.rid, nm = base, k = 2;
   while (ss.getSheetByName(nm)) nm = base + '_' + (k++);
@@ -1645,6 +1703,7 @@ function backupTab_(pl, batch) {
   if (!pl.map.skip) out.push(['map', JSON.stringify(pl.map.row.map(ptNorm_)), '', '', '', '']);
   pl.conv.rows.forEach(function (r) { out.push(['conv', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
   pl.par.rows.forEach(function (r) { out.push(['par', JSON.stringify(r.map(ptNorm_)), '', '', '', '']); });
+  (pl.react || []).forEach(function (r) { out.push(['skuSt', JSON.stringify([r.sku_id, r.name, REACT_FROM, '']), '', '', '', '']); });   /* 2026-10-17：停售改回在用（改前／改後） */
   var rg = sh.getRange(1, 1, out.length, 6);
   rg.setNumberFormat('@');
   rg.setValues(out.map(function (r) { return r.map(function (v) { return safe_(String(v)); }); }));
@@ -1667,13 +1726,25 @@ function pushToPurchase_(rid, who) {
       try { done.push(ptAppend_(pl.P.par2, pl.par.rows2)); }
       catch (e3) { soft.push('儀表板專用檔的店別參數沒寫到（' + errMsg_(e3) + '）：明天 07:05 會同步'); }
     }
+    if (pl.react.length) {   /* 2026-10-17：停售品項改回在用（BOM 本為準；專用檔改不到不擋，07:05 會同步） */
+      var rs = ptStatusSet_('sku', pl.react, REACT_FROM, '');
+      if (rs.done.length) done.push(ptStatusRec_('sku', rs));
+      if (rs.miss.length) soft.push('主檔有 ' + rs.miss.length + ' 項沒有改回在用：' + rs.miss.join('、'));
+      if (rs.done.length && pl.P.sku2) {
+        try { var rs2 = ptStatusSet_('sku2', rs.done, REACT_FROM, ''); if (rs2.done.length) done.push(ptStatusRec_('sku2', rs2)); if (rs2.miss.length) soft.push('儀表板專用檔主檔有 ' + rs2.miss.length + ' 項沒改到（' + rs2.miss.join('、') + '）：明天 07:05 會同步'); }
+        catch (e4) { soft.push('儀表板專用檔主檔的狀態沒改到（' + errMsg_(e4) + '）：明天 07:05 會同步'); }
+      }
+    }
     if (!pl.bom.skip) done.push(ptAppend_(pl.P.bom, pl.bom.rows));
     if (pl.conv.rows.length && pl.P.conv) done.push(ptAppend_(pl.P.conv, pl.conv.rows));   /* 2026-10-07：新單位換算（對照表仍最後寫＝備料啟動開關） */
     if (!pl.map.skip) done.push(ptAppend_(pl.P.map, [pl.map.row]));
   } catch (e) {
     var undo = [];
     done.slice().reverse().forEach(function (d) {
-      try { var tab = ptRead_(d.table), r = ptRemove_(tab, d); undo.push(PT[d.table] + ' 刪回 ' + r.removed + ' 列' + (r.miss.length ? '（' + r.miss.length + ' 列找不到：' + r.miss.join('、') + '）' : '')); }
+      try {
+        if (d.status) { var u = ptStatusUndo_(d); undo.push(PT[d.table] + ' 倒回停售 ' + u.removed + ' 項' + (u.miss.length ? '（' + u.miss.join('、') + '）' : '')); return; }
+        var tab = ptRead_(d.table), r = ptRemove_(tab, d); undo.push(PT[d.table] + ' 刪回 ' + r.removed + ' 列' + (r.miss.length ? '（' + r.miss.length + ' 列找不到：' + r.miss.join('、') + '）' : ''));
+      }
       catch (e2) { undo.push(PT[d.table] + ' 刪回失敗：' + errMsg_(e2)); }
     });
     pushLog_({ ts: now, req_id: rid, batch: batch, action: 'fail', table: '', rows: '', detail: JSON.stringify(done.map(function (d) { return { table: d.table, start: d.start, n: d.rows.length }; })),
@@ -1683,9 +1754,11 @@ function pushToPurchase_(rid, who) {
   var show = { sku: pl.sku.rows.map(function (r) { return [r.sku_id, r.name, r.cat, r.vendor]; }), bom: pl.bom.rows.map(function (r) { return r.map(ptNorm_); }), map: [pl.map.show],
     conv: pl.conv.rows.map(function (r) { return r.slice(0, 4).map(ptNorm_); }), par: pl.par.show.map(function (r) { return r.map(ptNorm_); }) };
   show.sku2 = show.sku; show.par2 = show.par;
+  done.forEach(function (d) { if (d.status) show[d.table] = d.rows.map(function (r) { return [r[0], r[1], r[2]]; }); });   /* 停售改回在用：編號｜品名｜列號 */
   done.forEach(function (d) {
     pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: d.table, rows: String(d.rows.length),
-      detail: JSON.stringify({ start: d.start, rows: d.rows, show: show[d.table] || [] }), backup: bk, ok: 'Y', msg: (who || '') + '｜' + PT[d.table] + ' 第 ' + d.start + '～' + (d.start + d.rows.length - 1) + ' 列' });
+      detail: JSON.stringify({ start: d.start, rows: d.rows, show: show[d.table] || [], status: !!d.status }), backup: bk, ok: 'Y',
+      msg: (who || '') + '｜' + PT[d.table] + (d.status ? '：' + d.rows.map(function (r) { return r[0] + ' ' + r[1] + '（第 ' + r[2] + ' 列）'; }).join('、') : ' 第 ' + d.start + '～' + (d.start + d.rows.length - 1) + ' 列') });
   });
   if (!done.length) pushLog_({ ts: now, req_id: rid, batch: batch, action: 'write', table: '', rows: '0', detail: '{}', backup: bk, ok: 'Y', msg: (who || '') + '｜三張表都已經有了，沒有寫' });
   var v = planView_(pl);
@@ -1702,6 +1775,21 @@ function rollbackPush_(rid, who) {
     var bs = ss_().getSheetByName(st.backup);
     if (bs) bs.getRange(3, 1, 7, 4).getValues().forEach(function (r) { if (String(r[0])) bkDig[String(r[0])] = String(r[3]); });   /* 2026-10-07 起第 7 列是 conv、晚上起第 8、9 列是 par／par2；舊備份那幾列是空白 */
   } catch (e) { }
+  /* 2026-10-17：先把「停售改回在用」倒回停售（要在主檔指紋比對之前，才比得出「回到寫入前」） */
+  ['skuSt', 'skuSt2'].forEach(function (key) {
+    var rec = st.tables[key];
+    if (!rec) return;
+    try {
+      var u = ptStatusUndo_({ table: key, rows: rec.rows || [] });
+      res.push({ table: key, name: PT[key], removed: u.removed, miss: u.miss, digest: '', backToBackup: null, status: true });
+      pushLog_({ ts: now, req_id: rid, batch: st.batch, action: 'rollback', table: key, rows: String(u.removed), detail: JSON.stringify({ miss: u.miss }), backup: st.backup, ok: 'Y',
+        msg: (who || '') + '｜' + PT[key] + '：倒回停售 ' + u.removed + ' 項' + (u.miss.length ? '，' + u.miss.length + ' 項沒動（' + u.miss.join('、') + '）' : '') });
+    } catch (e) {
+      if (key === 'skuSt') throw e;
+      res.push({ table: key, name: PT[key], removed: 0, miss: [], digest: '', backToBackup: null, status: true, error: errMsg_(e) });
+      pushLog_({ ts: now, req_id: rid, batch: st.batch, action: 'rollback', table: key, rows: '0', detail: '{}', backup: st.backup, ok: 'N', msg: (who || '') + '｜專用檔狀態沒倒回（' + errMsg_(e) + '），明天 07:05 會跟 BOM 本同步' });
+    }
+  });
   ['map', 'conv', 'bom', 'par', 'par2', 'sku', 'sku2'].forEach(function (key) {   /* 店別參數比主檔先刪（列裡有新品項的 sku_id） */
     var rec = st.tables[key];
     if ((key === 'sku2' || key === 'conv' || key === 'par' || key === 'par2') && !rec) return;   /* 當初沒寫到專用檔／這張單沒有新單位換算／沒有新器具標配 */
@@ -1769,7 +1857,7 @@ function rollbackPurchase_(p, auth) {
   var r = rollbackPush_(rid, auth.role);
   var st = reqStatus_(rid);
   if (st === PUSH_OK) setStatus_(rid, '已核准');
-  return { id: rid, data: { status: st === PUSH_OK ? '已核准' : st, rollback: r }, msg: '還原：' + r.tables.map(function (x) { return x.name + ' 刪 ' + x.removed; }).join('、') };
+  return { id: rid, data: { status: st === PUSH_OK ? '已核准' : st, rollback: r }, msg: '還原：' + r.tables.map(function (x) { return x.status ? x.name.replace('停售改回在用', '改回停售') + ' ' + x.removed + ' 項' : x.name + ' 刪 ' + x.removed; }).join('、') };
 }
 function pushMsg_(v) {
   var w = v.written || [];

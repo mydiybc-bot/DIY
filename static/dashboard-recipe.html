@@ -3607,7 +3607,10 @@ function planHTML(pl){var m=pl.map||[],x='<div class="ap-pushpv"><div><b>核准�
   if(!pl.bomSkip&&pl.bom.length)x+=pvTable(['品項','數量','單位','容器'],pl.bom.map(function(r){return [r[1],r[2],r[3],r[4]]}));
   x+='<div><b>③ 主檔新品項</b>：'+(pl.sku.length?'新增 '+pl.sku.length+' 項，標「🆕 待確認」由採購補單價、單位換算、適用店':'沒有新品項')+'</div>';
   if(pl.sku.length)x+=pvTable(['編號','品名','廠商品名','品類別','廠商','使用單位','採購單位','內容量','單價'],pl.sku.map(function(r){return [r.sku_id,r.name+(r.semi?'（店製半成品）':''),r.vname||'—',r.cat,r.vendor,r.unit,r.buy,r.pack,r.price||'（待補）']}));
-  if((pl.existing||[]).length)x+='<div class="ap-muted">主檔已有、一格都不動：'+esc(pl.existing.join('、'))+'</div>';
+  var rcN={};(pl.react||[]).forEach(function(r){rcN[r.name]=1;rcN[r.line]=1});   /* 2026-10-17：停售改回在用 */
+  if((pl.react||[]).length)x+='<div><b>⑥ 主檔「停售」改回在用</b>：'+pl.react.length+' 項（各店盤點看得到；最後有效日隔天早上 6 點依這個檔期自動更新。「不盤點」的品項不動）</div>'+pvTable(['編號','品名','品類別'],pl.react.map(function(r){return [r.sku_id,r.name+(r.line!==r.name?'（申請單寫「'+r.line+'」）':''),r.cat]}));
+  var exN=(pl.existing||[]).filter(function(n){return !rcN[n]});
+  if(exN.length)x+='<div class="ap-muted">主檔已有、一格都不動：'+esc(exN.join('、'))+'</div>';
   if((pl.conv||[]).length)x+='<div><b>④ 新單位換算（單位對照）</b>：新增 '+pl.conv.length+' 列，備註「自動草稿…請採購確認」</div>'+pvTable(['品項','單位','換算成','1 單位＝'],pl.conv);   /* 2026-10-07 */
   if((pl.par||[]).length)x+='<div><b>⑤ 新器具／模具各店標配（店別參數）</b>：新增 '+pl.par.length+' 列（每店一列；店長在採購系統看得到要放幾個）</div>'+pvTable(['品項','每店標配','店號'],parGroups(pl.par));   /* 2026-10-07 晚 */
   if((pl.warn||[]).length)x+='<div class="ap-pushwarn">⚠ '+pl.warn.map(esc).join('<br>⚠ ')+'</div>';
@@ -3621,10 +3624,12 @@ function pushPvHTML(){if(PUSHPV.rid!==AP.head.req_id)return '';
   if(PUSHPV.err)return '<div class="ap-bad" style="margin-top:6px">✕ '+esc(PUSHPV.err)+'</div>';
   return PUSHPV.plan?planHTML(PUSHPV.plan):''}
 function pushDoneHTML(pi){var w=(pi&&pi.written)||[];if(!w.length)return '<div class="ap-muted">三張表都已經有這支甜點，沒有寫新的列。</div>';
-  var nm={sku:'主檔新品項',sku2:'主檔新品項（採購系統讀取用的副本）',bom:'BOM 表',map:'產品名稱對照表',conv:'新單位換算（單位對照）',par:'新器具／模具各店標配',par2:'新器具／模具各店標配（採購系統讀取用的副本）'};
-  var x='<div class="ap-pushpv"><details class="xhelp" style="margin:0"><summary>ⓘ 寫在哪幾張表、第幾列（總部查核用）</summary><div>'+w.map(function(d){return '<b>'+esc(nm[d.table]||d.name)+'</b> 第 '+esc(d.start)+'～'+esc(d.start+d.n-1)+' 列（'+esc(d.n)+' 列）'}).join('<br>')+'</div></details>';
+  var nm={sku:'主檔新品項',sku2:'主檔新品項（採購系統讀取用的副本）',bom:'BOM 表',map:'產品名稱對照表',conv:'新單位換算（單位對照）',par:'新器具／模具各店標配',par2:'新器具／模具各店標配（採購系統讀取用的副本）',skuSt:'主檔停售改回在用',skuSt2:'主檔停售改回在用（採購系統讀取用的副本）'};
+  var x='<div class="ap-pushpv"><details class="xhelp" style="margin:0"><summary>ⓘ 寫在哪幾張表、第幾列（總部查核用）</summary><div>'+w.map(function(d){return '<b>'+esc(nm[d.table]||d.name)+'</b> '+(/^skuSt/.test(d.table)?'第 '+esc((d.show||[]).map(function(r){return r[2]}).join('、'))+' 列（'+esc(d.n)+' 項）':'第 '+esc(d.start)+'～'+esc(d.start+d.n-1)+' 列（'+esc(d.n)+' 列）')}).join('<br>')+'</div></details>';
   var sk=w.filter(function(d){return d.table==='sku'})[0],bm=w.filter(function(d){return d.table==='bom'})[0];
   if(sk&&sk.show.length)x+='<details><summary>主檔新品項 '+sk.show.length+' 項</summary>'+pvTable(['編號','品名','品類別','廠商'],sk.show)+'</details>';
+  var rcw=w.filter(function(d){return d.table==='skuSt'})[0];   /* 2026-10-17 */
+  if(rcw&&(rcw.show||[]).length)x+='<details open><summary>主檔「停售」改回在用 '+rcw.show.length+' 項（各店盤點看得到）</summary>'+pvTable(['編號','品名'],rcw.show.map(function(r){return [r[0],r[1]]}))+'</details>';
   if(bm&&bm.show.length)x+='<details><summary>BOM 表 '+bm.show.length+' 列</summary>'+pvTable(['品項','數量','單位','容器'],bm.show.map(function(r){return [r[1],r[2],r[3],r[4]]}))+'</details>';
   var cvw=w.filter(function(d){return d.table==='conv'})[0];
   if(cvw&&cvw.show.length)x+='<details open><summary>新單位換算 '+cvw.show.length+' 列（請採購到採購系統「單位對照」確認數字）</summary>'+pvTable(['品項','單位','換算成','1 單位＝'],cvw.show)+'</details>';
@@ -3675,7 +3680,7 @@ function semiPushFlow(after){var list=semiTodo();if(!list.length)return;
     SENDMSG=base+x;updSendUI()})}
 
 function rollbackFlow(){if(_busy)return;var rid=AP.head.req_id;if(!rid)return;
-  if(!confirm('還原 '+rid+' 的採購系統寫入？\n\n會刪掉這張單當初寫進 產品名稱對照表／BOM 表／主檔／單位換算 的列（內容相符的才刪）。\n如果採購已經在主檔補了單價，那些也會一起刪掉。'))return;
+  if(!confirm('還原 '+rid+' 的採購系統寫入？\n\n會刪掉這張單當初寫進 產品名稱對照表／BOM 表／主檔／單位換算 的列（內容相符的才刪）；當初從「停售」改回在用的品項會改回停售。\n如果採購已經在主檔補了單價，那些也會一起刪掉。'))return;
   if(!confirm('再確認一次：刪除採購系統裡這張單寫入的列。確定？'))return;
   withCred('管理者','還原要「管理者」密碼。',function(cr){_busy=true;SENDMSG='<span class="ap-muted">還原中…（約 10～40 秒）</span>';updSendUI();
     apiPost({action:'rollbackPurchase',role:cr.role,password:cr.pw,req_id:rid,rq:rqToken()}).then(function(r){
