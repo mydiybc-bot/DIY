@@ -2,6 +2,29 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="theme-color" content="#2E7D32">
 <link rel="manifest" href="purchase-manifest.json">
@@ -2045,8 +2068,11 @@ function dsbRole(){
    ② 游標在搜尋框裡、沒在組字 → 照常重畫，畫完把焦點與游標放回去（原本只有打字觸發的重畫會放回，背景重畫會讓搜尋框失焦）
    只看 bindQ／invQBind 綁過的搜尋框（__qb），其他輸入框不受影響。 */
 var RENDER_DEFER=false;
+/* 2026-10-17 全站中文輸入保護（head 的 IME-GUARD）：任何輸入框正在選字（window.__ime.on）時，背景重畫一樣先延後；
+   選完字（compositionend）補畫一次。原本只保護 bindQ／invQBind 的搜尋框，新品項申請、訂貨單備註、主檔等欄位選字到一半被重畫會打斷。 */
+if(typeof document!=="undefined")document.addEventListener("compositionend",function(){if(RENDER_DEFER)setTimeout(function(){if(RENDER_DEFER&&!(window.__ime&&window.__ime.on))render();},0);},true);
 function render(){var __ae=(typeof document!=="undefined")?document.activeElement:null;
-  if(__ae&&__ae.__qb&&__ae.__ime&&document.body.contains(__ae)){RENDER_DEFER=true;return;}
+  if((__ae&&__ae.__qb&&__ae.__ime&&document.body.contains(__ae))||(typeof window!=="undefined"&&window.__ime&&window.__ime.on)){RENDER_DEFER=true;return;}
   RENDER_DEFER=false;
   if(__ae&&__ae.__qb&&__ae.id&&!QF&&document.body.contains(__ae)){var __pp=null;try{__pp=__ae.selectionStart;}catch(e){}QF={id:__ae.id,pos:__pp};}
   paintStoreId();renderTabs();dsbRole();
@@ -5967,7 +5993,7 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-chev]"),function(el){el.onclick=function(){var e=el.getAttribute("data-chev")||"",a=(ST.chEvs||[]).slice(),k=a.indexOf(e);   /* ct 批：複選切換（至少留一檔） */
     if(k>=0){if(a.length>1)a.splice(k,1);}else a.push(e);var od=campEvs();a.sort(function(x,y){return od.indexOf(x)-od.indexOf(y);});
     ST.chEvs=a;ST.chEv=a[0]||e;ST.chExp={};ST.chSt={};render();};});
-  var chq=$("#chQ");if(chq){chq.oninput=function(){ST.chQ=this.value;clearTimeout(chq._t);chq._t=setTimeout(function(){var v=$("#view").innerHTML;render();var e2=$("#chQ");if(e2){e2.focus();try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(e){}}},250);};}
+  var chq=$("#chQ");if(chq){chq.oninput=function(){ST.chQ=this.value;clearTimeout(chq._t);chq._t=setTimeout(function(){if(window.__ime&&__ime.on)return;var v=$("#view").innerHTML;render();var e2=$("#chQ");if(e2){e2.focus();try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(e){}}},250);};}   /* 2026-10-17：選字中不重畫（IME-GUARD），選完字會再排一次 */
   /* 2026-09-04 am 批：出貨中心判讀「算式」展開／收合 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-shipx]"),function(el){el.onclick=function(ev){
     if(ev&&ev.stopPropagation)ev.stopPropagation();
