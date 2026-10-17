@@ -1,9 +1,32 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
+<!-- 2026-10-17 晚 全頁中文輸入保護 IME-GUARD（head 最前面）：經營者回報 BOM 管理搜尋框也打不出中文、要求整頁全測 → 選字中的 input／keydown／keyup 在最外層攔下、選完字補送 input；BOM 兩個搜尋框延遲重畫前檢查 __ime.on。 -->
 <!-- 2026-10-17 晚 🧬 食譜演化：搜尋框打中文會被打斷（經營者回報，多個儀表板發生過）→ 搜尋框只建一次、打字只重畫清單；注音選字中不搜尋（compositionstart／end）。 -->
 <!-- 2026-10-17 晚 🧬 食譜演化：每款甜點一張代表圖（有啟用的版本優先、最新那支的封面 recipeimages/{id}/{id}.jpg；點圖開大圖）；家族清單也帶始祖款的圖。申請單 API lineage 多回 cover 欄。 -->
 <!-- 2026-10-17 新分頁「🧬 食譜演化」（LineageMod，經營者：後台 1000 多支食譜一代一代演化，想看家族樹＋時間軸；每天凌晨 1～2 點自動更新）：讀申請單 API 動作 lineage（免身分密碼、只讀；分頁 recipe_lineage 由 gas/recipe-req/lineage.gs 在公版掃描後重算）。只讀，不寫任何資料。 -->
@@ -5324,8 +5347,8 @@ function refreshRow(tr,i){var rows=rowsOfView();if(!rows||!rows[i])return;var ck
 function wire(){var el=root();
   el.querySelectorAll('[data-bmtab]').forEach(function(b){b.onclick=function(){S.tab=b.getAttribute('data-bmtab');if(S.tab==='log'&&getCred())loadLog();paint()}});
   el.querySelectorAll('[data-bm]').forEach(function(b){b.onclick=function(ev){ev.preventDefault();act(b.getAttribute('data-bm'))}});
-  var q=$('bmQ');if(q)q.oninput=function(){S.q=q.value;clearTimeout(q._t);q._t=setTimeout(function(){var pos=q.selectionStart;paint();var n=$('bmQ');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(e){}}},250)};
-  var mq=$('bmMQ');if(mq)mq.oninput=function(){S.mq=mq.value;clearTimeout(mq._t);mq._t=setTimeout(function(){var pos=mq.selectionStart;paint();var n=$('bmMQ');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(e){}}},250)};
+  var q=$('bmQ');if(q)q.oninput=function(){S.q=q.value;clearTimeout(q._t);q._t=setTimeout(function(){if(window.__ime&&__ime.on)return;var pos=q.selectionStart;paint();var n=$('bmQ');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(e){}}},250)};
+  var mq=$('bmMQ');if(mq)mq.oninput=function(){S.mq=mq.value;clearTimeout(mq._t);mq._t=setTimeout(function(){if(window.__ime&&__ime.on)return;var pos=mq.selectionStart;paint();var n=$('bmMQ');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(e){}}},250)};
   var mm=$('bmMMain');if(mm)mm.onchange=function(){S.mmain=mm.value;paint()};
   el.querySelectorAll('[data-bmfilt]').forEach(function(b){b.onclick=function(){S.filt=b.getAttribute('data-bmfilt');paint()}});
   el.querySelectorAll('[data-bmmf]').forEach(function(b){b.onclick=function(){S.mfilt=b.getAttribute('data-bmmf');paint()}});
