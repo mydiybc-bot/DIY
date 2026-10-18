@@ -26,7 +26,7 @@
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v27';   /* 2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v28';   /* 2026-10-18 v28：新品申請表半成品的材料（payload.semi_items_new：🆕／停售／過季）核准時也建主檔、停售改回在用；不進甜點 BOM（qty 0、semiOnly）；newItemsPub 也列。2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -1498,14 +1498,17 @@ function planPush_(rid) {
   var semi = {};
   (pl.semis || []).forEach(function (s) { [s.name, s.link].forEach(function (x) { var n = ptName_(x); if (n) semi[n] = 1; }); });
   var warn = [];
-  var lines = (pl.lines || []).map(function (l) {
+  /* 2026-10-18 v28：半成品用到的材料（申請表「新增食材/器模具」列出的那些）一起建主檔／停售改回在用；數量 0＝不進甜點 BOM */
+  var semiNew = (pl.semi_items_new || []).map(function (x) { var o = {}; for (var k in x) o[k] = x[k]; o.qty = 0; o.semi_only = true; return o; });
+  var lines = (pl.lines || []).concat(semiNew).map(function (l) {
     return { name: ptName_(l.name), qty: Number(l.qty) || 0, unit: ptName_(l.unit), cat: ptName_(l.cat), vendor: ptName_(l.vendor),
       pkgCost: Number(l.pkg_cost) || 0, pkgSpec: ptName_(l.pkg_spec), pack: Number(l.pack) || 0, zone: ptName_(l.zone),
       shelf: ptName_(l.shelf).replace(/\s*[|｜]\s*/g, '｜'), vname: ptName_(l.vname), supply: ptName_(l.supply),
       perStore: Number(l.per_store) > 0 ? Math.round(Number(l.per_store)) : 0,   /* 2026-10-07 晚：新器具／模具每店要幾個 */
       conv: 0, cbase: '',   /* 2026-10-17 經營者：申請表不再填換算、核准不再寫 dim_unitconv（換算交給平匙換算專案）；舊單裡的 conv 一律不用 */
       og: ptName_(l.opt_group), oo: ptName_(l.opt_name), op: parseFloat(l.opt_pct),   /* 2026-10-17 客人選一 */
-      mc: Number(l.manual_cost) > 0 ? Number(l.manual_cost) : 0 };   /* 2026-10-17 主廚手填每份成本（只用來提醒主檔負責人補價，不寫進主檔） */
+      mc: Number(l.manual_cost) > 0 ? Number(l.manual_cost) : 0,
+      semiOnly: !!l.semi_only, semiOf: ptName_(l.semi) };   /* 2026-10-18 v28 半成品材料 */   /* 2026-10-17 主廚手填每份成本（只用來提醒主檔負責人補價，不寫進主檔） */
   }).filter(function (l) { return l.name; });
   var optInfo = optShares_(lines);
   var mcL = lines.filter(function (l) { return l.mc > 0; });
@@ -1548,7 +1551,7 @@ function planPush_(rid) {
   var cSt = S.col['狀態'], cId = S.col['sku_id'], cCat = S.col['品類別'], byName = {}, react = [], reactSeen = {};
   if (cSt !== undefined) S.vals.forEach(function (r) { var n = ptName_(r[cN]); if (n) (byName[n] = byName[n] || []).push(r); });
   else warn.push('主檔 dim_sku 找不到「狀態」欄：停售品項沒辦法自動改回在用，請採購到主檔頁確認');
-  lines.forEach(function (l) { if (l.qty > 0) used[l.name] = 1; });   /* 只建 BOM 會用到的（數量 > 0），不然主檔會多出沒人用的孤兒 */
+  lines.forEach(function (l) { if (l.qty > 0 || l.semiOnly) used[l.name] = 1; });   /* v28：半成品材料雖然不進 BOM，也要建主檔 */   /* 只建 BOM 會用到的（數量 > 0），不然主檔會多出沒人用的孤兒 */
   lines.forEach(function (l) {
     if (seen[l.name] || !used[l.name]) return; seen[l.name] = 1;
     var k = known[l.name];
@@ -1584,7 +1587,7 @@ function planPush_(rid) {
     if (l.pack > 1) { var cm = l.pkgSpec.match(/[包袋箱盒罐瓶桶組件套盤打]/); buy = cm ? cm[0] : '包'; pack = l.pack; price = l.pkgCost; }
     else if (l.pack === 1) price = l.pkgCost;
     var dcSup = l.supply === '出貨中心出貨';   /* 2026-10-07 晚：提供方式＝出貨中心出貨 → 各店向出貨中心叫（主檔廠商寫「出貨中心」）；出貨中心向誰進貨寫在來源 */
-    var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '') + (l.vname && l.vname !== l.name ? '；廠商品名 ' + l.vname : '')
+    var src = DRAFT_TAG + ' ' + today + '（新品申請 ' + rid + '：' + name + (isSemi ? '；店製半成品' : '') + (l.semiOnly && l.semiOf ? '；半成品「' + l.semiOf + '」的材料' : '') + (l.vname && l.vname !== l.name ? '；廠商品名 ' + l.vname : '')
       + (dcSup && l.vendor && l.vendor !== '出貨中心' ? '；出貨中心向 ' + l.vendor + ' 進貨' : '')
       + ((l.pkgCost || l.pkgSpec) ? '；原包裝 ' + (l.pkgCost ? l.pkgCost + ' 元' : '—') + '／' + (l.pkgSpec || '—') : '') + '）';
     var o = { sku_id: id, '品名': l.name, '品類別': cat, '廠商': dcSup ? '出貨中心' : (l.vendor || (isSemi ? '半成品' : '')), '使用單位': u, '採購單位': buy,
@@ -2137,7 +2140,7 @@ function pushInfo_(rid) {
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v6', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v7', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -2149,7 +2152,7 @@ function newItemsPub_() {
     var pl = {};
     try { pl = JSON.parse(readPayload_(t, r._row) || '{}') || {}; } catch (e) { pl = {}; }
     var h = pl.head || {}, c = camp[str_(r.campaign_id)] || {}, U = units[str_(r.req_id)] || {}, seen = {};
-    var lines = (pl.lines || []).map(function (l) {
+    var lines = (pl.lines || []).concat(pl.semi_items_new || []).map(function (l) {   /* v28：半成品材料也列 */
       var nm = str_(l.name).trim(); if (!nm || seen[nm]) return null; seen[nm] = 1;
       var u = U[nm] || {};
       var o = { name: nm, is_new: !!l.is_new, vname: str_(l.vname).trim(), sticker: str_(l.sticker).trim(), supply: str_(l.supply).trim(),

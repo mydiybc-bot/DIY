@@ -197,6 +197,10 @@ window.__ime=(function(){
   #tab-apply .ap-r{text-align:right}
   #tab-apply .ap-money{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;text-align:right}
   #tab-apply .ap-sc{position:relative}
+  #tab-apply .ap-shelf{display:flex;flex-direction:column;gap:3px;min-width:150px}   /* 2026-10-18 保存期限分三格 */
+  #tab-apply .ap-shelf label{display:flex;align-items:center;gap:4px;font-size:12px;color:#6F4E45;white-space:nowrap}
+  #tab-apply .ap-shelf label span{width:3.2em;flex:0 0 auto}
+  #tab-apply .ap-shelf input{min-width:0;flex:1;padding:3px 6px;font-size:12px}
   #tab-apply .ap-sug{position:fixed;z-index:60;background:#fff;border:1px solid #D8C8BF;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:260px;overflow:auto;font-size:13px}
   #tab-apply .ap-sug div{padding:6px 10px;cursor:pointer;border-bottom:1px solid #F2ECE8}
   #tab-apply .ap-sug div:hover,#tab-apply .ap-sug div.on{background:#EEF6F4}
@@ -2034,9 +2038,9 @@ function autoT2(l){if(!String(l.m||'').trim()||isNewItem(l))return '';var s=skuO
   var st=String(EXTRA.status[s.name]||'').trim();if(st)return st.indexOf('停售')>=0?'停售':'';
   var q=EXTRA.last[s.name];if(q){var lim=new Date();lim.setDate(lim.getDate()-7);if(q<lim)return '過季'}
   return ''}
-function inTable2(l){return isNewItem(l)||!!l.pin||(!l.nopin&&!!autoT2(l))}
+function inTable2(l){if(lineSemi(l))return false;return isNewItem(l)||!!l.pin||(!l.nopin&&!!autoT2(l))}
 /* 表二／摘要／複製新增食材表 的列＝🆕（自動）＋ pin（手動）；dim_sku 新品項列仍只有 🆕 */
-function outLines(){var seen={};return AP.lines.filter(function(l){var nm=String(l.m||'').trim();if(!nm||seen[nm]||!inTable2(l))return false;seen[nm]=1;return true})}
+function outLines(){var seen={};return AP.lines.filter(function(l){var nm=String(l.m||'').trim();if(!nm||seen[nm]||!inTable2(l))return false;seen[nm]=1;return true}).concat(semiT2List().map(function(x){return x.o}).filter(function(o){var nm=String(o.m||'').trim();if(seen[nm])return false;seen[nm]=1;return true}))}
 function newSemiItem(){return {m:'',q:'',u:''}}
 function newSemi(){return {name:'',link:'',shared:false,kind:'',maker:'',yq:'',yu:'',nb:'2',store:'',take:'',usage:'',steps:'',note:'',items:[newSemiItem()]}}
 function blank(){return {head:blankHead(),semis:[],lines:[],warn:[],miss:[],srcName:'',sub:{},base:'',ext:null,recipe:null,recipeMsg:''}}   /* B 階段：base＝從檔期載入時的內容（各單位只送改過的欄位）；ext＝品項補充／檔期作業／已填／簽核紀錄 */   /* sub＝送件狀態（seq／status／savedAt／by／createdAt／campId），存草稿、不進 .json */
@@ -2296,7 +2300,7 @@ function normLine(l){var o=newLine();l=l||{};
   NI_KEYS.forEach(function(k){var v=(l[k]!==undefined&&l[k]!==null&&l[k]!=='')?l[k]:(nest&&nest[k]!==undefined&&nest[k]!==null?nest[k]:'');o[k]=v});
   o.zone=mapZone(o.zone);return o}
 function normSemi(s){var o=newSemi();s=s||{};SEMI_KEYS.forEach(function(k){if(s[k]!==undefined&&s[k]!==null)o[k]=s[k]});o.shared=!!s.shared;
-  o.items=(s.items||[]).map(function(it){var x=newSemiItem();it=it||{};['m','q','u'].forEach(function(k){if(it[k]!==undefined&&it[k]!==null)x[k]=it[k]});return x});if(!o.items.length)o.items=[newSemiItem()];return o}
+  o.items=(s.items||[]).map(function(it){var x=newSemiItem();it=it||{};['m','q','u','src','cat','pin','nopin','auto','miss','fuzzy'].concat(NI_KEYS).forEach(function(k){if(it[k]!==undefined&&it[k]!==null)x[k]=it[k]});return x});if(!o.items.length)o.items=[newSemiItem()];return o}
 function loadDraft(){try{var o=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');
   if(!o||!o.head)return false;
   var h=blankHead(),oh=o.head||{};
@@ -2448,7 +2452,7 @@ function validate(){var e=[],h=AP.head;
     semiItemsOf(s).forEach(function(it){if(badUnit(it))e.push('半成品「'+nm+'」用料「'+it.m+'」單位「'+it.u+'」請改成克數')})});
   return e}
 function catText(){var h=AP.head;return h.cat==='__other'?String(h.catOther||'').trim():String(h.cat||'').trim()}
-function buyQty(l){var q=num(l.q),n=num(AP.head.qty);return (q>0&&n>0)?r2(q*n*optShareOf(l)):0}   /* 2026-10-17：客人選一的選項乘比例 */
+function buyQty(l){if(isSemiItem(l))return 0;var q=num(l.q),n=num(AP.head.qty);return (q>0&&n>0)?r2(q*n*optShareOf(l)):0}   /* 2026-10-17：客人選一的選項乘比例 */
 /* 2026-10-08 經營者「對照舊流程申請表，新表要更好填、更好找」：
    ① 預估銷售數＝整個檔期、全部門市合計（採購系統用它算各店首批量）→ 表頭直接寫定義、算平均每店幾份
    ② 舊表「原包裝分裝份數／損耗金額／高損耗」→ 表二採購量格下面算「每店叫幾包、剩多少」，剩太多標 ⚠（每家店至少要叫 1 包，包裝太大就會浪費）
@@ -2472,6 +2476,89 @@ function nimemFor(l){var nm=String(l.m||'').trim();if(!nm||!isNewItem(l))return 
   var miss=Object.keys(m).filter(function(k){return k!=='at'&&!String(l[k]==null?'':l[k]).trim()});return miss.length?m:null}
 function newLines(){var seen={};return AP.lines.filter(function(l){var nm=String(l.m||'').trim();if(!nm||!isNewItem(l)||seen[nm])return false;seen[nm]=1;return true})}
 function semiItemsOf(s){return s.items.filter(function(it){return String(it.m||'').trim()})}
+/* ===== 2026-10-18 經營者：半成品「製作步驟」寫了材料和數量（例：黑白小熊各3隻、圈圈軟糖2個、陽傘1組 裝一包）
+   → 系統自動拆出 品名／每批數量／單位，比對表一用料、其他半成品、採購主檔的品名後填進下方「用料」，主廚不用再填。
+   ・「各」：A和B各3個＝兩樣各 3；黑白小熊各3隻（開頭兩個顏色字）＝6 隻
+   ・「裝一包」「裝成2袋」這類＝一批做出幾包（一批做出空白才帶）
+   ・自動帶入的列標 auto＋src（原文）；主廚改過那列就變手動（auto=false），之後重新分析不會蓋掉
+   ・比對不到的照原文品名帶入並標紅，請主廚確認（不改的話核准時會用這個名字建新品項） ===== */
+var SEMI_U='小匙|大匙|公克|毫升|公斤|隻|個|顆|粒|片|張|支|根|條|組|包|袋|盒|杯|匙|朵|塊|份|球|罐|瓶|捲|段|枚|串|入|kg|g|克|ml|cc|L';
+var SEMI_QRX='(各|每種|每樣)?\\s*(\\d+(?:\\.\\d+)?|[一二兩三四五六七八九十半]+)\\s*('+SEMI_U+')';
+var SEMI_COLOR='黑白紅橙橘黃綠藍紫粉灰棕金銀咖';
+function cnNum(t){if(/^\d/.test(t))return parseFloat(t);if(t==='半')return 0.5;var d={'一':1,'二':2,'兩':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+  if(t.indexOf('十')>=0){var p=t.split('十');return (p[0]?(d[p[0]]||1):1)*10+(p[1]?(d[p[1]]||0):0)}
+  var n=0;for(var i=0;i<t.length;i++){if(!(t[i] in d))return NaN;n=n*10+d[t[i]]}return n}
+function semiUnit(u){if(u==='克'||u==='公克')return {u:'g',k:1};if(u==='公斤'||u==='kg')return {u:'g',k:1000};if(u==='毫升'||u==='cc')return {u:'ml',k:1};if(u==='L')return {u:'ml',k:1000};return {u:u,k:1}}
+function semiClean(t){t=String(t||'').replace(/[\s「」『』"“”（）()【】\[\]：:]/g,'');
+  var re=/^(然後|接著|最後|另外|再|先|將|把|取出|取|拿出|拿|放入|放進|放(?!射)|加入|倒入|倒|裝入|裝進|裝(?!飾)|準備|使用|秤|和|與|及|跟|以及|共|每包|每袋|每份|每組)/,p;
+  do{p=t;t=t.replace(re,'')}while(t&&t!==p);return t.replace(/(各|每種|每樣|約|大約)$/,'')}
+function semiStepParse(txt){var out=[],yld=null,one=new RegExp(SEMI_QRX);
+  String(txt||'').replace(/\r/g,'').split(/[\n。；;，,]+/).forEach(function(seg){
+    seg=seg.replace(/^\s*(?:\d+\s*[.、．)）]|[①-⑳]|第[一二三四五六七八九十\d]+步)\s*/,'').replace(/([^\s\d])\s+(?=[\d一二兩三四五六七八九十半])/g,'$1');
+    var parts=seg.split('、'),merged=[],carry='';   /* 「A、B各3個」：沒數量的那段併到下一段 */
+    parts.forEach(function(x,i){if(!one.test(x)&&i<parts.length-1&&/各|每種|每樣/.test(parts[i+1])){carry+=(carry?'和':'')+x;return}merged.push(carry?carry+'和'+x:x);carry=''});
+    merged.join(' ').split(/\s+/).forEach(function(tok){if(!tok)return;var re=new RegExp(SEMI_QRX,'g'),m,prev=0;
+      while((m=re.exec(tok))){var raw=tok.slice(prev,m.index),name=semiClean(raw),q=cnNum(m[2]),u=m[3];prev=re.lastIndex;if(!(q>0))continue;
+        var src=(raw+m[0]).trim();
+        if(!name||/^(裝|裝成|裝入|裝進|分裝|分成|包成|合計|一共|做成|成)$/.test(name)){if(!yld&&/包|袋|盒|份|組|杯|罐|瓶/.test(u))yld={q:q,u:u};continue}
+        var U=semiUnit(u),names=[name];q=q*U.k;u=U.u;
+        if(m[1]){var sp=name.split(/和|與|及|跟|以及|＆|&|\+|／|\//).map(semiClean).filter(Boolean);
+          if(sp.length>1)names=sp;else{var c=name.match(new RegExp('^(['+SEMI_COLOR+']{2,})(.+)$'));if(c)q=q*c[1].length}}
+        names.forEach(function(n){out.push({name:n,q:q,u:u,src:src})})}})});
+  return {items:out,yld:yld}}
+function lcsLen(a,b){var m=0,p=[],i,j;for(j=0;j<=b.length;j++)p[j]=0;for(i=1;i<=a.length;i++){var prev=0;for(j=1;j<=b.length;j++){var t=p[j];p[j]=a[i-1]===b[j-1]?prev+1:0;if(p[j]>m)m=p[j];prev=t}}return m}
+function semiScore(a,b){if(a===b)return 100;var la=a.length,lb=b.length;if(!la||!lb)return 0;
+  if(la>=2&&b.indexOf(a)>=0)return 70+10*la/lb;
+  if(lb>=2&&a.indexOf(b)>=0)return 60+10*lb/la;
+  var L=lcsLen(a,b);if(L<2||L/Math.min(la,lb)<0.5)return 0;return 30+L*4+10*L/Math.max(la,lb)}
+/* 比對順序：主檔 BOM別名全等 → 分數最高（表一用料 +15、其他半成品 +12、主檔停售 −5）；45 分以上才算對到 */
+function semiMatch(name,si){var n=String(name||'').trim();if(!n)return null;
+  var al=R.aliasMap();if(al[n]&&al[n].name)return {name:al[n].name,sc:100,how:'alias'};
+  var C=[],seen={};function add(nm,w){nm=String(nm||'').trim();if(!nm||seen[nm]!==undefined&&seen[nm]>=w)return;seen[nm]=w;C.push({name:nm,w:w})}
+  AP.lines.forEach(function(l){add(l.m,15)});
+  AP.semis.forEach(function(s,j){if(j!==si)add(s.name,12)});
+  R.skus().forEach(function(o){add(o.name,String(EXTRA.status[o.name]||'').indexOf('停售')>=0?-5:0)});
+  var best=null;C.forEach(function(c){var b0=semiScore(n,c.name);if(b0<=0)return;var sc=b0+c.w;if(!best||sc>best.sc)best={name:c.name,sc:sc,how:b0>=100?'exact':(b0>=60?'contain':'fuzzy')}});
+  return best&&best.sc>=45?best:null}
+/* 對應用料空白 → 用半成品名稱去對表一的品項（例：池畔日常組合包 ↔ 池畔日常裝飾組合包） */
+function semiLinkGuess(sm){var n=String(sm.name||'').trim();if(!n)return '';var taken={};AP.semis.forEach(function(s){if(s!==sm&&String(s.link||'').trim())taken[String(s.link).trim()]=1});
+  var best=null;AP.lines.forEach(function(l){var m=String(l.m||'').trim();if(!m||taken[m])return;var sc=semiScore(n,m);if(sc>=45&&(!best||sc>best.sc))best={name:m,sc:sc}});
+  return best?best.name:''}
+function semiAutoFill(si){var sm=AP.semis[si];if(!sm||lockedReq()||unitMode())return false;
+  var sig=function(){return JSON.stringify([sm.items.map(function(it){return [it.m,it.q,it.u,!!it.auto]}),sm.yq,sm.yu,sm.link])},before=sig();
+  var P=semiStepParse(sm.steps),keep=sm.items.filter(function(it){return String(it.m||'').trim()&&!it.auto}),have={},add=[],idx={};
+  keep.forEach(function(it){have[String(it.m).trim()]=1});
+  P.items.forEach(function(x){var mt=semiMatch(x.name,si),nm=mt?mt.name:x.name;if(have[nm])return;var k=nm+'|'+x.u;
+    if(idx[k]){idx[k].q=String(r4(num(idx[k].q)+x.q));idx[k].src+='、'+x.src;return}
+    var old=sm.items.filter(function(it){return it.auto&&String(it.m||'').trim()===nm})[0];   /* 重新分析：保留表二已填的欄位 */
+    var o=old?Object.assign({},old):newSemiItem();o.m=nm;o.q=String(r4(x.q));o.u=x.u;o.auto=true;o.src=x.src;o.miss=!mt;o.fuzzy=!!(mt&&mt.how==='fuzzy');idx[k]=o;add.push(o)});
+  sm.items=keep.concat(add);if(!sm.items.length)sm.items=[newSemiItem()];
+  if(P.yld&&!String(sm.yq||'').trim()){sm.yq=String(P.yld.q);sm.yu=P.yld.u}
+  if(!String(sm.link||'').trim()&&semiItemsOf(sm).length){var lk=semiLinkGuess(sm);if(lk)sm.link=lk}
+  return before!==sig()}
+/* 畫面前先跑：有製作步驟但用料還空著的半成品 → 自動帶入；有用料但對應用料空白 → 猜對應 */
+function semiPrepass(){if(lockedReq()||unitMode()||!R.ready)return;var ch=false;
+  AP.semis.forEach(function(sm,si){if(String(sm.steps||'').trim()&&!semiItemsOf(sm).length){if(semiAutoFill(si))ch=true}
+    else if(!String(sm.link||'').trim()&&semiItemsOf(sm).length){var lk=semiLinkGuess(sm);if(lk){sm.link=lk;ch=true}}});
+  if(ch)saveDraft()}
+/* 2026-10-18 經營者：表一某列是「已填好用料的半成品」（對應用料／名稱對得到）→ 表二不列它本身，改列它的材料 */
+function lineSemi(l){var nm=String(l.m||'').trim();if(!nm)return null;
+  for(var i=0;i<AP.semis.length;i++){var s=AP.semis[i];if(!semiItemsOf(s).length)continue;if(String(s.link||'').trim()===nm||String(s.name||'').trim()===nm)return s}return null}
+function isSemiItem(o){for(var i=0;i<AP.semis.length;i++)if(AP.semis[i].items.indexOf(o)>=0)return true;return false}
+/* 表二要列的半成品材料：🆕（主檔沒有）、主檔停售／過季（不含不盤點）；表一已有同名的列、其他半成品不列；同名只列一次 */
+function semiT2List(){var t1={},seen={},out=[];AP.lines.forEach(function(l){var n=String(l.m||'').trim();if(n)t1[n]=1});
+  AP.semis.forEach(function(sm,si){sm.items.forEach(function(it,k){var n=String(it.m||'').trim();if(!n||t1[n]||seen[n]||isSemiRef(n,si))return;
+    if(!(isNewItem(it)||it.pin||(!it.nopin&&autoT2(it))))return;seen[n]=1;out.push({key:'s'+si+'.'+k,o:it,si:si})})});
+  return out}
+function t2Obj(key){key=String(key);var m=key.match(/^s(\d+)\.(\d+)$/);if(m){var sm=AP.semis[+m[1]];return sm?sm.items[+m[2]]:null}return AP.lines[+key]||null}
+/* 保存期限：分三格填（未開封／分裝／開封後），存成採購系統主檔「效期」同格式「未開封 …｜分裝 …｜開封後 …」 */
+var SHELF_PARTS=[['未開封','依原包裝'],['分裝','D+7'],['開封後','D+3']];
+function shelfSplit(v){var o={};String(v||'').split(/\s*[|｜]\s*/).forEach(function(seg){seg=seg.trim();if(!seg)return;var hit=false;
+  SHELF_PARTS.forEach(function(p){if(!hit&&seg.indexOf(p[0])===0){o[p[0]]=seg.slice(p[0].length).trim();hit=true}});if(!hit)o['備註']=(o['備註']?o['備註']+'｜':'')+seg});return o}
+function shelfJoin(o){var a=[];SHELF_PARTS.forEach(function(p){var v=String(o[p[0]]||'').trim();if(v)a.push(p[0]+' '+v)});if(String(o['備註']||'').trim())a.push(String(o['備註']).trim());return a.join('｜')}
+function shelfCellHTML(l,i){var o=shelfSplit(l.shelf);
+  return '<div class="ap-shelf" title="D+7＝7 天內用完；依原包裝＝看包裝上印的有效期限；沒有分裝就空著">'+SHELF_PARTS.map(function(p){
+    return '<label><span>'+p[0]+'</span><input type="text" list="apShelfDL" data-shelf="'+p[0]+'" value="'+esc(o[p[0]]||'')+'" placeholder="例：'+esc(p[1])+'"></label>'}).join('')+'</div>'}
 /* 主檔既有品項的唯讀欄：④成本＝dim_sku 單價、⑤規格＝內容量＋採購單位、⑫廠商＝dim_sku 廠商 */
 function skuCost(l){var s=skuOf(l.m);if(!s)return num(l.pkgCost)>0?String(num(l.pkgCost)):'';return s.price>0?String(s.price):''}
 function skuSpec(l){var s=skuOf(l.m);if(!s)return String(l.pkgSpec||'');return s.pack>0?(s.pack+(s.useUnit||'')+(s.buyUnit?'/'+s.buyUnit:'')):''}
@@ -2539,7 +2626,11 @@ function jsonObj(c){var d=new Date(),p=num(AP.head.price),rate=rateOf(c);
   return {version:3,req_id:AP.head.req_id||(reqDate()+'-'+pad2(d.getHours())+pad2(d.getMinutes())),created_at:(AP.sub&&AP.sub.createdAt)||d.toISOString(),status:'draft',
     head:Object.assign({},AP.head,{cat_text:catText(),cat_kind:(POSMAINS&&POSMAINS.indexOf(AP.head.cat)>=0)?'main':'',cost:r2(c.total),margin:rate===null?null:r1(100-rate),cost_rate:rate===null?null:r1(rate)}),
     semis:AP.semis.map(function(s,i){return {seq:i+1,name:s.name,link:s.link,shared:!!s.shared,kind:s.kind,maker:s.maker,yield_qty:num(s.yq)||null,yield_unit:s.yu,store:s.store,take:s.take,usage:s.usage,steps:s.steps,note:s.note,base:'一批',batches_preview:num(s.nb)||2,
-      items:semiItemsOf(s).map(function(it,k){var q=num(it.q);var yq=num(s.yq);return {seq:k+1,name:String(it.m).trim(),unit:it.u||'',qty_batch:q,per_unit:yq>0?r3(q/yq):null,qty4:q,in_master:!!skuOf(it.m)}})}}),
+      items:semiItemsOf(s).map(function(it,k){var q=num(it.q);var yq=num(s.yq);return {seq:k+1,name:String(it.m).trim(),unit:it.u||'',qty_batch:q,per_unit:yq>0?r3(q/yq):null,qty4:q,in_master:!!skuOf(it.m),src:it.src||''}})}}),
+    semi_items_new:semiT2List().map(function(x){var l=x.o,nw=isNewItem(l),sm=AP.semis[x.si];   /* 2026-10-18：半成品用到、要建主檔／停售改回在用的材料（不進 BOM） */
+      return {name:String(l.m).trim(),semi:String(sm.name||sm.link||'').trim(),is_new:nw,pinned:!nw,cat:lineCat(l),unit:l.u||'',qty_batch:num(l.q),sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packNum(l.pkgSpec):null,
+        store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
+        per_store:(nw&&isToolLine(l)&&num(l.perStore)>0)?Math.round(num(l.perStore)):null}}),
     lines:AP.lines.filter(function(l){return String(l.m||'').trim()}).map(function(l,i){var row=rowOf(c,l);var nw=isNewItem(l);
       return {seq:i+1,sku_id:l.id||'',name:String(l.m).trim(),is_new:nw,pinned:!nw&&inTable2(l),nopin:!!l.nopin,sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packNum(l.pkgSpec):null,
         qty:num(l.q),unit:l.u||'',conv:null,conv_base:'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
@@ -2573,7 +2664,10 @@ function fromJson(j,quiet){if(!j||typeof j!=='object')throw new Error('不是申
     return normLine(o)});
   var semis=(j.semis||[]).map(function(x){x=x||{};var o=newSemi();['name','link','kind','maker','store','take','usage','steps','note'].forEach(function(k){if(x[k]!=null)o[k]=String(x[k])});
     o.shared=!!x.shared;o.yq=x.yield_qty!=null?String(x.yield_qty):(x.yq!=null?String(x.yq):'');o.yu=String(x.yield_unit||x.yu||'');if(x.batches_preview!=null)o.nb=String(x.batches_preview);
-    o.items=(x.items||[]).map(function(it){it=it||{};return {m:String(it.name||it.m||''),q:it.qty_batch!==undefined?it.qty_batch:(it.qty4!==undefined?it.qty4:(it.q||'')),u:it.unit||it.u||''}});if(!o.items.length)o.items=[newSemiItem()];return o});
+    o.items=(x.items||[]).map(function(it){it=it||{};return {m:String(it.name||it.m||''),q:it.qty_batch!==undefined?it.qty_batch:(it.qty4!==undefined?it.qty4:(it.q||'')),u:it.unit||it.u||'',src:it.src||''}});if(!o.items.length)o.items=[newSemiItem()];return o});
+  (j.semi_items_new||[]).forEach(function(x){x=x||{};var nm=String(x.name||'').trim();if(!nm)return;   /* 2026-10-18：表二欄位放回半成品用料 */
+    semis.forEach(function(sm){sm.items.forEach(function(it){if(String(it.m||'').trim()!==nm)return;it.cat=x.cat||'';it.sticker=x.sticker||'';it.store=x.store||'';it.take=x.take||'';it.zone=x.zone||'';it.supply=x.supply||'';it.pkgType=x.pkg_type||'';it.split=x.split||'';it.first=x.first||'';it.lnote=x.note||'';it.shelf=x.shelf||'';it.vname=x.vname||'';it.perStore=x.per_store!=null?String(x.per_store):'';
+      if(x.is_new){it.pkgCost=x.pkg_cost!=null?x.pkg_cost:'';it.pkgSpec=x.pkg_spec||'';it.vendor=x.vendor||''}})})});
   if(!h.brand)h.brand=BRAND_DEFAULT;AP=blank();AP.head=h;AP.semis=semis;AP.lines=lines.length?lines:[newLine()];AP.srcName=j.source_file||j.srcName||'';
   AP.recipe=rcOk(j.recipe)?j.recipe:null;
   OUT=null;ERRS=[];if(!quiet){saveDraft();render()}}
@@ -2622,6 +2716,7 @@ function semiItemRowHTML(si,k,it){var key='s'+si+'-'+k,s=skuOf(it.m),q=num(it.q)
   var h='<tr data-si="'+si+'" data-sk="'+k+'">';
   h+='<td style="min-width:200px"><div class="ap-sc"><input type="text" data-sf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(it.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
     +(it.m?('<div class="ap-src">'+(s?esc(s.id)+' · '+esc(s.cat||''):(isSemiRef(it.m,si)?'<span style="color:#2E6B8A;font-weight:700">⤷ 半成品/材料包</span>':'<span class="ap-new">🆕 寫入時自動建主檔</span>'))+(badUnit(it)?' <span class="ap-bad">⚠ 單位「'+esc(it.u)+'」請改克數</span>':'')+'</div>'):'')+'</td>';
+  if(it.src)h=h.replace(/<\/td>$/,'<div class="ap-hint" style="color:#2E6B8A">🤖 從製作步驟帶入：「'+esc(it.src)+'」'+(it.auto?'':'（已手動改過）')+'</div>'+(it.auto&&it.miss?'<div class="ap-bad">⚠ 用料表和主檔都找不到相近的品名，請確認（不改的話核准時會用這個名字建新品項）</div>':'')+(it.auto&&it.fuzzy?'<div class="ap-warn">⚠ 用相近的品名帶入，請確認是不是同一樣（不是的話直接改品名）</div>':'')+'</td>');
   h+='<td style="width:90px"><input type="number" step="any" min="0" data-sf="q" value="'+esc(it.q)+'" placeholder="每批"></td>';
   h+='<td style="width:80px"><input type="text" data-sf="u" value="'+u+'" placeholder="'+esc(s?(s.useUnit||'g'):'單位')+'"></td>';
   h+='<td><button class="ap-x" data-sdel="'+si+'-'+k+'" title="刪除此列">✕</button></td></tr>';
@@ -2678,15 +2773,16 @@ function table1HTML(c){
   h+='</tbody></table></div>'+optSumHTML(c)+'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝用主檔的單位；填「匙」「滴」這類單位，系統會照單位換算表換算（換不到會請你估「1 匙≈幾 g」）。器具／模具只列清單、不算成本。🆕 品項的每份成本，照表二填的原包裝成本和規格估算。</span></div></div></div>';
   return h}
 /* 表二：只列 isNewItem 的列，Excel 第 17 列 17 欄；品項／每份使用量／單位 唯讀鏡像表一；無刪除鍵 */
-var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,84,62,150];   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
-function t2HeadHTML(){var H=['品項','類別','每店要幾個','廠商品名','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','整檔採購量','單位','第一單處理','備註','保存期限'];
+var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,84,62,190];   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
+function t2HeadHTML(){var H=['品項','類別','每店要幾個','廠商品名','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','整檔採購量','單位','第一單處理','備註','保存期限 <span style="font-weight:400;font-size:11px" title="D+7＝7 天內用完；依原包裝＝看包裝上印的有效期限；沒有分裝就空著">（D+7＝7天內用完）</span>'];
   return '<colgroup>'+COLW2.map(function(w){return '<col style="width:'+w+'px">'}).join('')+'</colgroup><thead><tr>'+H.map(function(x){return '<th>'+x+'</th>'}).join('')+'</tr></thead>'}
 function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l);
   function t(k,ph){return '<input type="text" data-nf="'+k+'" value="'+esc(l[k])+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'}
   function d(k,list,ph){return '<select data-nf="'+k+'">'+opts(list,l[k],ph)+'</select>'}
   function ro(v,cls){return '<td class="ap-rocell'+(cls?' '+cls:'')+'" title="'+esc(v)+'">'+esc(v||'—')+'</td>'}
+  var sem=isSemiItem(l)?AP.semis.filter(function(x){return x.items.indexOf(l)>=0})[0]:null;
   var h='<tr data-n2="'+i+'">';
-  h+='<td class="ap-rocell ap-t2name" title="'+esc(l.m)+'">'+esc(l.m||'—')+(!nw&&!l.pin&&autoT2(l)?'<div class="ap-hint" style="color:#8A5A00" title="主檔狀態停售或已過最後有效日，自動列進來提醒門市備料；核准寫入時停售的會改回在用">主檔'+autoT2(l)+'・自動列入</div>':'')+(nw?'':'<button class="ap-x ap-unpin" data-unpin="'+i+'" title="從新增表移出（表一那列保留）">✕ 移出</button>')+'<div class="ap-hint ap-bad" data-lossname="'+i+'">'+lossNameTxt(l)+'</div>'+(nw&&simPending(l).length?'<div class="ap-hint ap-bad" title="回表一確認">⚠ 主檔有類似品項，請在表一確認</div>':'')+(nimemFor(l)&&!lockedReq()?'<button class="ap-btn2 ap-mini" data-nimem="'+i+'" title="這個品項在這台電腦的其他申請單填過；按一下把空白的欄位帶進來（已經填的不會蓋掉）">↺ 帶入上次填的</button>':'')+'</td>';   /* 品項（唯讀鏡像）；手動加入的列可移出 */
+  h+='<td class="ap-rocell ap-t2name" title="'+esc(l.m)+'">'+esc(l.m||'—')+(sem?'<div class="ap-hint" style="color:#2E6B8A">⤷ 半成品「'+esc(String(sem.name||sem.link||'').trim())+'」的材料</div>':'')+(!nw&&!l.pin&&autoT2(l)?'<div class="ap-hint" style="color:#8A5A00" title="主檔狀態停售或已過最後有效日，自動列進來提醒門市備料；核准寫入時停售的會改回在用">主檔'+autoT2(l)+'・自動列入</div>':'')+(nw?'':'<button class="ap-x ap-unpin" data-unpin="'+i+'" title="從新增表移出（表一那列保留）">✕ 移出</button>')+'<div class="ap-hint ap-bad" data-lossname="'+i+'">'+lossNameTxt(l)+'</div>'+(nw&&simPending(l).length?'<div class="ap-hint ap-bad" title="回表一確認">⚠ 主檔有類似品項，請在表一確認</div>':'')+(nimemFor(l)&&!lockedReq()?'<button class="ap-btn2 ap-mini" data-nimem="'+i+'" title="這個品項在這台電腦的其他申請單填過；按一下把空白的欄位帶進來（已經填的不會蓋掉）">↺ 帶入上次填的</button>':'')+'</td>';   /* 品項（唯讀鏡像）；手動加入的列可移出 */
   /* 2026-10-07 晚：類別（🆕 才能選：影響採購系統分類與編號開頭 F／C／T／M）＋每店要幾個（只有新的器具／模具：核准後寫成各店標配） */
   h+=nw?('<td><select data-nf="cat" title="新品項的類別：食材／耗材／器具／模具">'+CATS.map(function(x){return '<option value="'+x+'"'+(lineCat(l)===x?' selected':'')+'>'+x+'</option>'}).join('')+'</select></td>'):ro(lineCat(l),'');
   h+=(nw&&isToolLine(l))?('<td><input type="number" step="1" min="0" data-nf="perStore" value="'+esc(l.perStore)+'" placeholder="個" title="每家店要放幾個（核准後自動寫成各店標配，店長在採購系統看得到）"></td>'):'<td class="ap-rocell" title="只有新的器具／模具要填">—</td>';
@@ -2694,24 +2790,25 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   h+='<td>'+t('sticker')+'</td>';
   if(nw){h+='<td><input type="number" step="any" min="0" data-nf="pkgCost" value="'+esc(l.pkgCost)+'" placeholder="元"></td><td>'+t('pkgSpec','例：1kg/包')+'</td>'}
   else{h+=ro(skuCost(l),'')+ro(skuSpec(l),'')}   /* 主檔有的：成本／規格帶主檔值唯讀 */
-  h+=ro(String(l.q||''),'')+ro(u,'');                                        /* 每份使用量／單位（唯讀鏡像） */
+  h+=ro(sem?(String(l.q||'')?'每批 '+l.q:''):String(l.q||''),'')+ro(u,'');   /* 每份使用量／單位（唯讀鏡像；半成品材料＝每批） */
   h+='<td>'+d('store',STOREWAYS)+'</td><td>'+d('take',TAKES_NI)+'</td>';
   h+='<td>'+d('zone',ZONES,'— 請選 —')+'</td>';
   h+='<td>'+d('supply',SUPPLYS)+'</td>'+(nw?('<td>'+t('vendor')+'</td>'):ro(skuVendor(l),''))+'<td>'+d('pkgType',PKGTYPES)+'</td><td>'+t('split')+'</td>';
   h+='<td class="ap-rocell" data-buyqty="'+i+'">'+buyCellHTML(l)+'</td><td class="ap-rocell" data-buyunit="'+i+'">'+esc(u||'—')+'</td>';
-  h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td><td>'+t('shelf','未開封 依原包裝｜開封後 D+7')+'</td></tr>';   /* 09-24 十三：保存期限 */
+  h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td><td>'+shelfCellHTML(l,i)+'</td></tr>';   /* 09-24 十三：保存期限 */
   return h}
-function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}).filter(function(i){return i>=0});
+function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}).filter(function(i){return i>=0}),SL=semiT2List();
   var h='<div class="ap-sheet"><div class="ap-sheet-title">🆕 新增食材/器模具 <span class="ap-muted">主檔還沒有的品項，在這裡補資料</span><button class="ap-btn2" id="apAddNew" style="margin-left:auto">＋ 新增品項</button></div>'
-   +'<div class="ap-muted" style="padding:8px 12px 4px">表一裡主檔沒有的品項（🆕）會自動列在這裡，請把右邊欄位補齊；品項和用量回表一改。主檔<b>停售</b>或<b>過季</b>的品項（不含不盤點）也會自動列進來，提醒門市備料；其他主檔有、但想提醒門市備料的（例如少用的），在表一按「↓ 加到新增表」。</div>'
+   +'<div class="ap-muted" style="padding:8px 12px 4px">表一裡主檔沒有的品項（🆕）會自動列在這裡，請把右邊欄位補齊；品項和用量回表一改。主檔<b>停售</b>或<b>過季</b>的品項（不含不盤點）也會自動列進來，提醒門市備料；其他主檔有、但想提醒門市備料的（例如少用的），在表一按「↓ 加到新增表」。上方<b>半成品</b>填好用料的（例：組合包），這裡不列半成品本身，改列它用到的🆕、停售、過季材料。</div>'
    +'<details class="xhelp" style="margin:0 12px 4px"><summary>ⓘ 整檔採購量、⚠ 包裝太大、↺ 帶入上次填的</summary><div>'
    +'<b>整檔採購量</b>＝每份用量 × 表頭的「預估銷售數」（整個檔期、全部門市合計）。<br>'
    +'<b>每店 N 包・剩 X%</b>：把整檔用量平均分到各店（自己做 10 家、吳寶春自己做 2 家、兩個品牌 12 家），每家店至少要叫 1 包，算出每店要叫幾包、用完還剩幾成。滑鼠移到數字上可以看細節。<br>'
    +'<b>⚠ 包裝太大</b>：每店用完還剩一半以上（有填成本的話，全部門市合計剩的料還要約 200 元以上），會浪費；可以考慮換小包裝或改分裝。<br>'
    +'<b>↺ 帶入上次填的</b>：這個品項在這台電腦的其他申請單填過，按一下把空白的欄位帶進來（已經填的不會蓋掉），帶入的那一列會閃一下黃色，請再看一眼。'
    +'</div></details>';
-  if(!NL.length)h+='<div class="ap-muted ap-empty" style="padding:6px 12px 12px;color:#9A8F88">目前用料都在主檔內，沒有新增品項。（要手動列進來的，在表一按「↓ 加到新增表」）</div>';
-  else{h+='<div style="padding:4px 10px 10px"><div class="ap-items"><table>'+t2HeadHTML()+'<tbody>';NL.forEach(function(i){h+=t2RowHTML(AP.lines[i],i)});h+='</tbody></table></div></div>'}
+  if(!NL.length&&!SL.length)h+='<div class="ap-muted ap-empty" style="padding:6px 12px 12px;color:#9A8F88">目前用料都在主檔內，沒有新增品項。（要手動列進來的，在表一按「↓ 加到新增表」）</div>';
+  else{h+='<div style="padding:4px 10px 10px"><div class="ap-items"><table>'+t2HeadHTML()+'<tbody>';NL.forEach(function(i){h+=t2RowHTML(AP.lines[i],i)});SL.forEach(function(x){h+=t2RowHTML(x.o,x.key)});h+='</tbody></table></div></div>'}
+  h+='<datalist id="apShelfDL"><option value="依原包裝"><option value="當天用完"><option value="D+1"><option value="D+3"><option value="D+7"><option value="D+14"><option value="D+30"><option value="D+90"><option value="D+180"><option value="D+365"></datalist>';
   return h+'</div>'}
 /* ＋新增品項：跳出輸入品名 → 在表一新增一列（主檔查得到就是普通列；查不到即 🆕 自動出現在表二） */
 function addNewItem(){var nm=prompt('輸入新增品項的品名（會加到表一；主檔查不到的會自動列進「新增食材/器模具」）：','');if(nm==null)return;nm=String(nm).trim();if(!nm)return;
@@ -4258,6 +4355,7 @@ function render(){var root=document.getElementById('apRoot');if(!_ready||!root)r
   if(window.UiKeep){if(UiKeep.busy()){UiKeep.later('apply',render);return}UiKeep.keep(root,paint)}else paint()}
 function paint(){var root=document.getElementById('apRoot');
   if(LM&&!LM.ready){root.innerHTML='<div class="'+(LM.err?'ap-bad':'ap-muted')+'" style="padding:20px 0">'+(LM.err?'✕ '+esc(LM.err):'⏳ 讀取申請表中…（Google 慢的時候要 10～30 秒）')+'</div>';return}
+  semiPrepass();   /* 2026-10-18 半成品：製作步驟自動帶入用料、猜對應用料 */
   var c=computeCost();
   var s='<div class="ap-grid"><div class="ap-area-head">'
     +(lockedReq()?'<div class="ap-lockbar">🔒 這張單目前是「'+esc(AP.sub.status)+'」，只能查看、複製與下載，不能修改或再送件。要開新的一張請按最下方「清空整張」。</div>':'')
@@ -4276,7 +4374,7 @@ function paint(){var root=document.getElementById('apRoot');
   /* 半成品製作 */
   s+=linkListHTML()+'<datalist id="apBomDL"></datalist>';
   s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品/材料包製作 <span class="ap-muted">這支新品要店員先做好的半成品、材料包、分裝包（沒有就留空）</span><span class="ap-btns"><button class="ap-btn2" id="apSemiAdd" title="手動新增一個半成品">＋ 新增一個</button><button class="ap-btn2" id="apSemiImport" title="用 Excel 標準格式一次帶進很多個">📥 從 Excel 載入</button></span><input type="file" id="apSemiFile" accept=".xlsx,.xls" style="display:none"></div>';
-  s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好就好，不用另外存：簽核通過後按 ②「📦 簽核通過，上傳更新採購系統」，會一起寫進採購系統（出貨中心製作的不寫）</div>';
+  s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好就好，不用另外存：簽核通過後按 ②「📦 簽核通過，上傳更新採購系統」，會一起寫進採購系統（出貨中心製作的不寫）　④ <b>製作步驟寫了材料和數量</b>（例：黑白小熊各3隻、圈圈軟糖2個、陽傘1組 裝一包），離開步驟欄時系統會<b>自動帶入下方用料</b>，請看一眼標 🤖 的列</div>';
   AP.semis.forEach(function(sm,si){s+=semiHTML(sm,si)});
   if(!AP.semis.length)s+='<div class="ap-muted" style="padding:8px 12px">目前沒有半成品；沒有就留空。</div>';
   /* 2026-10-08 經營者：半成品配方跟著申請表一起存，簽核通過後由 ②「上傳更新採購系統」一起寫進採購系統 → 拿掉「送到半成品分頁」按鈕 */
@@ -4353,13 +4451,14 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('.ap-semi').forEach(function(box){var si=+box.dataset.semi,sm=AP.semis[si];if(!sm)return;
     box.querySelectorAll('[data-sh]').forEach(function(el){var k=el.dataset.sh;el.oninput=function(){sm[k]=el.value;OUT=null;saveDraft()};
       el.onchange=function(){sm[k]=el.value;OUT=null;
+        if(k==='steps'){semiAutoFill(si);saveDraft();renderSoon();return}   /* 2026-10-18 製作步驟 → 自動帶入用料 */
         if(k==='link'){var l=lineByName(sm.link);if(l){if(!String(sm.yu||'').trim())sm.yu=String(l.u||'').trim();if(!sm.maker)sm.maker=l.supply==='出貨中心出貨'?'出貨中心':(l.supply==='店內自製'?'門市':'')}
           if(!sm.kind&&/材料包|食材包/.test(sm.link))sm.kind='材料包';saveDraft();renderSoon();return}
         saveDraft();if(k==='maker'||k==='yq'||k==='yu'||k==='nb'||k==='name')renderSoon();else updateSemiCard()}});
     box.querySelectorAll('[data-sgo]').forEach(function(b){b.onclick=function(){if(window.SemiMod)SemiMod.openFromApply(sm,semiDessert());else alert('半成品/材料包分頁尚未載入，請重新整理')}});
     box.querySelectorAll('[data-shc]').forEach(function(el){el.onchange=function(){sm.shared=!!el.checked;OUT=null;saveDraft();updateSemiCard()}});
     box.querySelectorAll('tr[data-sk]').forEach(function(tr){var k=+tr.dataset.sk,it=sm.items[k];if(!it)return;var key='s'+si+'-'+k;
-      tr.querySelectorAll('[data-sf]').forEach(function(el){var f=el.dataset.sf;
+      tr.querySelectorAll('[data-sf]').forEach(function(el){var f=el.dataset.sf;el.addEventListener('input',function(){if(it.auto){it.auto=false;it.miss=false;it.fuzzy=false}});
         if(f==='m')wireSearch(el,key,function(){var s=skuOf(it.m);if(s&&!it.u)it.u=s.useUnit||'g'});
         else if(f==='q'){el.oninput=function(){it.q=el.value;OUT=null;saveDraft();var q=num(it.q),u=String(it.u||'').trim();var tds=tr.querySelectorAll('.ap-tier');if(tds[0])tds[0].textContent=q>0?r1(q*2)+' '+u:'—';if(tds[1])tds[1].textContent=q>0?r1(q*5)+' '+u:'—'}}
         else{el.oninput=function(){it.u=el.value;OUT=null;saveDraft()};el.onchange=function(){renderSoon()}}})})});
@@ -4408,15 +4507,16 @@ function wire(){var root=document.getElementById('apRoot');
     if(!confirm('確認「'+l.m+'」不是主檔的這些品項？\n\n'+r.map(function(x){return x.o.id+' '+x.o.name+simTag(x.o)}).join('\n')+'\n\n確定＝核准後會在主檔新建一個品項。'))return;
     l.simok=r.map(function(x){return x.o.id}).join(',');OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-simundo]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.simundo];if(!l)return;l.simok='';OUT=null;saveDraft();render()}});
-  root.querySelectorAll('[data-unpin]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.unpin];if(!l)return;l.pin=false;l.nopin=true;OUT=null;saveDraft();render()}});
+  root.querySelectorAll('[data-unpin]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.unpin);if(!l)return;l.pin=false;l.nopin=true;OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-goto]').forEach(function(b){b.onclick=function(){var tr=document.querySelector('tr[data-n2="'+b.dataset.goto+'"]');if(tr){tr.scrollIntoView({behavior:'smooth',block:'center'});var inp=tr.querySelector('[data-nf="sticker"]');if(inp)inp.focus()}}});
   var add=document.getElementById('apAdd');if(add)add.onclick=function(){AP.lines.push(newLine());OUT=null;saveDraft();render();
     var rows=root.querySelectorAll('tr[data-ln]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-lf="m"]');if(inp)inp.focus()}};
   /* 表二：Excel 欄位即時寫回 AP.lines（不重繪；成本／規格改了只局部更新表一每份成本） */
-  root.querySelectorAll('tr[data-n2]').forEach(function(tr){var i=+tr.dataset.n2,l=AP.lines[i];if(!l)return;
+  root.querySelectorAll('tr[data-n2]').forEach(function(tr){var l=t2Obj(tr.dataset.n2);if(!l)return;
+    tr.querySelectorAll('[data-shelf]').forEach(function(el){var fn=function(e){var o=shelfSplit(l.shelf);o[el.dataset.shelf]=el.value;l.shelf=shelfJoin(o);OUT=null;saveDraft();if(e&&e.type==='change')nimemSave(l)};el.oninput=fn;el.onchange=fn});
     tr.querySelectorAll('[data-nf]').forEach(function(el){var k=el.dataset.nf;
       var fn=function(e){l[k]=el.value;OUT=null;saveDraft();if(e&&e.type==='change')nimemSave(l);if(k==='pkgCost'||k==='pkgSpec')refreshCost();if(k==='cat'&&e&&e.type==='change')render()};el.oninput=fn;el.onchange=fn})});
-  root.querySelectorAll('[data-nimem]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.nimem];if(!l)return;var m=nimemFor(l);if(!m)return;var n=0;
+  root.querySelectorAll('[data-nimem]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.nimem);if(!l)return;var m=nimemFor(l);if(!m)return;var n=0;
     Object.keys(m).forEach(function(k){if(k==='at')return;if(!String(l[k]==null?'':l[k]).trim()){l[k]=m[k];n++}});OUT=null;saveDraft();render();var tr=document.querySelector('tr[data-n2="'+b.dataset.nimem+'"]');if(tr){tr.scrollIntoView({block:'center'});tr.style.background='#FFF6D6';setTimeout(function(){tr.style.background=''},2500)}}});   /* 帶入後該列閃一下黃底，請主廚確認 */   /* 類別改了：成本（器具不計價）、「每店要幾個」欄要重畫 */
   var an=document.getElementById('apAddNew');if(an)an.onclick=addNewItem;
   var f=document.getElementById('apFile');if(f)f.onchange=function(e){importFiles(e.target.files)};
@@ -5702,7 +5802,7 @@ function detailHTML(camp){var v=S.view,q=v.req||{},j;try{j=JSON.parse(q.payload|
   var L=j.lines||[],nNew=L.filter(function(l){return l.is_new}).length;
   x+=sec('lines','🧾 用料（全部）',L.length+' 項'+(nNew?'｜🆕 '+nNew+' 項':''),'<div class="sg-tbl"><table><tr><th>品項</th><th>用量</th><th>每份成本</th></tr>'+L.map(function(l){
     return '<tr><td>'+esc(l.name)+(l.is_new?' <b class="sg-new">🆕</b>':'')+(l.opt_group?'<div class="sg-muted">🔀 客人選一：'+esc(l.opt_group)+'／'+esc(l.opt_name||l.name)+(l.opt_share!=null?' '+esc(Math.round(l.opt_share*1000)/10)+'%':'')+'</div>':'')+'</td><td>'+esc(((l.qty!=null?l.qty:'')+' '+(l.unit||'')).trim())+(l.conv?'<div class="sg-muted">新單位：1 '+esc(l.unit)+'≈'+esc(l.conv)+' '+esc(l.conv_base||'')+'</div>':'')+'</td><td>'+(l.cost!=null?money(l.cost):esc(l.basis||'—'))+'</td></tr>'}).join('')+'</table></div>');
-  var N=L.filter(function(l){return l.is_new||l.pinned});
+  var N=L.filter(function(l){return l.is_new||l.pinned}).concat((j.semi_items_new||[]).map(function(x){return Object.assign({},x,{name:x.name+'（半成品「'+(x.semi||'')+'」的材料）'})}));
   if(N.length)x+=sec('new','🆕 新增食材/器模具',N.length+' 項','<div class="sg-tbl"><table class="wide"><tr><th>品項</th><th>類別</th><th>貼紙名稱</th><th>原包裝成本</th><th>規格</th><th>廠商</th><th>提供方式</th><th>每店要幾個</th><th>包裝類型</th><th>第一單</th><th>保存期限</th><th>備註</th></tr>'+N.map(function(l){
     return '<tr><td>'+esc(l.name)+'</td><td>'+esc(l.cat||'')+'</td><td>'+esc(l.sticker||'')+'</td><td>'+(l.pkg_cost!=null?money(l.pkg_cost):'—')+'</td><td>'+esc(l.pkg_spec||'')+'</td><td>'+esc(l.vendor||'')+'</td><td>'+esc(l.supply||'')+'</td><td>'+(l.per_store?esc(l.per_store)+' 個':'—')+'</td><td>'+esc(l.pkg_type||'')+'</td><td>'+esc(l.first||'')+'</td><td>'+esc(l.shelf||'')+'</td><td>'+esc(l.note||'')+'</td></tr>'}).join('')+'</table></div>');
   var SM=j.semis||[];
