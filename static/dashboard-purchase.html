@@ -1012,7 +1012,7 @@ function bootStaleBar(){var el=document.getElementById("bootStale");if(!el)retur
   if(ymd(d)!==ymd(new Date()))hm=(d.getMonth()+1)+"/"+d.getDate()+" "+hm;
   el.innerHTML='<b>⏳ 顯示 '+hm+' 的資料，更新中…</b><span>最新資料讀到後會自動換上；這幾秒先不能輸入或存檔。</span>';
   el.style.display="";}
-function staleSafe(t){return !!(t&&t.closest&&t.closest("#skuQ,#skuQx,#vsel,#qbox"));}   /* 舊資料期間仍可用：搜尋框、清除鈕、廠商篩選（只改畫面篩選，不寫入） */
+function staleSafe(t){return !!(t&&t.closest&&t.closest("#skuQ,#skuQx,#vsel,#qbox,#cvQ,#cvQx"));}   /* 舊資料期間仍可用：搜尋框、清除鈕、廠商篩選（只改畫面篩選，不寫入） */
 function staleToast(){toast("資料更新中，請稍候幾秒再存");}
 function staleBlock(){if(!BOOT.stale)return false;staleToast();return true;}
 function staleLock(){var v=document.getElementById("view");if(!v)return;   /* render() 結尾呼叫：#view 內的輸入欄先鎖住 */
@@ -4201,19 +4201,44 @@ function viewSeason(){var ed=ST.role==="總部",tm=tgtMonth(),parts=srcIdxParts(
 
 /* ===== 單位對照（總部，唯讀；編輯走 Sheet 或主檔 POST）===== */
 function viewUnitConv(){var ed=ST.role==="總部";
-  var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note tabhelp"><b>這頁做什麼：</b>同一樣東西在配方裡有好幾種寫法時（例：鹹蛋黃 1 包＝45 g），在這裡設定怎麼換成同一個單位，系統算用量才不會錯。<br><b>怎麼做：</b>改「＝基準量」，或在最下面新增一列，按「儲存單位對照」；隔天早上重算後生效。</div><div class="card" style="overflow-x:auto"><table><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th>'+(ed?'<th></th>':'')+'</tr>';
+  var html='<div class="toolbar"><span class="lock">🔒 單位對照表（總部）</span></div><div class="note tabhelp"><b>這頁做什麼：</b>同一樣東西在配方裡有好幾種寫法時（例：鹹蛋黃 1 包＝45 g），在這裡設定怎麼換成同一個單位，系統算用量才不會錯。<br><b>怎麼做：</b>改「＝基準量」，或在最下面新增一列，按「儲存單位對照」；隔天早上重算後生效。</div>'+cvSearchBar()+'<div class="card" style="overflow-x:auto"><table id="cvTbl"><tr><th>適用品項</th><th>1 單位</th><th>＝基準量</th><th>基準單位</th>'+(ed?'<th></th>':'')+'</tr>';
   /* 2026-08-31 t 批 Q4：引擎規則＝「dim_sku 使用單位」必須等於這裡的「基準單位」（BOM 各種寫法先換到基準單位，再以使用單位計量、÷每採購單位內容量出建議量）。
      不相等時引擎會把基準量直接當成使用單位的數（例：1 包→160 g 但使用單位＝包 ⇒ 每用 1 包算成 160 包）。這裡逐列檢查並標出。 */
   var _idx=anSkuIdx(),_warnN=0;
   UNITCONV.forEach(function(u,i){var sk=_idx[u.item],warn='';
     if(sk){var uu=String(sk.useUnit||'').trim(),bb=String(u.base||'').trim();
       if(uu&&bb&&uu!==bb){_warnN++;warn='<div class="sub" style="color:#b3261e">⚠️ 使用單位「'+uu+'」≠ 基準單位「'+bb+'」→ 統計與訂貨點會用錯單位'+((u.unit===uu)?'（每用 1 '+uu+' 會被算成 '+u.amt+' '+uu+'）':'')+'。二選一：把主檔使用單位改成「'+bb+'」並把「每採購單位內容量」改成以 '+bb+' 計；或刪掉這列、全部用「'+uu+'」計量</div>';}}
-    html+='<tr><td>'+u.item+(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>')+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td>'+(ed?'<td>'+(CONV_API?'<button class="btn sm ghost" data-cvdel="'+i+'" title="刪除這列換算">🗑</button>':'<span class="muted" title="尚未部署 diybc-conv-api">—</span>')+'</td>':'')+'</tr>';});
-  if(!UNITCONV.length)html+='<tr><td colspan="5" class="muted">無資料</td></tr>';html+='</table></div>';
+    var _gen=/^[（(]?通用[）)]?$/.test(String(u.item||"").trim());   /* 2026-10-18：（通用）＝共用換算（kg／斤／L…），引擎找不到品項專屬換算時就用它；不是主檔品項，不標「未對應」 */
+    html+='<tr data-cvrow="'+i+'"><td>'+u.item+(_gen?' <span class="badge" style="background:#5B7F95" title="品項沒有自己的換算時，所有品項都套用這一列">所有品項共用</span>':(sk?'':' <span class="muted" title="主檔找不到此品名">（未對應）</span>'))+warn+'</td><td>1 '+u.unit+'</td><td>'+(ed?'<input class="sm" style="width:70px" type="number" step="0.01" data-cvi="'+i+'" value="'+u.amt+'">':'<b>'+u.amt+'</b>')+'</td><td>'+u.base+'</td>'+(ed?'<td>'+(CONV_API?'<button class="btn sm ghost" data-cvdel="'+i+'" title="刪除這列換算">🗑</button>':'<span class="muted" title="尚未部署 diybc-conv-api">—</span>')+'</td>':'')+'</tr>';});
+  if(!UNITCONV.length)html+='<tr><td colspan="5" class="muted">無資料</td></tr>';html+='<tr id="cvNone" style="display:none"><td colspan="5" class="muted">找不到符合的品項（可試試只打品名的一部分，或清除搜尋）</td></tr></table></div>';
   if(ed&&!CONV_API)html+='<div class="note">系統管理備註：要在網頁上直接刪除換算列，需要先部署 <b>diybc-conv-api</b>（見交付的 convApi.gs），把網址貼到單位對照表的 <b>F1</b>，再按 🔄 更新。</div>';
   if(_warnN)html=alertBig("stop","⛔ 有 "+_warnN+" 列單位不一致，建議量會算錯","「使用單位」與「基準單位」不同，統計與訂貨建議會用錯單位。請看下方各列紅字逐一修正。")+html;
   if(ed)html+='<div class="card"><div class="muted" style="margin-bottom:6px">新增換算（例：品項「鹹蛋黃」單位「包」換算量 45 基準「g」）</div><div style="display:flex;gap:6px;flex-wrap:wrap"><input class="sm" style="width:150px" placeholder="適用品項或（通用）" id="cvItem"><input class="sm" style="width:64px" placeholder="單位" id="cvUnit"><input class="sm" style="width:80px" type="number" step="0.01" placeholder="換算量" id="cvAmt"><input class="sm" style="width:80px" placeholder="基準單位" id="cvBase" value="g"></div></div><div class="toolbar"><button class="btn" id="saveConv">儲存單位對照</button></div>';
   return html;}
+
+/* 2026-10-18 單位對照搜尋（經營者：表上方要能快速找到品項）。
+   輸入框只在 render 建一次；打字只切換表格列的顯示（cvFilter），不重畫輸入框 → 注音／倉頡選字不會被打斷。
+   比對：適用品項、1 單位、基準單位，以及對到的主檔編號／品名／BOM別名；空白分隔多個字須全部符合；不分大小寫。 */
+function cvSearchBar(){var q=ST.cvQ||"";
+  return '<div class="toolbar" style="gap:6px;align-items:center;flex-wrap:wrap"><input class="tx" id="cvQ" type="search" autocomplete="off" style="flex:1;min-width:180px;max-width:360px" placeholder="🔍 搜尋品項／單位／編號（空白分隔可打多個字）" value="'+escA(q)+'">'
+    +'<button class="btn sm ghost" id="cvQx" title="清除搜尋"'+(q?'':' style="display:none"')+'>✕ 清除</button><span class="muted" id="cvQn" style="font-size:12px"></span></div>';}
+function cvHay(u,idx){var sk=idx[u.item],a=[u.item,u.unit,u.base];
+  if(sk){a.push(sk.id,sk.name);(sk.aliases||[]).forEach(function(x){a.push(x);});}
+  return a.join(" ").toLowerCase();}
+function cvFilter(){var tb=document.getElementById("cvTbl");if(!tb)return;
+  var ws=String(ST.cvQ||"").toLowerCase().split(/\s+/).filter(Boolean),idx=anSkuIdx(),shown=0,tot=0;
+  Array.prototype.forEach.call(tb.querySelectorAll("tr[data-cvrow]"),function(tr){var u=UNITCONV[+tr.getAttribute("data-cvrow")];if(!u)return;tot++;
+    var h=cvHay(u,idx),ok=ws.every(function(w){return h.indexOf(w)>=0;});tr.style.display=ok?"":"none";if(ok)shown++;});
+  var none=document.getElementById("cvNone");if(none)none.style.display=(ws.length&&tot&&!shown)?"":"none";
+  var n=document.getElementById("cvQn");if(n)n.textContent=ws.length?("符合 "+shown+" / "+tot+" 筆"):("共 "+tot+" 筆");
+  var x=document.getElementById("cvQx");if(x)x.style.display=ws.length?"":"none";}
+function cvWire(){var el=document.getElementById("cvQ");if(!el){return;}
+  var run=function(){ST.cvQ=el.value;cvFilter();};
+  el.addEventListener("input",function(e){if(e.isComposing||(window.__ime&&window.__ime.on))return;run();});
+  el.addEventListener("compositionend",function(){setTimeout(run,0);});
+  el.addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.isComposing){el.value="";run();}});
+  var x=document.getElementById("cvQx");if(x)x.onclick=function(){el.value="";run();el.focus();};
+  cvFilter();}
 
 /* ===== 主檔（總部，唯讀；編輯走 Sheet）===== */
 /* 2026-08-19 單價參考層：主檔頁「單價參考」儲存格。
@@ -6285,6 +6310,7 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-si]"),function(el){el.onchange=function(){SIDX[+el.dataset.si]=+el.value;};});
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});var lo=$("#sfLow"),hi=$("#sfHigh");if(lo&&+lo.value>0){SFACT.low=+lo.value;post({type:"season",month:"淡季係數",idx:SFACT.low});}if(hi&&+hi.value>0){SFACT.high=+hi.value;post({type:"season",month:"旺季係數",idx:SFACT.high});}toast("已送出季節指數與淡旺季係數");};
   // 單位對照
+  cvWire();
   Array.prototype.forEach.call(document.querySelectorAll("[data-cvi]"),function(el){el.onchange=function(){var u=UNITCONV[+el.dataset.cvi];u.amt=+el.value;u._dirty=1;};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-cvdel]"),function(el){el.onclick=function(){convDelete(+el.dataset.cvdel);};});
   var scv=$("#saveConv");if(scv)scv.onclick=function(){var n=0;UNITCONV.forEach(function(u){if(u._dirty){post({type:"conv",item:u.item,unit:u.unit,base:u.base,amt:u.amt},true);delete u._dirty;n++;}});  // 2026-07-27 修：勿再命名 var sc（會覆蓋 saveCount 閉包捕捉的 sc，盤點頁按儲存會拋錯）
