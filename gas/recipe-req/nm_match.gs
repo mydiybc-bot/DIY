@@ -53,6 +53,10 @@ function nmxRaw_() {
 function nmxIndex_() {
   if (_nmx) return _nmx;
   var o = nmxRaw_(); if (!o || !o.S.length) return null;
+  _nmx = nmxIndexOf_(o);
+  return _nmx;
+}
+function nmxIndexOf_(o) {
   var X = { R: o.R, G: o.G, S: o.S, at: o.at, from: o.from, byKey: {}, rk: [], rsteps: [], df: {}, km: {}, bg: [], nb: 0 };
   var baseKeys = {};
   o.R.forEach(function () { X.rk.push({}); X.rsteps.push([]); });
@@ -69,8 +73,37 @@ function nmxIndex_() {
   var bases = Object.keys(baseKeys); X.nb = bases.length;
   bases.forEach(function (b) { for (var k in baseKeys[b]) X.df[k] = (X.df[k] || 0) + 1; });
   X.rk = X.rk.map(function (m) { return Object.keys(m); });
-  _nmx = X;
   return X;
+}
+/* 2026-10-18 試驗用：直接從 media_scan 組一個「這天以後更新的繁中食譜」母體（跟 media_match 同形狀，R 多第 4 欄更新日），給 nmEval 比較不同年份範圍 */
+function nmxBuild_(fromKey) {
+  var sh = ss_().getSheetByName(NM_SCAN);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, NM_SCAN_HEAD.length).getValues(), blob = nmBlobMap_(), byMd5 = {};
+  Object.keys(blob).forEach(function (p) { var h = blob[p].md5; if (h) (byMd5[h] = byMd5[h] || []).push(p); });
+  var okFile = function (p) { var b = blob[p]; return !!(b && b.bytes <= NM_MAX_MB * 1048576 && /\.(mp4|mov|m4v|jpg|jpeg|png|gif)$/i.test(p)); };
+  var R = [], G = [], gi = {}, S = [], noText = 0;
+  rows.forEach(function (r) {
+    if (!r[5] || r[6] || !r[7] || String(r[2]) !== '繁體中文') return;
+    var upd = nmYmd_(r[4]); if (upd < fromKey) return;
+    var steps; try { steps = JSON.parse(r[7]); } catch (e) { return; }
+    var ri = R.length; R.push([String(r[0]), String(r[1]), nmBase_(r[1]), upd]);
+    steps.forEach(function (s) {
+      if (s.x == null) noText++;
+      var g = -1;
+      if (s.m) {
+        var b = blob[s.m], grp = (b && b.md5) ? 'md5:' + b.md5 : 'p:' + s.m;
+        if (gi[grp] == null) {
+          var p = okFile(s.m) ? s.m : '';
+          if (!p && b && b.md5) (byMd5[b.md5] || []).some(function (q) { if (okFile(q)) { p = q; return true; } return false; });
+          gi[grp] = G.length; G.push([p, s.k || '', p ? Math.round(blob[p].bytes / 1048576 * 100) / 100 : 0]);
+        }
+        g = gi[grp];
+      }
+      S.push([ri, nrTitleKey_(s.t), nmxNorm_(s.x).slice(0, NMX.textMax), g]);
+    });
+  });
+  return { R: R, G: G, S: S, at: nmNow_(), from: fromKey, noText: noText };
 }
 function nmxIdf_(X, k) { return Math.log(X.nb / (X.df[k] || 1)); }
 function nmxBgOf_(X, i) { return X.bg[i] || (X.bg[i] = nmxBg_(X.S[i][2])); }
@@ -169,16 +202,45 @@ function nmMatchMeta_() {
 
 /* ---------- 驗證：每一支 2026 食譜當成剛上傳（排除同一款），配出來跟後台實際放的比 ---------- */
 function nmEval_(p, auth) {
-  var t0 = Date.now(), X = nmxIndex_();
+  var t0 = Date.now(), X, tm = {}, from = String((p && p.from) || '').trim(), only = null, noText = 0;
+  var X26 = null, map26 = null, born = String((p && p.born) || '').replace(/\D/g, '').slice(0, 8), bornOk = null;
+  if (from) {   /* 2026-10-18 試驗：母體改成 from 以後更新的食譜，受測的仍是 2026 年的食譜（排除同一款） */
+    var o = nmxBuild_(nmYmd_(from)); if (!o) throw fail_('media_scan 沒有資料', 'nodata');
+    tm.build = Date.now() - t0; noText = o.noText;
+    var t1 = Date.now(); X = nmxIndexOf_(o); tm.index = Date.now() - t1;
+    only = function (r) { return r[3] >= NM_MATCH_FROM; };
+    if (p.cascade) {   /* 2026 優先：2026 母體配出綠／黃就用它，沒有才用大母體的綠／黃 */
+      var o26 = { R: [], G: o.G, S: [] }; map26 = {};
+      o.R.forEach(function (r, i) { if (r[3] >= NM_MATCH_FROM) { map26[i] = o26.R.length; o26.R.push(r); } });
+      o.S.forEach(function (st) { if (map26[st[0]] != null) o26.S.push([map26[st[0]], st[1], st[2], st[3]]); });
+      X26 = nmxIndexOf_(o26);
+    }
+  } else X = nmxIndex_();
+  if (born) {   /* 只測「這一款第一次出現」在 born 以後的食譜（全新甜點；用 🧬 recipe_lineage 的 kuan_birth） */
+    var lt = ss_().getSheetByName(LG_TAB); bornOk = {};
+    if (lt && lt.getLastRow() > 1) {
+      var lv = lt.getRange(2, 1, lt.getLastRow() - 1, LG_HEAD.length).getDisplayValues(), ci = LG_HEAD.indexOf('kuan_birth');
+      lv.forEach(function (r) { if (String(r[ci]).replace(/\D/g, '').slice(0, 8) >= born) bornOk[String(r[0]).toLowerCase()] = 1; });
+    }
+  }
   if (!X) throw fail_('media_match 分頁還沒有資料（等公版掃描跑完再驗）', 'nodata');
+  var t2 = Date.now(), nT = 0;
   var gb = {};
   X.S.forEach(function (s) { if (s[3] >= 0) (gb[s[3]] = gb[s[3]] || {})[X.R[s[0]][2]] = 1; });
   var stat = {}, tot = { recipes: X.R.length, steps: 0, media: 0, none: 0 }, ex = [];
   var add = function (tier, k) { var o = stat[tier] = stat[tier] || {}; o[k] = (o[k] || 0) + 1; };
   var want = String((p && p.name) || '').trim();
   X.R.forEach(function (r, ri) {
+    if (only && !only(r)) return;
+    if (bornOk && !bornOk[String(r[0]).toLowerCase()]) return;
+    nT++;
     var idx = X.rsteps[ri];
-    var res = nmxCore_(X, idx.map(function (si) { return { key: X.S[si][1], bg: nmxBgOf_(X, si) }; }), r[2]);
+    var Q = idx.map(function (si) { return { key: X.S[si][1], bg: nmxBgOf_(X, si) }; });
+    var res = nmxCore_(X, Q, r[2]);
+    if (X26) {
+      var r26 = nmxCore_(X26, Q, r[2]);
+      res = res.map(function (q, j) { var a = r26[j]; return (a.tier === 'auto' || a.tier === 'sib') ? a : ((q.tier === 'auto' || q.tier === 'sib') ? q : a); });
+    }
     var line = [];
     idx.forEach(function (si, j) {
       var truth = X.S[si][3], q = res[j], kind, k;
@@ -193,8 +255,10 @@ function nmEval_(p, auth) {
     });
     if (line.length) ex.push(r[1] + '｜' + line.join('、'));
   });
-  return { id: '', data: { stat: stat, tot: tot, at: X.at, from: X.from, rule: NMX, example: ex.slice(0, 3), secs: Math.round((Date.now() - t0) / 1000) } };
+  tm.match = Date.now() - t2; tm.per_recipe = nT ? Math.round(tm.match / nT) : 0;
+  tot.targets = nT; tot.pool_recipes = X.R.length; tot.pool_steps = X.S.length; tot.pool_no_text = noText;
+  return { id: '', data: { stat: stat, tot: tot, at: X.at, from: X.from, rule: NMX, example: ex.slice(0, 3), ms: tm, secs: Math.round((Date.now() - t0) / 1000) } };
 }
 ACTIONS.nmEval = function (p, a) { return nmEval_(p, a); };
 READS.nmEval = 1;
-NOAUTH.nmEval = 1;   /* 只回統計數字（可帶 name 看某一支每一步的燈號），不回圖片影片、不寫任何東西 */
+NOAUTH.nmEval = 1;   /* 只回統計數字（可帶 name 看某一支每一步的燈號；帶 from＝試別的母體年份範圍），不回圖片影片、不寫任何東西 */

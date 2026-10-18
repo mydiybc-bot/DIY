@@ -79,6 +79,8 @@ function nmMetaSet_(k, val) {   /* 2026-10-18：存成文字格式（不讓試�
   for (var i = 1; i < v.length; i++) if (String(v[i][0]) === k) { sh.getRange(i + 1, 2).setNumberFormat('@').setValue(String(val)); return; }
   var r = sh.getLastRow() + 1; sh.getRange(r, 1, 1, 2).setNumberFormat('@').setValues([[k, String(val)]]);
 }
+/* 「款」：名稱去掉期別前綴（115 11月大菜單_）、英文段、括號、版本字樣後相同＝同一款（nmAggregate_、nm_match.gs 共用） */
+function nmBase_(n) { return String(n || '').replace(/^.*｜/, '').replace(/^\d{3}\s*[^_]*_/, '').replace(/\|.*$/, '').replace(/（.*?）|\(.*?\)|【.*?】/g, '').replace(/[_\s]+(海綿蛋糕版|自選版|已解凍版本)$/, '').replace(/\s/g, '').trim(); }
 /* 更新日：分頁裡可能是日期格子（Date）或字串 '2026/10/16' → 一律 'yyyy/MM/dd' */
 function nmYmd_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, TZ, 'yyyy/MM/dd');
@@ -221,7 +223,7 @@ function nmAggregate_() {
   var fromKey = Utilities.formatDate(from, TZ, 'yyyy/MM/dd');
   var blob = nmBlobMap_();
   var gkey = function (path) { var b = blob[path]; return (b && b.md5) ? 'md5:' + b.md5 : 'p:' + path; };
-  var base = function (n) { return String(n || '').replace(/^.*｜/, '').replace(/^\d{3}\s*[^_]*_/, '').replace(/\|.*$/, '').replace(/（.*?）|\(.*?\)|【.*?】/g, '').replace(/[_\s]+(海綿蛋糕版|自選版|已解凍版本)$/, '').replace(/\s/g, '').trim(); };
+  var base = nmBase_;
   var okFile = function (p) { var b = blob[p]; return !!(b && b.bytes <= NM_MAX_MB * 1048576 && /\.(mp4|mov|m4v|jpg|jpeg|png|gif)$/i.test(p)); };
   var G = {}, T = {}, nRecent = 0, nScanned = 0, M = [], mRec = 0, gPaths = {};
   rows.forEach(function (r) {
