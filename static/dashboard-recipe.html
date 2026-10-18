@@ -1991,7 +1991,7 @@ var SUPPLYS=['店內自購','出貨中心出貨','店內自製'];
    網址放在 dim_semi 的 N1（表頭偵測，同 conv-api 做法）；寫完用 gviz 讀回核對（no-cors 看不到回應，地雷 17）。 */
 var SEMI_KINDS=['分裝包','材料包','半成品'];
 var SEMI_MAKERS=['門市','出貨中心'];
-var SEMI_KEYS=['name','link','kind','maker','yq','yu','nb','store','take','usage','steps','note'];
+var SEMI_KEYS=['name','link','kind','maker','yq','yu','nb','store','take','usage','steps','note','mat'];   /* mat：2026-10-18 Word 匯入的「材料」段（不顯示，只用來自動帶入用料） */
 var SEMI_TAB='dim_semi',SEMI_TOKEN='dbc-semi-Tn5wQ8',SEMI_SHARED='＊共用';
 var SEMI_HEAD=['來源甜點','甜點名稱','店製品項','類型','製作單位','一批產出量','產出單位','原料','一批用量','單位','原料sku_id','申請單號','寫入時間'];
 var BAD_UNIT=/勺|匙|適量|少許|些許|酌量/;
@@ -2494,7 +2494,7 @@ function semiClean(t){t=String(t||'').replace(/[\s「」『』"“”（）()【
   do{p=t;t=t.replace(re,'')}while(t&&t!==p);return t.replace(/(各|每種|每樣|約|大約)$/,'')}
 function semiStepParse(txt){var out=[],yld=null,one=new RegExp(SEMI_QRX);
   String(txt||'').replace(/\r/g,'').split(/[\n。；;，,]+/).forEach(function(seg){
-    seg=seg.replace(/^\s*(?:\d+\s*[.、．)）]|[①-⑳]|第[一二三四五六七八九十\d]+步)\s*/,'').replace(/([^\s\d])\s+(?=[\d一二兩三四五六七八九十半])/g,'$1');
+    seg=seg.replace(/^\s*(?:\d+\s*[.、．)）]|[①-⑳]|第[一二三四五六七八九十\d]+步)\s*/,'').replace(/([^\s\d])\s+(?=[\d一二兩三四五六七八九十半])/g,'$1').replace(new RegExp('(\\d|[一二兩三四五六七八九十半])\\s+(?=(?:'+SEMI_U+')(?![A-Za-z]))','g'),'$1');
     var parts=seg.split('、'),merged=[],carry='';   /* 「A、B各3個」：沒數量的那段併到下一段 */
     parts.forEach(function(x,i){if(!one.test(x)&&i<parts.length-1&&/各|每種|每樣/.test(parts[i+1])){carry+=(carry?'和':'')+x;return}merged.push(carry?carry+'和'+x:x);carry=''});
     merged.join(' ').split(/\s+/).forEach(function(tok){if(!tok)return;var re=new RegExp(SEMI_QRX,'g'),m,prev=0;
@@ -2524,9 +2524,11 @@ function semiMatch(name,si){var n=String(name||'').trim();if(!n)return null;
 function semiLinkGuess(sm){var n=String(sm.name||'').trim();if(!n)return '';var taken={};AP.semis.forEach(function(s){if(s!==sm&&String(s.link||'').trim())taken[String(s.link).trim()]=1});
   var best=null;AP.lines.forEach(function(l){var m=String(l.m||'').trim();if(!m||taken[m])return;var sc=semiScore(n,m);if(sc>=45&&(!best||sc>best.sc))best={name:m,sc:sc}});
   return best?best.name:''}
-function semiAutoFill(si){var sm=AP.semis[si];if(!sm||lockedReq()||unitMode())return false;
+function semiAutoFill(si,fromSteps){var sm=AP.semis[si];if(!sm||lockedReq()||unitMode())return false;
   var sig=function(){return JSON.stringify([sm.items.map(function(it){return [it.m,it.q,it.u,!!it.auto]}),sm.yq,sm.yu,sm.link])},before=sig();
-  var P=semiStepParse(sm.steps),keep=sm.items.filter(function(it){return String(it.m||'').trim()&&!it.auto}),have={},add=[],idx={};
+  var hasMat=!!String(sm.mat||'').trim(),P;
+  if(fromSteps||!hasMat){P=semiStepParse(sm.steps);if(hasMat){if(P.items.length)sm.mat='';else P=semiStepParse(sm.mat)}}else P=semiStepParse(sm.mat);
+  var keep=sm.items.filter(function(it){return String(it.m||'').trim()&&!it.auto}),have={},add=[],idx={};
   keep.forEach(function(it){have[String(it.m).trim()]=1});
   P.items.forEach(function(x){var mt=semiMatch(x.name,si),nm=mt?mt.name:x.name;if(have[nm])return;var k=nm+'|'+x.u;
     if(idx[k]){idx[k].q=String(r4(num(idx[k].q)+x.q));idx[k].src+='、'+x.src;return}
@@ -2536,9 +2538,81 @@ function semiAutoFill(si){var sm=AP.semis[si];if(!sm||lockedReq()||unitMode())re
   if(P.yld&&!String(sm.yq||'').trim()){sm.yq=String(P.yld.q);sm.yu=P.yld.u}
   if(!String(sm.link||'').trim()&&semiItemsOf(sm).length){var lk=semiLinkGuess(sm);if(lk)sm.link=lk}
   return before!==sig()}
+/* ===== 2026-10-18 經營者：半成品資料用 Word 檔匯入（主廚的半成品不在食譜裡）=====
+   讀檔：.docx（解壓 word/document.xml，段落一行、表格一列一行、儲存格用 Tab 隔開）／.doc 與 .html（網頁格式）／.txt；Word 97 舊格式請改存 .docx。
+   拆欄位：照「標題：內容」認（半成品名稱／類型／製作單位／存放／拿取／一批做出／對應用料／使用說明／製作步驟／備註／材料），
+   【名稱】這種括號標題或再出現一次「半成品名稱」＝下一個；沒有任何標題時，第一行當名稱、其餘當製作步驟。
+   用料：有「材料」段就用材料段，沒有就用製作步驟，一律交給 semiAutoFill（同「製作步驟自動帶入用料」）。 */
+function semiDocText(f){
+  return new Promise(function(res){var rd=new FileReader();rd.onload=function(){res(rd.result)};rd.onerror=function(){res(null)};rd.readAsArrayBuffer(f)}).then(function(buf){
+    if(!buf)return {err:'讀不到這個檔案'};var u8=new Uint8Array(buf);
+    if(u8[0]===0xD0&&u8[1]===0xCF&&u8[2]===0x11&&u8[3]===0xE0)return {err:'是 Word 97～2003 舊格式（.doc），讀不到：請在 Word「另存新檔」選 .docx 再匯入'};
+    if(u8[0]===0x50&&u8[1]===0x4B){if(typeof DecompressionStream==='undefined')return {err:'這台電腦的瀏覽器太舊、打不開 .docx：請更新瀏覽器（Chrome）'};
+      return rcUnzip(buf,['word/document.xml']).then(function(z){return z['word/document.xml']?{text:docxPlain(z['word/document.xml'])}:{err:'不是 Word 的 .docx'}},function(){return {err:'是壓縮檔但打不開'}})}
+    var t=new TextDecoder('utf-8').decode(u8);return {text:/<(html|body|p|div|table|br)\b/i.test(t)?htmlPlain(t):t}})}
+function docxPlain(xml){var W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',d=new DOMParser().parseFromString(String(xml||''),'application/xml');
+  if(d.getElementsByTagName('parsererror').length)return '';
+  function pText(p){var t='';Array.prototype.forEach.call(p.getElementsByTagNameNS(W,'r'),function(r){for(var c=r.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;if(c.localName==='t')t+=c.textContent;else if(c.localName==='br'||c.localName==='cr')t+='\n';else if(c.localName==='tab')t+='\t'}});return t}
+  var out=[],body=d.getElementsByTagNameNS(W,'body')[0];if(!body)return '';
+  function walk(el){for(var c=el.firstChild;c;c=c.nextSibling){if(c.nodeType!==1)continue;
+    if(c.localName==='p')out.push(pText(c));
+    else if(c.localName==='tbl')Array.prototype.forEach.call(c.getElementsByTagNameNS(W,'tr'),function(tr){var cells=[];for(var tc=tr.firstChild;tc;tc=tc.nextSibling){if(tc.nodeType===1&&tc.localName==='tc'){var ps=[];Array.prototype.forEach.call(tc.getElementsByTagNameNS(W,'p'),function(p){ps.push(pText(p))});cells.push(ps.join(' ').trim())}}out.push(cells.join('\t'))});
+    else if(c.localName==='sdt'||c.localName==='sdtContent')walk(c)}}
+  walk(body);return out.join('\n')}
+function htmlPlain(h){var d=new DOMParser().parseFromString(h,'text/html'),b=d.body;if(!b)return '';
+  Array.prototype.forEach.call(b.querySelectorAll('script,style'),function(e){e.remove()});
+  Array.prototype.forEach.call(b.querySelectorAll('br'),function(e){e.replaceWith('\n')});
+  Array.prototype.forEach.call(b.querySelectorAll('td,th'),function(e){e.append('\t')});
+  Array.prototype.forEach.call(b.querySelectorAll('p,div,tr,li,h1,h2,h3,h4,h5,h6'),function(e){e.append('\n')});
+  return b.textContent.replace(/ /g,' ')}
+var SEMI_DOC_LBL=[['name','半成品名稱|材料包名稱|分裝包名稱|半成品|材料包|名稱|品名'],['kind','類型|種類'],['maker','製作單位|製作者|誰做'],['store','存放方式|保存方式|存放|保存'],['take','拿取方式|拿取'],
+  ['yield','一批做出|一批可做|一批|產出|份量|批量'],['link','對應用料|對應品項'],['usage','使用說明|使用方式|用途'],['steps','製作步驟|作法|做法|製作方式|步驟'],['note','備註說明|注意事項|備註'],['mat','材料清單|材料|用料|原料|食材工具|食材|內容物']];
+var SEMI_DOC_MULTI={steps:1,mat:1,usage:1,note:1};
+function semiDocParse(text){var blocks=[],cur=null,field=null,lblAll=SEMI_DOC_LBL.map(function(x){return x[1]}).join('|');
+  function nb(){cur={};blocks.push(cur);field=null}
+  String(text||'').replace(/\r/g,'').split('\n').forEach(function(line){
+    var t=line.replace(/ /g,' ').trim();if(!t)return;
+    t=t.replace(new RegExp('^('+lblAll+')\\s*\\t+'),'$1：');   /* 表格：左欄標題、右欄內容 */
+    var hm=t.match(/^[【［\[《](.{1,30}?)[】］\]》]$/);if(hm){nb();cur.name=hm[1].trim();return}
+    for(var i=0;i<SEMI_DOC_LBL.length;i++){var L=SEMI_DOC_LBL[i],m=t.match(new RegExp('^(?:'+L[1]+')\\s*'+(SEMI_DOC_MULTI[L[0]]?'[：:]?':'[：:]')+'\\s*(.*)$'));
+      if(!m)continue;var v=m[1].replace(/\t+/g,' ').trim();
+      if(SEMI_DOC_MULTI[L[0]]&&v&&!new RegExp('^(?:'+L[1]+')\\s*[：:]').test(t))continue;   /* 沒冒號又後面有字（例：步驟一…、材料要先秤）＝不是標題 */
+      if(L[0]==='name'){if(!cur||cur.name)nb();cur.name=v;field=null;return}
+      if(!cur)nb();
+      if(SEMI_DOC_MULTI[L[0]]){cur[L[0]]=(cur[L[0]]?cur[L[0]]+'\n':'')+v;field=L[0]}else{if(cur[L[0]]==null)cur[L[0]]=v;field=null}
+      return}
+    if(!cur){nb();cur.name=t.replace(/\t+/g,' ');return}
+    if(field){cur[field]=(cur[field]?cur[field]+'\n':'')+t;return}
+    if(!cur.name){cur.name=t.replace(/\t+/g,' ');return}
+    cur.steps=(cur.steps?cur.steps+'\n':'')+t;field='steps'});
+  return blocks.filter(function(b){return b.name||b.steps||b.mat}).map(function(b){Object.keys(b).forEach(function(k){if(typeof b[k]==='string')b[k]=b[k].replace(/^\n+|\n+$/g,'')});return b})}
+function semiPick(v,list){v=String(v||'').trim();if(!v)return '';for(var i=0;i<list.length;i++)if(v.indexOf(list[i])>=0||list[i].indexOf(v)>=0)return list[i];
+  if(/店|門市/.test(v)&&list.indexOf('門市')>=0)return '門市';if(/出貨|中央|總部/.test(v)&&list.indexOf('出貨中心')>=0)return '出貨中心';if(/店員/.test(v)&&list.indexOf('向店員拿取')>=0)return '向店員拿取';return ''}
+function semiImportDocs(files){if(!files||!files.length)return;if(lockedReq()||unitMode()){alert('這張申請單已鎖定，不能匯入');return}
+  Promise.all(Array.prototype.map.call(files,function(f){return semiDocText(f).then(function(r){r.f=f.name;return r})})).then(function(rs){
+    var errs=[],got=[];
+    rs.forEach(function(r){if(r.err){errs.push(r.f+'：'+r.err);return}var bs=semiDocParse(r.text);if(!bs.length){errs.push(r.f+'：沒讀到半成品資料');return}
+      bs.forEach(function(b){if(!b.name)b.name=String(r.f||'').replace(/\.[^.]+$/,'');got.push(b)})});
+    if(!got.length){alert('沒有匯入任何半成品。'+(errs.length?'\n'+errs.join('\n'):''));return}
+    if(AP.semis.length===1&&!semiName(AP.semis[0])&&!semiItemsOf(AP.semis[0]).length&&!String(AP.semis[0].steps||'').trim())AP.semis=[];
+    var msg=[];
+    got.forEach(function(b){var nm=String(b.name).trim(),sm=AP.semis.filter(function(s){return String(s.name||'').trim()===nm})[0],isNew=!sm;
+      if(!sm){sm=newSemi();sm.items=[];AP.semis.push(sm)}
+      sm.name=nm;
+      var kind=semiPick(b.kind,SEMI_KINDS);if(!kind&&/材料包/.test(nm))kind='材料包';if(!kind&&/分裝/.test(nm))kind='分裝包';if(kind)sm.kind=kind;
+      var mk=semiPick(b.maker,SEMI_MAKERS);if(mk)sm.maker=mk;
+      var st=semiPick(b.store,STOREWAYS);if(st)sm.store=st;var tk=semiPick(b.take,TAKES);if(tk)sm.take=tk;
+      if(b.yield){var ym=String(b.yield).match(/(\d+(?:\.\d+)?|[一二兩三四五六七八九十半]+)\s*([^\s\d，,。]*)/);if(ym&&cnNum(ym[1])>0){sm.yq=String(cnNum(ym[1]));sm.yu=ym[2]||sm.yu||''}}
+      if(b.link)sm.link=b.link;if(b.usage)sm.usage=b.usage;if(b.note)sm.note=b.note;if(b.steps)sm.steps=b.steps;sm.mat=b.mat||'';
+      if(!sm.items.length)sm.items=[newSemiItem()];
+      semiAutoFill(AP.semis.indexOf(sm));
+      var n=semiItemsOf(sm).length,miss=sm.items.filter(function(it){return it.auto&&(it.miss||it.fuzzy)}).length;
+      msg.push((isNew?'＋ ':'↻ ')+nm+'：用料 '+n+' 項'+(miss?'（'+miss+' 項品名要確認）':'')+(n?'':'（沒讀到數量，請手動填用料）'))});
+    OUT=null;saveDraft();render();
+    alert('已匯入 '+got.length+' 個半成品／材料包：\n'+msg.join('\n')+(errs.length?'\n\n讀不到的檔：\n'+errs.join('\n'):'')+'\n\n請看一下半成品區標 🤖 的用料（紅字＝找不到、黃字＝相近品名）。同名的半成品會更新，不會重複建立。')})}
 /* 畫面前先跑：有製作步驟但用料還空著的半成品 → 自動帶入；有用料但對應用料空白 → 猜對應 */
 function semiPrepass(){if(lockedReq()||unitMode()||!R.ready)return;var ch=false;
-  AP.semis.forEach(function(sm,si){if(String(sm.steps||'').trim()&&!semiItemsOf(sm).length){if(semiAutoFill(si))ch=true}
+  AP.semis.forEach(function(sm,si){if((String(sm.steps||'').trim()||String(sm.mat||'').trim())&&!semiItemsOf(sm).length){if(semiAutoFill(si))ch=true}
     else if(!String(sm.link||'').trim()&&semiItemsOf(sm).length){var lk=semiLinkGuess(sm);if(lk){sm.link=lk;ch=true}}});
   if(ch)saveDraft()}
 /* 2026-10-18 經營者：表一某列是「已填好用料的半成品」（對應用料／名稱對得到）→ 表二不列它本身，改列它的材料 */
@@ -4373,8 +4447,8 @@ function paint(){var root=document.getElementById('apRoot');
   if(AP.miss.length)s+='<div class="ap-note"><b>⚠ 食譜內文提到、但「食材工具」清單沒列的品項（'+AP.miss.length+' 項）</b><div class="ap-muted">這些沒被計入成本，門市備料與週用量推算也會漏。請主廚補進食材清單，或手動加到表一。</div><div style="margin-top:4px"><b>'+esc(AP.miss.join('、'))+'</b></div></div>';
   /* 半成品製作 */
   s+=linkListHTML()+'<datalist id="apBomDL"></datalist>';
-  s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品/材料包製作 <span class="ap-muted">這支新品要店員先做好的半成品、材料包、分裝包（沒有就留空）</span><span class="ap-btns"><button class="ap-btn2" id="apSemiAdd" title="手動新增一個半成品">＋ 新增一個</button><button class="ap-btn2" id="apSemiImport" title="用 Excel 標準格式一次帶進很多個">📥 從 Excel 載入</button></span><input type="file" id="apSemiFile" accept=".xlsx,.xls" style="display:none"></div>';
-  s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好就好，不用另外存：簽核通過後按 ②「📦 簽核通過，上傳更新採購系統」，會一起寫進採購系統（出貨中心製作的不寫）　④ <b>製作步驟寫了材料和數量</b>（例：黑白小熊各3隻、圈圈軟糖2個、陽傘1組 裝一包），離開步驟欄時系統會<b>自動帶入下方用料</b>，請看一眼標 🤖 的列</div>';
+  s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品/材料包製作 <span class="ap-muted">這支新品要店員先做好的半成品、材料包、分裝包（沒有就留空）</span><span class="ap-btns"><button class="ap-btn2" id="apSemiAdd" title="手動新增一個半成品">＋ 新增一個</button><button class="ap-btn2" id="apSemiDoc" title="主廚寫好的半成品 Word 檔（.docx；可一次選好幾個）：自動帶入名稱、存放、一批做出、製作步驟，用料和數量自動分析">📄 匯入 Word 檔</button><button class="ap-btn2" id="apSemiImport" title="用 Excel 標準格式一次帶進很多個">📥 從 Excel 載入</button></span><input type="file" id="apSemiFile" accept=".xlsx,.xls" style="display:none"><input type="file" id="apSemiDocFile" accept=".docx,.doc,.html,.htm,.txt" multiple style="display:none"></div>';
+  s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📄 匯入 Word 檔」（主廚寫好的半成品 .docx，可一次選好幾個）、「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好就好，不用另外存：簽核通過後按 ②「📦 簽核通過，上傳更新採購系統」，會一起寫進採購系統（出貨中心製作的不寫）　④ <b>製作步驟寫了材料和數量</b>（例：黑白小熊各3隻、圈圈軟糖2個、陽傘1組 裝一包），離開步驟欄時系統會<b>自動帶入下方用料</b>，請看一眼標 🤖 的列</div>';
   AP.semis.forEach(function(sm,si){s+=semiHTML(sm,si)});
   if(!AP.semis.length)s+='<div class="ap-muted" style="padding:8px 12px">目前沒有半成品；沒有就留空。</div>';
   /* 2026-10-08 經營者：半成品配方跟著申請表一起存，簽核通過後由 ②「上傳更新採購系統」一起寫進採購系統 → 拿掉「送到半成品分頁」按鈕 */
@@ -4451,7 +4525,7 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('.ap-semi').forEach(function(box){var si=+box.dataset.semi,sm=AP.semis[si];if(!sm)return;
     box.querySelectorAll('[data-sh]').forEach(function(el){var k=el.dataset.sh;el.oninput=function(){sm[k]=el.value;OUT=null;saveDraft()};
       el.onchange=function(){sm[k]=el.value;OUT=null;
-        if(k==='steps'){semiAutoFill(si);saveDraft();renderSoon();return}   /* 2026-10-18 製作步驟 → 自動帶入用料 */
+        if(k==='steps'){semiAutoFill(si,true);saveDraft();renderSoon();return}   /* 2026-10-18 製作步驟 → 自動帶入用料 */
         if(k==='link'){var l=lineByName(sm.link);if(l){if(!String(sm.yu||'').trim())sm.yu=String(l.u||'').trim();if(!sm.maker)sm.maker=l.supply==='出貨中心出貨'?'出貨中心':(l.supply==='店內自製'?'門市':'')}
           if(!sm.kind&&/材料包|食材包/.test(sm.link))sm.kind='材料包';saveDraft();renderSoon();return}
         saveDraft();if(k==='maker'||k==='yq'||k==='yu'||k==='nb'||k==='name')renderSoon();else updateSemiCard()}});
@@ -4466,6 +4540,8 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
     var box=root.querySelector('.ap-semi[data-semi="'+b.dataset.sadd+'"]');if(box){var rows=box.querySelectorAll('tr[data-sk]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-sf="m"]');if(inp)inp.focus()}}}});
   root.querySelectorAll('[data-semidel]').forEach(function(b){b.onclick=function(){if(!confirm('刪除半成品 '+(+b.dataset.semidel+1)+'？'))return;AP.semis.splice(+b.dataset.semidel,1);OUT=null;saveDraft();render()}});
+  var sd1=document.getElementById('apSemiDoc'),sdf=document.getElementById('apSemiDocFile');   /* 2026-10-18 匯入半成品 Word 檔 */
+  if(sd1&&sdf){sd1.onclick=function(){sdf.value='';sdf.click()};sdf.onchange=function(){semiImportDocs(sdf.files)}}
   var si1=document.getElementById('apSemiImport'),sf=document.getElementById('apSemiFile');
   if(si1&&sf){si1.onclick=function(){if(!window.SemiMod){alert('半成品/材料包模組尚未載入，請重新整理');return}sf.value='';sf.click()};
     sf.onchange=function(){var f=sf.files&&sf.files[0];if(!f)return;
