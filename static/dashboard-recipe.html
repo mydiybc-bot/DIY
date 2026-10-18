@@ -560,6 +560,15 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
 <style id="apSimpleCss">/* 2026-10-08 精簡版送件區 */
 body.form-mode .tab-bar,body.form-mode .dsb,body.form-mode .uhelp,body.form-mode .mt-home,body.form-mode #apAdminBtn{display:none!important}
 #tab-apply .ap-lmbar{background:#E6F3F1;border:1px solid #B2DFDB;border-radius:10px;padding:10px 12px;margin-bottom:10px}
+#tab-apply .ap-sum{margin-top:8px;background:#fff;border:1px solid #B2DFDB;border-radius:10px;padding:8px 12px}   /* 2026-10-18 檔期總覽 */
+#tab-apply .ap-sum>summary{cursor:pointer;font-weight:800;color:#00695C}
+#tab-apply .ap-sumtbl{overflow-x:auto;margin-top:6px}
+#tab-apply .ap-sumtbl table{border-collapse:collapse;font-size:13px;min-width:520px;width:100%}
+#tab-apply .ap-sumtbl th,#tab-apply .ap-sumtbl td{border-bottom:1px solid #EFE7E1;padding:4px 8px;text-align:left;white-space:nowrap}
+#tab-apply .ap-sumtbl th{background:#F4FAF9;color:#00695C}
+#tab-apply .ap-sumtbl .r{text-align:right;font-variant-numeric:tabular-nums}
+#tab-apply .ap-sumtbl tr.tot td{font-weight:700;background:#FAF8F6}
+#tab-apply .ap-sumcmp{margin-top:6px;background:#FFF8E1;border-radius:8px;padding:6px 10px;font-size:13.5px}
 #tab-apply .ap-lmlist{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 #tab-apply .ap-lmgo{font:inherit;font-size:13px;padding:5px 12px;border:1px solid #80CBC4;border-radius:16px;background:#fff;color:#00695C;cursor:pointer}
 #tab-apply .ap-lmgo.on{background:#00796B;color:#fff;border-color:#00796B;font-weight:700}
@@ -3614,13 +3623,76 @@ function lmBarHTML(){if(!LM)return '';var c=(LM.data&&LM.data.campaign)||{},R=(L
   return '<div class="ap-lmbar"><div><b>📋 '+esc(c['檔期名稱']||LM.cid)+'</b>'+(c['起']||c['迄']?'　<span class="ap-muted">'+esc((c['起']||'?')+'～'+(c['迄']||(String(c['類型']||'')==='常態菜單'?'長期':'?')))+'</span>':'')+'　<span class="ap-muted">這個檔期的新甜點（點一支切換）：</span></div>'
     +'<div class="ap-lmlist">'+R.map(function(D){var q=D.req||{};return '<button type="button" class="ap-lmgo'+(q.req_id===LM.rid?' on':'')+'" data-lmgo="'+esc(q.req_id)+'">'+(q.seq?esc(q.seq)+'. ':'')+esc(lmNm(D))+'</button>'}).join('')+'</div>'
     +(LM.chef?'<div class="ap-okline" style="margin-top:6px">🔓 主廚模式：整張都可以改；改完按最下方「💾 存進檔期」存檔（連結不變）。</div>'
-      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…）；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+'</div>'}
+      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…）；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+campSumHTML()+'</div>'}
+/* ===== 2026-10-18 經營者：📊 檔期總覽（同一檔期多支新品一次看）=====
+   ①每支：品名、定價、成本、利潤率、預估銷售數、狀態（讀整檔連結已載入的每支申請表）
+   ②新增食材／耗材／器具／模具各幾項（各支用料的 🆕＋半成品材料的 🆕；同名只算一次）
+   ③去年同類檔期的新品：檔期名稱去掉年份後同名（例：2026 萬聖節 ↔ 2025 萬聖節），對不到可從下拉改選；
+     品項＝產品名稱對照表「次類別」＝那個檔期的列，份數＝POS資料（BOM 本）在各品項起始～結束有效日之間的銷售數量合計。只讀。 */
+var POS_BOOK='1EyDihj4LPok_dvv3ZkAzDhsHqs7kDi5RTCXPF5Lt1ao',SUM={open:false,subs:null,pick:'',ly:{},err:''};
+function sumPay(D){try{return JSON.parse((D.req||{}).payload||'{}')||{}}catch(e){return {}}}
+function sumRows(){var R=(LM&&LM.data&&LM.data.reqs)||[];return R.map(function(D){var q=D.req||{},j=sumPay(D),h=j.head||{},c=j.cost||{};
+  var price=num(h.price||q['定價']),cost=c.total!=null?num(c.total):num(h.cost!=null?h.cost:q['成本']);
+  return {seq:q.seq,name:lmNm(D),price:price,cost:cost,margin:price>0&&cost>0?(price-cost)/price*100:null,qty:num(h.qty||q['預估銷售數']),st:String(q.status||''),j:j}})}
+function sumNew(rows){var cat={食材:{},耗材:{},器具:{},模具:{}};
+  rows.forEach(function(r){(r.j.lines||[]).concat(r.j.semi_items_new||[]).forEach(function(l){if(!l.is_new)return;var n=String(l.name||'').trim();if(!n)return;var k=cat[l.cat]?l.cat:'食材';cat[k][n]=1})});
+  return cat}
+function sumYear(c){var m=String(c['檔期名稱']||'').match(/^\s*(20\d\d)/);if(m)return +m[1];var d=String(c['起']||'').match(/^(20\d\d)/);return d?+d[1]:new Date().getFullYear()}
+function sumRest(n){return String(n||'').replace(/^\s*20\d\d\s*/,'').trim()}
+function sumGuess(c){var y=sumYear(c)-1,rest=sumRest(c['檔期名稱']),best='',bs=0;
+  (SUM.subs||[]).forEach(function(sb){var m=sb.match(/^\s*(20\d\d)/);if(!m||+m[1]!==y)return;var sc=rest?semiScore(rest,sumRest(sb)):0;if(sc>bs){bs=sc;best=sb}});
+  return bs>=60?best:''}
+function gvDate2(v){var m=String(v||'').match(/Date\((\d+),(\d+),(\d+)/);if(m)return m[1]+'-'+('0'+(+m[2]+1)).slice(-2)+'-'+('0'+m[3]).slice(-2);var t=String(v||'').trim().replace(/\//g,'-');return /^\d{4}-\d{2}-\d{2}/.test(t)?t.slice(0,10):''}
+function sumLoadSubs(){if(SUM.subs)return Promise.resolve(SUM.subs);
+  return R.gq(R.readIdOf('產品名稱對照表'),'產品名稱對照表',"select H, count(A) where H is not null group by H").then(function(r){
+    SUM.subs=r.rows.map(function(x){return String(x[0]||'').trim()}).filter(function(x){return /^\s*20\d\d/.test(x)}).sort().reverse();return SUM.subs})}
+function sumLoadLy(sub){if(SUM.ly[sub])return Promise.resolve(SUM.ly[sub]);
+  return R.gq(R.readIdOf('產品名稱對照表'),'產品名稱對照表',"select A,B,E,F where H='"+sub.replace(/'/g,'')+"'").then(function(r){
+    var its=r.rows.map(function(x){return {pos:String(x[0]||'').trim(),nm:String(x[1]||x[0]||'').trim(),from:gvDate2(x[2]),to:gvDate2(x[3]),q:0}}).filter(function(x){return x.pos});
+    if(!its.length){SUM.ly[sub]={its:[]};return SUM.ly[sub]}
+    var f=its.map(function(x){return x.from}).filter(Boolean).sort()[0],t=its.map(function(x){return x.to}).filter(Boolean).sort().slice(-1)[0];
+    var qs=its.map(function(x){return 'D="'+x.pos.replace(/"/g,'')+'"'}).join(' or ');
+    return R.gq(POS_BOOK,'POS資料','select D,C,sum(H) where ('+qs+')'+(f?" and C >= date '"+f+"'":'')+(t?" and C <= date '"+t+"'":'')+' group by D,C').then(function(s){
+      var by={};its.forEach(function(x){by[x.pos]=x});
+      s.rows.forEach(function(z){var x=by[String(z[0]||'').trim()],d=gvDate2(z[1]);if(!x||!d)return;if((x.from&&d<x.from)||(x.to&&d>x.to))return;x.q+=num(z[2])});
+      SUM.ly[sub]={its:its,from:f,to:t};return SUM.ly[sub]})})}
+function sumLyHTML(rows){var c=(LM.data&&LM.data.campaign)||{};
+  if(SUM.err)return '<div class="ap-bad">讀不到去年資料：'+esc(SUM.err)+'</div>';
+  if(!SUM.subs)return '<div class="ap-muted">⏳ 讀取去年檔期…</div>';
+  var y=sumYear(c)-1,opts=SUM.subs.filter(function(sb){var yy=+(sb.match(/^\s*(20\d\d)/)||[0,0])[1];return yy>=y-1&&yy<=y});   /* 只列往年（前兩年） */
+  var sel='<select id="apSumPick"><option value="">— 選去年的檔期 —</option>'+opts.map(function(sb){return '<option'+(sb===SUM.pick?' selected':'')+'>'+esc(sb)+'</option>'}).join('')+'</select>';
+  var h='<div style="margin:8px 0 4px"><b>📅 去年同類檔期的新品</b>　比較：'+sel+(SUM.pick?'':'　<span class="ap-muted">（沒找到去年同名的檔期，請從下拉選一個）</span>')+'</div>';
+  if(!SUM.pick)return h;var L=SUM.ly[SUM.pick];
+  if(!L)return h+'<div class="ap-muted">⏳ 讀取「'+esc(SUM.pick)+'」各品項銷售份數…（POS 資料多，約 10～20 秒）</div>';
+  if(!L.its.length)return h+'<div class="ap-muted">產品名稱對照表裡沒有次類別是「'+esc(SUM.pick)+'」的品項。</div>';
+  var ty=rows.reduce(function(a,r){return a+r.qty},0),lt=L.its.reduce(function(a,x){return a+x.q},0),tn=rows.filter(function(r){return r.qty>0}).length;
+  h+='<div class="ap-sumtbl"><table><tr><th>去年品項（POS 名稱）</th><th>販售期間</th><th class="r">賣了幾份</th></tr>'+L.its.slice().sort(function(a,b){return b.q-a.q}).map(function(x){return '<tr><td>'+esc(x.pos)+'</td><td>'+esc((x.from||'?')+'～'+(x.to||'?'))+'</td><td class="r">'+Math.round(x.q).toLocaleString()+'</td></tr>'}).join('')
+    +'<tr class="tot"><td>去年合計（'+L.its.length+' 支）</td><td></td><td class="r">'+Math.round(lt).toLocaleString()+'</td></tr></table></div>';
+  var cmp=lt>0&&ty>0?'今年預估 <b>'+Math.round(ty).toLocaleString()+'</b> 份 ＝ 去年的 <b>'+Math.round(ty/lt*100)+'%</b>':'';
+  h+='<div class="ap-sumcmp">今年 '+rows.length+' 支、預估合計 <b>'+Math.round(ty).toLocaleString()+'</b> 份'+(tn?'（平均每支 '+Math.round(ty/tn).toLocaleString()+' 份）':'')+'｜去年 '+L.its.length+' 支、實際賣 <b>'+Math.round(lt).toLocaleString()+'</b> 份（平均每支 '+Math.round(lt/L.its.length).toLocaleString()+' 份）'+(cmp?'<br>'+cmp:'')+(ty&&!tn?'':'')+(rows.some(function(r){return !(r.qty>0)})?'<br><span class="ap-warn">有 '+rows.filter(function(r){return !(r.qty>0)}).length+' 支還沒填預估銷售數</span>':'')+'</div>';
+  return h}
+function campSumHTML(){if(!LM||!LM.data)return '';var rows=sumRows();if(!rows.length)return '';
+  var nw=sumNew(rows),nc=function(k){return Object.keys(nw[k]).length},tot=nc('食材')+nc('耗材')+nc('器具')+nc('模具');
+  var ty=rows.reduce(function(a,r){return a+r.qty},0),mg=rows.filter(function(r){return r.margin!==null});
+  var h='<details class="ap-sum" id="apSum"'+(SUM.open?' open':'')+'><summary>📊 檔期總覽：'+rows.length+' 支新品｜預估合計 '+Math.round(ty).toLocaleString()+' 份｜新品項 '+tot+' 項</summary>';
+  h+='<div class="ap-sumtbl"><table><tr><th>#</th><th>品名</th><th class="r">定價</th><th class="r">成本</th><th class="r">利潤率</th><th class="r">預估銷售數</th><th>狀態</th></tr>'
+    +rows.map(function(r){return '<tr><td>'+esc(r.seq||'')+'</td><td>'+esc(r.name)+'</td><td class="r">'+(r.price?Math.round(r.price).toLocaleString():'—')+'</td><td class="r">'+(r.cost?Math.round(r.cost).toLocaleString():'—')+'</td><td class="r">'+(r.margin===null?'—':r.margin.toFixed(1)+'%')+'</td><td class="r">'+(r.qty?Math.round(r.qty).toLocaleString():'<span class="ap-warn">未填</span>')+'</td><td>'+esc(r.st||'—')+'</td></tr>'}).join('')
+    +'<tr class="tot"><td></td><td>合計／平均</td><td class="r">'+(rows.some(function(r){return r.price})?'平均 '+Math.round(rows.filter(function(r){return r.price}).reduce(function(a,r){return a+r.price},0)/rows.filter(function(r){return r.price}).length).toLocaleString():'—')+'</td><td></td><td class="r">'+(mg.length?'平均 '+(mg.reduce(function(a,r){return a+r.margin},0)/mg.length).toFixed(1)+'%':'—')+'</td><td class="r">'+Math.round(ty).toLocaleString()+'</td><td></td></tr></table></div>';
+  h+='<div style="margin:8px 0 4px"><b>🆕 要新增的品項</b>（各支用料＋半成品材料；同一樣只算一次）：食材 <b>'+nc('食材')+'</b>｜耗材 <b>'+nc('耗材')+'</b>｜器具 <b>'+nc('器具')+'</b>｜模具 <b>'+nc('模具')+'</b></div>'
+    +(tot?'<div class="ap-muted" style="font-size:12.5px">'+['食材','耗材','器具','模具'].filter(function(k){return nc(k)}).map(function(k){return k+'：'+Object.keys(nw[k]).map(esc).join('、')}).join('<br>')+'</div>':'');
+  h+='<div id="apSumLy">'+(SUM.open?sumLyHTML(rows):'')+'</div></details>';
+  return h}
+function sumRefreshLy(){var el=document.getElementById('apSumLy');if(el)el.innerHTML=sumLyHTML(sumRows());var p=document.getElementById('apSumPick');if(p)p.onchange=function(){SUM.pick=p.value;sumRefreshLy();if(SUM.pick)sumLoadLy(SUM.pick).then(sumRefreshLy,function(e){SUM.err=String(e&&e.message||e);sumRefreshLy()})}}
+function sumWire(){var d=document.getElementById('apSum');if(!d)return;
+  d.ontoggle=function(){SUM.open=d.open;if(!d.open)return;sumRefreshLy();
+    sumLoadSubs().then(function(){if(!SUM.pick)SUM.pick=sumGuess((LM.data&&LM.data.campaign)||{});sumRefreshLy();if(SUM.pick)return sumLoadLy(SUM.pick).then(sumRefreshLy)},function(e){SUM.err=String(e&&e.message||e)+'（Google 慢的時候請重新整理再試）';sumRefreshLy()})};
+  if(d.open)sumRefreshLy()}
 function lmCardHTML(){var lk=lockedReq();
   if(lk)return '<div class="ap-note">這支目前是「'+esc((AP.sub||{}).status)+'」，已經不能再修改。</div>';
   return '<div class="ap-steps"><div class="ap-step"><div class="ap-stepn">✍️</div><div class="ap-stepb"><b>儲存你對「新品研發工作申請單」的修改</b>'
     +'<div class="ap-muted">改了黃色框之後按儲存；主廚和其他同仁重新打開連結就看得到。會記錄是誰改的。</div>'
     +'<div class="ap-actions" style="padding:6px 0 0"><label class="ap-muted" style="font-size:13px">你的名字 <input type="text" id="apLmName" maxlength="20" value="'+esc(LM.name||'')+'" style="width:120px"></label><button class="ap-btn" id="apLmSave" type="button">💾 儲存修改</button></div></div></div></div>'}
-function lmWire(){var root=document.getElementById('apRoot');if(!LM||!root)return;
+function lmWire(){var root=document.getElementById('apRoot');if(!LM||!root)return;sumWire();
   root.querySelectorAll('[data-lmgo]').forEach(function(b){b.onclick=function(){lmGo(b.getAttribute('data-lmgo'))}});
   var ch=document.getElementById('apLmChef');if(ch)ch.onclick=lmChef;
   var sv=document.getElementById('apLmSave');if(sv)sv.onclick=lmSave;
