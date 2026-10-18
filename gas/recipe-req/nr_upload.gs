@@ -163,7 +163,7 @@ function nrPreview_(p, auth) {
   var sp = rbProbeIngs_(sess, list), pool = [];
   nrAttachCodes_(sp.ings, nrCodeMap_(sess, false));   /* 2026-10-14：後台品項編號（前綴＝種類），給前端顯示用 */
   /* 2026-10-14：公版圖片／影片改用 nr_mediapool.gs 的 nrMediaFor_（近期食譜、同內容合併、依占比分 auto／maybe／none），不再讀素材索引的「公版候選」分頁 */
-  var miss = {}, order = [];
+  var miss = {}, order = [], mm = nmMatchRecipe_(rc.steps);   /* 2026-10-18：五燈號配對（nm_match.gs，整份食譜一起比：標題＋步驟文字＋最像的 2026 食譜） */
   rc.steps.forEach(function (s, i) {
     var m = nrMatchStep_(sp.ings, s), keys = [];
     m.items.forEach(function (it) {
@@ -180,9 +180,9 @@ function nrPreview_(p, auth) {
       if (!miss[k].zone && it.zone) miss[k].zone = it.zone;
       keys.push(k);
     });
-    var mf = nrMediaFor_(s.t);
+    var mf = mm[i];   /* media＝自動配的（auto 綠燈、sib 黃燈）；media_alt＝候選（maybe）；text＝通常不放；none＝要上傳 */
     out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, mk: keys, notes: m.notes,
-      media: mf.tier === 'auto' ? mf.list : [], media_alt: mf.tier === 'maybe' ? mf.list.slice(0, 3) : [], media_tier: mf.tier, media_n: mf.n });
+      media: mf.list, media_alt: mf.alt, media_tier: mf.tier, media_n: mf.n, media_share: mf.share || 0, media_from: mf.from || '' });
   });
   out.missing = order.map(function (k) { return miss[k]; });
   out.media_meta = nrMediaMeta_();   /* 2026-10-14：公版資料來源與掃描時間，給畫面顯示 */

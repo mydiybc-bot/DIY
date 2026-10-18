@@ -166,10 +166,10 @@ function rbPreview_(p, auth) {
   catch (e) { out.warn.push('讀不到後台食譜清單，沒有檢查同名食譜（' + errMsg_(e) + '）'); }
   if (list) out.dup = list.filter(function (r) { return rbTitleNorm_(r.title) === rbTitleNorm_(d.title); }).slice(0, 10);
   var sp = rbProbeIngs_(sess, list);
-  var pool = [];   /* 2026-10-14：不再讀素材索引「公版候選」，rbMediaFor_ 改用 nr_mediapool.gs */
+  var mm = nmMatchRecipe_(rc.steps);   /* 2026-10-18：五燈號配對（nm_match.gs）；🍰 匯入只自動放綠燈（auto），黃燈以下不放 */
   rc.steps.forEach(function (s, i) {
     var m = rbMatchStep_(sp.ings, s);
-    out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, notes: m.notes, media: rbMediaFor_(pool, s.t) });
+    out.steps.push({ n: i + 1, title: s.t, ing_n: s.ing.length, ok: m.ok.length, miss: m.miss, notes: m.notes, media: mm[i].tier === 'auto' ? mm[i].list : [] });
   });
   if (rc.name && d.title && rbTitleNorm_(rc.name).indexOf(rbTitleNorm_(d.title)) < 0 && rbTitleNorm_(d.title).indexOf(rbTitleNorm_(rc.name)) < 0)
     out.warn.push('食譜檔的品名「' + rc.name + '」和申請單名稱「' + d.title + '」不一樣：「確認品項」頁等步驟文字照食譜檔，匯入後請食譜負責夥伴檢查');

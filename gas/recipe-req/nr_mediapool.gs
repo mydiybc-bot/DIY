@@ -24,4 +24,5 @@ function nrMediaFor_(title) {
   else if (top && top.recipes >= 2 && n && top.recipes / n >= NR_MEDIA_META.maybe_share) tier = 'maybe';
   return { tier: tier, n: n, list: L.slice(0, 5), source: live ? 'sheet' : 'constant' };
 }
-function nrMediaMeta_() { var live = (typeof nmPool_ === 'function') ? nmPool_() : null; return live ? { source: 'sheet', scanned: live.meta.scanned, recipes: live.meta.recipes, recent_from: live.meta.recent_from } : { source: 'constant', scanned: NR_MEDIA_META.scanned, recipes: NR_MEDIA_META.recipes, recent_from: NR_MEDIA_META.recent_from }; }
+function nrMediaMeta_() { var mx = (typeof nmMatchMeta_ === 'function') ? nmMatchMeta_() : null; if (mx) return mx;   /* 2026-10-18：五燈號配對（nm_match.gs）有資料就報它 */
+  var live = (typeof nmPool_ === 'function') ? nmPool_() : null; return live ? { source: 'sheet', scanned: live.meta.scanned, recipes: live.meta.recipes, recent_from: live.meta.recent_from } : { source: 'constant', scanned: NR_MEDIA_META.scanned, recipes: NR_MEDIA_META.recipes, recent_from: NR_MEDIA_META.recent_from }; }
