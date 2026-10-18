@@ -2863,7 +2863,8 @@ function viewCampHQOne(sub){
     if(_myMode&&ST.chNeedOnly&&items.some(function(it){return !!it.per[String(ST.storeId)];})){h+='<div style="font-weight:700;color:#2E7D32">✅ 本店這檔不用另外調貨或加買，照「📑 訂貨單」叫就好。</div>'+_myNote+'</div>';return h;}
     h+='<div class="muted">'+(_allSelf?'這一檔用到的料，出貨中心都不用備（各店自購或向廠商叫）。按上面「全部」可以看各店還要用多少。':(ST.chNeedOnly&&items.length?'目前沒有還要備的品項。按上面「全部」可以看全部 '+items.length+' 項。':'沒有符合的品項。'))+'</div></div>';return h;}
   var _chHead='<th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th>';
-  h+='<div class="chWrap"><table><thead class="chThead"><tr><th>品項</th><th class="right">推估總需求</th><th class="right">已用</th><th class="right">剩餘推估</th><th class="right">已出貨</th><th class="right">估計在店</th><th class="right">🔁 可調撥</th><th class="right">需採購</th><th class="right">建議備<div class="sub" style="font-weight:400">採購單位</div></th></tr></thead><tbody>';
+  if(_myMode)_chHead='<th>品項</th><th class="right">這檔還要用</th><th class="right">店裡大約還有</th><th>要怎麼做</th>';   /* 2026-10-18 店長只看本店：9 欄改 4 欄（每欄細節點品項展開看） */
+  h+='<div class="chWrap"><table><thead class="chThead"><tr>'+_chHead+'</tr></thead><tbody>';
   shown.forEach(function(it){var s=it.s,open=!!ST.chExp[it.id],u=s.useUnit,bu=s.buyUnit||"包";
     if(open)h+='<tr class="chRep">'+_chHead+'</tr>';
     h+='<tr class="shoh" data-chexp="'+escA(it.id)+'" style="cursor:pointer"><td><span class="badge b-'+s.cat+'">'+s.cat+'</span>'
@@ -2872,16 +2873,19 @@ function viewCampHQOne(sub){
       ;
     /* 2026-10-07 各儀表板調整 1006-2 #3：店長預設只看本店的量（原本主列是全公司合計，店長會以為自己要叫那麼多） */
     var _mine=(ST.role==="店長"&&ST.chScope!=="all"),_p=_mine?it.per[String(ST.storeId)]:null;
-    if(_mine&&!_p)h+='<td class="muted" colspan="8">本店這檔期不用這個料（按「全部店」可看別店）</td></tr>';
-    else if(_mine){var _xin=0;(_p.xin||[]).forEach(function(x){_xin+=x.qty;});
-      h+='<td class="right">'+fmt(Math.round(_p.rem+_p.used))+' '+u+'</td><td class="right">'+fmt(Math.round(_p.used))+' '+u+'</td><td class="right">'+fmt(Math.round(_p.rem))+' '+u+'</td>'
-        +'<td class="right">'+(_p.dc?(_p.noShip?'—':fmt(Math.round(_p.shipped))+' '+u):'<span class="muted">自購／廠商</span>')+'</td>'
-        +'<td class="right muted">'+(_p.dc&&!_p.noShip?'≈ '+fmt(Math.round(_p.onhand))+' '+u:'—')+'</td>'
-        +'<td class="right" style="color:#1e4e8c;font-weight:700">'+(_xin>0?'調入 '+fmt(Math.round(_xin))+' '+u+'<div class="sub" style="font-weight:400">自 '+_p.xin.map(function(x){return escA(storeName(x.from));}).join('、')+'</div>'
-          :(_p.xout&&_p.xout.length?'<span style="color:#2E7D32">調出 '+fmt(Math.round(_p.xout.reduce(function(a,x){return a+x.qty;},0)))+' '+u+'</span><div class="sub" style="font-weight:400;color:#2E7D32">給 '+_p.xout.map(function(x){return escA(storeName(x.to));}).join('、')+'</div>':'<span class="muted">—</span>'))+'</td>'   /* 2026-10-18：寫出跟哪家店調 */
-        +'<td class="right" style="color:'+(_p.buy>0?'#B3261E':'#2E7D32')+';font-weight:700">'+fmt(Math.round(_p.buy))+' '+u
-          +(_p.self>0?'<div class="sub muted" style="font-weight:400">自購／向廠商叫，還要用 '+fmt(Math.round(_p.self))+'，店長自行判斷</div>':'')+(_p.tiny>0?'<div class="sub muted" style="font-weight:400">只差 '+fmt(Math.round(_p.tiny))+'，不叫</div>':'')+(_p.late>0?'<div class="sub" style="font-weight:400;color:#8a1c1c">貨到已下架，不採購</div>':'')+'</td>'
-        +'<td class="right"><b>'+fmt(_p.packs)+'</b> '+s.buyUnit+'</td></tr>';}
+    if(_mine&&!_p)h+='<td class="muted" colspan="3">本店這檔期不用這個料（按「全部店」可看別店）</td></tr>';
+    else if(_mine){   /* 2026-10-18：4 欄——這檔還要用（剩餘推估）、店裡大約還有、要怎麼做（調入／調出／要買／不用叫） */
+      var _xq=function(x){return x.units?fmt(x.units)+' '+escA(bu)+'<span class="muted">（'+fmt(Math.round(x.qty))+' '+u+'）</span>':fmt(Math.round(x.qty))+' '+u;},_do=[];
+      (_p.xin||[]).forEach(function(x){_do.push('<b style="color:#1e4e8c">🔁 向 '+escA(storeName(x.from))+(x.cross?'':'（同區）')+' 調入 '+_xq(x)+'</b>');});
+      (_p.xout||[]).forEach(function(x){_do.push('<b style="color:#2E7D32">🔁 調出 '+_xq(x)+' 給 '+escA(storeName(x.to))+(x.cross?'':'（同區）')+'</b>');});
+      if(_p.buy>0)_do.push('<b style="color:#B3261E">🛒 要買 '+fmt(_p.packs)+' '+escA(s.buyUnit||'')+'</b><span class="muted">（'+fmt(Math.round(_p.buy))+' '+u+'）</span>');
+      if(_p.late>0)_do.push('<span style="color:#8a1c1c">⏳ 貨到時已下架，不採購（還差 '+fmt(Math.round(_p.late))+' '+u+'）</span>');
+      if(_p.self>0)_do.push('<span class="muted">本店自己向廠商叫，還要用 '+fmt(Math.round(_p.self))+' '+u+'，店長自行判斷</span>');
+      if(_p.tiny>0)_do.push('<span class="muted">只差 '+fmt(Math.round(_p.tiny))+' '+u+'，不用叫</span>');
+      if(!_do.length)_do.push('<span style="color:#2E7D32">✅ 夠了</span>');
+      h+='<td class="right">'+fmt(Math.round(_p.rem))+' '+u+'</td>'
+        +'<td class="right">'+(_p.dc?(_p.noShip?'<span class="muted">—</span>':'≈ '+fmt(Math.round(_p.onhand))+' '+u):'<span class="muted">系統看不到</span>')+'</td>'
+        +'<td>'+_do.join('<br>')+'</td></tr>';}
     else h+='<td class="right">'+fmt(Math.round(it.sumRem+it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumUsed))+' '+u+'</td><td class="right">'+fmt(Math.round(it.sumRem))+' '+u+'</td>'
       +'<td class="right">'+(it.dc?(rowsAll?fmt(Math.round(it.sumShip))+' '+u:'—'):'<span class="muted">自購／廠商</span>')+'</td>'
       +'<td class="right muted">'+(it.dc&&rowsAll?'≈ '+fmt(Math.round(it.sumOn))+' '+u:'—')+'</td>'
@@ -2890,7 +2894,7 @@ function viewCampHQOne(sub){
         +((it.nTiny||it.nSelf)?'<div class="sub muted" style="font-weight:400">'+[it.nTiny?it.nTiny+' 店只差一點點':'',it.nSelf?it.nSelf+' 店自購或向廠商叫':''].filter(Boolean).join('、')+'，不列</div>':'')+'</td>'
       +'<td class="right"><b>'+fmt(it.sumPacks)+'</b> '+s.buyUnit+'</td></tr>';
     if(open){
-      h+='<tr><td colspan="9" style="background:#fffdf2;padding:4px 10px"><div class="sub muted chMobNote" style="margin:2px 0 4px">📱 手機已隱藏「推估總份數、已售份數、推估總需求、已用」四欄，橫放或用電腦可看全部</div><table style="font-size:12.5px"><thead><tr><th class="chStore">店</th><th class="right chMH">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right chMH">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（'+escA(bu)+'數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥'+(it.xm==="whole"?'<div class="sub" style="font-weight:400">整'+escA(bu)+'調、不拆</div>':(it.xm==="none"?'<div class="sub" style="font-weight:400">此料不調撥</div>':''))+'</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
+      h+='<tr><td colspan="'+(_mine?4:9)+'" style="background:#fffdf2;padding:4px 10px"><div class="sub muted chMobNote" style="margin:2px 0 4px">📱 手機已隱藏「推估總份數、已售份數、推估總需求、已用」四欄，橫放或用電腦可看全部</div><table style="font-size:12.5px"><thead><tr><th class="chStore">店</th><th class="right chMH">推估總份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">已售份數<div class="sub" style="font-weight:400">份</div></th><th class="right chMH">推估總需求<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right chMH">已用<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">剩餘推估<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">已出貨<div class="sub" style="font-weight:400">'+u+'（'+escA(bu)+'數）</div></th><th class="right">估計在店<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">尚需<div class="sub" style="font-weight:400">'+u+'</div></th><th>🔁 調撥'+(it.xm==="whole"?'<div class="sub" style="font-weight:400">整'+escA(bu)+'調、不拆</div>':(it.xm==="none"?'<div class="sub" style="font-weight:400">此料不調撥</div>':''))+'</th><th class="right">需採購<div class="sub" style="font-weight:400">'+u+'</div></th><th class="right">建議備<div class="sub" style="font-weight:400">'+s.buyUnit+(it.per[Object.keys(it.per)[0]]&&it.per[Object.keys(it.per)[0]].pq>0?'（每'+s.buyUnit+' '+fmt(it.per[Object.keys(it.per)[0]].pq)+' '+u+'）':'')+'</div></th></tr></thead><tbody>';
       Object.keys(it.per).sort(function(a,b){return (+a)-(+b);}).forEach(function(st){var p=it.per[st];
         var _rg=function(x){return x.cross?'<span class="muted" style="font-size:12px">（跨區）</span>':'<span style="color:#2E7D32;font-size:12px">（同區）</span>';};   /* aw 批 */
         var _q=function(x){return x.units?(fmt(x.units)+' '+escA(bu)+'<span class="muted">（'+fmt(Math.round(x.qty))+' '+u+'）</span>'):fmt(Math.round(x.qty));};   /* bv 批：整瓶調撥顯示瓶數 */
