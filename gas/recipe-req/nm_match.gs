@@ -1,18 +1,19 @@
 /* ===== nm_match.gs — 公版圖片／影片配對「五燈號」（2026-10-18）=====
    經營者 10/18：「新食譜上傳的圖片影片自動選配，還是有大量步驟配不到」→「用 2026 年的食譜交叉比對步驟內容」；
    評估報告《公版圖片影片配對改善評估_20261018.md》（輸出/成品）第四、六節，經營者同意照做。
-   資料：nm_scan.gs 的 nmAggregate_ 每天寫 media_match 分頁（2026-01-01 以後更新的繁中食譜，每一步一列：標題鍵、步驟文字、代表檔、同內容群組）。
+   資料：nm_scan.gs 的 nmAggregate_ 每天寫 media_match 分頁（NM_MATCH_FROM 以後更新的繁中食譜，每一步一列：標題鍵、步驟文字、代表檔、同內容群組、更新日）。
+   10/18 晚 經營者裁定母體改「全部年份」（實測全新甜點自動對 730→761、配錯一樣 80）；驗證 nmEval 的受測對象仍是 NM_EVAL_FROM（2026）以後更新的。
    比法：
    ・標題鍵＝nrTitleKey_（去空白、去括號內容）；步驟文字＝去標點數字空白後，相鄰兩字的重疊比例（0～1）。
    ・「最像的食譜」：兩支共同的步驟標題，越少見的越算分（教學影片這種每支都有的幾乎不算），除以這支自己的總分。
    每一步依序判斷：
    🟢 auto  同標題、文字相似 ≥ 0.9 的步驟裡，最多款用的那一版 ≥ 2 款且占 ≥ 70%        （試算 90% 對）
    🟡 sib   整份最像的那一支（相似度 ≥ 0.5）有同標題、文字幾乎一樣（≥ 0.99）的步驟 → 照它配，請人確認 （試算 76% 對）
-   ⚪ text  2026 年這個標題 ≥ 5 款、八成以上都沒放圖片影片 → 「這一步通常不放」          （98% 確實不放）
+   ⚪ text  母體裡這個標題 ≥ 5 款、八成以上都沒放圖片影片 → 「這一步通常不放」          （98% 確實不放）
    🔵 maybe 同標題有文字相近（≥ 0.7）的、或常用版本（≥ 3 款、占 ≥ 30%）→ 最多 3 個候選給人選
    🔴 none  都沒有 → 要上傳／新拍
    只讀：不寫後台，不寫試算表（media_match 由 nm_scan.gs 寫）。驗證動作 nmEval：每一支當成剛上傳、排除同一款，回統計數字。 */
-var NMX_CACHE = 'nmmatch:v1';
+var NMX_CACHE = 'nmmatch:v2';   /* v2：R 多第 4 欄更新日 */
 var NMX = { autoD: 0.9, autoMin: 2, autoShare: 0.7, sibD: 0.99, sibSim: 0.5, textMin: 5, textShare: 0.8, maybeD: 0.7, maybeShare: 0.3, maybeMin: 3, maxList: 3, textMax: 200 };
 var _nmx = null;   /* 同一次執行內記住索引 */
 
@@ -37,7 +38,7 @@ function nmxRaw_() {
   var R = [], ri = {}, G = [], gi = {}, S = [];
   v.forEach(function (r) {
     var id = String(r[0] || ''); if (!id) return;
-    if (ri[id] == null) { ri[id] = R.length; R.push([id, String(r[1]), String(r[2])]); }
+    if (ri[id] == null) { ri[id] = R.length; R.push([id, String(r[1]), String(r[2]), nmYmd_(r[10])]); }
     var grp = String(r[9] || ''), g = -1;
     if (grp) {
       if (gi[grp] == null) { gi[grp] = G.length; G.push([String(r[6] || ''), String(r[7] || ''), Number(r[8]) || 0]); }
@@ -197,7 +198,7 @@ function nmxRecipe_(X, steps) {
 function nmMatchMeta_() {
   var X = null;
   try { X = nmxIndex_(); } catch (e) { X = null; }
-  return X ? { source: 'match', scanned: X.at, recipes: X.R.length, steps: X.S.length, recent_from: String(X.from).replace(/\//g, '-') } : null;
+  return X ? { source: 'match', scanned: X.at, recipes: X.R.length, steps: X.S.length, recent_from: String(X.from).replace(/\//g, '-'), all: X.from <= '2000/01/01' } : null;
 }
 
 /* ---------- 驗證：每一支 2026 食譜當成剛上傳（排除同一款），配出來跟後台實際放的比 ---------- */
@@ -208,14 +209,14 @@ function nmEval_(p, auth) {
     var o = nmxBuild_(nmYmd_(from)); if (!o) throw fail_('media_scan 沒有資料', 'nodata');
     tm.build = Date.now() - t0; noText = o.noText;
     var t1 = Date.now(); X = nmxIndexOf_(o); tm.index = Date.now() - t1;
-    only = function (r) { return r[3] >= NM_MATCH_FROM; };
+    only = function (r) { return r[3] >= NM_EVAL_FROM; };
     if (p.cascade) {   /* 2026 優先：2026 母體配出綠／黃就用它，沒有才用大母體的綠／黃 */
       var o26 = { R: [], G: o.G, S: [] }; map26 = {};
-      o.R.forEach(function (r, i) { if (r[3] >= NM_MATCH_FROM) { map26[i] = o26.R.length; o26.R.push(r); } });
+      o.R.forEach(function (r, i) { if (r[3] >= NM_EVAL_FROM) { map26[i] = o26.R.length; o26.R.push(r); } });
       o.S.forEach(function (st) { if (map26[st[0]] != null) o26.S.push([map26[st[0]], st[1], st[2], st[3]]); });
       X26 = nmxIndexOf_(o26);
     }
-  } else X = nmxIndex_();
+  } else { X = nmxIndex_(); only = function (r) { return (r[3] || '') >= NM_EVAL_FROM; }; }   /* 正式母體（全部年份）：受測的仍是 2026 年更新的食譜 */
   if (born) {   /* 只測「這一款第一次出現」在 born 以後的食譜（全新甜點；用 🧬 recipe_lineage 的 kuan_birth） */
     var lt = ss_().getSheetByName(LG_TAB); bornOk = {};
     if (lt && lt.getLastRow() > 1) {

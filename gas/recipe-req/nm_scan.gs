@@ -11,8 +11,9 @@
    nmAggregate_ 另寫 media_match 分頁（2026-01-01 以後更新的繁中食譜，每一步一列）給 nm_match.gs 的五燈號配對用。
    順手修：更新日在分頁裡會被轉成日期格子，原本 String(日期) 跟 '2025/07/18' 比永遠成立 → 「近 15 個月」其實沒在篩（1,551 支全算）；改用 nmYmd_ 比。 */
 var NM_SCAN = 'media_scan', NM_POOL = 'media_pool', NM_TITLES = 'media_titles', NM_META = 'media_meta';
-var NM_MATCH = 'media_match', NM_MATCH_FROM = '2026/01/01';   /* 五燈號配對的母體：這天以後更新的繁中食譜（經營者 10/18：用 2026 年的食譜） */
-var NM_MATCH_HEAD = ['recipe_id', 'name', 'base', 'step', 'key', 'text', 'path', 'kind', 'mb', 'grp'];
+var NM_MATCH = 'media_match', NM_MATCH_FROM = '2000/01/01';   /* 五燈號配對的母體：這天以後更新的繁中食譜。10/18 先用 2026；同晚實測全部年份（全新甜點自動對 730→761、配錯一樣 80、綠燈 91.6→93.5%）→ 經營者裁定改全部年份 */
+var NM_EVAL_FROM = '2026/01/01';   /* nmEval 驗證的受測對象：這天以後更新的食譜（跟 10/18 報告同一批，數字才比得起來） */
+var NM_MATCH_HEAD = ['recipe_id', 'name', 'base', 'step', 'key', 'text', 'path', 'kind', 'mb', 'grp', 'upd'];
 var NM_BUDGET_MS = 240000;        /* 每次觸發最多掃 4 分鐘（GAS 上限 6 分鐘） */
 var NM_RECENT_MONTHS = 15;        /* 「近期」＝更新日在 15 個月內 */
 var NM_DAILY_HOUR = 1;            /* 每天這個小時以後做一次清單比對（2026-10-17 3→1：經營者要 🧬 食譜演化每天凌晨 1～2 點更新，掃完接著算 lineage.gs） */
@@ -230,8 +231,6 @@ function nmAggregate_() {
     if (!r[5] || r[6] || !r[7]) return;
     nScanned++;
     var upd = nmYmd_(r[4]);
-    if (upd < fromKey) return;
-    nRecent++;
     var steps; try { steps = JSON.parse(r[7]); } catch (e) { return; }
     var rb = base(r[1]), seenT = {};
     if (upd >= NM_MATCH_FROM && String(r[2]) === '繁體中文') {   /* 2026-10-18：五燈號配對母體（每一步一列，沒放圖片影片的步驟也要，用來判斷「通常不放」） */
@@ -239,9 +238,11 @@ function nmAggregate_() {
       steps.forEach(function (s, i) {
         var g = s.m ? gkey(s.m) : '';
         if (g) (gPaths[g] = gPaths[g] || {})[s.m] = 1;
-        M.push([String(r[0]), String(r[1]), rb, i + 1, nrTitleKey_(s.t), nmxNorm_(s.x).slice(0, 200), s.m || '', s.m ? (s.k || '') : '', '', g]);
+        M.push([String(r[0]), String(r[1]), rb, i + 1, nrTitleKey_(s.t), nmxNorm_(s.x).slice(0, 200), s.m || '', s.m ? (s.k || '') : '', '', g, upd]);
       });
     }
+    if (upd < fromKey) return;   /* 以下是舊規則用的「近 15 個月」公版池（media_pool／media_titles，現在只當退路）；media_match 在上面、不受這個篩選 */
+    nRecent++;
     steps.forEach(function (s) {
       if (!s.m) return;
       var t = nrTitleKey_(s.t); if (!t) return;
@@ -325,7 +326,10 @@ function nmStatus_(p, auth) {
 function nmKick_(p, auth) {   /* 立刻跑一次（最多 4 分鐘）；同時只跑一個 */
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(3000)) throw fail_('掃描正在跑，等它結束再按', 'busy');
-  try { var r = nmRun_(NM_BUDGET_MS, !!p.force); return { id: '', data: r, msg: '公版掃描：' + JSON.stringify(r).slice(0, 300) }; }
+  try {
+    if (p.agg) { var a = nmAggregate_(); return { id: '', data: { aggregated: a }, msg: '公版彙整：' + JSON.stringify(a).slice(0, 300) }; }   /* 2026-10-18：只重做彙整（不重掃後台），改母體範圍後用 */
+    var r = nmRun_(NM_BUDGET_MS, !!p.force); return { id: '', data: r, msg: '公版掃描：' + JSON.stringify(r).slice(0, 300) };
+  }
   finally { lock.releaseLock(); }
 }
 function nmProbe_(p, auth) {   /* 試掃一支，回解析結果（驗證解析器用） */
