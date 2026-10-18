@@ -949,6 +949,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
     <button class="tab-btn" data-tab="semi">🧪 半成品/材料包</button>
     <button class="tab-btn" data-tab="bom">📚 BOM 管理</button>
     <button class="tab-btn" data-tab="lineage">🧬 食譜演化</button>
+    <button class="tab-btn" data-tab="finder">🗂 找食譜</button>
   </div>
 
   <!-- ===== 食譜成本分析畫面已刪（2026-09-29）；只留隱藏容器給 RecipeMod 引擎寫狀態，不是分頁、沒有按鈕 ===== -->
@@ -986,6 +987,12 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
   <div id="lgRoot"></div>
   </div>
 
+  <!-- ===== TAB: 🗂 找食譜（FinderMod，2026-10-18）：後台食譜依甜點種類重新分類＋勾選下載 Word（只讀） ===== -->
+  <div class="tab-panel" id="tab-finder">
+  <div class="ap-panel-head"><h2 class="ap-panel-title">🗂 找食譜 <span class="ap-sub">門市食譜後台的食譜，依甜點種類（戚風、生乳酪、塔派、餅乾…）重新分類；勾選後可以一次下載成 Word</span></h2></div>
+  <div id="fdRoot"></div>
+  </div>
+
 </div>
 
 <script>
@@ -1002,6 +1009,7 @@ function activateTab(tab, fromHash){
   if(tab==='semi' && window.SemiMod) SemiMod.ensureInit();
   if(tab==='bom' && window.BomMod) BomMod.ensureInit();   /* 2026-10-01 需求 7 */
   if(tab==='lineage' && window.LineageMod) LineageMod.ensureInit();   /* 2026-10-17 🧬 食譜演化 */
+  if(tab==='finder' && window.FinderMod) FinderMod.ensureInit();   /* 2026-10-18 🗂 找食譜 */
   if(!fromHash){ try{ history.replaceState(null,'', '#'+tab); }catch(e){} }
 }
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>activateTab(btn.dataset.tab)));
@@ -6132,6 +6140,302 @@ window.LineageMod=(function(){
 })();
 /* 打開網址就是 #lineage 時，分頁切換比本模組早跑 → 這裡補叫一次 */
 (function(){var p=document.getElementById('tab-lineage');if(p&&p.classList.contains('active'))LineageMod.ensureInit()})();
+</script>
+<!-- ===== 🗂 找食譜（FinderMod，2026-10-18）=====
+     經營者：「後台食譜的類別建得很亂，在新品申請表做一個功能重新整理類別、輕易找到甜點食譜；還要能點選食譜下載」。
+     分類：依「甜點種類」（戚風、生乳酪、塔派、餅乾…27 種，分 8 大類）重新整理，不看後台那 70 多種混亂的類別寫法（後台類別只當篩選條件）。
+       種類從哪來（依序）：① static/recipe-kind.json（10/14 盤點、10/15 對照表，用品名＋食材／步驟結構判定，1,577 支）
+       ② 對照檔沒有的新食譜 → 同一款其他版本的種類（新食譜幾乎都是複製舊款改的）③ 品名關鍵字 ④ 待分類。
+     資料：沿用 🧬 食譜演化的 lineage（免密碼、只讀；每天凌晨 1～2 點更新），IndexedDB 與食譜演化共用（diybc_lineage）。
+     下載：勾選 → 申請單 API 動作 rcpZip（要身分密碼，每批 40 支）＝後台「批次匯出勾選食譜」的 Word 壓縮檔；多批自動合成一個 .zip（JSZip）。
+     本模組不改後台、不寫試算表（下載會在申請單 API 的 log 分頁留一筆紀錄）；class／id 前綴 fd-。
+     搜尋框只建一次、選字中不搜尋（規則：儀表板輸入框一定要能打中文）。 -->
+<style>
+  #tab-finder .fd-btn{font-size:13px;padding:7px 14px;border:0;background:#00796B;color:#fff;border-radius:9px;cursor:pointer;font-family:inherit;font-weight:700}
+  #tab-finder .fd-btn:disabled{background:#9EBFBA;cursor:default}
+  #tab-finder .fd-btn2{font-size:13px;padding:6px 12px;border:1px solid #D8C8BF;background:#fff;color:#6F4E45;border-radius:9px;cursor:pointer;font-family:inherit}
+  #tab-finder .fd-btn2:disabled{opacity:.5;cursor:default}
+  .fd-wrap{display:grid;grid-template-columns:230px 1fr;gap:16px;align-items:start}
+  @media(max-width:900px){.fd-wrap{grid-template-columns:1fr}}
+  .fd-wrap>div{min-width:0}
+  .fd-side{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:8px;position:sticky;top:8px;max-height:calc(100vh - 24px);overflow:auto}
+  @media(max-width:900px){.fd-side{position:static;max-height:none;display:flex;flex-wrap:wrap;gap:4px}}
+  .fd-g{margin:2px 0 6px}
+  @media(max-width:900px){.fd-g{margin:0;display:contents}}
+  .fd-k{display:flex;justify-content:space-between;align-items:center;gap:6px;width:100%;border:0;background:transparent;border-radius:8px;padding:5px 9px;cursor:pointer;font-family:inherit;font-size:13px;color:#2A2320;text-align:left}
+  .fd-k:hover{background:#F3EDE8}
+  .fd-k.on{background:#00796B;color:#fff}
+  .fd-k.on .fd-n{color:#E0F2F1}
+  .fd-k.g{font-weight:800;font-size:13.5px;color:#00695C}
+  .fd-k.g.on{color:#fff}
+  .fd-k.sub{padding-left:20px}
+  @media(max-width:900px){.fd-k,.fd-k.sub{width:auto;padding:4px 10px;border:1px solid #E6D8CF;background:#fff}.fd-k.sub{display:none}.fd-k.on{background:#00796B}}
+  .fd-n{font-size:12px;color:#9A8A80;font-variant-numeric:tabular-nums}
+  .fd-bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:0 0 10px}
+  .fd-bar input[type=search]{font-family:inherit;font-size:14px;padding:7px 10px;border:1px solid #D6CCC4;border-radius:8px;min-width:200px;flex:1 1 220px}
+  .fd-bar select{font-family:inherit;font-size:13px;padding:6px 8px;border:1px solid #D6CCC4;border-radius:8px;background:#fff;max-width:100%}
+  .fd-bar label{font-size:13px;color:#5E564F;display:flex;align-items:center;gap:4px;cursor:pointer}
+  .fd-muted{color:#7A6A60;font-size:13px}
+  .fd-cards{display:flex;flex-direction:column;gap:10px}
+  .fd-card{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:10px 12px;display:flex;gap:12px;align-items:flex-start}
+  .fd-card.has{border-color:#4DB6AC;box-shadow:0 0 0 1px #B2DFDB}
+  .fd-img{flex:0 0 auto;width:76px;height:76px;border-radius:9px;overflow:hidden;background:#F3EDE8;border:1px solid #E6D8CF;display:flex;align-items:center;justify-content:center;font-size:24px;padding:0;cursor:zoom-in}
+  .fd-img img{width:100%;height:100%;object-fit:cover;display:block}
+  .fd-body{flex:1;min-width:0}
+  .fd-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0 0 4px}
+  .fd-head b{font-size:15px;color:#2A2320}
+  .fd-head label{display:flex;align-items:center;gap:4px;font-size:12px;color:#5E564F;cursor:pointer;margin-left:auto}
+  .fd-pill{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:0 8px;white-space:nowrap}
+  .fd-on{background:#E2F2E7;color:#2E6B43}.fd-off{background:#EEECEA;color:#6E6660}.fd-kind{background:#FFF1D6;color:#8A5A00}.fd-auto{background:#F3E5F5;color:#6A1B9A}
+  .fd-vers{list-style:none;margin:0;padding:0}
+  .fd-v{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;padding:4px 0;border-top:1px solid #F1EAE4;font-size:13px}
+  .fd-v:first-child{border-top:0}
+  .fd-v label{display:flex;align-items:flex-start;gap:6px;flex:1 1 260px;min-width:0;cursor:pointer}
+  .fd-v label span{word-break:break-all}
+  .fd-v input{margin-top:3px;width:16px;height:16px;flex:0 0 auto;accent-color:#00796B}
+  .fd-v .m{color:#7A6A60;font-size:12px;font-variant-numeric:tabular-nums}
+  .fd-v a{font-size:12px;white-space:nowrap}
+  .fd-tray{position:sticky;bottom:0;z-index:20;margin-top:12px;background:#FFFDF8;border:1px solid #E9C94F;border-radius:12px;padding:10px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;box-shadow:0 -4px 14px rgba(0,0,0,.08)}
+  .fd-tray b{font-size:15px}
+  .fd-msg{flex-basis:100%;font-size:13px;color:#5E564F}
+  .fd-msg.bad{color:#A3321F;font-weight:700}
+  .fd-more{margin:12px 0;text-align:center}
+  .fd-modal{position:fixed;inset:0;z-index:1000;background:rgba(46,35,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:8vh 16px;overflow:auto}
+  .fd-mbox{background:#fff;border-radius:12px;width:100%;max-width:420px;padding:16px 18px;box-shadow:0 12px 32px rgba(0,0,0,.22);box-sizing:border-box}
+  .fd-mbox label{display:block;font-size:13px;color:#5E564F;margin:8px 0 3px}
+  .fd-mbox select,.fd-mbox input{width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:7px 9px;border:1px solid #D6CCC4;border-radius:8px}
+  .fd-mact{display:flex;gap:8px;margin-top:12px}
+  @media(max-width:600px){.fd-card{padding:9px 9px;gap:9px}.fd-img{width:52px;height:52px}.fd-head label{margin-left:0}}
+  /* 分頁變 6 個，手機上原本會被擠成直排字 → 窄螢幕改成一行、可左右滑 */
+  @media(max-width:700px){.tab-bar{overflow-x:auto;-webkit-overflow-scrolling:touch}.tab-btn{white-space:nowrap;flex:0 0 auto;padding:10px 12px;font-size:14px}}
+</style>
+<script>
+window.FinderMod=(function(){
+  'use strict';
+  var API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+  var BACK='https://diybc.azurewebsites.net/Recipes/Edit/';
+  var IMG='https://diybcstorage.blob.core.windows.net/recipeimages/', THUMB_KB=200, THUMB='thumbs/r/';
+  var KIND_URL='recipe-kind.json', BATCH=40, PAGE=60;
+  var JSZIP='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+  var CRED_KEY='rcp:cred', ROLES=['管理者','主廚','出貨中心','採購','行銷設計','營運POS'];
+  /* 8 大類（順序＝左邊清單順序）；「蛋糕（待歸主體）」畫面上叫「其他蛋糕」 */
+  var GROUPS=[['🎂 蛋糕',['戚風蛋糕','海綿蛋糕','蛋糕捲','磅蛋糕','布朗尼','熔岩巧克力','蛋糕（待歸主體）']],
+    ['🧀 乳酪・慕斯',['生乳酪','巴斯克','烤乳酪蛋糕','提拉米蘇','慕斯／奶凍']],
+    ['🥧 塔派',['塔派']],
+    ['🍪 餅乾・小點心',['餅乾','馬卡龍','達克瓦茲','瑪德蓮／費南雪／瑪芬','可麗露','泡芙','司康']],
+    ['🍞 麵包',['麵包']],
+    ['🥮 中式點心',['中式酥皮','冰皮／麻糬／雞蛋糕']],
+    ['🎨 翻糖・裝飾蛋糕',['翻糖蛋糕','裝飾蛋糕／杯子蛋糕']],
+    ['📦 其他',['待分類','訓練／半成品／對照']]];
+  var KNAME={'蛋糕（待歸主體）':'其他蛋糕','待分類':'還沒分類','訓練／半成品／對照':'訓練・半成品・對照'};
+  /* 對照檔沒有的新食譜、同款也沒分過 → 依品名關鍵字（由上往下先符合先用；10/18 用 1,577 支驗：單靠品名約 7 成準，所以排在同款之後） */
+  var RULES=[['訓練／半成品／對照',/訓練|半成品|材料包|測試|對照|示範|備料|\btest\b/i],['翻糖蛋糕',/翻糖|fondant/i],['裝飾蛋糕／杯子蛋糕',/杯子蛋糕|裝飾蛋糕|cupcake/i],
+    ['馬卡龍',/馬卡龍|macaron/i],['達克瓦茲',/達克瓦茲|dacquoise/i],['可麗露',/可麗露|canel/i],['泡芙',/泡芙|閃電|choux|[eé]clair/i],['司康',/司康|scone/i],
+    ['瑪德蓮／費南雪／瑪芬',/瑪德蓮|馬德蓮|費南雪|瑪芬|馬芬|madeleine|financier|muffin/i],['提拉米蘇',/提拉米蘇|tiramisu/i],['巴斯克',/巴斯克|basque/i],
+    ['生乳酪',/生乳酪|生起司|no-?bake/i],['烤乳酪蛋糕',/乳酪蛋糕|起司蛋糕|重乳酪|輕乳酪|cheesecake/i],['熔岩巧克力',/熔岩|lava/i],['布朗尼',/布朗尼|brownie/i],
+    ['磅蛋糕',/磅蛋糕|pound ?cake/i],['中式酥皮',/蛋黃酥|月餅|鳳梨酥|酥餅|綠豆椪|太陽餅|老婆餅|芋頭酥|芋泥酥|棗泥|中式/],['冰皮／麻糬／雞蛋糕',/冰皮|麻糬|雞蛋糕|大福|mochi/i],
+    ['蛋糕捲',/蛋糕捲|瑞士捲|生乳捲|樹幹|roll ?cake|swiss ?roll|yule/i],['海綿蛋糕',/海綿/],['戚風蛋糕',/戚風|chiffon/i],['慕斯／奶凍',/慕斯|奶凍|布丁|奶酪|mousse|pudding|panna/i],
+    ['麵包',/麵包|吐司|貝果|布里歐|肉桂捲|可頌|餐包|bread|bagel|brioche|toast|cinnamon roll|croissant/i],['塔派',/塔|派|tart|pie|quiche/i],
+    ['餅乾',/餅乾|曲奇|雪球|牛軋|脆片|cookie|biscuit|nougat/i],['蛋糕（待歸主體）',/蛋糕|cake/i]];
+  var S={inited:false,rows:null,kuans:[],at:'',stale:false,kind:'',q:'',st:'all',lang:'all',cat:'',sort:'on',noBak:false,sel:{},shown:PAGE,onlySel:false,busy:false};
+  var BAK=/備用|備份|訓練/;   /* 「不看備份／訓練用的」：後台類別含這些字的版本先藏起來 */
+  function $(id){return document.getElementById(id)}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function kn(k){return KNAME[k]||k}
+  function groupOf(k){for(var i=0;i<GROUPS.length;i++)if(GROUPS[i][1].indexOf(k)>=0)return i;return GROUPS.length-1}
+  /* ---- 資料：lineage 與 🧬 食譜演化共用 IndexedDB 快取；先畫快取再讀最新 ---- */
+  function idb(fn){try{var r=indexedDB.open('diybc_lineage',1);r.onupgradeneeded=function(){r.result.createObjectStore('kv')};r.onsuccess=function(){try{fn(r.result)}catch(e){}};r.onerror=function(){}}catch(e){}}
+  function cacheGet(cb){var done=false;setTimeout(function(){if(!done){done=true;cb(null)}},1500);idb(function(db){var q=db.transaction('kv').objectStore('kv').get('v1');q.onsuccess=function(){if(!done){done=true;cb(q.result||null)}};q.onerror=function(){if(!done){done=true;cb(null)}}})}
+  function cachePut(v){idb(function(db){try{db.transaction('kv','readwrite').objectStore('kv').put(v,'v1')}catch(e){}})}
+  function post(body,ms){
+    var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms):0;
+    return fetch(API,{method:'POST',body:JSON.stringify(body),redirect:'follow',signal:ctl?ctl.signal:undefined}).then(function(r){return r.text()}).then(function(t){
+      clearTimeout(tm);var j;try{j=JSON.parse(t)}catch(e){throw new Error('系統回應看不懂')}
+      if(!j||j.act!==body.action){var e2=new Error('系統忙碌（回錯動作）');e2.retry=true;throw e2}return j},function(e){clearTimeout(tm);var e3=new Error(e&&e.name==='AbortError'?'等太久沒有回應':'連線失敗');e3.retry=true;throw e3});
+  }
+  function loadLineage(){var n=0,go=function(){n++;return post({action:'lineage'},n<3?45000:70000).then(function(j){if(!j.ok||!j.data)throw new Error(j.msg||'系統忙碌');return j.data}).catch(function(e){if(n<4)return new Promise(function(r){setTimeout(r,1500)}).then(go);throw e})};return go()}
+  var KIND=null;
+  function loadKind(){if(KIND)return Promise.resolve(KIND);return fetch(KIND_URL,{cache:'no-cache'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(j){KIND=j;return j}).catch(function(){KIND={kinds:[],map:{}};return KIND})}
+  function shape(d){
+    var H=d.head||[],ix={};H.forEach(function(h,i){ix[h]=i});
+    var rows=(d.rows||[]).map(function(r){var o={};H.forEach(function(h){o[h]=r[ix[h]]});o.on=o.status==='Active';o.cats=String(o.cat||'').split('、').map(function(s){return s.trim()}).filter(Boolean);o.bak=BAK.test(o.cat||'');return o});
+    /* ① 對照檔 */
+    rows.forEach(function(o){var i=KIND.map[String(o.recipe_id).slice(0,8)];if(i!=null&&KIND.kinds[i]){o.kind=KIND.kinds[i];o.ksrc=''}});
+    /* ② 同款多數決 */
+    var byK={};rows.forEach(function(o){(byK[o.kuan]=byK[o.kuan]||[]).push(o)});
+    Object.keys(byK).forEach(function(k){var c={},best='',bn=0;byK[k].forEach(function(o){if(o.kind){c[o.kind]=(c[o.kind]||0)+1;if(c[o.kind]>bn){bn=c[o.kind];best=o.kind}}});
+      if(best)byK[k].forEach(function(o){if(!o.kind){o.kind=best;o.ksrc='同款其他版本'}})});
+    /* ③ 品名 ④ 待分類 */
+    rows.forEach(function(o){if(o.kind)return;var n=String(o.name||'').replace(/發酵奶油/g,'');for(var i=0;i<RULES.length;i++)if(RULES[i][1].test(n)){o.kind=RULES[i][0];o.ksrc='品名';return}o.kind='待分類';o.ksrc='自動'});
+    var kuans=Object.keys(byK).map(function(k){var vs=byK[k];
+      var cnt={};vs.forEach(function(o){cnt[o.kind]=(cnt[o.kind]||0)+1});var kind=Object.keys(cnt).sort(function(a,b){return cnt[b]-cnt[a]})[0];
+      var c=vs.filter(function(v){return v.cover}),a=c.filter(function(v){return v.on});
+      var p=(a.length?a:c).slice().sort(function(x,y){return String(y.upd).localeCompare(String(x.upd))})[0];
+      var kb=p?Number(p.cover_kb)||0:0;
+      return {key:k,kind:kind,vers:vs.slice().sort(function(x,y){return (y.on-x.on)||String(y.upd).localeCompare(String(x.upd))}),
+        full:p?IMG+p.cover:'',img:p?(kb>THUMB_KB?THUMB+p.recipe_id+'.jpg':IMG+p.cover):'',kb:kb}});
+    return {rows:rows,kuans:kuans,meta:d.meta||{}};
+  }
+  function ensureInit(){
+    if(S.inited)return;S.inited=true;
+    $('fdRoot').innerHTML='<div class="fd-muted" style="padding:16px 0">⏳ 讀取後台食譜清單…（系統回應有時要等 10～60 秒）</div>';
+    loadKind().then(function(){
+      cacheGet(function(c){if(c&&c.rows&&!S.rows){use(c);S.stale=true;render()}
+        loadLineage().then(function(d){use(d);S.stale=false;cachePut(d);render()}).catch(function(e){
+          if(S.rows){S.stale=false;render();var n=$('fdNote');if(n)n.textContent='⚠ 沒讀到最新（'+e.message+'），先顯示上次的資料'}
+          else{$('fdRoot').innerHTML='<div class="fd-card">讀不到後台食譜清單：'+esc(e.message)+'　<button class="fd-btn2" type="button" id="fdRetry">再試一次</button></div>';$('fdRetry').onclick=function(){S.inited=false;ensureInit()}}})})});
+  }
+  function use(d){var x=shape(d);S.rows=x.rows;S.kuans=x.kuans;S.meta=x.meta}
+  /* ---- 篩選 ---- */
+  function verOk(v){if(S.st==='on'&&!v.on)return false;if(S.st==='off'&&v.on)return false;
+    if(S.lang==='zh'&&v.lang==='英文')return false;if(S.lang==='en'&&v.lang!=='英文')return false;
+    if(S.cat&&v.cats.indexOf(S.cat)<0)return false;if(S.noBak&&v.bak)return false;if(S.onlySel&&!S.sel[v.recipe_id])return false;return true}
+  function kindOk(k){if(!S.kind)return true;if(S.kind.charAt(0)==='g')return groupOf(k)===Number(S.kind.slice(1));return k===S.kind}
+  function filtered(ignoreKind){var q=S.q.trim().toLowerCase(),out=[];
+    S.kuans.forEach(function(K){if(!ignoreKind&&!kindOk(K.kind))return;
+      var vs=K.vers.filter(function(v){if(!verOk(v))return false;if(q&&K.key.toLowerCase().indexOf(q)<0&&String(v.name).toLowerCase().indexOf(q)<0)return false;return true});
+      if(vs.length)out.push({K:K,vs:vs})});
+    var by={on:function(a,b){return (b.vs.some(function(v){return v.on})-a.vs.some(function(v){return v.on}))||String(b.vs[0].upd).localeCompare(String(a.vs[0].upd))},
+      upd:function(a,b){return String(b.vs[0].upd).localeCompare(String(a.vs[0].upd))},
+      name:function(a,b){return a.K.key.localeCompare(b.K.key,'zh-Hant')},
+      n:function(a,b){return b.vs.length-a.vs.length}}[S.sort];
+    return out.sort(by)}
+  function selN(){return Object.keys(S.sel).length}
+  /* ---- 畫面：外框（搜尋框）只建一次；之後只重畫左邊種類數字、清單、下載列 ---- */
+  function render(){
+    if($('fdQ')){renderSide();renderList();renderTray();$('fdNote').textContent=S.stale?'⏳ 先顯示上次的資料，正在讀最新…':'';return}
+    var cats={};S.rows.forEach(function(v){v.cats.forEach(function(c){cats[c]=(cats[c]||0)+1})});
+    var catOpts=Object.keys(cats).sort(function(a,b){return cats[b]-cats[a]}).map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'（'+cats[c]+'）</option>'}).join('');
+    var m=S.meta||{};
+    $('fdRoot').innerHTML='<div class="fd-bar"><input type="search" id="fdQ" placeholder="搜甜點名稱（例：提拉米蘇、小黑炭、Oreo）" autocomplete="off">'
+      +'<select id="fdSt" title="狀態"><option value="all">全部狀態</option><option value="on">只看啟用中</option><option value="off">只看停用</option></select>'
+      +'<select id="fdLang" title="語言"><option value="all">中文＋英文</option><option value="zh">只看中文版</option><option value="en">只看英文版</option></select>'
+      +'<select id="fdCat" title="後台原本的類別"><option value="">後台類別：全部</option>'+catOpts+'</select>'
+      +'<select id="fdSort" title="排序"><option value="on">有啟用的先、再看最近更新</option><option value="upd">最近更新的先</option><option value="name">依名稱</option><option value="n">版本多的先</option></select>'
+      +'<label title="後台類別寫著備用、備份、訓練的版本先藏起來"><input type="checkbox" id="fdBak"> 不看備份／訓練版</label>'
+      +'<span class="fd-muted" id="fdNote"></span></div>'
+      +'<div class="fd-wrap"><div class="fd-side" id="fdSide"></div><div><div class="fd-muted" id="fdCount" style="margin:0 0 6px"></div><div class="fd-cards" id="fdList"></div><div class="fd-more" id="fdMore"></div>'
+      +'<div class="fd-tray" id="fdTray"></div></div></div>'
+      +'<div class="fd-muted" style="margin-top:12px">資料：門市食譜後台，最後更新 '+esc(m.at||'—')+'（每天凌晨 1～2 點自動更新）。甜點種類依 10/14 全庫盤點（品名＋食材步驟判定）；之後新建的食譜照同款其他版本或品名自動判斷，標 <span class="fd-pill fd-auto">自動判斷</span>。這頁只讀，不會改後台。</div>';
+    var qi=$('fdQ'),composing=false;
+    var apply=function(){clearTimeout(qi.t);qi.t=setTimeout(function(){if(composing)return;if(S.q===qi.value)return;S.q=qi.value;S.shown=PAGE;renderSide();renderList()},250)};
+    qi.addEventListener('compositionstart',function(){composing=true;clearTimeout(qi.t)});
+    qi.addEventListener('compositionend',function(){composing=false;apply()});
+    qi.addEventListener('input',function(e){if(composing||e.isComposing)return;apply()});
+    var bind=function(id,key,f){var el=$(id);el.value=S[key];el.onchange=function(){S[key]=el.value;S.shown=PAGE;renderSide();renderList()}};
+    bind('fdSt','st');bind('fdLang','lang');bind('fdCat','cat');
+    $('fdSort').value=S.sort;$('fdSort').onchange=function(){S.sort=this.value;renderList()};
+    $('fdBak').checked=S.noBak;$('fdBak').onchange=function(){S.noBak=this.checked;S.shown=PAGE;renderSide();renderList()};
+    $('fdNote').textContent=S.stale?'⏳ 先顯示上次的資料，正在讀最新…':'';
+    renderSide();renderList();renderTray();
+  }
+  function renderSide(){
+    var all=filtered(true),cnt={},gc={},tot=0;all.forEach(function(x){cnt[x.K.kind]=(cnt[x.K.kind]||0)+1;var g=groupOf(x.K.kind);gc[g]=(gc[g]||0)+1;tot++});
+    var btn=function(v,label,n,cls){return '<button type="button" class="fd-k'+(cls?' '+cls:'')+(S.kind===v?' on':'')+'" data-k="'+esc(v)+'"><span>'+esc(label)+'</span><span class="fd-n">'+(n||0)+'</span></button>'};
+    var h=btn('','全部甜點',tot,'g');
+    GROUPS.forEach(function(G,i){h+='<div class="fd-g">'+btn('g'+i,G[0],gc[i],'g');
+      if(G[1].length>1)G[1].forEach(function(k){h+=btn(k,kn(k),cnt[k],'sub')});h+='</div>'});
+    $('fdSide').innerHTML=h;
+    Array.prototype.forEach.call($('fdSide').querySelectorAll('[data-k]'),function(b){b.onclick=function(){S.kind=b.getAttribute('data-k');S.shown=PAGE;renderSide();renderList();
+      if(window.innerWidth<900){var l=$('fdCount');if(l)l.scrollIntoView({behavior:'smooth',block:'start'})}}});
+  }
+  function kindLabel(){if(!S.kind)return '全部甜點';if(S.kind.charAt(0)==='g')return GROUPS[Number(S.kind.slice(1))][0];return kn(S.kind)}
+  function renderList(){
+    var list=filtered(false),nV=0;list.forEach(function(x){nV+=x.vs.length});
+    $('fdCount').innerHTML='<b>'+esc(kindLabel())+'</b>：'+list.length+' 款、'+nV+' 支食譜'+(S.q.trim()?'（搜尋「'+esc(S.q.trim())+'」）':'')
+      +(nV?'　<button type="button" class="fd-btn2" id="fdPickAll" style="padding:3px 10px;font-size:12px">☑ 這些全部勾選</button>':'');
+    var show=list.slice(0,S.shown);
+    $('fdList').innerHTML=show.map(function(x,i){var K=x.K,on=x.vs.filter(function(v){return v.on}).length,has=x.vs.some(function(v){return S.sel[v.recipe_id]}),allSel=x.vs.every(function(v){return S.sel[v.recipe_id]});
+      var auto=x.vs.some(function(v){return v.ksrc});
+      return '<div class="fd-card'+(has?' has':'')+'">'
+        +(K.img?'<button type="button" class="fd-img" data-zoom="'+i+'" title="點一下看大圖"><img loading="lazy" alt="" src="'+esc(K.img)+'"'+(K.img!==K.full?' data-full="'+esc(K.full)+'" data-kb="'+K.kb+'"':'')+' onerror="FinderMod._imgErr(this)"></button>':'<span class="fd-img" style="cursor:default">🍰</span>')
+        +'<div class="fd-body"><div class="fd-head"><b>'+esc(K.key)+'</b><span class="fd-pill fd-kind">'+esc(kn(K.kind))+'</span>'+(auto?'<span class="fd-pill fd-auto" title="這款有新食譜不在 10/14 盤點裡，種類是依同款其他版本或品名自動判斷">自動判斷</span>':'')
+        +(on?'<span class="fd-pill fd-on">'+on+' 支啟用</span>':'<span class="fd-pill fd-off">都停用</span>')
+        +'<label><input type="checkbox" data-all="'+i+'"'+(allSel?' checked':'')+'> 這款全勾（'+x.vs.length+'）</label></div><ul class="fd-vers">'
+        +x.vs.map(function(v){return '<li class="fd-v"><label><input type="checkbox" data-id="'+esc(v.recipe_id)+'"'+(S.sel[v.recipe_id]?' checked':'')+'><span>'+esc(v.name)+'</span></label>'
+          +(v.on?'<span class="fd-pill fd-on">啟用</span>':'<span class="fd-pill fd-off">停用</span>')
+          +'<span class="m">'+esc(v.lang==='繁體中文'?'中文':v.lang)+'・'+esc(v.cat||'沒有類別')+'・更新 '+esc(v.upd||'—')+(v.steps?'・'+esc(v.steps)+' 步':'')+'</span>'
+          +'<a href="'+BACK+esc(v.recipe_id)+'" target="_blank" rel="noopener">後台 ↗</a></li>'}).join('')+'</ul></div></div>'}).join('')
+      +(list.length?'':'<div class="fd-card fd-muted">找不到符合的食譜，換個關鍵字或放寬上面的條件。</div>');
+    $('fdMore').innerHTML=list.length>S.shown?'<button type="button" class="fd-btn2" id="fdMoreBtn">再顯示 '+Math.min(PAGE,list.length-S.shown)+' 款（還有 '+(list.length-S.shown)+' 款）</button>':'';
+    if($('fdMoreBtn'))$('fdMoreBtn').onclick=function(){S.shown+=PAGE;renderList()};
+    var L=$('fdList');
+    Array.prototype.forEach.call(L.querySelectorAll('input[data-id]'),function(c){c.onchange=function(){var id=c.getAttribute('data-id');if(c.checked)S.sel[id]=1;else delete S.sel[id];renderList();renderTray()}});
+    Array.prototype.forEach.call(L.querySelectorAll('input[data-all]'),function(c){c.onchange=function(){var x=show[Number(c.getAttribute('data-all'))];x.vs.forEach(function(v){if(c.checked)S.sel[v.recipe_id]=1;else delete S.sel[v.recipe_id]});renderList();renderTray()}});
+    Array.prototype.forEach.call(L.querySelectorAll('[data-zoom]'),function(b){b.onclick=function(){zoom(show[Number(b.getAttribute('data-zoom'))].K)}});
+    if($('fdPickAll'))$('fdPickAll').onclick=function(){var ids=[];list.forEach(function(x){x.vs.forEach(function(v){ids.push(v.recipe_id)})});
+      if(ids.length>200&&!confirm('要勾選 '+ids.length+' 支食譜嗎？下載會分 '+Math.ceil(ids.length/BATCH)+' 批、可能要幾分鐘。'))return;
+      ids.forEach(function(id){S.sel[id]=1});renderList();renderTray()};
+  }
+  function imgErr(el){var f=el.getAttribute('data-full');if(f&&!el.getAttribute('data-tried')&&(Number(el.getAttribute('data-kb'))||0)<=3000){el.setAttribute('data-tried','1');el.src=f;return}var sp=document.createElement('span');sp.textContent='📷';el.replaceWith(sp)}
+  function zoom(K){var d=document.createElement('div');d.className='fd-modal';d.setAttribute('role','dialog');
+    d.innerHTML='<div class="fd-mbox" style="max-width:560px"><img alt="" src="'+esc(K.img)+'" style="display:block;width:100%;height:auto;max-height:70vh;object-fit:contain;border-radius:8px;background:#F3EDE8"'+(K.img!==K.full?' data-full="'+esc(K.full)+'"':'')+' onerror="FinderMod._imgErr(this)">'
+      +'<div class="fd-mact" style="align-items:center"><b style="flex:1">'+esc(K.key)+'</b><a href="'+esc(K.full)+'" target="_blank" rel="noopener">看原圖 ↗</a><button type="button" class="fd-btn2">關閉</button></div></div>';
+    var close=function(){d.remove();document.removeEventListener('keydown',ek,true)},ek=function(e){if(e.key==='Escape')close()};
+    d.onclick=function(e){if(e.target===d||e.target.tagName==='BUTTON')close()};document.addEventListener('keydown',ek,true);$('tab-finder').appendChild(d)}
+  function renderTray(msg,bad){
+    var n=selN(),t=$('fdTray');if(!t)return;
+    if(!n&&!msg){t.style.display='none';if(S.onlySel){S.onlySel=false;renderSide();renderList()}return}
+    t.style.display='';
+    t.innerHTML='<b>☑ 已勾 '+n+' 支食譜</b>'
+      +'<button type="button" class="fd-btn" id="fdDl"'+(S.busy||!n?' disabled':'')+'>⬇ 下載 Word（'+n+' 支）</button>'
+      +'<label class="fd-muted" style="display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="fdOnlySel"'+(S.onlySel?' checked':'')+(n?'':' disabled')+'> 只看已勾的</label>'
+      +'<button type="button" class="fd-btn2" id="fdClr"'+(S.busy||!n?' disabled':'')+'>清空</button>'
+      +'<div class="fd-msg'+(bad?' bad':'')+'" id="fdMsg">'+(msg||('每支一個 Word 檔（.doc，跟後台「批次匯出勾選食譜」一樣），全部包成一個 .zip；'+(n>BATCH?'超過 '+BATCH+' 支會分 '+Math.ceil(n/BATCH)+' 批抓、再合成一個檔。':'')+'要輸入身分密碼。'))+'</div>';
+    $('fdDl').onclick=download;
+    $('fdClr').onclick=function(){if(n>5&&!confirm('清空已勾的 '+n+' 支？'))return;S.sel={};S.onlySel=false;renderSide();renderList();renderTray()};
+    $('fdOnlySel').onchange=function(){S.onlySel=this.checked;S.shown=PAGE;renderSide();renderList()};
+  }
+  function setMsg(m,bad){var e=$('fdMsg');if(e){e.textContent=m;e.className='fd-msg'+(bad?' bad':'')}}
+  /* ---- 身分密碼：跟新品申請表共用這個分頁記住的（sessionStorage rcp:cred），沒有才問 ---- */
+  function getCred(){try{var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
+  function setCred(o){try{if(o){sessionStorage.setItem(CRED_KEY,JSON.stringify(o));sessionStorage.setItem(CRED_KEY+':'+o.role,o.pw)}else{var c=getCred();if(c)sessionStorage.removeItem(CRED_KEY+':'+c.role);sessionStorage.removeItem(CRED_KEY)}}catch(e){}}
+  function askCred(why,cb){
+    var d=document.createElement('div');d.className='fd-modal';d.id='fdCredM';
+    d.innerHTML='<div class="fd-mbox" role="dialog" aria-modal="true"><div style="font-weight:800;font-size:15px">🔑 輸入身分密碼</div><div class="fd-muted" style="margin-top:4px">'+esc(why)+' 密碼只記在這個分頁，關掉分頁就要重新輸入。</div>'
+      +'<label>身分</label><select id="fdCr">'+ROLES.map(function(r){return '<option>'+esc(r)+'</option>'}).join('')+'</select>'
+      +'<label>密碼</label><input type="password" id="fdCp" autocomplete="new-password">'
+      +'<div class="fd-mact"><button type="button" class="fd-btn" id="fdCok">確定</button><button type="button" class="fd-btn2" id="fdCno">取消</button></div></div>';
+    $('tab-finder').appendChild(d);var c=getCred();if(c)$('fdCr').value=c.role;setTimeout(function(){$('fdCp').focus()},30);
+    var close=function(){d.remove()};
+    $('fdCno').onclick=function(){close();cb(null)};
+    var ok=function(){var p=$('fdCp').value;if(!p){$('fdCp').focus();return}var o={role:$('fdCr').value,pw:p};close();cb(o)};
+    $('fdCok').onclick=ok;$('fdCp').onkeydown=function(e){if(e.key==='Enter')ok()};
+  }
+  /* ---- 下載：每批 40 支 → 申請單 API rcpZip（Google 回錯動作／逾時自動重試 3 次）→ 一批直接存；多批用 JSZip 合成一個 ---- */
+  function b64bytes(s){var bin=atob(s),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
+  function oneBatch(cr,ids,k,nb,t0){var n=0,go=function(){n++;setMsg('⏳ 從食譜後台取檔：第 '+k+'／'+nb+' 批（'+ids.length+' 支）'+(n>1?'，重試第 '+(n-1)+' 次':'')+'…已 '+Math.round((Date.now()-t0)/1000)+' 秒');
+      return post({action:'rcpZip',role:cr.role,password:cr.pw,ids:ids},120000).then(function(j){if(!j.ok){var e=new Error(j.msg||'下載失敗');e.code=j.code;throw e}return b64bytes(j.data.b64)})
+        .catch(function(e){if(e.retry&&n<3)return new Promise(function(r){setTimeout(r,1500*n)}).then(go);throw e})};return go()}
+  function loadJSZip(){if(window.JSZip)return Promise.resolve(window.JSZip);return new Promise(function(res,rej){var s=document.createElement('script');s.src=JSZIP;s.onload=function(){window.JSZip?res(window.JSZip):rej(new Error('壓縮工具載入失敗'))};s.onerror=function(){rej(new Error('壓縮工具載入失敗'))};document.head.appendChild(s)})}
+  function save(bytes,name){var url=URL.createObjectURL(new Blob([bytes],{type:'application/zip'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},60000)}
+  function today(){var d=new Date();return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')}
+  function download(){
+    if(S.busy)return;var ids=Object.keys(S.sel);if(!ids.length)return;
+    var cr=getCred();if(!cr){askCred('下載完整食譜內容要身分密碼（任何身分都可以）。',function(c){if(c)run(c,ids)});return}
+    run(cr,ids);
+  }
+  function run(cr,ids){
+    S.busy=true;renderTray();var t0=Date.now(),parts=[],nb=Math.ceil(ids.length/BATCH),k=0;
+    var next=function(){if(k>=nb)return Promise.resolve();var b=ids.slice(k*BATCH,(k+1)*BATCH);k++;return oneBatch(cr,b,k,nb,t0).then(function(u){parts.push(u)}).then(next)};
+    next().then(function(){
+      setCred(cr);var name='食譜_'+today()+'_'+ids.length+'支.zip';
+      if(parts.length===1){save(parts[0],name);return parts[0].length}
+      setMsg('⏳ 合成一個壓縮檔…');
+      return loadJSZip().then(function(JSZip){var out=new JSZip(),used={};
+        return parts.reduce(function(p,u){return p.then(function(){return JSZip.loadAsync(u).then(function(z){var fs=[];z.forEach(function(path,f){if(!f.dir)fs.push(f)});
+          return Promise.all(fs.map(function(f){return f.async('uint8array').then(function(c){var nm=f.name,i=2;while(used[nm]){nm=f.name.replace(/(\.[^.]+)?$/,' ('+(i++)+')$1')}used[nm]=1;out.file(nm,c)})}))})})},Promise.resolve())
+          .then(function(){return out.generateAsync({type:'uint8array'})}).then(function(z){save(z,name);return z.length})})
+        .catch(function(e){parts.forEach(function(u,i){save(u,'食譜_'+today()+'_第'+(i+1)+'批.zip')});return -1});
+    }).then(function(sz){S.busy=false;renderTray('✅ 已下載 '+ids.length+' 支食譜（'+(sz>0?Math.max(1,Math.round(sz/1024))+' KB、':'')+'花 '+Math.round((Date.now()-t0)/1000)+' 秒）'+(sz===-1?'；合成一個檔失敗，改成每批一個檔':'')+'。檔案在瀏覽器的「下載」資料夾。')},
+      function(e){S.busy=false;
+        if(e.code==='auth'){setCred(null);renderTray('密碼不對，請重新輸入。',true);askCred('密碼不對，請重新輸入身分密碼。',function(c){if(c)run(c,ids)});return}
+        renderTray('❌ 下載失敗：'+e.message+(parts.length?'（前 '+parts.length+' 批已取到，但沒有存檔）':'')+'。請稍後再按一次。',true)});
+  }
+  return {ensureInit:ensureInit,_imgErr:imgErr,_state:S};
+})();
+/* 打開網址就是 #finder 時，分頁切換比本模組早跑 → 這裡補叫一次 */
+(function(){var p=document.getElementById('tab-finder');if(p&&p.classList.contains('active'))FinderMod.ensureInit()})();
 </script>
 </body>
 </html>
