@@ -4112,7 +4112,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   +'</div></details>'
   +catChips()
   +'<div style="margin-bottom:8px"><input class="sm" id="qbox" style="width:100%;max-width:340px" placeholder="🔍 搜尋品項／廠商／編號，空白分隔可多關鍵字" value="'+(ST.q||'').replace(/"/g,'&quot;')+'"></div>';
-  var _spN=SKUS.filter(function(s){return !isDur(s)&&num(pOf(store,s).par)>0;});
+  var _spN=SKUS.filter(function(s){return !isDur(s)&&!s.status&&num(pOf(store,s).par)>0;});
   if(_spN.length)html+='<div class="banner" style="background:#EAF3FB;border-color:#7FB3DA;color:#0B4A6F;margin-bottom:8px">📌 本店有 <b>'+_spN.length+'</b> 項食材／耗材已改走<b>標配</b>（不看 POS 用量）：'+_spN.slice(0,12).map(function(s){return shEsc(dispName(store,s));}).join('、')+(_spN.length>12?' 等':'')+'。要改回用量預測，把該項「標配」填 0。</div>';
   /* 2026-09-10 bp 批：500+ 品項要店長維護，預設順序等於沒有順序。
      排序①近 3 個月有使用（過季／清貨尾除外）②品名 ③分區。 */
@@ -4122,6 +4122,11 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
     var ua=used3m(store,a)?0:1,ub=used3m(store,b)?0:1;if(ua!==ub)return ua-ub;
     var na=String(a.name||""),nb=String(b.name||"");if(na!==nb)return na.localeCompare(nb,"zh-Hant");
     return String(zoneOf(store,a)||"").localeCompare(String(zoneOf(store,b)||""),"zh-Hant");});
+  /* 2026-10-18 經營者：總部主檔設「停售／不盤點」的品項，引擎本來就全站排除（liveItems 等的 !s.status），
+     但這頁沒標示、照樣給勾「啟用」和填參數，店長以為還在用。改成移到最後一區、只顯示狀態、不給勾也不給填。
+     本店原本存的 used／參數不動；總部改回「在用」就照原設定恢復。 */
+  var offs=items.filter(function(s){return !!s.status;});
+  items=items.filter(function(s){return !s.status;});
   var _n3=_p3ready?items.filter(function(s){return used3m(store,s);}).length:0;
   html+='<div class="sub muted" style="margin:-2px 0 8px">'
     +(_p3ready?('排序：<b>🟢 3 個月有使用（'+_n3+' 項）</b>排最前 → 品名 → 分區。過季／清貨尾不列入「有使用」。'):'排序：讀取近 3 個月用量中…（先照品名排）')
@@ -4183,7 +4188,21 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
       +'<span class="pc-right"><span class="pf"><b>啟用</b><input type="checkbox" class="ck" data-puse="'+s.id+'" title="取消勾選＝本店不使用此品項，不出現在盤點與建議" '+(usedOf(store,s)?"checked":"")+'></span>'
       +'<span data-pst="'+s.id+'">'+pstBtn(s.id)+'</span></span></div>'
       +'<div class="pc-grid">'+g.join('')+'</div>'+parLine+'</div>';});
-  html+='<div class="muted">共 '+items.length+' 項</div>';return html;}
+  if(offs.length){
+    var _offOpen=!!ST.pOffOpen||!!String(ST.q||"").trim();   /* 有搜尋字時自動展開，搜得到的停售品才看得到 */
+    var _offN={};offs.forEach(function(s){_offN[s.status]=(_offN[s.status]||0)+1;});
+    html+='<div class="card" style="background:#F6F3F1;border-color:#C9BBB2;margin-top:10px">'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>⛔ 總部已停售／不盤點（'+offs.length+' 項）</b>'
+      +'<span class="muted" style="font-size:12px">'+Object.keys(_offN).map(function(k){return k+' '+_offN[k];}).join('・')+'</span>'
+      +'<span style="margin-left:auto"></span>'+(String(ST.q||"").trim()?'':'<button class="btn sm ghost" id="pOffTgl">'+(_offOpen?'收起':'展開看清單')+'</button>')+'</div>'
+      +'<div class="sub muted" style="margin-top:4px">這些品項總部主檔設為停售或不盤點：<b>全部門市都不會出現在盤點、建議量和訂貨單，本店不用設定，也不能啟用。</b>要恢復使用，請總部在「主檔」把狀態改回「在用」。</div>';
+    if(_offOpen)offs.forEach(function(s){
+      html+='<div class="pcard" data-prow="'+s.id+'" style="background:#FBFAF9;opacity:.85;margin:6px 0 0">'
+        +'<div class="pc-top"><span class="badge b-'+s.cat+'">'+s.cat+'</span><b style="color:#6B5E57">'+s.name+'</b>'
+        +'<span class="badge" style="background:'+(s.status==="停售"?'#C0392B':'#8A7466')+'">'+(s.status==="停售"?'⛔ 總部停售':'🚫 總部不盤點')+'</span>'
+        +'<span class="pc-right"><span class="muted" style="font-size:12px" title="總部主檔狀態＝'+s.status+'，本店不能啟用">本店不能啟用</span></span></div></div>';});
+    html+='</div>';}
+  html+='<div class="muted">共 '+(items.length+offs.length)+' 項'+(offs.length?'（可設定 '+items.length+' 項＋總部停售／不盤點 '+offs.length+' 項）':'')+'</div>';return html;}
 
 /* ===== 季節 ===== */
 function viewSeason(){var ed=ST.role==="總部",tm=tgtMonth(),parts=srcIdxParts(),srcD={},pi;
@@ -6251,6 +6270,7 @@ function wire(){
     };});
   Array.prototype.forEach.call(document.querySelectorAll("[data-mfilter]"),function(el){
     el.onclick=function(){ST.mfilter=el.dataset.mfilter;render();};});
+  var pot=$("#pOffTgl");if(pot)pot.onclick=function(){ST.pOffOpen=!ST.pOffOpen;render();};   /* 2026-10-18 店別參數「總部已停售／不盤點」區展開／收起 */
   var mdt=$("#mDcTgl");if(mdt)mdt.onclick=function(){ST.mDC=!ST.mDC;render();};   /* 2026-10-01 cs 批：總部主檔「🏬 出貨中心品項」開關 */
   var mrt=$("#mRefTgl");if(mrt)mrt.onclick=function(){ST.mRef=!ST.mRef;render();};
   var nc=$("#nsCat");if(nc)nc.onchange=function(){var v=nextSkuId(nc.value),a=$("#nsId"),b=$("#nsIdTxt");if(a)a.value=v;if(b)b.textContent=v;};
