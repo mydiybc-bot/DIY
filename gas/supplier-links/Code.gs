@@ -11,14 +11,16 @@
  *   ?action=ping        版號
  *   ?action=items       彙整結果（items＋files＋found＋最後彙整時間）
  *                       found＝alternatives 分頁：Claude 上網找的連結與替代廠商（不是申請單填的正式連結，只是建議）
+ *                       i18n＝英文對照 {中文: 英文}（i18n 分頁；頁面切 English 時用，不現場翻）；i18n_todo＝還沒英文的詞數
  *   ?action=rebuild     立刻重新彙整（10 分鐘內只跑一次；只讀來源檔、只寫本試算表）
  * 寫（POST）：
  *   {action:'foundSave', token, rows:[…]}（要通行碼，只有 Claude 用）整份覆蓋 alternatives 分頁；寫前先備份成 alternatives_備份_時間（只留最近 5 份）
+ *   {action:'i18nSave', token, rows:[{zh,en,kind}]}（要通行碼，同 foundSave）依中文合併進 i18n 分頁（有就更新、沒有就加）；寫前備份 i18n_備份_時間（留 5 份）
  *   {action:'authSetup'}（免密碼）權限中心 dim_auth 補「supplier」列，已有就只把名稱改成 AUTH_NAME（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 排程：rebuild 每天 06:00（在編輯器「觸發條件」介面建，不加 script.scriptapp 權限）。
  * 所有儲存格一律存純文字。
  */
-var VER = 'v1.2';   /* 2026-10-19 v1.2：加 alternatives（Claude 找的連結／替代廠商） */
+var VER = 'v1.3';   /* 2026-10-19 v1.3：英文對照 i18n＋彙整時列出沒英文的詞（i18n_todo） */   /* 2026-10-19 v1.2：加 alternatives（Claude 找的連結／替代廠商） */
 var ROOT_FOLDER_ID = '1EVJrOIhB69jRkKDNbOpifbVq7BHENd2o';   /* 新品研發工作申請單／2026 */
 var AUTH_DASH = 'supplier', AUTH_NAME = '海外代理商購買平台';   /* 2026-10-19 經營者改名（原「新品供應商查詢」） */
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -27,6 +29,11 @@ var REBUILD_GAP_SEC = 600;
 var FOUND_TAB = 'alternatives';
 var FOUND_COLS = ['item', 'kind', 'rank', 'url', 'site', 'shop', 'title', 'price', 'spec', 'match', 'diff', 'note', 'found_at', 'found_by'];
 /* foundSave 通行碼的 SHA-256（通行碼本身在經營者電腦 ~/.config/diybc/supplier-write-token，不進 repo） */
+/* 英文對照：i18n（zh→en）；rebuild 時把還沒英文的中文詞列進 i18n_todo，Claude 再補翻 */
+var I18N_TAB = 'i18n', I18N_COLS = ['zh', 'en', 'kind', 'updated_at', 'by'];
+var TODO_TAB = 'i18n_todo', TODO_COLS = ['zh', 'kind', 'listed_at'];
+var I18N_ITEM_KEYS = ['item', 'dessert', 'supplier', 'vendor_src', 'campaign', 'file', 'folder', 'zone', 'note'];
+var I18N_FOUND_KEYS = ['title', 'spec', 'note', 'diff', 'site', 'price'];   /* 店名（shop）不翻：保留原文客戶才找得到店；淘寶價格「（N人付款）」頁面自己換 */
 var FOUND_TOKEN_SHA256 = 'c76eccc371f8c81fa9207702ad1c0255e1e035e0ded7261654f591e049807725';
 
 var ITEM_COLS = ['item', 'dessert', 'campaign', 'file', 'folder', 'supplier', 'vendor_src', 'provide', 'links', 'cost', 'spec', 'usage',
@@ -59,6 +66,7 @@ function doPost(e) {
     var b = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (b.action === 'authSetup') res = authSetup_();
     else if (b.action === 'foundSave') res = foundSave_(b);
+    else if (b.action === 'i18nSave') res = i18nSave_(b);
     else res = { ok: false, error: '不認得的動作：' + b.action };
   } catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
   return out_(res);
@@ -91,6 +99,8 @@ function items_() {
     items: table_(ss.getSheetByName('items'), ITEM_COLS),
     files: table_(ss.getSheetByName('files'), FILE_COLS),
     found: table_(ss.getSheetByName(FOUND_TAB), FOUND_COLS),
+    i18n: i18nMap_(),
+    i18n_todo: Number(PropertiesService.getScriptProperties().getProperty('i18n_todo_n') || 0),
     rebuilt_at: PropertiesService.getScriptProperties().getProperty('rebuilt_at') || '',
     ver: VER
   };
@@ -129,6 +139,7 @@ function rebuild_() {
   pr.setProperty('rebuilt_at', at); pr.setProperty('rebuilt_ms', String(Date.now()));
   var stat = { files: files.length, items: rows.length, links: rows.filter(function (x) { return x.links; }).length, sec: Math.round((Date.now() - t0) / 1000), at: at };
   log_(stat);
+  try { stat.i18n_todo = i18nTodo_(rows); } catch (err) { stat.i18n_todo_err = String(err && err.message || err); }
   return stat;
 }
 function walk_(folder, path, files, meta) {
@@ -252,6 +263,58 @@ function foundSave_(b) {
     }
     write_(FOUND_TAB, FOUND_COLS, rows);
     return { ok: true, before: before, after: rows.length, backup: bk, items: Object.keys(rows.reduce(function (m, r) { m[r.item] = 1; return m; }, {})).length };
+  } finally { lk.releaseLock(); }
+}
+
+/* ---------------- 英文對照 ---------------- */
+function hasCJK_(s) { return /[\u3400-\u9fff]/.test(String(s || '')); }
+function i18nMap_() {
+  var m = {};
+  table_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(I18N_TAB), I18N_COLS).forEach(function (r) { if (r.zh && r.en) m[r.zh] = r.en; });
+  return m;
+}
+function i18nTodo_(rows) {   /* 彙整後：items＋alternatives 裡還沒英文的中文詞 → i18n_todo 分頁 */
+  var m = i18nMap_(), need = {}, at = now_();
+  var add = function (v, k) {
+    v = String(v || '').trim();
+    var probe = k === 'found_price' ? v.replace(/（[\d,+萬万.]+人付款）/, '') : v;
+    if (v && hasCJK_(probe) && !m[v] && !need[v]) need[v] = k;
+  };
+  rows.forEach(function (r) { I18N_ITEM_KEYS.forEach(function (k) { add(r[k], k); }); });
+  table_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(FOUND_TAB), FOUND_COLS).forEach(function (f) { I18N_FOUND_KEYS.forEach(function (k) { add(f[k], 'found_' + k); }); });
+  table_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName('files'), FILE_COLS).forEach(function (f) { add(f.file, 'file'); add(f.folder, 'folder'); });
+  var list = Object.keys(need).map(function (z) { return { zh: z, kind: need[z], listed_at: at }; });
+  write_(TODO_TAB, TODO_COLS, list);
+  PropertiesService.getScriptProperties().setProperty('i18n_todo_n', String(list.length));
+  return list.length;
+}
+function i18nSave_(b) {
+  if (!b.token || sha256_(b.token) !== FOUND_TOKEN_SHA256) return { ok: false, error: '通行碼不對' };
+  var rows = b.rows;
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '沒有資料' };
+  var lk = LockService.getScriptLock();
+  if (!lk.tryLock(30000)) return { ok: false, error: '正在寫入中，請稍後再試' };
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(I18N_TAB), cur = table_(sh, I18N_COLS), bk = '';
+    if (sh && sh.getLastRow() > 1) {
+      bk = I18N_TAB + '_備份_' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmmss');
+      sh.copyTo(ss).setName(bk);
+      var olds = ss.getSheets().map(function (x) { return x.getName(); }).filter(function (n) { return n.indexOf(I18N_TAB + '_備份_') === 0; }).sort();
+      while (olds.length > 5) ss.deleteSheet(ss.getSheetByName(olds.shift()));
+    }
+    var idx = {}, at = now_(), added = 0, updated = 0;
+    cur.forEach(function (r, i) { idx[r.zh] = i; });
+    rows.forEach(function (r) {
+      var zh = String(r.zh || '').trim(), en = String(r.en || '').trim();
+      if (!zh || !en) return;
+      var o = { zh: zh, en: en, kind: r.kind || '', updated_at: at, by: 'Claude' };
+      if (idx[zh] != null) { if (cur[idx[zh]].en !== en) { cur[idx[zh]] = o; updated++; } }
+      else { idx[zh] = cur.length; cur.push(o); added++; }
+    });
+    write_(I18N_TAB, I18N_COLS, cur);
+    /* 補完後順手更新待補清單（不用等明天彙整） */
+    var todo = 0; try { todo = i18nTodo_(table_(ss.getSheetByName('items'), ITEM_COLS)); } catch (e) {}
+    return { ok: true, before: cur.length - added, after: cur.length, added: added, updated: updated, backup: bk, todo: todo };
   } finally { lk.releaseLock(); }
 }
 
