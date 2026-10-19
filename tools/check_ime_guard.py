@@ -31,6 +31,7 @@ REQUIRED = [
     'google-reviews.html', 'dashboard-schedule.html', 'dashboard-purchase.html',
     'dashboard-reservation.html', 'recipe-upload.html', 'project-hub.html', 'admin-auth.html',
     'recipe-studio.html', 'index.html',   # 訓練站首頁（核心檔；2026-10-18 經營者同意加）
+    'dashboard-supplier.html',   # 新品供應商查詢（2026-10-19 新建）
 ]
 
 # 不加的頁面與原因

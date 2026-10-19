@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<!-- 2026-10-19 新建「新品供應商查詢」儀表板（經營者交辦：把新品研發申請單裡每個產品用的食材／器模具、供貨廠商、購買連結表列出來，可以搜尋）。
+     來源：Drive「新品研發工作申請單／2026」資料夾（含子資料夾）每份 Google 試算表的「新品通知表 → 各店新增食材、器具」；xlsx 讀不到（列在「讀了哪些檔」）。
+     後端：新品供應商查詢 API（GAS，綁試算表「新品供應商查詢_資料庫」；原始碼 gas/supplier-links/），每天 06:00 自動彙整；本頁只讀不寫。
+     閘門 DASH_ID=supplier。第二段（每個品項找 3 家替代廠商）另做。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新品供應商查詢｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FBF8F5;color:#2A2320;font-size:14px;line-height:1.55}
+  a{color:#8B3A2A}
+  /* 頁首（墨綠系：新品供應商查詢） */
+  .mt-header{background:linear-gradient(100deg,#2F5D50,#4E8A76);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1280px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:12.5px;opacity:.92}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-home:hover{background:rgba(255,255,255,.32)}
+  .mt-main{max-width:1280px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px 16px 40px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#EAF3EF;border-color:#C3DCD1;color:#2F5D50}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A3A40;font-size:13px}
+  .dsb-sop.open{display:block}
+  .dsb-sop ol,.dsb-sop ul{margin:0;padding-left:20px}
+  @media(max-width:600px){.dsb-info{margin-left:0}}
+  .card{background:#fff;border:1px solid #E3DCD6;border-radius:12px;padding:14px 16px;margin:0 0 14px}
+  .muted{color:#77706A;font-size:13px}
+  .btn{font-family:inherit;font-size:13px;font-weight:700;border-radius:8px;padding:6px 12px;cursor:pointer;border:1px solid #2F5D50;background:#2F5D50;color:#fff}
+  .btn.ghost{background:#fff;color:#2F5D50}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,.stat:focus-visible{outline:2px solid #F4D35E;outline-offset:1px}
+  .chip{font-family:inherit;font-size:12.5px;border:1px solid #CFC6BF;background:#fff;color:#2A2320;border-radius:999px;padding:3px 11px;cursor:pointer}
+  .chip.on{border-color:#2F5D50;background:#2F5D50;color:#fff}
+  /* 搜尋列 */
+  .sbar{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+  .sbar .q{flex:1 1 320px;min-width:0;position:relative}
+  .sbar .q input{width:100%;font-family:inherit;font-size:15px;padding:9px 34px 9px 12px;border:1px solid #CFC6BF;border-radius:10px;background:#fff}
+  .sbar .q button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;color:#9A8A80;cursor:pointer;padding:2px 6px}
+  .sbar select{font-family:inherit;font-size:13px;padding:7px 8px;border:1px solid #CFC6BF;border-radius:8px;background:#fff;max-width:100%}
+  .sbar2{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-top:10px}
+  .sbar2 .lab{font-size:12.5px;color:#77706A;margin-left:4px}
+  .sbar2 select{font-family:inherit;font-size:13px;padding:5px 8px;border:1px solid #CFC6BF;border-radius:8px;background:#fff}
+  /* 統計 */
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 14px}
+  @media(max-width:700px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat{background:#fff;border:1px solid #E3DCD6;border-radius:12px;padding:10px 14px;text-align:left;font-family:inherit;color:inherit;cursor:pointer}
+  .stat .v{font-size:22px;font-weight:800;color:#2F5D50;font-variant-numeric:tabular-nums}
+  .stat .k{font-size:12.5px;color:#77706A}
+  .stat.on{border-color:#2F5D50;box-shadow:inset 0 0 0 1px #2F5D50}
+  .stat.warn .v{color:#A3321F}
+  /* 結果表 */
+  .rhead{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin:0 0 8px}
+  .rhead b{font-size:15px}
+  .tw{background:#fff;border:1px solid #E3DCD6;border-radius:12px;overflow:auto;max-height:76vh}
+  table.t{width:100%;border-collapse:collapse;font-size:13px}
+  table.t th,table.t td{text-align:left;padding:8px 10px;border-bottom:1px solid #EDE7E2;vertical-align:top}
+  table.t th{font-size:12.5px;color:#77706A;font-weight:700;background:#FAF8F6;position:sticky;top:0;z-index:1;white-space:nowrap}
+  table.t td.nm{font-weight:700;min-width:180px}
+  table.t td.nm .alt{font-weight:400;color:#77706A;font-size:12px}
+  table.t tr.nolink td.lk{background:#FFF7F5}
+  .lk a.go{display:inline-block;margin:0 4px 4px 0;font-size:12.5px;font-weight:700;text-decoration:none;border:1px solid #C3DCD1;background:#EAF3EF;color:#2F5D50;border-radius:8px;padding:2px 9px;white-space:nowrap}
+  .lk a.go:hover{background:#D6EBE1}
+  .lk .none{font-size:12px;color:#A3321F}
+  .use{display:inline-block;margin:0 4px 4px 0;font-size:12px;background:#F4EFEA;border-radius:6px;padding:1px 7px}
+  .use a{color:#5E4A3E;text-decoration:none}
+  .use a:hover{text-decoration:underline}
+  .use .c{color:#9A8A80}
+  .sup{display:inline-block;margin:0 4px 2px 0;font-size:12.5px;font-weight:700;color:#4A3228}
+  .sup.blank{color:#A3321F;font-weight:400}
+  .tag{display:inline-block;font-size:11.5px;border-radius:999px;padding:0 8px;margin:0 4px 2px 0;background:#EEECEA;color:#5E5852;white-space:nowrap}
+  .tag.p1{background:#E2ECF8;color:#23436E}.tag.p2{background:#FBF0D9;color:#8A5A00}.tag.p3{background:#E2F2E7;color:#2E6B43}
+  mark{background:#FFF0A8;color:inherit;padding:0 1px;border-radius:2px}
+  .more{text-align:center;padding:12px}
+  .empty{padding:24px;text-align:center;color:#77706A}
+  /* 手機：表格改卡片 */
+  @media(max-width:760px){
+    .tw{max-height:none;border:none;background:none;overflow:visible}
+    table.t thead{display:none}
+    table.t,table.t tbody,table.t tr,table.t td{display:block;width:100%}
+    table.t tr{background:#fff;border:1px solid #E3DCD6;border-radius:12px;margin:0 0 10px;padding:6px 4px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+    table.t td.nm,table.t td.wide{grid-column:1/-1}
+    table.t td{border:none;padding:4px 10px}
+    table.t td[data-k]::before{content:attr(data-k);display:block;font-size:11.5px;color:#9A8A80;font-weight:700}
+    table.t td.nm{font-size:15px;min-width:0}
+    table.t tr.nolink td.lk{background:none}
+  }
+  details.files{margin-top:16px}
+  details.files>summary{cursor:pointer;font-weight:800;color:#2F5D50;padding:6px 0}
+  .st-ok{color:#2E6B43}.st-bad{color:#A3321F}
+  .dlg{position:fixed;inset:0;background:rgba(30,30,40,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9000;padding:40px 16px;overflow:auto}
+  .dlg[hidden]{display:none}
+  .dlg>div{background:#fff;border-radius:14px;max-width:520px;width:100%;padding:18px 20px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+  .dlg h3{margin:0 0 10px;color:#2F5D50}
+  .dlg-act{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2F5D50;color:#fff;padding:9px 16px;border-radius:10px;font-size:14px;z-index:9500;box-shadow:0 4px 16px rgba(0,0,0,.25);max-width:calc(100% - 32px)}
+  .toast[hidden]{display:none}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'supplier';
+  var DASH_NAME = '新品供應商查詢';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+<script>
+(function(){
+  document.addEventListener('toggle',function(e){var d=e.target;if(d&&d.id==='uhelp'&&document.body)document.body.classList.toggle('uhelp-on',!!d.open);},true);
+  /* 「最後更新」那一行（#dsbFresh 由各頁檔尾小程式產生；訂位頁是 #dsbTimes）搬到「📖 使用說明」那一列，收起時也看得到（1006 #7：每頁都要看得到最後更新） */
+  function pull(){var u=document.getElementById('uhelp');if(!u)return;var sm=u.querySelector('summary');if(!sm)return;
+    ['dsbFresh','dsbTimes'].forEach(function(id){var el=document.getElementById(id);if(el&&el.parentNode!==sm){el.style.display='inline';el.style.flexBasis='auto';el.style.marginLeft='10px';el.style.fontSize='12px';sm.appendChild(el);}});}
+  function boot(){var u=document.getElementById('uhelp');if(!u)return;pull();try{new MutationObserver(pull).observe(u,{childList:true,subtree:true});}catch(_){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();
+</script>
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>🔎 新品供應商查詢</h1>
+  <span class="mt-sub">新品研發申請單裡每個食材／器模具：用在哪些甜點、跟誰買、購買連結</span>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 每天 06:00 自動彙整</b>
+    <span>來源：Drive「新品研發工作申請單／2026」資料夾（含子資料夾）每份檔的「新品通知表」</span>
+    <span id="dsbFresh">🕒 最後彙整：讀取中…</span>
+    <button class="dsb-info" type="button" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <b>這頁做什麼</b>：把每個檔期申請單「新品通知表 → 各店新增食材、器具」那張表合在一起，可以搜尋品項、甜點、供應商。
+      <ul>
+        <li><b>依品項</b>（預設）：同名品項合成一列，看它用在哪些甜點、哪些檔期、跟誰買、所有購買連結。</li>
+        <li><b>逐筆明細</b>：每個檔期、每支甜點各一列（含每份用量、成本、區域、備註）。</li>
+        <li>點「用在」裡的甜點名稱，會打開那份申請單原檔。</li>
+        <li>上面四格數字可以點：點「沒有連結」就只看還沒填連結的品項。</li>
+      </ul>
+      <div style="margin-top:6px"><b>資料怎麼更新</b>：每天 06:00 自動重讀一次。剛在申請單填好新連結、想馬上看到 → 按右下「🔄 立刻重新彙整」（約 1 分鐘；10 分鐘內只能按一次）。</div>
+      <div style="margin-top:6px"><b>要改資料</b>：到原本的申請單改（「新品通知表」的供應商、購買連結欄），這頁只讀不寫。xlsx 檔讀不到，要轉成 Google 試算表才會列進來。</div>
+    </div>
+  </div>
+  </div></details>
+
+  <div class="card">
+    <div class="sbar">
+      <div class="q"><input id="q" type="search" placeholder="搜尋品項、甜點、供應商、檔期…（例：花生醬、1688、蛋糕圈）" autocomplete="off"><button type="button" id="qx" aria-label="清除搜尋" hidden>✕</button></div>
+      <select id="fCamp" aria-label="檔期"><option value="">全部檔期</option></select>
+      <select id="fSup" aria-label="供應商"><option value="">全部供應商</option></select>
+      <select id="fProv" aria-label="提供方式"><option value="">全部提供方式</option></select>
+    </div>
+    <div class="sbar2">
+      <span class="lab">顯示</span>
+      <button class="chip on" type="button" data-view="item">依品項</button>
+      <button class="chip" type="button" data-view="row">逐筆明細</button>
+      <span class="lab">排序</span>
+      <select id="fSort" aria-label="排序">
+        <option value="recent">最近檔期在前</option>
+        <option value="uses">用最多次在前</option>
+        <option value="name">品名</option>
+        <option value="sup">供應商</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+  <div id="res"><div class="empty">讀取中…（第一次打開約 5～10 秒）</div></div>
+
+  <details class="files" id="files"><summary>📂 讀了哪些檔</summary><div id="filesBody" class="muted">讀取中…</div></details>
+  <div style="text-align:right;margin-top:10px"><button class="btn ghost" type="button" id="rebuildBtn">🔄 立刻重新彙整</button></div>
+</div>
+
+<div class="dlg" id="dlg" hidden><div role="dialog" aria-modal="true" aria-labelledby="dlgT"><h3 id="dlgT"></h3><div id="dlgB"></div><div class="dlg-act" id="dlgA"></div></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+'use strict';
+var API = 'https://script.google.com/macros/s/AKfycbyIxT6s8l-k9-YMlAhrSX2Axl_JlU_Z83oe6qx5l2nN7iBngbAGjKnjmRgHLkSnhXj2QQ/exec';
+/* 只有本機測試（127.0.0.1／localhost）可以用 ?api= 換成模擬資料；線上網址不受影響 */
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) { var _api = new URLSearchParams(location.search).get('api'); if (_api && _api.charAt(0) === '/') API = _api; }
+var PAGE = 60;
+var S = { rows: [], files: [], at: '', groups: [], q: '', camp: '', sup: '', prov: '', link: '', view: 'item', sort: 'recent', shown: PAGE, fileOrder: {} };
+try { var _v = localStorage.getItem('sup_view'); if (_v === 'row' || _v === 'item') S.view = _v; var _s = localStorage.getItem('sup_sort'); if (_s) S.sort = _s; } catch(e){}
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function key(s){ return String(s || '').replace(/\s+/g, '').toLowerCase(); }
+function toast(t){ var el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(el.t); el.t = setTimeout(function(){ el.hidden = true; }, 3500); }
+var jpN = 0;
+function jsonp(url, ms){
+  return new Promise(function(resolve, reject){
+    var cb = '__sp' + (++jpN) + '_' + Date.now(), s = document.createElement('script'), done = false;
+    var end = function(){ done = true; try { delete window[cb]; } catch(e){ window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+    var tm = setTimeout(function(){ if (!done){ end(); reject(new Error('逾時')); } }, ms || 45000);
+    window[cb] = function(d){ clearTimeout(tm); end(); resolve(d); };
+    s.onerror = function(){ clearTimeout(tm); if (!done){ end(); reject(new Error('讀取失敗')); } };
+    s.src = url + (url.indexOf('?') < 0 ? '?' : '&') + 'callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+function get(action, ms){
+  var u = API + '?action=' + action;
+  return jsonp(u, ms).then(function(r){ if (!r || !r.ok) throw new Error((r && r.error) || '讀取失敗'); return r; })
+    .catch(function(e){ if (action !== 'items') throw e; return jsonp(u, ms).then(function(r){ if (!r || !r.ok) throw new Error((r && r.error) || '讀取失敗'); return r; }); });   /* GAS 冷啟動常第一發失敗 → 自動再試一次 */
+}
+
+/* ---------- 連結 → 平台名稱 ---------- */
+var HOSTS = [[/1688\.com/, '1688'], [/taobao\.com/, '淘寶'], [/tmall\.com/, '天貓'], [/shopee\./, '蝦皮'], [/momoshop\./, 'momo'], [/pchome\./, 'PChome'],
+  [/pxmart\.|pxbox\./, '全聯'], [/costco\./, '好市多'], [/ruten\./, '露天'], [/books\.com\.tw/, '博客來'], [/carrefour\./, '家樂福'], [/ikea\./, 'IKEA']];
+function site(u){
+  for (var i = 0; i < HOSTS.length; i++) if (HOSTS[i][0].test(u)) return HOSTS[i][1];
+  var m = /^https?:\/\/(?:www\.)?([^\/?#]+)/i.exec(u); return m ? m[1] : '連結';
+}
+function linkBtns(list){
+  if (!list.length) return '<span class="none">沒有連結</span>';
+  return list.map(function(u){ return '<a class="go" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer" title="' + esc(u) + '">🔗 ' + esc(site(u)) + '</a>'; }).join('');
+}
+function provTag(p){
+  if (!p) return '';
+  var c = /出貨中心/.test(p) ? 'p1' : /自購/.test(p) ? 'p2' : /自製/.test(p) ? 'p3' : '';
+  return '<span class="tag ' + c + '">' + esc(p) + '</span>';
+}
+function fileUrl(r){ return 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(r.file_id) + '/edit' + (r.gid ? '#gid=' + encodeURIComponent(r.gid) : ''); }
+function srcUrl(r){ return 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(r.file_id) + '/edit'; }
+function hl(s, q){
+  var t = esc(s); if (!q) return t;
+  var qs = q.split(/\s+/).filter(Boolean).map(function(w){ return esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+  if (!qs.length) return t;
+  return t.replace(new RegExp('(' + qs.join('|') + ')', 'gi'), '<mark>$1</mark>');
+}
+function supName(s){ return s && s !== '0' ? s : ''; }
+
+/* ---------- 資料整理 ---------- */
+function prep(){
+  /* 檔案新舊：用檔名開頭的月份＋最後修改日排「最近檔期在前」 */
+  S.files.forEach(function(f){ S.fileOrder[f.file_id] = f.modified || ''; });
+  S.rows.forEach(function(r){
+    r._links = String(r.links || '').split('\n').filter(Boolean);
+    r._sup = supName(r.supplier);
+    r._ord = S.fileOrder[r.file_id] || '';
+    r._txt = key([r.item, r.dessert, r.campaign, r.file, r.folder, r._sup, r.vendor_src, r.note, r.sticker, r.spec, r.provide, r.zone].join(' '));
+  });
+  var g = {}, order = [];
+  S.rows.forEach(function(r){
+    var k = key(r.item);
+    if (!g[k]) { g[k] = { k: k, names: {}, rows: [], links: [], sups: [], provs: [], ord: '' }; order.push(k); }
+    var x = g[k];
+    x.names[r.item] = (x.names[r.item] || 0) + 1;
+    x.rows.push(r);
+    r._links.forEach(function(u){ if (x.links.indexOf(u) < 0) x.links.push(u); });
+    if (r._sup && x.sups.indexOf(r._sup) < 0) x.sups.push(r._sup);
+    if (r.provide && x.provs.indexOf(r.provide) < 0) x.provs.push(r.provide);
+    if (r._ord > x.ord) x.ord = r._ord;
+  });
+  S.groups = order.map(function(k){
+    var x = g[k], nm = Object.keys(x.names).sort(function(a, b){ return x.names[b] - x.names[a]; });
+    x.name = nm[0]; x.alt = nm.slice(1);
+    x.rows.sort(function(a, b){ return a._ord < b._ord ? 1 : a._ord > b._ord ? -1 : 0; });
+    x.last = x.rows[0];
+    x._txt = x.rows.map(function(r){ return r._txt; }).join(' ');
+    return x;
+  });
+  fillSelects();
+}
+function fillSelects(){
+  var camp = {}, sup = {}, prov = {};
+  S.rows.forEach(function(r){
+    camp[r.file_id] = camp[r.file_id] || { n: 0, name: (r.folder ? r.folder + '／' : '') + r.file, ord: r._ord }; camp[r.file_id].n++;
+    var s = r._sup || '（空白）'; sup[s] = (sup[s] || 0) + 1;
+    if (r.provide) prov[r.provide] = (prov[r.provide] || 0) + 1;
+  });
+  var opt = function(sel, first, list){
+    var cur = sel.value;
+    sel.innerHTML = '<option value="">' + first + '</option>' + list.map(function(o){ return '<option value="' + esc(o[0]) + '">' + esc(o[1]) + '</option>'; }).join('');
+    sel.value = cur;
+  };
+  opt($('fCamp'), '全部檔期', Object.keys(camp).sort(function(a, b){ return camp[a].ord < camp[b].ord ? 1 : -1; }).map(function(id){ return [id, camp[id].name + '（' + camp[id].n + '）']; }));
+  opt($('fSup'), '全部供應商', Object.keys(sup).sort(function(a, b){ return sup[b] - sup[a]; }).map(function(s){ return [s, s + '（' + sup[s] + '）']; }));
+  opt($('fProv'), '全部提供方式', Object.keys(prov).sort(function(a, b){ return prov[b] - prov[a]; }).map(function(s){ return [s, s + '（' + prov[s] + '）']; }));
+  $('fCamp').value = S.camp; $('fSup').value = S.sup; $('fProv').value = S.prov;
+}
+
+/* ---------- 篩選 ---------- */
+function rowOk(r, words){
+  if (S.camp && r.file_id !== S.camp) return false;
+  if (S.sup && (r._sup || '（空白）') !== S.sup) return false;
+  if (S.prov && r.provide !== S.prov) return false;
+  for (var i = 0; i < words.length; i++) if (r._txt.indexOf(words[i]) < 0) return false;
+  return true;
+}
+function words(){ return String(S.q || '').toLowerCase().split(/\s+/).map(function(w){ return w.replace(/\s+/g, ''); }).filter(Boolean); }
+function filtered(){
+  var w = words();
+  if (S.view === 'row') {
+    var rs = S.rows.filter(function(r){ return rowOk(r, w) && (S.link === 'has' ? r._links.length : S.link === 'no' ? !r._links.length : true); });
+    return sortRows(rs);
+  }
+  var out = [];
+  S.groups.forEach(function(g){
+    var hit = g.rows.filter(function(r){ return rowOk(r, []); });
+    if (!hit.length) return;
+    if (w.length) { var t = hit.map(function(r){ return r._txt; }).join(' '); for (var i = 0; i < w.length; i++) if (t.indexOf(w[i]) < 0) return; }
+    if (S.link === 'has' && !g.links.length) return;
+    if (S.link === 'no' && g.links.length) return;
+    out.push(g);
+  });
+  return sortGroups(out);
+}
+function cmp(a, b){ return a < b ? -1 : a > b ? 1 : 0; }
+function sortGroups(a){
+  return a.sort(function(x, y){
+    if (S.sort === 'uses') return (y.rows.length - x.rows.length) || cmp(x.name, y.name);
+    if (S.sort === 'name') return x.name.localeCompare(y.name, 'zh-Hant');
+    if (S.sort === 'sup') return cmp(x.sups[0] || '～', y.sups[0] || '～') || cmp(x.name, y.name);
+    return cmp(y.ord, x.ord) || cmp(x.name, y.name);
+  });
+}
+function sortRows(a){
+  return a.sort(function(x, y){
+    if (S.sort === 'name' || S.sort === 'uses') return x.item.localeCompare(y.item, 'zh-Hant');
+    if (S.sort === 'sup') return cmp(x._sup || '～', y._sup || '～') || cmp(x.item, y.item);
+    return cmp(y._ord, x._ord) || cmp(x.dessert, y.dessert);
+  });
+}
+
+/* ---------- 畫面（只重畫 #stats、#res；搜尋框不重建） ---------- */
+function renderStats(){
+  var nG = S.groups.length, has = S.groups.filter(function(g){ return g.links.length; }).length;
+  var nf = {}; S.rows.forEach(function(r){ nf[r.file_id] = 1; });
+  var box = function(id, v, k, cls){ return '<button type="button" class="stat ' + (cls || '') + (S.link === id ? ' on' : '') + '" data-link="' + id + '"><div class="v">' + v + '</div><div class="k">' + k + '</div></button>'; };
+  $('stats').innerHTML = box('', nG, '品項（同名合併）') + box('has', has, '有購買連結') + box('no', nG - has, '沒有連結（點我只看這些）', 'warn')
+    + '<div class="stat" style="cursor:default"><div class="v">' + Object.keys(nf).length + '</div><div class="k">份檔期申請單・' + S.rows.length + ' 筆</div></div>';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-link]'), function(el){ el.onclick = function(){ var v = el.getAttribute('data-link'); S.link = S.link === v ? '' : v; S.shown = PAGE; renderStats(); renderRes(); }; });
+}
+function usesHtml(rows, q){
+  var seen = {}, out = [];
+  rows.forEach(function(r){
+    var k = r.file_id + '|' + r.dessert; if (seen[k]) return; seen[k] = 1;
+    out.push('<span class="use"><a href="' + esc(fileUrl(r)) + '" target="_blank" rel="noopener" title="打開申請單原檔">' + hl(r.dessert || '（沒填甜點名）', q) + '</a> <span class="c">· ' + hl(r.file, q) + '</span></span>');
+  });
+  return out.join('');
+}
+function renderRes(){
+  var list = filtered(), q = S.q.trim(), box = $('res');
+  if (!S.rows.length) { box.innerHTML = '<div class="card empty">還沒有資料。按下面「🔄 立刻重新彙整」讀一次檔案。</div>'; return; }
+  var head = '<div class="rhead"><b>' + (S.view === 'row' ? '逐筆明細' : '依品項') + '：' + list.length + ' ' + (S.view === 'row' ? '筆' : '項') + '</b>'
+    + ((S.q || S.camp || S.sup || S.prov || S.link) ? '<button class="chip" type="button" id="clrAll">✕ 清除所有條件</button>' : '') + '</div>';
+  if (!list.length) { box.innerHTML = head + '<div class="card empty">找不到符合的品項。試試少打幾個字，或清除條件。</div>'; bindClr(); return; }
+  var part = list.slice(0, S.shown), html;
+  if (S.view === 'row') {
+    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>甜點・檔期</th><th>原包裝規格</th><th>每份用量</th><th>成本</th><th>提供方式</th><th>區域</th><th>備註</th></tr></thead><tbody>'
+      + part.map(function(r){
+        return '<tr class="' + (r._links.length ? '' : 'nolink') + '"><td class="nm" data-k="品項">' + hl(r.item, q) + '</td>'
+          + '<td data-k="供應商">' + (r._sup ? '<span class="sup">' + hl(r._sup, q) + '</span>' : '<span class="sup blank">空白</span>') + (r.vendor_src && r.vendor_src !== r._sup ? '<div class="muted">甜點分頁寫：' + esc(r.vendor_src) + '</div>' : '') + '</td>'
+          + '<td class="lk" data-k="購買連結">' + linkBtns(r._links) + '</td>'
+          + '<td class="wide" data-k="甜點・檔期">' + usesHtml([r], q) + '</td>'
+          + '<td data-k="原包裝規格">' + esc(r.spec) + '</td><td data-k="每份用量">' + esc(r.usage) + '</td>'
+          + '<td data-k="成本">' + (r.cost ? '$' + esc(r.cost) : '') + '</td><td data-k="提供方式">' + provTag(r.provide) + '</td>'
+          + '<td data-k="區域">' + esc(r.zone) + '</td><td class="wide" data-k="備註">' + hl(r.note, q) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } else {
+    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>用在（甜點・檔期，點了開原檔）</th><th>規格・成本（最近一次）</th><th>提供方式</th></tr></thead><tbody>'
+      + part.map(function(g){
+        var L = g.last;
+        return '<tr class="' + (g.links.length ? '' : 'nolink') + '"><td class="nm" data-k="品項">' + hl(g.name, q) + (g.alt.length ? '<div class="alt">也寫成：' + g.alt.map(function(a){ return hl(a, q); }).join('、') + '</div>' : '') + '</td>'
+          + '<td data-k="供應商">' + (g.sups.length ? g.sups.map(function(s){ return '<span class="sup">' + hl(s, q) + '</span>'; }).join('') : '<span class="sup blank">空白</span>') + '</td>'
+          + '<td class="lk" data-k="購買連結">' + linkBtns(g.links) + '</td>'
+          + '<td class="wide" data-k="用在">' + usesHtml(g.rows, q) + '</td>'
+          + '<td data-k="規格・成本">' + esc(L.spec) + (L.cost ? '<div class="muted">成本 $' + esc(L.cost) + (L.usage ? '・每份 ' + esc(L.usage) : '') + '</div>' : (L.usage ? '<div class="muted">每份 ' + esc(L.usage) + '</div>' : '')) + '</td>'
+          + '<td data-k="提供方式">' + g.provs.map(provTag).join('') + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  box.innerHTML = head + '<div class="tw">' + html + '</div>' + (list.length > S.shown ? '<div class="more"><button class="btn ghost" type="button" id="moreBtn">再顯示 ' + Math.min(PAGE, list.length - S.shown) + ' ' + (S.view === 'row' ? '筆' : '項') + '（還有 ' + (list.length - S.shown) + '）</button></div>' : '');
+  if ($('moreBtn')) $('moreBtn').onclick = function(){ S.shown += PAGE; renderRes(); };
+  bindClr();
+}
+function bindClr(){
+  if (!$('clrAll')) return;
+  $('clrAll').onclick = function(){ S.q = ''; S.camp = ''; S.sup = ''; S.prov = ''; S.link = ''; S.shown = PAGE; $('q').value = ''; $('qx').hidden = true; $('fCamp').value = ''; $('fSup').value = ''; $('fProv').value = ''; renderStats(); renderRes(); };
+}
+function renderFiles(){
+  var f = S.files;
+  if (!f.length) { $('filesBody').innerHTML = '還沒有彙整紀錄。'; return; }
+  var ok = f.filter(function(x){ return x.status === 'OK'; }).length;
+  $('files').querySelector('summary').textContent = '📂 讀了哪些檔（' + f.length + ' 份，' + ok + ' 份讀到資料）';
+  $('filesBody').innerHTML = '<div class="tw" style="max-height:none"><table class="t"><thead><tr><th>資料夾</th><th>檔名</th><th>最後修改</th><th>狀態</th><th>筆數</th><th>有連結</th></tr></thead><tbody>'
+    + f.map(function(x){
+      var good = x.status === 'OK';
+      return '<tr><td data-k="資料夾">' + esc(x.folder || '（最外層）') + '</td><td data-k="檔名"><a href="' + esc(srcUrl(x)) + '" target="_blank" rel="noopener">' + esc(x.file) + '</a></td><td data-k="最後修改">' + esc(x.modified) + '</td>'
+        + '<td data-k="狀態" class="' + (good ? 'st-ok' : 'st-bad') + '">' + esc(good ? '✓ 已讀' : x.status) + '</td><td data-k="筆數">' + esc(x.n_items) + '</td><td data-k="有連結">' + esc(x.n_links) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+/* ---------- 輸入（IME：選字中不搜尋；只重畫結果區） ---------- */
+var qi = $('q'), qt = null, composing = false;
+function onQ(){
+  if (composing || (window.__ime && __ime.on)) return;
+  clearTimeout(qt);
+  qt = setTimeout(function(){ if (composing || (window.__ime && __ime.on)) return; S.q = qi.value; S.shown = PAGE; $('qx').hidden = !qi.value; renderRes(); }, 180);
+}
+qi.addEventListener('compositionstart', function(){ composing = true; clearTimeout(qt); });
+qi.addEventListener('compositionend', function(){ composing = false; onQ(); });
+qi.addEventListener('input', function(e){ if (e.isComposing) return; onQ(); });
+$('qx').onclick = function(){ qi.value = ''; S.q = ''; $('qx').hidden = true; S.shown = PAGE; renderRes(); qi.focus(); };
+$('fCamp').onchange = function(){ S.camp = this.value; S.shown = PAGE; renderRes(); };
+$('fSup').onchange = function(){ S.sup = this.value; S.shown = PAGE; renderRes(); };
+$('fProv').onchange = function(){ S.prov = this.value; S.shown = PAGE; renderRes(); };
+$('fSort').value = S.sort;
+$('fSort').onchange = function(){ S.sort = this.value; try { localStorage.setItem('sup_sort', S.sort); } catch(e){} renderRes(); };
+Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function(el){
+  el.classList.toggle('on', el.getAttribute('data-view') === S.view);
+  el.onclick = function(){
+    S.view = el.getAttribute('data-view'); S.shown = PAGE;
+    try { localStorage.setItem('sup_view', S.view); } catch(e){}
+    Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function(b){ b.classList.toggle('on', b === el); });
+    renderRes();
+  };
+});
+
+/* ---------- 重新彙整（只讀來源檔、只寫本頁自己的資料庫） ---------- */
+function dlg(title, body, acts){
+  $('dlgT').textContent = title; $('dlgB').innerHTML = body; var a = $('dlgA'); a.innerHTML = '';
+  acts.forEach(function(x){ var b = document.createElement('button'); b.type = 'button'; b.className = 'btn' + (x.ghost ? ' ghost' : ''); b.textContent = x.t; b.onclick = function(){ $('dlg').hidden = true; if (x.fn) x.fn(); }; a.appendChild(b); });
+  $('dlg').hidden = false;
+}
+$('rebuildBtn').onclick = function(){
+  dlg('🔄 立刻重新彙整', '<div>會重新讀資料夾裡每一份檔期申請單，大約 1 分鐘。<br><span class="muted">只讀申請單、不會改申請單；10 分鐘內只能按一次。</span></div>', [
+    { t: '取消', ghost: 1 },
+    { t: '開始彙整', fn: function(){
+      var b = $('rebuildBtn'); b.disabled = true; b.textContent = '⏳ 彙整中…（約 1 分鐘）';
+      get('rebuild', 330000).then(function(r){ toast(r.msg || '完成'); return load(); })
+        .catch(function(e){ toast('彙整失敗：' + e.message); })
+        .then(function(){ b.disabled = false; b.textContent = '🔄 立刻重新彙整'; });
+    } }
+  ]);
+};
+
+function load(){
+  return get('items').then(function(r){
+    var d = r.data || {};
+    S.rows = d.items || []; S.files = d.files || []; S.at = d.rebuilt_at || '';
+    $('dsbFresh').textContent = '🕒 最後彙整：' + (S.at || '還沒彙整過');
+    prep(); renderStats(); renderRes(); renderFiles();
+  }).catch(function(e){
+    $('res').innerHTML = '<div class="card">讀不到資料：' + esc(e.message) + '　<button class="btn" type="button" id="retry">再試一次</button></div>';
+    $('retry').onclick = load;
+  });
+}
+load();
+})();
+</script>
+</body>
+</html>
