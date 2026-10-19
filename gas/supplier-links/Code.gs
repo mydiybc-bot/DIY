@@ -1,5 +1,5 @@
 /**
- * 新品供應商查詢 API（2026-10-19 新建，經營者交辦：「把檔案中每一個產品使用的廠商、供貨的廠商，還有它的連結表列出來，讓我可以搜尋」）
+ * 海外代理商購買平台 API（原名「新品供應商查詢」；2026-10-19 新建，同日改名，經營者交辦：「把檔案中每一個產品使用的廠商、供貨的廠商，還有它的連結表列出來，讓我可以搜尋」）
  * 綁在試算表「新品供應商查詢_資料庫」；前端＝static/dashboard-supplier.html。
  *
  * 資料來源：Drive 資料夾「2026」（新品研發工作申請單，一個檔期一份 Google 試算表，含子資料夾）
@@ -12,13 +12,13 @@
  *   ?action=items       彙整結果（items＋files＋最後彙整時間）
  *   ?action=rebuild     立刻重新彙整（10 分鐘內只跑一次；只讀來源檔、只寫本試算表）
  * 寫（POST）：
- *   {action:'authSetup'}（免密碼）權限中心 dim_auth 補「supplier」列（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
+ *   {action:'authSetup'}（免密碼）權限中心 dim_auth 補「supplier」列，已有就只把名稱改成 AUTH_NAME（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 排程：rebuild 每天 06:00（在編輯器「觸發條件」介面建，不加 script.scriptapp 權限）。
  * 所有儲存格一律存純文字。
  */
-var VER = 'v1.0';
+var VER = 'v1.1';
 var ROOT_FOLDER_ID = '1EVJrOIhB69jRkKDNbOpifbVq7BHENd2o';   /* 新品研發工作申請單／2026 */
-var AUTH_DASH = 'supplier', AUTH_NAME = '新品供應商查詢';
+var AUTH_DASH = 'supplier', AUTH_NAME = '海外代理商購買平台';   /* 2026-10-19 經營者改名（原「新品供應商查詢」） */
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
 var REBUILD_GAP_SEC = 600;
 
@@ -222,12 +222,18 @@ function log_(stat) {
 function authSetup_() {
   var ss = SpreadsheetApp.openById(AUTHC_SS_ID), sh = ss.getSheetByName(AUTHC_TAB);
   if (!sh) throw new Error('找不到權限中心 dim_auth');
-  var last = sh.getLastRow(), have = false;
-  if (last > 1) sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { if (String(r[0]).trim() === AUTH_DASH) have = true; });
-  if (have) return { ok: true, msg: '已經有 ' + AUTH_DASH + ' 列，不用補' };
+  var last = sh.getLastRow(), at = 0;
+  if (last > 1) sh.getRange(2, 1, last - 1, 2).getValues().forEach(function (r, i) { if (!at && String(r[0]).trim() === AUTH_DASH) at = i + 2; });
   var bk = 'dim_auth_備份_' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmm');
+  if (at) {   /* 已有這列：只在名稱不同時改 B 欄名稱（改名用；密碼、效期、啟用都不動） */
+    var cur = String(sh.getRange(at, 2).getValue()).trim();
+    if (cur === AUTH_NAME) return { ok: true, msg: '已經有 ' + AUTH_DASH + ' 列，名稱也一致，不用改' };
+    if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+    sh.getRange(at, 2).setNumberFormat('@').setValue(AUTH_NAME);
+    return { ok: true, msg: AUTH_DASH + ' 列名稱「' + cur + '」→「' + AUTH_NAME + '」；備份 ' + bk, row: at };
+  }
   if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
   sh.getRange(last + 1, 1, 1, 7).setNumberFormat('@');
-  sh.getRange(last + 1, 1, 1, 7).setValues([[AUTH_DASH, AUTH_NAME, '', '12', 'Y', now_(), '新品供應商查詢儀表板（2026-10-19 補；密碼空白＝還不能用，請在權限管理後台設定）']]);
+  sh.getRange(last + 1, 1, 1, 7).setValues([[AUTH_DASH, AUTH_NAME, '', '12', 'Y', now_(), '海外代理商購買平台儀表板（2026-10-19 補；密碼空白＝還不能用，請在權限管理後台設定）']]);
   return { ok: true, msg: '已補 ' + AUTH_DASH + ' 列；備份 ' + bk, before: last - 1 };
 }
