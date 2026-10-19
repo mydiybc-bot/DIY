@@ -198,6 +198,13 @@ function nrIngClean_(it, zones) {
   if (!o.name) throw fail_('新品項的名稱是空的', 'input');
   if (!o.unit) throw fail_('「' + o.name + '」的單位是空的', 'input');
   if (zones.indexOf(o.zone) < 0) throw fail_('「' + o.name + '」的取放區不對（要從清單選）', 'input');
+  /* 2026-10-19：三地名稱（澳門中文／菲律賓英文／越南文）可一起填；空白＝那個語言列照舊空著 */
+  o.tr = {};
+  Object.keys(TR_LANG_ID).forEach(function (k) {
+    var t = it.tr && it.tr[k];
+    if (!t || !rbTrim_(t.name)) return;
+    o.tr[k] = { name: rbTrim_(t.name).slice(0, 60), unit: rbTrim_(t.unit).slice(0, 20) || o.unit };
+  });
   return o;
 }
 function nrFindIng_(ings, o) {
@@ -217,6 +224,10 @@ function nrCreateIng_(sess, im, o) {
     payload[pre + 'Cost'] = mine ? String(o.cost) : '';
     payload[pre + 'IngredCateItemId'] = r.cate[gid] || '';   /* 後台頁面選取放區時，每個語言的類別都跟著選好（照頁面行為） */
     if (mine) { payload[pre + 'DefaultName'] = 'true'; payload[pre + 'Status'] = 'true'; }
+    Object.keys(o.tr || {}).forEach(function (k) {   /* 2026-10-19：三地名稱填進對應的語言列（名稱、單位、啟用；類別上面已跟著取放區選好） */
+      if (r.lang !== TR_LANG_ID[k] || mine) return;
+      payload[pre + 'Name'] = o.tr[k].name; payload[pre + 'Unit'] = o.tr[k].unit; payload[pre + 'Status'] = 'true';
+    });
   });
   var res = rbReq_(sess, 'post', '/IngredSources/Create', { payload: payload });
   if (rbIsLogin_(res)) throw rbErr_('食譜後台登入逾時', 'rbrelogin');
@@ -270,11 +281,22 @@ function nrIngCreate_(p, auth) {
       out.forEach(function (r) { if (r.id && codes[r.id]) r.code = codes[r.id]; });
     }
     rbSaveSession_(sess);
+    /* 2026-10-19：建好的品項有填三地名稱 → 記進「三地確認用語」（🌐 食譜翻譯馬上能用，不用等對照表暫存過期）；對照表暫存清掉 */
+    if (made) {
+      var conf = [];
+      out.forEach(function (r, j) { if (r.st !== 'created') return; var o = items[j]; Object.keys(o.tr || {}).forEach(function (k) {
+        conf.push({ lang: k, kind: 'item', zh: o.name, tr: o.tr[k].name, unit: o.tr[k].unit, note: '建新品項時一起填進後台', src: '📤 新食譜上傳' + (r.code ? ' ' + r.code : '') }); }); });
+      try { CacheService.getScriptCache().remove(TR_DICT_KEY); } catch (e0) { }
+      if (conf.length) {
+        var lk = LockService.getScriptLock();
+        if (lk.tryLock(10000)) { try { trConfWrite_(conf.map(trConfClean_), auth.role + '（新食譜上傳）'); out.forEach(function (r) { if (r.st === 'created') r.tr = 1; }); } catch (e1) { } finally { lk.releaseLock(); } }
+      }
+    }
     var left = items.length - out.filter(function (r) { return r.st === 'created' || r.st === 'exists'; }).length;
     if (err && !made && left === items.length) throw fail_('建立新品項沒有成功：' + errMsg_(err), (err && err.code) || 'rbnet', { items: out });
     return { id: '', data: { items: out, made: made, left: left },
       msg: ('新品項：建立 ' + made + '、已存在 ' + out.filter(function (r) { return r.st === 'exists'; }).length + '、未完成 ' + left + '｜' +
-        out.map(function (r) { return r.name + '(' + r.unit + ')' + r.st + (r.code ? ' ' + r.code : ''); }).join('、')).slice(0, 480) };   /* 寫進 log 分頁（doPost 記） */
+        out.map(function (r, j) { return r.name + '(' + r.unit + ')' + r.st + (r.code ? ' ' + r.code : '') + (items[j] && Object.keys(items[j].tr || {}).length ? '［' + Object.keys(items[j].tr).map(function (k) { return k + ':' + items[j].tr[k].name; }).join('／') + '］' : ''); }).join('、')).slice(0, 480) };   /* 寫進 log 分頁（doPost 記） */
   } finally { cache.remove('nring'); }
 }
 

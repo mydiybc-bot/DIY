@@ -804,6 +804,8 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
         +'<div><label>售價（每單位，元）</label><input type="number" data-f="price" min="0" step="0.01" value="'+esc(d.price)+'"'+dis+'></div>'
         +'<div><label>成本（每單位，元）</label><input type="number" data-f="cost" min="0" step="0.01" value="'+esc(d.cost)+'"'+dis+'></div>'
         +'<div style="grid-column:1/-1"><label>說明（可空白，會寫在後台的「說明」）</label><input type="text" class="w100" data-f="note" maxlength="200" value="'+esc(d.note)+'"'+dis+'></div></div>'
+        +'<div class="ru-tr" data-sub="'+esc(m.key)+'"><div class="ru-muted" style="margin:6px 0 2px">🌐 三地名稱（選填；建品項時一起填進後台，🌐 食譜翻譯就直接用，不會再變成「AI 暫譯」）</div><div class="ru-sub">'
+        +TR3.map(function(t){return '<div><label>'+t[1]+'名稱</label><input type="text" data-f="tr_'+t[0]+'" maxlength="60" value="'+esc(d['tr_'+t[0]]||'')+'"'+dis+'><label style="margin-top:4px">'+t[1]+'單位</label><input type="text" data-f="tr_'+t[0]+'_u" maxlength="20" placeholder="'+esc(trUnit(t[0],d.unit))+'" value="'+esc(d['tr_'+t[0]+'_u']||'')+'"'+dis+'></div>'}).join('')+'</div></div>'
         +'<div class="ru-mi-prev" data-prev="'+esc(m.key)+'">'+createPreview(d,kind)+'</div>'
         +'<div class="ru-muted" style="margin-top:3px">取放區怎麼選：'+esc(ZONE_HELP[kind]||'')+'</div>'
         +'<div class="ru-note" data-er="'+esc(m.key)+'">'+(er?'⚠ '+esc(er):'')+'</div></div>'}
@@ -817,6 +819,7 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
     else h+='<div class="ru-mi-body ru-note">❓ 還沒決定：請按上面三個按鈕選一個。</div>';
     h+='</div>'});
   var nC=miss.filter(function(m){return S.dec[m.key].act==='create'}).length,bad=miss.filter(function(m){var d=S.dec[m.key];return d.act==='create'&&createRowErr(d)}).length;
+  if(nC)h+='<div class="ru-row" style="margin-top:10px"><button class="ru-btn2" id="mTr" type="button"'+((S.busy||(S.job&&S.job.busy))?' disabled':'')+'>'+(S.busy==='tr'?'AI 想名稱中…':'🤖 AI 建議三地名稱（只填空白的格子）')+'</button><span class="ru-muted">澳門中文／菲律賓英文／越南文；建議完請看一下再建立</span></div>'+(S.msg.tr||'');
   h+='<div class="ru-row" style="margin-top:10px"><button class="ru-btn" id="mCreate" type="button"'+((!nC||bad||S.busy||(S.job&&S.job.busy))?' disabled':'')+'>'+(S.busy==='ing'?'建立中…（約 10～60 秒）':'✅ 建立這 '+nC+' 項新品項到後台食材管理')+'</button>'
     +(bad?'<span class="ru-note">有 '+bad+' 項資料沒填完整</span>':(nC?'<span class="ru-muted">按下去會先列出清單再確認一次；建好的品項只有負責食譜的夥伴能在後台修改或刪除</span>':''))+'</div>';
   if(S.msg.ing)h+=S.msg.ing;
@@ -832,20 +835,56 @@ function renderMiss(){var c=$('cardMiss'),pv=S.pv,miss=(pv&&pv.missing)||[];
     e.oninput=on;e.onchange=on})});
   c.querySelectorAll('[data-map]').forEach(function(e){e.onchange=function(){S.dec[e.getAttribute('data-map')].map=e.value;renderMiss();renderGo()}});
   c.querySelectorAll('[data-factor]').forEach(function(e){e.oninput=function(){S.dec[e.getAttribute('data-factor')].factor=e.value;renderGo()}});
-  if($('mCreate'))$('mCreate').onclick=createIngs}
+  if($('mCreate'))$('mCreate').onclick=createIngs;if($('mTr'))$('mTr').onclick=suggestTr}
 function createPreview(d,kind){var er=createRowErr(d);
   if(er)return '會建成：<span class="ru-note">（'+esc(er)+'）</span>';
-  return '會建成：'+kindTag(kind)+' <b>'+esc(String(d.zone))+'</b>｜<b>'+esc(String(d.name).trim())+'</b>｜單位 '+esc(String(d.unit).trim())+'｜售價 '+esc(String(d.price).trim()||'0')+' 元／成本 '+esc(String(d.cost).trim()||'0')+' 元'+(String(d.note||'').trim()?'｜說明：'+esc(String(d.note).trim()):'')+'<span class="ru-muted">（繁體中文、啟用；編號由後台自動給）</span>'}
+  return '會建成：'+kindTag(kind)+' <b>'+esc(String(d.zone))+'</b>｜<b>'+esc(String(d.name).trim())+'</b>｜單位 '+esc(String(d.unit).trim())+'｜售價 '+esc(String(d.price).trim()||'0')+' 元／成本 '+esc(String(d.cost).trim()||'0')+' 元'+(String(d.note||'').trim()?'｜說明：'+esc(String(d.note).trim()):'')+'<span class="ru-muted">（繁體中文、啟用；編號由後台自動給）</span>'+trPrev(d)}
+/* ---------- 🌐 三地名稱（2026-10-19）：建新品項時一起填進後台對應的語言列；AI 建議走訓練站 /api/recipe/translate（身分密碼驗證） ---------- */
+var TR3=[['mo','澳門中文'],['ph','菲律賓英文'],['vn','越南文']],TR_GLOSS=null;
+var TR_UNIT={ph:{g:'g.','個':'pc.','支':'pc.','顆':'pc.','段':'pc.','根':'pc.','張':'sheet','捲':'sheet','包':'pack','匙':'t.','平匙':'t.','杯':'cup','片':'piece','罐':'can','滴':'drop','碗':'bowl','條':'pc.','盒':'box','瓶':'bottle','組':'set'},
+  vn:{g:'Gram','個':'Cái','支':'Chiếc','根':'Cây','條':'Cây','顆':'Trái','段':'Khúc','張':'Tờ','捲':'Cuộn','包':'Gói','匙':'Muỗng','平匙':'Muỗng','杯':'Ly','片':'Miếng','罐':'Hủ','滴':'Giọt','碗':'Chén','組':'Bộ','盒':'Hộp','瓶':'Chai'}};   /* 同 recipe-gloss.json units */
+function trUnit(k,u){u=String(u||'').trim();return k==='mo'?u:((TR_UNIT[k]||{})[u]||u)}
+function trOf(d){var o={};TR3.forEach(function(t){var n=String(d['tr_'+t[0]]||'').trim();if(n)o[t[0]]={name:n,unit:String(d['tr_'+t[0]+'_u']||'').trim()||trUnit(t[0],String(d.unit).trim())}});return o}
+function trPrev(d){var o=trOf(d),ks=Object.keys(o);
+  return ks.length?'<div>三地：'+TR3.filter(function(t){return o[t[0]]}).map(function(t){return t[1]+' <b>'+esc(o[t[0]].name)+'</b>（'+esc(o[t[0]].unit)+'）'}).join('／')+(ks.length<3?'<span class="ru-note">（'+TR3.filter(function(t){return !o[t[0]]}).map(function(t){return t[1]}).join('、')+'沒填，翻譯時會變成 AI 暫譯）</span>':'')+'</div>'
+    :'<div class="ru-note">三地名稱沒填：翻譯成澳門／菲律賓／越南食譜時會變成「AI 暫譯」，要再確認</div>'}
+function suggestTr(){var miss=(S.pv&&S.pv.missing)||[],src=miss.filter(function(m){return S.dec[m.key].act==='create'});if(!src.length||S.busy||!S.cred)return;
+  S.busy='tr';S.msg.tr='';renderMiss();
+  var list=src.map(function(m,i){var d=S.dec[m.key];return {i:i,zh:String(d.name).trim(),unit:String(d.unit).trim(),zone:d.zone,kind:d.kind||guessKind(m.name,m.zone),note:String(d.note||'').trim()}});
+  var gl=TR_GLOSS?Promise.resolve(TR_GLOSS):fetch('recipe-gloss.json',{cache:'no-cache'}).then(function(r){return r.json()}).then(function(j){TR_GLOSS=j;return j}).catch(function(){return null});
+  gl.then(function(G){
+    var all=list.map(function(x){return x.zh+' '+x.note}).join('\n'),terms=G?G.terms.filter(function(t){return all.indexOf(t[0])>=0}).map(function(t){return '- '+t[0]+' → 澳門 '+(t[1]||t[0])+'／PH '+t[2]+'／VN '+t[3]}):[];
+    var sys=['You name new ingredients, consumables, tools, molds and packaging boxes for 自己做烘焙聚樂部 (DIY baking stores) in three markets.',
+      'For each Taiwan (Traditional Chinese) item name give: mo = Macau Traditional Chinese (Macau/HK baking wording, e.g. 焗爐、牛油、淡忌廉、忌廉芝士、芝士、魚膠片、吋; keep it the same as Taiwan when there is no local difference),',
+      'ph = Philippines English (short product-style name, e.g. "Butter", "Pastry bag", "6\" cake box"), vn = Vietnamese (e.g. "Bơ lạt", "Túi bắt kem", "Hộp 6\'\'").',
+      'Keep codes/zone prefixes like 【A區】→【Khu A】for vn, sizes and numbers unchanged. Units: use local unit words (ph: g., pc., sheet, pack, t.; vn: Gram, Cái, Chiếc, Tờ, Gói, Muỗng; mo: same as Taiwan).',
+      'note: one short Traditional Chinese remark only if a choice is uncertain (else empty). Return i exactly as given.',
+      'Glossary:',terms.join('\n')||'(none)'].join('\n');
+    var item={type:'object',additionalProperties:false,required:['name','unit'],properties:{name:{type:'string'},unit:{type:'string'}}};
+    var schema={type:'object',additionalProperties:false,required:['items'],properties:{items:{type:'array',items:{type:'object',additionalProperties:false,required:['i','mo','ph','vn','note'],properties:{i:{type:'integer'},mo:item,ph:item,vn:item,note:{type:'string'}}}}}};
+    var body={model:'claude-opus-5-5',max_tokens:8000,system:sys,messages:[{role:'user',content:JSON.stringify({items:list})}],output_config:{effort:'low',format:{type:'json_schema',schema:schema}}};
+    return fetch('/api/recipe/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:S.cred.role,password:S.cred.pw,payload:body})}).then(function(r){return r.text().then(function(t){var j=null;try{j=JSON.parse(t)}catch(e){}
+      if(r.status===401)throw new Error((j&&j.error)||'身分密碼不對');
+      if(!r.ok)throw new Error('AI 回應錯誤 '+r.status+'：'+JSON.stringify(j&&j.error||t).slice(0,200));
+      var txt=((j&&j.content)||[]).filter(function(b){return b.type==='text'}).map(function(b){return b.text}).join(''),a=txt.indexOf('{'),z=txt.lastIndexOf('}');
+      return JSON.parse(txt.slice(a,z+1))})})})
+  .then(function(res){var n=0,notes=[];(res.items||[]).forEach(function(x){var m=src[x.i];if(!m)return;var d=S.dec[m.key];
+      TR3.forEach(function(t){var v=x[t[0]];if(!v||!String(v.name||'').trim())return;if(!String(d['tr_'+t[0]]||'').trim()){d['tr_'+t[0]]=String(v.name).trim();n++}
+        if(!String(d['tr_'+t[0]+'_u']||'').trim()&&String(v.unit||'').trim())d['tr_'+t[0]+'_u']=String(v.unit).trim()});
+      if(x.note)notes.push(d.name+'：'+x.note)});
+    S.busy='';S.msg.tr='<div class="ru-okbox">✓ AI 填了 '+n+' 個名稱（原本有填的沒動）。請看一下，不對直接改。'+(notes.length?'<div class="ru-muted">AI 備註：'+esc(notes.join('；'))+'</div>':'')+'</div>';renderMiss();renderGo()},
+    function(e){S.busy='';S.msg.tr='<div class="ru-err">✕ AI 建議沒有完成：'+esc(e.message)+'（可以自己填，或再按一次）</div>';renderMiss();renderGo()})}
 function createIngs(){var miss=(S.pv&&S.pv.missing)||[];if(S.busy||!S.cred)return;
   var src=miss.filter(function(m){return S.dec[m.key].act==='create'});
   var items=src.map(function(m){var d=S.dec[m.key];
-    return {name:String(d.name).trim(),unit:String(d.unit).trim(),zone:d.zone,price:String(d.price).trim()||'0',cost:String(d.cost).trim()||'0',note:String(d.note||'').trim(),kind:d.kind||guessKind(m.name,m.zone)}});
+    return {name:String(d.name).trim(),unit:String(d.unit).trim(),zone:d.zone,price:String(d.price).trim()||'0',cost:String(d.cost).trim()||'0',note:String(d.note||'').trim(),kind:d.kind||guessKind(m.name,m.zone),tr:trOf(d)}});
   if(!items.length)return;
-  var lines=items.map(function(o,i){return (i+1)+'. ['+o.kind+'] '+o.name+'｜單位 '+o.unit+'｜'+o.zone+'｜售價 '+o.price+'／成本 '+o.cost+' 元'+(o.note?'｜'+o.note:'')}).join('\n');
+  var lines=items.map(function(o,i){var t=TR3.filter(function(x){return o.tr[x[0]]}).map(function(x){return x[1].slice(0,2)+' '+o.tr[x[0]].name+'('+o.tr[x[0]].unit+')'});
+    return (i+1)+'. ['+o.kind+'] '+o.name+'｜單位 '+o.unit+'｜'+o.zone+'｜售價 '+o.price+'／成本 '+o.cost+' 元'+(o.note?'｜'+o.note:'')+(t.length?'\n     三地：'+t.join('／'):'\n     （三地名稱沒填）')}).join('\n');
   if(!confirm('在自己做食譜系統「食材管理」新增下面 '+items.length+' 個品項（繁體中文、啟用；編號由後台自動給）：\n\n'+lines+'\n\n資料都對嗎？'))return;
   if(!confirm('再確認一次：建立 '+items.length+' 個新品項到後台。建好後只能請負責食譜的夥伴在後台修改或刪除。'))return;
   S.busy='ing';S.msg.ing='';renderMiss();renderInfo();renderGo();var n=0;
-  var send=items.map(function(o){return {name:o.name,unit:o.unit,zone:o.zone,price:o.price,cost:o.cost,note:o.note}});   /* 種類只給畫面用，不送後台 */
+  var send=items.map(function(o){return {name:o.name,unit:o.unit,zone:o.zone,price:o.price,cost:o.cost,note:o.note,tr:o.tr}});   /* 種類只給畫面用，不送後台；tr＝三地名稱（2026-10-19） */
   function go(){n++;return postOnce({action:'nrIngCreate',role:S.cred.role,password:S.cred.pw,items:send},150000).then(function(r){
     if(!r.ok&&SOFT[r.code]&&n<3){S.msg.ing='<div class="ru-muted">'+esc(r.msg||'連線不穩')+'；5 秒後再試一次（已建的不會重複建）…</div>';renderMiss();return wait(5000).then(go)}
     return r})}
@@ -859,7 +898,7 @@ function createIngs(){var miss=(S.pv&&S.pv.missing)||[];if(S.busy||!S.cred)retur
     S.msg.ing='';doCheck()})}
 function ingTable(its,items){if(!its||!its.length)return '';var ST={created:'✅ 建好了',exists:'☑ 後台本來就有',later:'⏳ 時間不夠，再按一次',missing:'⚠ 回覆成功但清單找不到',unsure:'⚠ 不確定',sent:'…'};
   return '<div class="ru-tblwrap"><table class="ru-tbl"><thead><tr><th>品項</th><th>種類</th><th>取放區</th><th>後台編號</th><th>結果</th></tr></thead><tbody>'+its.map(function(x,j){var k=(items&&items[j]&&items[j].kind)||guessKind(x.name,x.zone,x.code);
-    return '<tr><td>'+esc(x.name)+'（'+esc(x.unit)+'）</td><td>'+kindTag(codeKind(x.code)||k)+'</td><td>'+esc(x.zone||'')+'</td><td>'+(x.code?'<b>'+esc(x.code)+'</b>':'<span class="ru-muted">（讀不到）</span>')+'</td><td>'+esc(ST[x.st]||x.st)+(x.msg?'<div class="ru-muted">'+esc(x.msg)+'</div>':'')+'</td></tr>'}).join('')+'</tbody></table></div>'}
+    return '<tr><td>'+esc(x.name)+'（'+esc(x.unit)+'）</td><td>'+kindTag(codeKind(x.code)||k)+'</td><td>'+esc(x.zone||'')+'</td><td>'+(x.code?'<b>'+esc(x.code)+'</b>':'<span class="ru-muted">（讀不到）</span>')+'</td><td>'+esc(ST[x.st]||x.st)+(x.tr?'<div class="ru-muted">🌐 三地名稱已一起填</div>':'')+(x.msg?'<div class="ru-muted">'+esc(x.msg)+'</div>':'')+'</td></tr>'}).join('')+'</tbody></table></div>'}
 
 /* ---------- ⑤ 步驟與圖片／影片 ---------- */
 function dropMedia(m){if(m&&m.url0){try{URL.revokeObjectURL(m.url0)}catch(e){}}}

@@ -27,7 +27,7 @@ from storage_paths import FILE_LOCK, get_rev, bump_rev
 from scoreboard import build_public_scoreboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
-from recipe_auth import recipe_auth, call_anthropic
+from recipe_auth import recipe_auth, call_anthropic, verify_req_identity, clean_translate_payload
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -269,6 +269,16 @@ class TrainingHandler(BaseHTTPRequestHandler):
                 return
             body = self.read_json()
             status_code, resp_data = call_anthropic(body)
+            self.send_json(resp_data, status=status_code)
+            return
+
+        if parsed.path == "/api/recipe/translate":
+            body = self.read_json()
+            ok, err = verify_req_identity(body.get("role", ""), body.get("password", ""))
+            if not ok:
+                self.send_json({"ok": False, "error": err}, status=401)
+                return
+            status_code, resp_data = call_anthropic(clean_translate_payload(body.get("payload") or {}))
             self.send_json(resp_data, status=status_code)
             return
 

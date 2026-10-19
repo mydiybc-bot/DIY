@@ -96,3 +96,88 @@ def call_anthropic(payload: dict) -> tuple[int, dict]:
         return e.code, err_body
     except Exception as e:
         return 500, {"error": f"Anthropic 連線失敗:{type(e).__name__}: {e}"}
+
+
+# ============ 🌐 食譜翻譯（2026-10-19）：用「新品申請表的身分密碼」驗證，不用另外登入食譜小幫手 ============
+# 經營者 10/19：「這個食譜翻譯不需要食譜小幫手的密碼輸入，簡單點」。
+# 流程：前端送 role＋password＋payload → 先拿身分密碼到「食譜系統申請單 API」whoami 驗證（通過記 30 分鐘，存雜湊不存密碼）
+#       → 通過才轉給 Anthropic；payload 只留翻譯用得到的欄位，模型限定、輸出上限 16000（不讓這個入口被拿去做別的事）。
+import hashlib
+
+REQ_API_URL = "https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec"
+REQ_ID_TTL = 30 * 60
+TRANSLATE_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-5")
+TRANSLATE_MAX_TOKENS = 16000
+TRANSLATE_MAX_CHARS = 200000
+_id_ok = {}
+_id_lock = Lock()
+
+
+def _whoami(role: str, password: str) -> dict:
+    body = json.dumps({"action": "whoami", "role": role, "password": password}).encode("utf-8")
+    req = urllib.request.Request(REQ_API_URL, data=body, method="POST",
+                                 headers={"Content-Type": "text/plain;charset=utf-8"})
+    ctx = ssl.create_default_context()
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:   # Google 會 302 轉到結果頁，urllib 自動用 GET 跟過去
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def verify_req_identity(role, password):
+    """身分密碼對 → (True, '')；不對或連不到 → (False, 原因)"""
+    role = str(role or "").strip()
+    password = str(password or "")
+    if not role or not password:
+        return False, "請輸入身分密碼"
+    key = hashlib.sha256((role + "\x00" + password).encode("utf-8")).hexdigest()
+    now = time.time()
+    with _id_lock:
+        exp = _id_ok.get(key)
+        if exp and exp > now:
+            return True, ""
+    last = "驗證身分時連不到申請單系統，請再試一次"
+    for _ in range(3):   # Google 偶爾回錯動作或逾時 → 再試
+        try:
+            data = _whoami(role, password)
+        except Exception:
+            continue
+        if data.get("act") != "whoami":
+            continue
+        if data.get("ok"):
+            with _id_lock:
+                _id_ok[key] = now + REQ_ID_TTL
+                for k in [k for k, v in _id_ok.items() if v < now]:
+                    _id_ok.pop(k, None)
+            return True, ""
+        if data.get("code") == "auth":
+            return False, "身分密碼不對"
+        last = str(data.get("msg") or "驗證身分失敗")
+        break
+    return False, last
+
+
+def clean_translate_payload(p: dict) -> dict:
+    """只留翻譯用得到的欄位；模型、長度設上限"""
+    p = p if isinstance(p, dict) else {}
+    model = p.get("model") if p.get("model") in TRANSLATE_MODELS else TRANSLATE_MODELS[0]
+    try:
+        mt = int(p.get("max_tokens") or TRANSLATE_MAX_TOKENS)
+    except (TypeError, ValueError):
+        mt = TRANSLATE_MAX_TOKENS
+    msgs = [m for m in (p.get("messages") or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)][:4]
+    system = p.get("system") if isinstance(p.get("system"), str) else ""
+    total = len(system) + sum(len(m["content"]) for m in msgs)
+    if total > TRANSLATE_MAX_CHARS:
+        msgs = []   # 太長 → 送空的 messages，Anthropic 直接回 400（不花錢），前端顯示錯誤
+    out = {"model": model, "max_tokens": max(256, min(mt, TRANSLATE_MAX_TOKENS)), "system": system,
+           "messages": [{"role": m["role"], "content": m["content"]} for m in msgs]}
+    oc = p.get("output_config")
+    if isinstance(oc, dict):
+        keep = {}
+        if oc.get("effort") in ("low", "medium", "high"):
+            keep["effort"] = oc["effort"]
+        if isinstance(oc.get("format"), dict) and oc["format"].get("type") == "json_schema":
+            keep["format"] = {"type": "json_schema", "schema": oc["format"].get("schema") or {}}
+        if keep:
+            out["output_config"] = keep
+    return out
