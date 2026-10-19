@@ -93,11 +93,11 @@ function trTestNow() {
 
 /* ================= 🌐 三地確認用語（2026-10-19 第二批） =================
    經營者 10/19：全新的用語、食材、耗材、包裝盒、模具器具（以前沒用過的）→ AI 暫譯後，由主廚／代理商確認；確認過的要記住，下次照用。
-   分頁 tr_confirmed（申請單試算表，第一次寫入時自動建）：lang（mo／ph／vn）、kind（item＝品項名稱、term＝用語）、zh、tr、unit（品項的當地單位）、
+   分頁 tr_confirmed（申請單試算表，第一次寫入時自動建）：lang（mo／ph／vn／me 澳門英文／en 英文）、kind（item＝品項名稱、term＝用語）、zh、tr、unit（品項的當地單位）、
    note、src（從哪支食譜／哪個功能確認的）、by（身分＋名字）、at、status（有效／作廢）。同一個 lang＋kind＋zh 只留一筆有效，改譯法＝舊的標作廢、加一筆新的（留歷史）。
    ⚠ 這份表**不會**自動寫進門市食譜後台的「食材名稱對照表」；翻譯分頁會優先用它，後台名稱要另外補（📤 新食譜上傳建新品項時可一起填三地名稱）。 */
 var TR_CONF_TAB = 'tr_confirmed', TR_CONF_HEAD = ['lang', 'kind', 'zh', 'tr', 'unit', 'note', 'src', 'by', 'at', 'status'];
-var TR_CONF_KEY = 'trconf:v1', TR_LANGS = { mo: 1, ph: 1, vn: 1 }, TR_CONF_MAX = 300;
+var TR_CONF_KEY = 'trconf:v1', TR_LANGS = { mo: 1, ph: 1, vn: 1, me: 1, en: 1 }, TR_CONF_MAX = 300;   /* 10/19 v33 加 me＝澳門英文、en＝英文（台灣門市英文版） */
 /* 後台「新增食材」頁 10 個語言列的 LanguageId（10/19 讀頁面確認；跟食譜的語言 ID 相同） */
 var TR_LANG_ID = { mo: 'ee184749-9860-48f4-a76f-14c80dd8fdb2', ph: '73743a68-2ef5-4e71-be40-3bebd8d97712', vn: '68d41688-4c57-44ed-b35d-0fcdbd1ee292' };
 
@@ -131,7 +131,7 @@ function trConfClean_(it) {
   it = it || {};
   var o = { lang: String(it.lang || ''), kind: String(it.kind || ''), zh: rbTrim_(it.zh).slice(0, 80), tr: rbTrim_(it.tr).slice(0, 160),
     unit: rbTrim_(it.unit).slice(0, 20), note: rbTrim_(it.note).slice(0, 200), src: rbTrim_(it.src).slice(0, 80) };
-  if (!TR_LANGS[o.lang]) throw fail_('語言不對（只能是澳門中文、菲律賓英文、越南文）', 'input');
+  if (!TR_LANGS[o.lang]) throw fail_('語言不對（只能是澳門中文、菲律賓英文、越南文、澳門英文、英文）', 'input');
   if (o.kind !== 'item' && o.kind !== 'term') throw fail_('種類不對（品項或用語）', 'input');
   if (!o.zh || !o.tr) throw fail_('「' + (o.zh || '（空白）') + '」的原文或譯法是空的', 'input');
   return o;

@@ -1023,7 +1023,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
   <!-- ===== TAB: 🌐 食譜翻譯（TrMod，2026-10-19）：任何後台食譜 → 澳門中文／菲律賓英文／越南文翻譯稿（只產生稿子，不寫進後台） ===== -->
   <div class="tab-panel" id="tab-translate">
-  <div class="ap-panel-head"><h2 class="ap-panel-title">🌐 食譜翻譯 <span class="ap-sub">把門市食譜後台的任何食譜翻成澳門中文、菲律賓英文、越南文——食材器具名稱照各地叫法、用語照各地習慣；只產生翻譯稿，不寫進後台</span></h2></div>
+  <div class="ap-panel-head"><h2 class="ap-panel-title">🌐 食譜翻譯 <span class="ap-sub">把門市食譜後台的任何食譜翻成澳門中文、菲律賓英文、越南文、澳門英文、英文——食材器具名稱照各地叫法、用語照各地習慣；只產生翻譯稿，不寫進後台</span></h2></div>
   <div id="trRoot"></div>
   </div>
 
@@ -6865,6 +6865,8 @@ window.FinderMod=(function(){
           ③ 步驟標題／內容／產品特色／保存方式：訓練站的 Claude 代理（/api/recipe/translate，用身分密碼驗證；10/19 起不用食譜小幫手密碼）；
              提示裡帶：該語言的寫法規則＋詞庫（static/recipe-gloss.json：從後台 378 組已翻好的食譜統計出來的三地用語）＋這支食譜用到的品項當地名稱＋常用步驟標題
           ④ 自動檢查：數字不一致、步驟內文的品名跟清單不一致、對照表沒有的品項、當地名稱不同（可能換料）、AI 自己決定的新用語
+     2026-10-19 經營者：「我還需要澳門英文、英文二種語言」→ 加 me＝澳門英文（後台「澳門 English」）、en＝英文（後台「英文」＝台灣門市給外國客人的英文版）；
+          詞庫 terms 第 7、8 欄、titles 第 5、6 欄（TCOL／HCOL），寫法規則在 recipe-gloss.json langs.me／langs.en。
      稿子存在這台電腦（localStorage tr:draft:<食譜>:<語言>），改字也會存。class／id 前綴 tr-。
      搜尋框只建一次、選字中不搜尋（規則：儀表板輸入框一定要能打中文）。 -->
 <style>
@@ -6929,9 +6931,11 @@ window.TrMod=(function(){
   var MODEL='claude-opus-5-5',MODEL_FB='claude-sonnet-4-5';   /* 主要用 Opus 5.5；帳號沒開放就退回食譜小幫手一直在用的 Sonnet 4.5 */
   var GLOSS_URL='recipe-gloss.json',BACK='https://diybc.azurewebsites.net/Recipes/Edit/',CHUNK=8,PAR=3;
   var CRED_KEY='rcp:cred',ROLES=['管理者','主廚','出貨中心','採購','行銷設計','營運POS'];
-  var LANGS=['mo','ph','vn'];
+  var LANGS=['mo','ph','vn','me','en'];
+  var NAMES={mo:'澳門中文',ph:'菲律賓英文',vn:'越南文',me:'澳門英文',en:'英文'};
+  var TCOL={mo:1,ph:2,vn:3,me:6,en:7},HCOL={mo:1,ph:2,vn:3,me:4,en:5};   /* 詞庫欄位：terms［台灣,澳門,菲英,越,類別,備註,澳英,英］、titles［台灣,澳門,菲英,越,澳英,英］ */
   var FIELDS=['製作時間','尺寸','產品特色','保存方式'];
-  var S={inited:false,rows:null,q:'',pick:null,src:null,dict:null,gloss:null,conf:null,want:{mo:1,ph:1,vn:1},view:'mo',busy:false,glQ:'',glMode:'terms'};
+  var S={inited:false,rows:null,q:'',pick:null,src:null,dict:null,gloss:null,conf:null,want:(function(){var w=null;try{w=JSON.parse(localStorage.getItem('tr:want')||'null')}catch(e){}return w&&typeof w==='object'?w:{mo:1,ph:1,vn:1,me:1,en:1}})(),view:'mo',busy:false,glQ:'',glMode:'terms'};
   function $(id){return document.getElementById(id)}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
   function norm(s){return String(s||'').replace(/[ \s]+/g,' ').replace(/（/g,'(').replace(/）/g,')').trim()}
@@ -6939,7 +6943,7 @@ window.TrMod=(function(){
   function today(){var d=new Date();return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')}
   function lsGet(k){try{return JSON.parse(localStorage.getItem(k)||'null')}catch(e){return null}}
   function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}
-  function L(k){return S.gloss&&S.gloss.langs[k]||{label:k,dict:k,rules:[]}}
+  function L(k){return S.gloss&&S.gloss.langs[k]||{label:NAMES[k]||k,dict:k,rules:[]}}
 
   /* ---- 申請單 API（Google）：回錯動作／逾時自動重試 ---- */
   function post(body,ms){
@@ -7006,7 +7010,7 @@ window.TrMod=(function(){
       map[o.lang+'|'+o.kind+'|'+norm(o.zh)]=o;if(o.kind==='item')map[o.lang+'|item|'+core(o.zh)]=map[o.lang+'|item|'+core(o.zh)]||o});
     return {map:map,list:list,at:d.at}}
   function loadConf(force){if(S.conf&&!force)return Promise.resolve(S.conf);
-    return withCred('讀「三地確認用語」要身分密碼（任何身分都可以）。',function(){return call('trConfList',force?{fresh:1}:{},45000,3)}).then(function(d){S.conf=shapeConf(d);AIC={};return S.conf})}
+    return withCred('讀「各地確認用語」要身分密碼（任何身分都可以）。',function(){return call('trConfList',force?{fresh:1}:{},45000,3)}).then(function(d){S.conf=shapeConf(d);AIC={};return S.conf})}
 
   /* ---- 讀一支食譜（匯出食譜頁）→ 欄位＋步驟（步驟內容只留顏色、粗體、換行） ---- */
   function clean(node,imgs){
@@ -7070,10 +7074,10 @@ window.TrMod=(function(){
   /* 提示：寫法規則＋只帶這支食譜會用到的詞庫、品項名稱、步驟標題 */
   function buildSystem(k,src,itemMap){
     var G=S.gloss,lg=L(k),all=[src.name].concat(FIELDS.map(function(f){return src.f[f]||''}),src.s.map(function(s){return s.t+' '+plain(s.h)})).join('\n');
-    var ci={mo:1,ph:2,vn:3}[k];
+    var ci=TCOL[k],hi=HCOL[k];
     var ct=((S.conf&&S.conf.list)||[]).filter(function(c){return c.lang===k&&c.kind==='term'&&all.indexOf(c.zh)>=0}).map(function(c){return '- '+c.zh+' → '+c.tr+'（已確認，一定要用）'});
-    var terms=ct.concat(G.terms.filter(function(t){return all.indexOf(t[0])>=0&&!(k==='mo'&&(!t[1]||t[1]===t[0]))&&!confOf(k,'term',t[0])}).map(function(t){return '- '+t[0]+' → '+(t[ci]||t[0])+(t[5]&&k==='mo'?'（'+t[5]+'）':'')}));
-    var titles=G.titles.filter(function(t){return src.s.some(function(s){return s.t.replace(/\s*\d+\s*$/,'')===t[0]})}).map(function(t){return '- '+t[0]+' → '+t[ci]});
+    var terms=ct.concat(G.terms.filter(function(t){return all.indexOf(t[0])>=0&&t[ci]&&!(k==='mo'&&t[1]===t[0])&&!confOf(k,'term',t[0])}).map(function(t){return '- '+t[0]+' → '+t[ci]+(t[5]&&k==='mo'?'（'+t[5]+'）':'')}));
+    var titles=G.titles.filter(function(t){return t[hi]&&src.s.some(function(s){return s.t.replace(/\s*\d+\s*$/,'')===t[0]})}).map(function(t){return '- '+t[0]+' → '+t[hi]});
     var items=Object.keys(itemMap).map(function(z){return '- '+z+' → '+itemMap[z]});
     return ['You translate DIY baking recipes of 自己做烘焙聚樂部 (customers bake by themselves in our stores, following a tablet step by step).',
       'Source language: Traditional Chinese (Taiwan). Target: '+lg.label+'（'+lg.region+' 門市客人用的食譜）.',
@@ -7136,13 +7140,13 @@ window.TrMod=(function(){
       +'<div class="tr-row"><input type="search" id="trQ" placeholder="搜尋食譜名稱（門市食譜後台台灣區），或貼後台網址／食譜編號" autocomplete="off"></div>'
       +'<div id="trPick" style="margin-top:8px"></div><div class="tr-res" id="trRes"><div class="tr-muted" style="padding:8px 0">⏳ 讀取後台食譜清單…</div></div></div>'
       +'<div class="tr-card"><div class="tr-h">② 翻成哪些語言</div>'
-      +'<div class="tr-row">'+LANGS.map(function(k){return '<label><input type="checkbox" data-l="'+k+'" checked> '+({mo:'澳門中文',ph:'菲律賓英文',vn:'越南文'})[k]+'</label>'}).join('')+'</div>'
+      +'<div class="tr-row">'+LANGS.map(function(k){return '<label><input type="checkbox" data-l="'+k+'"'+(S.want[k]?' checked':'')+'> '+NAMES[k]+'</label>'}).join('')+'</div>'
       +'<div id="trAi" style="margin-top:10px"></div>'
       +'<div class="tr-act"><button type="button" class="tr-btn" id="trGo" disabled>🌐 開始翻譯</button><button type="button" class="tr-btn2" id="trDictR" title="後台食材名稱對照表改過時，按這個重新讀">🔄 重讀食材名稱對照表</button></div>'
       +'<div class="tr-msg" id="trMsg"></div>'
-      +'<div class="tr-muted" style="margin-top:6px">只產生翻譯稿，<b>不會寫進門市食譜後台</b>。食材、器具、模具、耗材、包裝盒名稱照後台「食材名稱對照表」換成當地叫法；步驟文字由 AI 依三地用語詞庫翻譯，翻好會自動檢查並標出要人確認的地方。</div></div>'
+      +'<div class="tr-muted" style="margin-top:6px">只產生翻譯稿，<b>不會寫進門市食譜後台</b>。食材、器具、模具、耗材、包裝盒名稱照後台「食材名稱對照表」換成當地叫法；步驟文字由 AI 依各地用語詞庫翻譯，翻好會自動檢查並標出要人確認的地方。</div></div>'
       +'<div id="trOut"></div>'
-      +'<details class="tr-card tr-gl" id="trGl"><summary class="tr-h" style="cursor:pointer;margin:0">📖 三地用語詞庫（翻譯時會用到的對照）</summary><div style="margin-top:10px">'
+      +'<details class="tr-card tr-gl" id="trGl"><summary class="tr-h" style="cursor:pointer;margin:0">📖 各地用語詞庫（翻譯時會用到的對照）</summary><div style="margin-top:10px">'
       +'<div class="tr-row" style="margin-bottom:8px"><input type="search" id="trGq" placeholder="搜尋用語（台灣、澳門、英文、越南文都可以）" autocomplete="off">'
       +'<label><input type="radio" name="trGm" value="terms" checked> 通用用語</label><label><input type="radio" name="trGm" value="titles"> 常用步驟標題</label><label><input type="radio" name="trGm" value="names"> 食材名稱對照（後台）</label><label><input type="radio" name="trGm" value="conf"> ✅ 已確認的譯法</label></div>'
       +'<div id="trGlRes" class="tr-muted">打開時才讀取…</div></div></details>';
@@ -7150,7 +7154,7 @@ window.TrMod=(function(){
     q.addEventListener('compositionstart',function(){comp=true});
     q.addEventListener('compositionend',function(){comp=false;S.q=q.value;renderRes()});
     q.addEventListener('input',function(e){if(comp||e.isComposing||(window.__ime&&__ime.on))return;S.q=q.value;renderRes()});
-    Array.prototype.forEach.call(document.querySelectorAll('#tab-translate input[data-l]'),function(c){c.onchange=function(){S.want[c.dataset.l]=c.checked?1:0;renderGo()}});
+    Array.prototype.forEach.call(document.querySelectorAll('#tab-translate input[data-l]'),function(c){c.onchange=function(){S.want[c.dataset.l]=c.checked?1:0;lsSet('tr:want',S.want);renderGo()}});
     $('trGo').onclick=start;
     $('trDictR').onclick=function(){setMsg('⏳ 重讀後台食材名稱對照表（約 20 秒）…');loadDict(true).then(function(){setMsg('✅ 食材名稱對照表已更新（後台 '+S.dict.raw.rows.length+' 個品項，'+S.dict.at+'）');renderOut()},function(e){setMsg('❌ '+e.message,true)})};
     var gq=$('trGq'),gc=false;
@@ -7253,7 +7257,7 @@ window.TrMod=(function(){
     return out}
   function confHTML(k,src,o){var P=S.pend=pendOf(k,src,o),who='';try{who=localStorage.getItem('tr:who')||''}catch(e){}
     var h='<div class="tr-card" style="margin-top:10px;background:#FBF7FD"><div class="tr-h">🔎 要確認的新品項與用語（'+P.length+' 項）</div>'
-      +'<div class="tr-muted" style="margin-bottom:8px">對照表沒有的品項、AI 自己決定的用語都列在這裡。譯法對了按「✅ 確認」，會存進共用的「三地確認用語」，之後翻譯都照這個用（📖 詞庫可查、可作廢）。不確定的先「📤 匯出給代理商確認」，代理商在 Excel 填好傳回來再「📥 匯入代理商回填」。<b>確認不會改門市食譜後台</b>；後台對照表的名稱要另外補。確認要「主廚」或「管理者」密碼。</div>';
+      +'<div class="tr-muted" style="margin-bottom:8px">對照表沒有的品項、AI 自己決定的用語都列在這裡。譯法對了按「✅ 確認」，會存進共用的「各地確認用語」，之後翻譯都照這個用（📖 詞庫可查、可作廢）。不確定的先「📤 匯出給代理商確認」，代理商在 Excel 填好傳回來再「📥 匯入代理商回填」。<b>確認不會改門市食譜後台</b>；後台對照表的名稱要另外補。確認要「主廚」或「管理者」密碼。</div>';
     if(P.length){h+='<div class="tr-row" style="margin-bottom:8px"><label>確認人</label><input type="search" id="trWho" value="'+esc(who)+'" placeholder="你的名字（會記在確認紀錄）" style="flex:0 1 220px" autocomplete="off"></div>'
       +'<table class="tr-grid"><thead><tr><th style="width:70px">類型</th><th>台灣原文</th><th>'+esc(L(k).label)+' 譯法（可改）</th><th style="width:76px">當地單位</th><th style="width:70px"></th></tr></thead><tbody>'
       +P.map(function(p,i){return '<tr><td class="lb">'+(p.kind==='item'?'品項'+(p.code?'<br>'+esc(p.code):''):'用語')+'</td><td>'+esc(p.zh)+(p.kind==='item'?' <span class="tr-muted">（'+esc(p.unit)+'）</span>':'')
@@ -7281,10 +7285,10 @@ window.TrMod=(function(){
     $('trXFile').onchange=function(){var f=this.files&&this.files[0];if(f)importX(f)}}
   function flushSave(){if(saveT){clearTimeout(saveT);saveT=null}}
   function confirmItems(items,ask){
-    if(ask&&!confirm(ask+'？\n\n確認後存進「三地確認用語」，之後翻譯都照這個用（不會改門市食譜後台）。'))return;
+    if(ask&&!confirm(ask+'？\n\n確認後存進「各地確認用語」，之後翻譯都照這個用（不會改門市食譜後台）。'))return;
     var who='';try{who=localStorage.getItem('tr:who')||''}catch(e){}
     var rq='trc-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),fn=function(){return call('trConfirm',{items:items,name:who,rq:rq},60000,3)};
-    cmsg('⏳ 存進三地確認用語（'+items.length+' 筆）…');
+    cmsg('⏳ 存進各地確認用語（'+items.length+' 筆）…');
     withCred('確認譯法要「主廚」或「管理者」密碼。',fn).catch(function(e){if(e.code!=='perm')throw e;setCred(null);
         return askCred('確認譯法要「主廚」或「管理者」密碼（剛剛的身分不能確認）。').then(function(c){if(!c)throw new Error('沒有輸入密碼');return fn()})})
       .then(function(d){flushSave();return loadConf(true).then(function(){renderOut();cmsg('✅ 已確認：新增 '+d.added+' 筆'+(d.replaced?'（取代舊譯法 '+d.replaced+' 筆）':'')+(d.same?'、'+d.same+' 筆跟原本一樣':'')+'。之後翻譯會照這些譯法；後台對照表的名稱還要另外補。')})},
@@ -7322,7 +7326,7 @@ window.TrMod=(function(){
       var msg='「'+file.name+'」\n\n要確認的譯法 '+ok.length+' 筆'+(skip?'（另有 '+skip+' 筆沒填，略過）':'')+'：\n'+ok.slice(0,30).map(function(x){return L(x.lang).label+'｜'+x.zh+' → '+x.tr+(x.unit?'（'+x.unit+'）':'')}).join('\n')+(ok.length>30?'\n…':'')
         +(notes.length?'\n\n代理商備註（不會自動套用，請自己看）：\n'+notes.slice(0,15).join('\n'):'');
       if(!ok.length){alert(msg);cmsg('代理商只寫了備註，沒有要確認的譯法（備註已顯示）');return}
-      if(!confirm(msg+'\n\n把這 '+ok.length+' 筆存進三地確認用語？'))return;
+      if(!confirm(msg+'\n\n把這 '+ok.length+' 筆存進各地確認用語？'))return;
       confirmItems(ok,'');if(notes.length)setTimeout(function(){var e=$('trCmsg');if(e)e.textContent+='\n代理商備註：'+notes.join('；')},4000)})
       .catch(function(e){cmsg('❌ 匯入失敗：'+e.message,true)})}
   /* ---- 匯出：Word（跟後台「匯出食譜」同版面）、純文字 ---- */
@@ -7353,14 +7357,14 @@ window.TrMod=(function(){
         withCred('作廢要「主廚」或「管理者」密碼。',fn).catch(function(e){if(e.code!=='perm')throw e;setCred(null);return askCred('作廢要「主廚」或「管理者」密碼。').then(function(c){if(!c)throw new Error('沒有輸入密碼');return fn()})})
           .then(function(){return loadConf(true)}).then(function(){renderGl();renderOut()},function(e){alert('作廢沒有成功：'+e.message)})}});return}
     if(S.glMode==='names'){if(!S.dict){box.innerHTML='<button type="button" class="tr-btn2" id="trGlLoad">讀後台食材名稱對照表（要身分密碼）</button>';$('trGlLoad').onclick=function(){box.textContent='⏳ 讀取中（約 20 秒）…';loadDict().then(renderGl,function(e){box.textContent='❌ '+e.message})};return}
-      var D=S.dict,li=D.li,cols=[['澳門中文','澳門中文'],['The Philippines English','菲律賓英文'],['越南文 Tiếng Việt','越南文']],rows=D.raw.rows.filter(function(r){return hit(r)}),miss=cols.map(function(c){return D.raw.rows.filter(function(r){return !r[3+li[c[0]]]}).length});
-      box.innerHTML='<div class="tr-muted" style="margin-bottom:6px">後台 '+D.raw.rows.length+' 個品項（'+esc(D.at)+' 讀取）。還沒填名稱：澳門中文 '+miss[0]+'、菲律賓英文 '+miss[1]+'、越南文 '+miss[2]+' 項（翻譯時會由 AI 暫譯並標出來）。</div>'
+      var D=S.dict,li=D.li,cols=LANGS.map(function(k){return [L(k).dict,L(k).label]}),rows=D.raw.rows.filter(function(r){return hit(r)}),miss=cols.map(function(c){return D.raw.rows.filter(function(r){return li[c[0]]==null||!r[3+li[c[0]]]}).length});
+      box.innerHTML='<div class="tr-muted" style="margin-bottom:6px">後台 '+D.raw.rows.length+' 個品項（'+esc(D.at)+' 讀取）。還沒填名稱：'+cols.map(function(c,i){return c[1]+' '+miss[i]}).join('、')+' 項（翻譯時會由 AI 暫譯並標出來）。</div>'
         +'<table><thead><tr><th style="width:70px">編號</th><th>台灣</th>'+cols.map(function(c){return '<th>'+c[1]+'</th>'}).join('')+'</tr></thead><tbody>'
-        +rows.slice(0,300).map(function(r){return '<tr><td class="note">'+esc(r[0])+'</td><td>'+esc(r[3])+'</td>'+cols.map(function(c){var v=r[3+li[c[0]]];return '<td'+(c[0]==='澳門中文'&&v&&norm(v)!==norm(r[3])?' style="color:#1F5C99;font-weight:700"':'')+'>'+(v?esc(v):'<span class="note">（沒填）</span>')+'</td>'}).join('')+'</tr>'}).join('')
+        +rows.slice(0,300).map(function(r){return '<tr><td class="note">'+esc(r[0])+'</td><td>'+esc(r[3])+'</td>'+cols.map(function(c){var v=li[c[0]]!=null?r[3+li[c[0]]]:'';return '<td'+(c[0]==='澳門中文'&&v&&norm(v)!==norm(r[3])?' style="color:#1F5C99;font-weight:700"':'')+'>'+(v?esc(v):'<span class="note">（沒填）</span>')+'</td>'}).join('')+'</tr>'}).join('')
         +'</tbody></table>'+(rows.length>300?'<div class="tr-muted">只列前 300 項，請用搜尋縮小</div>':'');return}
     var list=S.glMode==='titles'?G.titles:G.terms,rows2=list.filter(hit);
-    box.innerHTML='<div class="tr-muted" style="margin-bottom:6px">'+esc(G.about)+'</div><table><thead><tr><th>台灣</th><th>澳門中文</th><th>菲律賓英文</th><th>越南文</th>'+(S.glMode==='terms'?'<th style="width:70px">類別</th><th>備註</th>':'')+'</tr></thead><tbody>'
-      +rows2.map(function(t){return '<tr><td>'+esc(t[0])+'</td><td>'+(t[1]&&t[1]!==t[0]?'<b style="color:#1F5C99">'+esc(t[1])+'</b>':esc(t[1]||t[0]))+'</td><td>'+esc(t[2])+'</td><td>'+esc(t[3])+'</td>'+(S.glMode==='terms'?'<td class="note">'+esc(t[4])+'</td><td class="note">'+esc(t[5])+'</td>':'')+'</tr>'}).join('')+'</tbody></table>'}
+    box.innerHTML='<div class="tr-muted" style="margin-bottom:6px">'+esc(G.about)+'</div><table><thead><tr><th>台灣</th>'+LANGS.map(function(k){return '<th>'+esc(NAMES[k])+'</th>'}).join('')+(S.glMode==='terms'?'<th style="width:70px">類別</th><th>備註</th>':'')+'</tr></thead><tbody>'
+      +rows2.map(function(t){var C=S.glMode==='terms'?TCOL:HCOL;return '<tr><td>'+esc(t[0])+'</td><td>'+(t[1]&&t[1]!==t[0]?'<b style="color:#1F5C99">'+esc(t[1])+'</b>':esc(t[1]||t[0]))+'</td>'+LANGS.slice(1).map(function(k){return '<td>'+esc(t[C[k]]||'')+'</td>'}).join('')+(S.glMode==='terms'?'<td class="note">'+esc(t[4])+'</td><td class="note">'+esc(t[5])+'</td>':'')+'</tr>'}).join('')+'</tbody></table>'}
   return {ensureInit:ensureInit,_state:S,_parse:parseRecipe,_look:look,_checks:checks,_build:buildSystem,_shapeDict:shapeDict};
 })();
 /* 打開網址就是 #translate 時，分頁切換比本模組早跑 → 這裡補叫一次 */
