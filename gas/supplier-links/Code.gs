@@ -9,18 +9,25 @@
  *
  * 讀（GET，JSONP，免密碼，跟其他儀表板一樣靠頁面閘門擋路人）：
  *   ?action=ping        版號
- *   ?action=items       彙整結果（items＋files＋最後彙整時間）
+ *   ?action=items       彙整結果（items＋files＋found＋最後彙整時間）
+ *                       found＝alternatives 分頁：Claude 上網找的連結與替代廠商（不是申請單填的正式連結，只是建議）
  *   ?action=rebuild     立刻重新彙整（10 分鐘內只跑一次；只讀來源檔、只寫本試算表）
  * 寫（POST）：
+ *   {action:'foundSave', token, rows:[…]}（要通行碼，只有 Claude 用）整份覆蓋 alternatives 分頁；寫前先備份成 alternatives_備份_時間（只留最近 5 份）
  *   {action:'authSetup'}（免密碼）權限中心 dim_auth 補「supplier」列，已有就只把名稱改成 AUTH_NAME（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 排程：rebuild 每天 06:00（在編輯器「觸發條件」介面建，不加 script.scriptapp 權限）。
  * 所有儲存格一律存純文字。
  */
-var VER = 'v1.1';
+var VER = 'v1.2';   /* 2026-10-19 v1.2：加 alternatives（Claude 找的連結／替代廠商） */
 var ROOT_FOLDER_ID = '1EVJrOIhB69jRkKDNbOpifbVq7BHENd2o';   /* 新品研發工作申請單／2026 */
 var AUTH_DASH = 'supplier', AUTH_NAME = '海外代理商購買平台';   /* 2026-10-19 經營者改名（原「新品供應商查詢」） */
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
 var REBUILD_GAP_SEC = 600;
+/* alternatives：每列一個連結。kind＝link（原品項的規格頁／購買頁）｜alt（替代候選，rank 1～3）｜none（不用找或找不到，看 note） */
+var FOUND_TAB = 'alternatives';
+var FOUND_COLS = ['item', 'kind', 'rank', 'url', 'site', 'shop', 'title', 'price', 'spec', 'match', 'diff', 'note', 'found_at', 'found_by'];
+/* foundSave 通行碼的 SHA-256（通行碼本身在經營者電腦 ~/.config/diybc/supplier-write-token，不進 repo） */
+var FOUND_TOKEN_SHA256 = 'c76eccc371f8c81fa9207702ad1c0255e1e035e0ded7261654f591e049807725';
 
 var ITEM_COLS = ['item', 'dessert', 'campaign', 'file', 'folder', 'supplier', 'vendor_src', 'provide', 'links', 'cost', 'spec', 'usage',
   'keep', 'take', 'zone', 'pack', 'split', 'order_way', 'first_order', 'sticker', 'note', 'src_tab', 'src_row', 'file_id', 'gid'];
@@ -51,6 +58,7 @@ function doPost(e) {
   try {
     var b = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (b.action === 'authSetup') res = authSetup_();
+    else if (b.action === 'foundSave') res = foundSave_(b);
     else res = { ok: false, error: '不認得的動作：' + b.action };
   } catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
   return out_(res);
@@ -82,6 +90,7 @@ function items_() {
   return {
     items: table_(ss.getSheetByName('items'), ITEM_COLS),
     files: table_(ss.getSheetByName('files'), FILE_COLS),
+    found: table_(ss.getSheetByName(FOUND_TAB), FOUND_COLS),
     rebuilt_at: PropertiesService.getScriptProperties().getProperty('rebuilt_at') || '',
     ver: VER
   };
@@ -216,6 +225,34 @@ function log_(stat) {
   var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName('log') || ss.insertSheet('log');
   if (sh.getLastRow() < 1) sh.appendRow(['ts', 'files', 'items', 'links', 'sec']);
   sh.appendRow([stat.at, stat.files, stat.items, stat.links, stat.sec]);
+}
+
+/* ---------------- Claude 找的連結／替代廠商 ---------------- */
+function sha256_(s) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s), Utilities.Charset.UTF_8)
+    .map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+function foundSave_(b) {
+  if (!b.token || sha256_(b.token) !== FOUND_TOKEN_SHA256) return { ok: false, error: '通行碼不對' };
+  var rows = b.rows;
+  if (!Array.isArray(rows) || !rows.length) return { ok: false, error: '沒有資料' };
+  var bad = rows.filter(function (r) { return !r || !String(r.item || '').trim() || ['link', 'alt', 'none'].indexOf(r.kind) < 0; });
+  if (bad.length) return { ok: false, error: bad.length + ' 列缺品項或 kind 不對（只收 link／alt／none）' };
+  rows.forEach(function (r) { if (r.url && !/^https?:\/\//i.test(String(r.url))) throw new Error('網址格式不對：' + r.item); });
+  var lk = LockService.getScriptLock();
+  if (!lk.tryLock(30000)) return { ok: false, error: '正在寫入中，請稍後再試' };
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(FOUND_TAB), before = 0, bk = '';
+    if (sh && sh.getLastRow() > 1) {
+      before = sh.getLastRow() - 1;
+      bk = FOUND_TAB + '_備份_' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmmss');
+      sh.copyTo(ss).setName(bk);
+      var olds = ss.getSheets().map(function (x) { return x.getName(); }).filter(function (n) { return n.indexOf(FOUND_TAB + '_備份_') === 0; }).sort();
+      while (olds.length > 5) ss.deleteSheet(ss.getSheetByName(olds.shift()));   /* 只刪自己做的舊備份 */
+    }
+    write_(FOUND_TAB, FOUND_COLS, rows);
+    return { ok: true, before: before, after: rows.length, backup: bk, items: Object.keys(rows.reduce(function (m, r) { m[r.item] = 1; return m; }, {})).length };
+  } finally { lk.releaseLock(); }
 }
 
 /* ---------------- 權限中心補列 ---------------- */
