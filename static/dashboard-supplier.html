@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<!-- 2026-10-19 新建「新品供應商查詢」儀表板；同日經營者改名「海外代理商購買平台」（檔名、DASH_ID 不變）。（經營者交辦：把新品研發申請單裡每個產品用的食材／器模具、供貨廠商、購買連結表列出來，可以搜尋）。
+<!-- 2026-10-19 晚 經營者：拿掉「規格・成本」「提供方式」兩欄（逐筆明細的原包裝規格／每份用量／成本／提供方式、提供方式篩選一起拿掉）。
+     2026-10-19 新建「新品供應商查詢」儀表板；同日經營者改名「海外代理商購買平台」（檔名、DASH_ID 不變）。（經營者交辦：把新品研發申請單裡每個產品用的食材／器模具、供貨廠商、購買連結表列出來，可以搜尋）。
      來源：Drive「新品研發工作申請單／2026」資料夾（含子資料夾）每份 Google 試算表的「新品通知表 → 各店新增食材、器具」；xlsx 讀不到（列在「讀了哪些檔」）。
      後端：新品供應商查詢 API（GAS，綁試算表「新品供應商查詢_資料庫」；原始碼 gas/supplier-links/），每天 06:00 自動彙整；本頁只讀不寫。
      閘門 DASH_ID=supplier。第二段（每個品項找 3 家替代廠商）另做。 -->
@@ -64,6 +65,7 @@ window.__ime=(function(){
   .sbar{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
   .sbar .q{flex:1 1 320px;min-width:0;position:relative}
   .sbar .q input{width:100%;font-family:inherit;font-size:15px;padding:9px 34px 9px 12px;border:1px solid #CFC6BF;border-radius:10px;background:#fff}
+  .sbar .q input::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
   .sbar .q button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;color:#9A8A80;cursor:pointer;padding:2px 6px}
   .sbar select{font-family:inherit;font-size:13px;padding:7px 8px;border:1px solid #CFC6BF;border-radius:8px;background:#fff;max-width:100%}
   .sbar2{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-top:10px}
@@ -400,7 +402,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <b>這頁做什麼</b>：把每個檔期申請單「新品通知表 → 各店新增食材、器具」那張表合在一起，可以搜尋品項、甜點、供應商。
       <ul>
         <li><b>依品項</b>（預設）：同名品項合成一列，看它用在哪些甜點、哪些檔期、跟誰買、所有購買連結。</li>
-        <li><b>逐筆明細</b>：每個檔期、每支甜點各一列（含每份用量、成本、區域、備註）。</li>
+        <li><b>逐筆明細</b>：每個檔期、每支甜點各一列（含區域、備註）。</li>
         <li>點「用在」裡的甜點名稱，會打開那份申請單原檔。</li>
         <li>上面四格數字可以點：點「沒有連結」就只看還沒填連結的品項。</li>
       </ul>
@@ -415,7 +417,6 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <div class="q"><input id="q" type="search" placeholder="搜尋品項、甜點、供應商、檔期…（例：花生醬、1688、蛋糕圈）" autocomplete="off"><button type="button" id="qx" aria-label="清除搜尋" hidden>✕</button></div>
       <select id="fCamp" aria-label="檔期"><option value="">全部檔期</option></select>
       <select id="fSup" aria-label="供應商"><option value="">全部供應商</option></select>
-      <select id="fProv" aria-label="提供方式"><option value="">全部提供方式</option></select>
     </div>
     <div class="sbar2">
       <span class="lab">顯示</span>
@@ -484,11 +485,6 @@ function linkBtns(list){
   if (!list.length) return '<span class="none">沒有連結</span>';
   return list.map(function(u){ return '<a class="go" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer" title="' + esc(u) + '">🔗 ' + esc(site(u)) + '</a>'; }).join('');
 }
-function provTag(p){
-  if (!p) return '';
-  var c = /出貨中心/.test(p) ? 'p1' : /自購/.test(p) ? 'p2' : /自製/.test(p) ? 'p3' : '';
-  return '<span class="tag ' + c + '">' + esc(p) + '</span>';
-}
 function fileUrl(r){ return 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(r.file_id) + '/edit' + (r.gid ? '#gid=' + encodeURIComponent(r.gid) : ''); }
 function srcUrl(r){ return 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(r.file_id) + '/edit'; }
 function hl(s, q){
@@ -507,7 +503,7 @@ function prep(){
     r._links = String(r.links || '').split('\n').filter(Boolean);
     r._sup = supName(r.supplier);
     r._ord = S.fileOrder[r.file_id] || '';
-    r._txt = key([r.item, r.dessert, r.campaign, r.file, r.folder, r._sup, r.vendor_src, r.note, r.sticker, r.spec, r.provide, r.zone].join(' '));
+    r._txt = key([r.item, r.dessert, r.campaign, r.file, r.folder, r._sup, r.vendor_src, r.note, r.sticker, r.zone].join(' '));   /* 2026-10-19 經營者：規格成本、提供方式不顯示 → 也不納入搜尋 */
   });
   var g = {}, order = [];
   S.rows.forEach(function(r){
@@ -532,11 +528,10 @@ function prep(){
   fillSelects();
 }
 function fillSelects(){
-  var camp = {}, sup = {}, prov = {};
+  var camp = {}, sup = {};
   S.rows.forEach(function(r){
     camp[r.file_id] = camp[r.file_id] || { n: 0, name: (r.folder ? r.folder + '／' : '') + r.file, ord: r._ord }; camp[r.file_id].n++;
     var s = r._sup || '（空白）'; sup[s] = (sup[s] || 0) + 1;
-    if (r.provide) prov[r.provide] = (prov[r.provide] || 0) + 1;
   });
   var opt = function(sel, first, list){
     var cur = sel.value;
@@ -545,15 +540,13 @@ function fillSelects(){
   };
   opt($('fCamp'), '全部檔期', Object.keys(camp).sort(function(a, b){ return camp[a].ord < camp[b].ord ? 1 : -1; }).map(function(id){ return [id, camp[id].name + '（' + camp[id].n + '）']; }));
   opt($('fSup'), '全部供應商', Object.keys(sup).sort(function(a, b){ return sup[b] - sup[a]; }).map(function(s){ return [s, s + '（' + sup[s] + '）']; }));
-  opt($('fProv'), '全部提供方式', Object.keys(prov).sort(function(a, b){ return prov[b] - prov[a]; }).map(function(s){ return [s, s + '（' + prov[s] + '）']; }));
-  $('fCamp').value = S.camp; $('fSup').value = S.sup; $('fProv').value = S.prov;
+  $('fCamp').value = S.camp; $('fSup').value = S.sup;
 }
 
 /* ---------- 篩選 ---------- */
 function rowOk(r, words){
   if (S.camp && r.file_id !== S.camp) return false;
   if (S.sup && (r._sup || '（空白）') !== S.sup) return false;
-  if (S.prov && r.provide !== S.prov) return false;
   for (var i = 0; i < words.length; i++) if (r._txt.indexOf(words[i]) < 0) return false;
   return true;
 }
@@ -613,30 +606,25 @@ function renderRes(){
   var list = filtered(), q = S.q.trim(), box = $('res');
   if (!S.rows.length) { box.innerHTML = '<div class="card empty">還沒有資料。按下面「🔄 立刻重新彙整」讀一次檔案。</div>'; return; }
   var head = '<div class="rhead"><b>' + (S.view === 'row' ? '逐筆明細' : '依品項') + '：' + list.length + ' ' + (S.view === 'row' ? '筆' : '項') + '</b>'
-    + ((S.q || S.camp || S.sup || S.prov || S.link) ? '<button class="chip" type="button" id="clrAll">✕ 清除所有條件</button>' : '') + '</div>';
+    + ((S.q || S.camp || S.sup || S.link) ? '<button class="chip" type="button" id="clrAll">✕ 清除所有條件</button>' : '') + '</div>';
   if (!list.length) { box.innerHTML = head + '<div class="card empty">找不到符合的品項。試試少打幾個字，或清除條件。</div>'; bindClr(); return; }
   var part = list.slice(0, S.shown), html;
   if (S.view === 'row') {
-    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>甜點・檔期</th><th>原包裝規格</th><th>每份用量</th><th>成本</th><th>提供方式</th><th>區域</th><th>備註</th></tr></thead><tbody>'
+    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>甜點・檔期</th><th>區域</th><th>備註</th></tr></thead><tbody>'
       + part.map(function(r){
         return '<tr class="' + (r._links.length ? '' : 'nolink') + '"><td class="nm" data-k="品項">' + hl(r.item, q) + '</td>'
           + '<td data-k="供應商">' + (r._sup ? '<span class="sup">' + hl(r._sup, q) + '</span>' : '<span class="sup blank">空白</span>') + (r.vendor_src && r.vendor_src !== r._sup ? '<div class="muted">甜點分頁寫：' + esc(r.vendor_src) + '</div>' : '') + '</td>'
           + '<td class="lk" data-k="購買連結">' + linkBtns(r._links) + '</td>'
           + '<td class="wide" data-k="甜點・檔期">' + usesHtml([r], q) + '</td>'
-          + '<td data-k="原包裝規格">' + esc(r.spec) + '</td><td data-k="每份用量">' + esc(r.usage) + '</td>'
-          + '<td data-k="成本">' + (r.cost ? '$' + esc(r.cost) : '') + '</td><td data-k="提供方式">' + provTag(r.provide) + '</td>'
           + '<td data-k="區域">' + esc(r.zone) + '</td><td class="wide" data-k="備註">' + hl(r.note, q) + '</td></tr>';
       }).join('') + '</tbody></table>';
   } else {
-    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>用在（甜點・檔期，點了開原檔）</th><th>規格・成本（最近一次）</th><th>提供方式</th></tr></thead><tbody>'
+    html = '<table class="t"><thead><tr><th>品項</th><th>供應商</th><th>購買連結</th><th>用在（甜點・檔期，點了開原檔）</th></tr></thead><tbody>'
       + part.map(function(g){
-        var L = g.last;
         return '<tr class="' + (g.links.length ? '' : 'nolink') + '"><td class="nm" data-k="品項">' + hl(g.name, q) + (g.alt.length ? '<div class="alt">也寫成：' + g.alt.map(function(a){ return hl(a, q); }).join('、') + '</div>' : '') + '</td>'
           + '<td data-k="供應商">' + (g.sups.length ? g.sups.map(function(s){ return '<span class="sup">' + hl(s, q) + '</span>'; }).join('') : '<span class="sup blank">空白</span>') + '</td>'
           + '<td class="lk" data-k="購買連結">' + linkBtns(g.links) + '</td>'
-          + '<td class="wide" data-k="用在">' + usesHtml(g.rows, q) + '</td>'
-          + '<td data-k="規格・成本">' + esc(L.spec) + (L.cost ? '<div class="muted">成本 $' + esc(L.cost) + (L.usage ? '・每份 ' + esc(L.usage) : '') + '</div>' : (L.usage ? '<div class="muted">每份 ' + esc(L.usage) + '</div>' : '')) + '</td>'
-          + '<td data-k="提供方式">' + g.provs.map(provTag).join('') + '</td></tr>';
+          + '<td class="wide" data-k="用在">' + usesHtml(g.rows, q) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
   box.innerHTML = head + '<div class="tw">' + html + '</div>' + (list.length > S.shown ? '<div class="more"><button class="btn ghost" type="button" id="moreBtn">再顯示 ' + Math.min(PAGE, list.length - S.shown) + ' ' + (S.view === 'row' ? '筆' : '項') + '（還有 ' + (list.length - S.shown) + '）</button></div>' : '');
@@ -645,7 +633,7 @@ function renderRes(){
 }
 function bindClr(){
   if (!$('clrAll')) return;
-  $('clrAll').onclick = function(){ S.q = ''; S.camp = ''; S.sup = ''; S.prov = ''; S.link = ''; S.shown = PAGE; $('q').value = ''; $('qx').hidden = true; $('fCamp').value = ''; $('fSup').value = ''; $('fProv').value = ''; renderStats(); renderRes(); };
+  $('clrAll').onclick = function(){ S.q = ''; S.camp = ''; S.sup = ''; S.link = ''; S.shown = PAGE; $('q').value = ''; $('qx').hidden = true; $('fCamp').value = ''; $('fSup').value = ''; renderStats(); renderRes(); };
 }
 function renderFiles(){
   var f = S.files;
@@ -673,7 +661,6 @@ qi.addEventListener('input', function(e){ if (e.isComposing) return; onQ(); });
 $('qx').onclick = function(){ qi.value = ''; S.q = ''; $('qx').hidden = true; S.shown = PAGE; renderRes(); qi.focus(); };
 $('fCamp').onchange = function(){ S.camp = this.value; S.shown = PAGE; renderRes(); };
 $('fSup').onchange = function(){ S.sup = this.value; S.shown = PAGE; renderRes(); };
-$('fProv').onchange = function(){ S.prov = this.value; S.shown = PAGE; renderRes(); };
 $('fSort').value = S.sort;
 $('fSort').onchange = function(){ S.sort = this.value; try { localStorage.setItem('sup_sort', S.sort); } catch(e){} renderRes(); };
 Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function(el){
