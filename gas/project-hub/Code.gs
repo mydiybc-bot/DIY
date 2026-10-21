@@ -12,6 +12,8 @@
  *   {action:'save', table, row}                      新增／修改一列（沒有 id＝新增）
  *   {action:'del', table, id}                        刪除（標記 deleted=Y，不真的刪）
  *   {action:'spoonSave', ingredient, g_per_spoon, max_spoons, tol_pct, note}
+ *   {action:'specSave', ingredient, spoon_ml, g_per_spoon, real_g, note}      量匙規格（ml）＋食譜用克數＋真實克數；同時記一列 spoon_spec_log
+ *   {action:'evoSnap', version, ver_date, rows:[…]}                           把頁面算好的換算記成一個版本（同一行同版本名稱會先標刪除再寫）
  *   {action:'authSetup'}（免密碼）                   權限中心 dim_auth 補「project」列（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 所有儲存格一律存純文字（避免數字、日期被試算表自動轉格式）。
  *
@@ -21,7 +23,12 @@
  *     decisions 加 due（決定期限）、blocks（不決定會卡哪個階段）；新表 people（姓名、角色、Email，提醒信用）。
  *   - 每日提醒信 dailyReminder（排程每天 08:00）：過期檢查點、該開始沒開始、卡關、7 天內到的檢查點與階段、待決定期限 → 寄給負責人／窗口／經營者。
  */
-var VER = 'v1.1';
+/* v1.2（2026-10-21，經營者交辦「平匙專案加一頁：每個食材最後用的 1 平匙＝幾 g 與量匙規格，分食譜用克數／真實克數；
+ *   換成平匙的食譜演進，可用食材或甜點篩選，並放入食譜後台『台灣匙版備份』第一版的舊平匙數做比較」）：
+ *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
+ *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
+ *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
+var VER = 'v1.2';
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -35,7 +42,9 @@ var T = {
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
   people:    { id: 'person_id', cols: ['person_id', 'name', 'role', 'email', 'note', 'updated_at', 'deleted'] },
   spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source'] },
-  spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at'] },
+  spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g'] },
+  spoon_spec_log: { id: 'log_id', cols: ['log_id', 'ingredient', 'version', 'eff_date', 'spoon_ml', 'recipe_g', 'real_g', 'note', 'saved_at', 'deleted'] },
+  spoon_evo: { id: 'evo_id', cols: ['evo_id', 'line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'version', 'ver_date', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note', 'source', 'updated_at', 'deleted'] },
   log:       { id: '', cols: ['ts', 'action', 'table', 'target', 'detail'] }
 };
 var EDITABLE = { projects: 1, phases: 1, decisions: 1, risks: 1, people: 1 };
@@ -66,6 +75,8 @@ function doPost(e) {
         if (a === 'save') return save_(b.table, b.row || {});
         if (a === 'del') return del_(b.table, b.id);
         if (a === 'spoonSave') return spoonSave_(b);
+        if (a === 'specSave') return specSave_(b);
+        if (a === 'evoSnap') return evoSnap_(b);
         throw new Error('不認得的動作：' + a);
       });
     }
@@ -134,6 +145,7 @@ function append_(name, objs) {
   if (!objs.length) return;
   var sh = sheet_(name), hdr = hdr_(name), start = sh.getLastRow() + 1;
   var vals = objs.map(function (o) { return rowVals_(name, o); });
+  if (sh.getMaxRows && start + vals.length - 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), start + vals.length - 1 - sh.getMaxRows() + 200);   /* 新分頁只有 1,000 列，超過要先加列 */
   sh.getRange(start, 1, vals.length, hdr.length).setNumberFormat('@').setValues(vals);
 }
 function writeRow_(name, rowNo, o) {
@@ -150,7 +162,8 @@ function bundle_() {
 }
 function spoon_() {
   var lines = rows_('spoon_lines').map(clean_);
-  return { lines: lines, set: rows_('spoon_set').map(clean_), snap_date: lines.length ? lines[0].snap_date : '', source: lines.length ? lines[0].source : '' };
+  return { lines: lines, set: rows_('spoon_set').map(clean_), snap_date: lines.length ? lines[0].snap_date : '', source: lines.length ? lines[0].source : '',
+    spec_log: live_('spoon_spec_log'), evo: live_('spoon_evo') };
 }
 
 /* ---------------- 寫 ---------------- */
@@ -191,12 +204,57 @@ function spoonSave_(b) {
   var ing = String(b.ingredient || '').trim(), g = Number(b.g_per_spoon);
   if (!ing) throw new Error('缺食材');
   if (!(g > 0 && g < 1000)) throw new Error('一平匙克數要大於 0');
-  var o = { ingredient: ing, g_per_spoon: String(g), max_spoons: String(Number(b.max_spoons) || 0), tol_pct: String(Number(b.tol_pct) || 0), note: String(b.note || '').slice(0, 300), saved_at: now_() };
   var hit = rows_('spoon_set').filter(function (r) { return r.ingredient === ing; })[0];
+  var o = hit ? clean_(hit) : { ingredient: ing, spoon_ml: '', real_g: '' };   /* v1.2：保留量匙規格、真實克數 */
+  o.g_per_spoon = String(g); o.max_spoons = String(Number(b.max_spoons) || 0); o.tol_pct = String(Number(b.tol_pct) || 0); o.note = String(b.note || '').slice(0, 300); o.saved_at = now_();
   if (hit) writeRow_('spoon_set', hit._row, o);
   else append_('spoon_set', [o]);
+  specLog_(o, '換算頁存檔');
   log_('spoonSave', 'spoon_set', ing, JSON.stringify(o));
   return { ok: true, data: o };
+}
+function specLog_(o, version) {
+  append_('spoon_spec_log', [{ log_id: 'SL' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10), ingredient: o.ingredient, version: version, eff_date: today_(),
+    spoon_ml: o.spoon_ml || '', recipe_g: o.g_per_spoon || '', real_g: o.real_g || '', note: o.note || '', saved_at: o.saved_at || now_(), deleted: '' }]);
+}
+/* 量匙規格：spoon_ml＝量匙容量（ml），g_per_spoon＝食譜用克數（換算平匙數用），real_g＝真實克數（實測；平匙數 × 真實克數＝真正用了幾 g） */
+function specSave_(b) {
+  var ing = String(b.ingredient || '').trim(), ml = String(b.spoon_ml == null ? '' : b.spoon_ml).trim(), g = Number(b.g_per_spoon), rg = String(b.real_g == null ? '' : b.real_g).trim();
+  if (!ing) throw new Error('缺食材');
+  if (ml !== '' && !(Number(ml) > 0 && Number(ml) <= 500)) throw new Error('量匙規格要填 ml 數字');
+  if (!(g > 0 && g < 1000)) throw new Error('食譜用克數要大於 0');
+  if (rg !== '' && !(Number(rg) > 0 && Number(rg) < 1000)) throw new Error('真實克數要大於 0（還沒實測就留空白）');
+  var hit = rows_('spoon_set').filter(function (r) { return r.ingredient === ing; })[0];
+  var o = hit ? clean_(hit) : { ingredient: ing, max_spoons: '6', tol_pct: '0' };
+  o.spoon_ml = ml === '' ? '' : String(Number(ml)); o.g_per_spoon = String(g); o.real_g = rg === '' ? '' : String(Number(rg));
+  o.note = String(b.note || '').slice(0, 300); o.saved_at = now_();
+  if (hit) writeRow_('spoon_set', hit._row, o);
+  else append_('spoon_set', [o]);
+  specLog_(o, String(b.version || '規格更新').slice(0, 40));
+  log_('specSave', 'spoon_set', ing, JSON.stringify(o));
+  return { ok: true, data: o };
+}
+/* 把頁面上「目前試算」記成一個版本（例：第二版 11/9 上線）；同一行（line_key）同一個版本名稱已經有的，先標刪除再寫，所以可以重記 */
+function evoSnap_(b) {
+  var ver = String(b.version || '').trim().slice(0, 40), vd = String(b.ver_date || '').trim(), rows = b.rows || [];
+  if (!ver) throw new Error('缺版本名稱');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(vd)) throw new Error('生效日期格式要 yyyy-mm-dd');
+  if (!rows.length) throw new Error('沒有要記的項目');
+  if (rows.length > 600) throw new Error('一次最多 600 項');
+  var t = now_(), keys = {}, del = 0;
+  rows.forEach(function (r) { if (!r.line_key) throw new Error('缺 line_key'); keys[r.line_key] = 1; });
+  rows_('spoon_evo').forEach(function (r) {
+    if (r.deleted !== 'Y' && r.version === ver && keys[r.line_key]) { var c = clean_(r); c.deleted = 'Y'; c.updated_at = t; writeRow_('spoon_evo', r._row, c); del++; }
+  });
+  var base = 'E' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMddHHmmss'), F = ['line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note'];
+  var add = rows.map(function (r, i) {
+    var o = { evo_id: base + ('000' + i).slice(-4), version: ver, ver_date: vd, source: '專案推動頁記錄', updated_at: t, deleted: '' };
+    F.forEach(function (f) { o[f] = String(r[f] == null ? '' : r[f]).slice(0, 300); });
+    return o;
+  });
+  append_('spoon_evo', add);
+  log_('evoSnap', 'spoon_evo', ver, '寫入 ' + add.length + ' 列、取代 ' + del + ' 列，生效 ' + vd);
+  return { ok: true, data: { added: add, replaced: del } };
 }
 
 /* ---------------- 每日提醒（跟前端「本週要做」同一套規則） ---------------- */
@@ -331,7 +389,7 @@ function authorize() {
 function setupTables() {
   Object.keys(T).forEach(function (k) { sheet_(k); });
   var d = ss_().getSheetByName('工作表1'); if (d && d.getLastRow() === 0 && ss_().getSheets().length > 1) ss_().deleteSheet(d);
-  Logger.log(JSON.stringify({ projects: live_('projects').length, phases: live_('phases').length, decisions: live_('decisions').length, risks: live_('risks').length, people: live_('people').length, spoon_lines: rows_('spoon_lines').length, spoon_set: rows_('spoon_set').length, hdr: _hdr }));
+  Logger.log(JSON.stringify({ projects: live_('projects').length, phases: live_('phases').length, decisions: live_('decisions').length, risks: live_('risks').length, people: live_('people').length, spoon_lines: rows_('spoon_lines').length, spoon_set: rows_('spoon_set').length, spoon_evo: rows_('spoon_evo').length, spoon_spec_log: rows_('spoon_spec_log').length, hdr: _hdr }));
 }
 /* 寫入流程自我檢查：新增測試專案 → 改 → 刪；跑完只留 deleted=Y 的一列（以及 log） */
 function selfTest() {
