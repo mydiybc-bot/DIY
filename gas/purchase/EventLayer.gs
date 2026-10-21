@@ -1,5 +1,13 @@
 // ================================================================
-// EventLayer.gs — 節慶事件層 v1.13（2026-10-21）
+// EventLayer.gs — 節慶事件層 v1.14（2026-10-21）
+// v1.14：★ 檔期曲線對齊全面修正（經營者：萬聖節之外，其他檔期與全新檔期也不能再發生）
+//   ① 國曆節日用規則自動算（萬聖節 10/31、聖誕節 12/25、情人節 2/14、白色情人節 3/14、母親節＝5 月第 2 個週日），不用每年登錄。
+//   ② 沒有節日的檔期（夏季限定、抹茶季、草莓季…）改用「開賣日→開賣日」對齊；舊的「去年最後一天→今年檔期結束日」
+//      遇到去年賣得比較久就整條往前移（萬聖節少算約三分之二）。回測：2026 夏季限定誤差 −8～−20% → −2～+14%；
+//      2026 母親節（改節日對齊）−13～−44% → +3～+19%。
+//   ③ 同一個次類別混到別季的銷售（同名商品隔年沿用、POS 全期重匯時被改標成新年份）：
+//      依日期切成「季」（相隔 ≥ SEASON_GAP_DAYS 天沒賣就算不同季），進行中檔期只留最近這一季、已結束檔期只留銷量最大的一季。
+//      實例：「2025 聖誕節」含 2024/12 的 2,835 份；「2025 萬聖節」含 2026/3、5 月零星銷售，讓節日週誤判去年尖峰在 2 月。
 // v1.13：萬聖節加進 EV_FEST，去年曲線改照 10/31 當天對齊（原本退回主段結束日對齊，整條往前移 9 天、剩餘量少算約三分之二）。
 // v1.12：★ 常態菜單的新甜點也算開賣前首批量（經營者 2026-10-17：11 月大菜單是長期菜單，不是限定檔期）
 //   食譜系統檔期類型「常態菜單」核准後，對照表寫 次類別「無」、結束 2099-12-31 ⇒ evBuildContext_ 認不出來、首批量全無。
@@ -360,17 +368,24 @@ var EV_ALIAS = {
   '西洋情人節': ['情人節']
 };
 
-/* ★ v1.6：節日當天的國曆日期（曲線對齊錨點）。v1.13 更正：國曆節日（萬聖節…）也要登錄，沒登錄＝退回主段結束日對齊。
+/* ★ v1.6：農曆節日的國曆日期（曲線對齊錨點），每年要加一列。國曆節日改走下方 EV_FEST_RULE（v1.14），不必登錄。
    每年新增一列即可；沒登錄的檔期退回「距主段結束日」對齊。 */
 var EV_FEST = {
   '中秋節':   { 2025: '2025-10-06', 2026: '2026-09-25', 2027: '2027-10-15' },
   '父親七夕': { 2025: '2025-08-29', 2026: '2026-08-19', 2027: '2027-08-08' },
   '父親節':   { 2025: '2025-08-29', 2026: '2026-08-19', 2027: '2027-08-08' },
-  '端午節':   { 2025: '2025-05-31', 2026: '2026-06-19', 2027: '2027-06-09' },
-  /* v1.13：國曆節日也要登錄。沒登錄會退回「主段結束日」對齊——2025 萬聖節賣到 11/10、2026 檔期 11/1 結束，
-     曲線整條往前移 9 天，10/21 就判成已賣 81%（8 號店巴芮脆片推估只剩 2 份）。 */
-  '萬聖節':   { 2025: '2025-10-31', 2026: '2026-10-31', 2027: '2027-10-31' }
+  '端午節':   { 2025: '2025-05-31', 2026: '2026-06-19', 2027: '2027-06-09' }
 };
+
+/* ★ v1.14：國曆節日規則（每年自動算）。md＝固定月日；nthSun＝[月, 第幾個週日]。
+   檔期次類別名稱含這些字就套用（例：「萬聖節」「2026 聖誕節快樂」）。 */
+var EV_FEST_RULE = [
+  { key: '萬聖',     md: [10, 31] },
+  { key: '聖誕',     md: [12, 25] },
+  { key: '白色情人', md: [3, 14] },
+  { key: '情人節',   md: [2, 14] },
+  { key: '母親節',   nthSun: [5, 2] }
+];
 
 var EV_CFG = {
   SHORT_MAX: 29,          // 檔期天數 <30 ＝短尖峰
@@ -392,6 +407,7 @@ var EV_CFG = {
   GAP_DAYS: 5,            // 去年檔期連續 N 天零銷售 ⇒ 主段結束（之後的視為清庫存）
   CURVE_MIN_DAYS: 14,     // 去年主段至少 N 天才用曲線
   CURVE_MIN_CUM: 0.10,    // 今年累積佔比至少到此才推估總量（太早推估會被前幾天雜訊放大）
+  SEASON_GAP_DAYS: 45,    // ★ v1.14：同一次類別相隔 N 天以上沒賣＝不同季（同名商品隔年沿用時會混在一起）
   CURVE_MIN_CORRECT: 5,   // 進行中檔期起始日校正：至少 N 個有銷售日
   RECENT_DAYS: 28,        // 增量計算用的「近 N 天均」（對齊前端近 4 週均）
   CURVE_MAX_RATIO: 2.5,   // 推估總量／去年總量 上限保險（避免開賣爆量把整檔推到天上）
@@ -827,6 +843,16 @@ function evFest_(evName, year) {
   for (var i = 0; i < cand.length; i++) {
     var t = EV_FEST[cand[i]]; if (t && t[year]) return evDate_(t[year]);
   }
+  for (var j = 0; j < cand.length; j++) {
+    for (var r = 0; r < EV_FEST_RULE.length; r++) {
+      var ru = EV_FEST_RULE[r];
+      if (String(cand[j]).indexOf(ru.key) < 0) continue;
+      if (ru.md) return new Date(year, ru.md[0] - 1, ru.md[1]);
+      var d = new Date(year, ru.nthSun[0] - 1, 1);
+      d = evAddDays_(d, (7 - d.getDay()) % 7);
+      return evAddDays_(d, 7 * (ru.nthSun[1] - 1));
+    }
+  }
   return null;
 }
 
@@ -848,7 +874,12 @@ function evCurve_(P, C, instDay, today) {
   var fP = evFest_(P.evName, P.year), fC = evFest_(C.evName, C.year);
   var anchorP, anchorC, anchorTxt;
   if (fP && fC) { anchorP = fP; anchorC = fC; anchorTxt = '節日 ' + evYmd_(fP) + '→' + evYmd_(fC); }
-  else { anchorP = mainEnd; anchorC = C.end; anchorTxt = '主段結束 ' + evYmd_(mainEnd) + '→檔期結束 ' + evYmd_(C.end); }
+  else {
+    /* ★ v1.14：沒有節日 → 開賣日對齊（今年開賣日＝今年 POS 首賣日；還沒賣就用對照表起始日） */
+    var cDays = Object.keys(cm).filter(function (y) { return cm[y] > 0; }).sort();
+    var cStart = cDays.length ? evDate_(cDays[0]) : C.start;
+    anchorP = P.start; anchorC = cStart; anchorTxt = '開賣日 ' + evYmd_(P.start) + '→' + evYmd_(cStart);
+  }
   var dayShare = {}, total = 0, offMin = 0, offMax = 0;
   for (var d = new Date(P.start); d <= mainEnd; d = evAddDays_(d, 1)) {
     var q = dm[evYmd_(d)] || 0; total += q;
@@ -1012,6 +1043,37 @@ function evBuildContext_(map, pos, today, log) {
     var pn = String(r['POS 資料產品名稱'] || '').trim();
     if (pn) o.posNames[pn] = nm || pn;
   });
+  /* ★ v1.14：先找每個檔期「該算的那一季」日期範圍，別季的銷售整筆不算進這個檔期 */
+  var rawDays = {};
+  pos.forEach(function (r) {
+    var sub = String(r['次類別'] || '').trim(), m = sub.match(/^(\d{4})\s*(.+)$/); if (!m) return;
+    var k = m[1] + ' ' + m[2]; if (!inst[k]) return;
+    var d = evDate_(r['建立日期']), q = Number(r['數量']) || 0; if (!d || !q) return;
+    var y = evYmd_(d); (rawDays[k] = rawDays[k] || {})[y] = (rawDays[k][y] || 0) + q;
+  });
+  var keepRange = {};
+  Object.keys(rawDays).forEach(function (k) {
+    var ys = Object.keys(rawDays[k]).sort(), cl = [], cur = null;
+    ys.forEach(function (y) {
+      var d = evDate_(y);
+      if (cur && Math.round((d - cur.hi) / 864e5) < EV_CFG.SEASON_GAP_DAYS) { cur.hi = d; cur.q += rawDays[k][y]; }
+      else { cur = { lo: d, hi: d, q: rawDays[k][y] }; cl.push(cur); }
+    });
+    if (cl.length < 2) return;
+    var pick;
+    if (inst[k].end >= today) {
+      var recent = cl.filter(function (c) { return Math.round((today - c.hi) / 864e5) <= EV_CFG.SEASON_GAP_DAYS; });
+      pick = recent.length ? { lo: recent[0].lo, hi: recent[recent.length - 1].hi } : { lo: today, hi: today };
+    } else {
+      var big = cl.reduce(function (a, b) { return b.q > a.q ? b : a; });
+      pick = { lo: big.lo, hi: big.hi };
+    }
+    keepRange[k] = pick;
+    var drop = 0, txt = [];
+    cl.forEach(function (c) { if (c.hi < pick.lo || c.lo > pick.hi) { drop += c.q; txt.push(evYmd_(c.lo) + '~' + evYmd_(c.hi)); } });
+    if (drop && log) log.push('ℹ️ ' + k + ' 排除別季銷售 ' + Math.round(drop) + ' 份（' + txt.join('、') + '），只算 ' + evYmd_(pick.lo) + '~' + evYmd_(pick.hi) + '（同名商品沿用時 POS 次類別會被改成新年份）');
+  });
+
   var dayTotal = {}, instDay = {}, instItemStore = {}, instItemFirst = {}, instItemStoreDay = {};
   pos.forEach(function (r) {
     var d = evDate_(r['建立日期']); if (!d) return;
@@ -1020,6 +1082,7 @@ function evBuildContext_(map, pos, today, log) {
     var sub = String(r['次類別'] || '').trim();
     var m = sub.match(/^(\d{4})\s*(.+)$/); if (!m) return;
     var k = m[1] + ' ' + m[2], o = inst[k]; if (!o) return;
+    var kr = keepRange[k], dy = evDate_(y); if (kr && (dy < kr.lo || dy > kr.hi)) return;   /* ★ v1.14 別季不算 */
     (instDay[k] = instDay[k] || {})[y] = (instDay[k][y] || 0) + q;
     var raw = String(r['商品名稱'] || '').trim();
     var nm = o.posNames[raw] || raw;
