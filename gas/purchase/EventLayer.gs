@@ -5,6 +5,7 @@
 //   ② 沒有節日的檔期（夏季限定、抹茶季、草莓季…）改用「開賣日→開賣日」對齊；舊的「去年最後一天→今年檔期結束日」
 //      遇到去年賣得比較久就整條往前移（萬聖節少算約三分之二）。回測：2026 夏季限定誤差 −8～−20% → −2～+14%；
 //      2026 母親節（改節日對齊）−13～−44% → +3～+19%。
+//   ②' 節日週（dim_event 自動列）同一套錨點：evMapPeak_ 不再用距檔期結束日。
 //   ③ 同一個次類別混到別季的銷售（同名商品隔年沿用、POS 全期重匯時被改標成新年份）：
 //      依日期切成「季」（相隔 ≥ SEASON_GAP_DAYS 天沒賣就算不同季），進行中檔期只留最近這一季、已結束檔期只留銷量最大的一季。
 //      實例：「2025 聖誕節」含 2024/12 的 2,835 份；「2025 萬聖節」含 2026/3、5 月零星銷售，讓節日週誤判去年尖峰在 2 月。
@@ -530,7 +531,7 @@ function rebuildEventLayer() {
           var mp = evMapPeak_(pk, P, C);
           if (mp.ok) {
             evRows.push([C.evName + '節日週(自動)', evYmd_(mp.start), evYmd_(mp.end), pk.coef, '全部', '是', '自動',
-              '樣本:' + P.year + ' 尖峰週 ' + evYmd_(pk.start) + '~' + evYmd_(pk.end) + '（檔期結束前 ' + mp.offset + ' 天）/檔期均週' + (mp.clipped ? '｜已截在檔期內' : '')]);
+              '樣本:' + P.year + ' 尖峰週 ' + evYmd_(pk.start) + '~' + evYmd_(pk.end) + '（' + mp.how + '）/檔期均週' + (mp.clipped ? '｜已截在檔期內' : '')]);
           } else {
             var mm = '⚠️ 節日週無法放入檔期：去年尖峰 ' + evYmd_(pk.start) + '~' + evYmd_(pk.end) + ' ×' + pk.coef + '，對齊後 ' + evYmd_(mp.start) + '~' + evYmd_(mp.end) + ' 不足 ' + EV_CFG.PEAK_MIN_DAYS + ' 天｜請用「手動」自填';
             evRows.push([C.evName + '節日週(自動)', evYmd_(C.start), evYmd_(C.end), 1, '全部', '否', '自動', mm]);
@@ -1134,15 +1135,19 @@ function evFindPrev_(inst, C) {
  * 若超出今年檔期則截在檔期內；截後不足 PEAK_MIN_DAYS 天視為放不進去（ok=false）。
  */
 function evMapPeak_(pk, P, C) {
-  var offset = Math.round((P.end - pk.end) / 864e5);
-  if (offset < 0) offset = 0;
-  var e2 = evAddDays_(C.end, -offset);
-  var s2 = evAddDays_(e2, -(EV_CFG.PEAK_WIN - 1));
+  /* ★ v1.14：與曲線同一套錨點——有節日用節日當天，沒有用開賣日。
+     舊版用「距檔期結束日」對齊：去年賣得比較久就整段往前移（2026 萬聖節節日週被放到 10/13~10/19，去年尖峰其實是 10/23~10/29）。 */
+  var fP = evFest_(P.evName, P.year), fC = evFest_(C.evName, C.year);
+  var aP = (fP && fC) ? fP : P.start, aC = (fP && fC) ? fC : C.start;
+  var offset = Math.round((pk.start - aP) / 864e5);
+  var s2 = evAddDays_(aC, offset);
+  var e2 = evAddDays_(s2, EV_CFG.PEAK_WIN - 1);
+  var how = (fP && fC) ? ('節日' + (offset < 0 ? '前 ' + (-offset) : '後 ' + offset) + ' 天') : ('開賣後第 ' + (offset + 1) + ' 天');
   var clipped = false;
   if (s2 < C.start) { s2 = C.start; clipped = true; }
   if (e2 > C.end) { e2 = C.end; clipped = true; }
   var days = Math.round((e2 - s2) / 864e5) + 1;
-  return { start: s2, end: e2, offset: offset, clipped: clipped, ok: days >= EV_CFG.PEAK_MIN_DAYS };
+  return { start: s2, end: e2, offset: offset, how: how, clipped: clipped, ok: days >= EV_CFG.PEAK_MIN_DAYS };
 }
 
 /** ★ v1.5 唯讀預覽：列出每個進行中／即將到來的長檔期，節日週會放在哪裡。不寫任何表。 */
@@ -1165,7 +1170,7 @@ function evPeakPreview_() {
     if (!pk) { out.push(line + '：去年 ' + P.year + ' 檔期 POS 無資料'); return; }
     var mp = evMapPeak_(pk, P, C);
     out.push(line + '：去年 ' + P.year + ' 檔期 ' + evYmd_(P.start) + '~' + evYmd_(P.end) + '，尖峰週 ' + evYmd_(pk.start) + '~' + evYmd_(pk.end) + ' ×' + pk.coef
-      + ' → 今年 ' + evYmd_(mp.start) + '~' + evYmd_(mp.end) + '（檔期結束前 ' + mp.offset + ' 天' + (mp.clipped ? '，已截' : '') + '）'
+      + ' → 今年 ' + evYmd_(mp.start) + '~' + evYmd_(mp.end) + '（' + mp.how + (mp.clipped ? '，已截' : '') + '）'
       + (pk.coef >= EV_CFG.PEAK_MIN_COEF ? (mp.ok ? ' ✅ 會寫入' : ' ⚠️ 放不進檔期') : ' ℹ️ 低於門檻 ' + EV_CFG.PEAK_MIN_COEF + '，寫停用說明列'));
   });
   Logger.log(out.join('\n'));
