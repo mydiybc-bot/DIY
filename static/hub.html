@@ -18,7 +18,7 @@
 <!-- 2026-10-02 登入穩定化（待處理事項 1002 #3）：<head> 加入全站共用 AUTH-CORE v2（權限中心慢／回 404 自動補發、預熱、瀏覽器空間滿不卡）；authVerify／setUnlock／isUnlocked 改走它，AUTH_API 常數移到那一段；解鎖後與點卡片前先預熱 -->
 <!-- 2026-10-07 經營者裁定「原物料成本用不到」：移除「🧾 原物料成本」卡（dashboard-materials.html 一併刪除；廠商單價 Sheet 與 vendor-price-tracker 不動）；標題 11→10；移除 VENDOR_SHEET 與 loadVendorStat() -->
 <!-- 2026-10-21 經營者裁定「首頁分總部／各店，避免混用」：密碼框先選 🏪 門市（權限中心 hub 列，原密碼不變）或 🏢 總部（權限中心新列 hub_hq，經營者另設密碼）；
-     門市只看 9 張卡；總部看全部，專案推動／新品申請表／海外代理商（data-scope="hq"）排在「總部專用」區。身分存 hub_role（hq／store），回首頁自動用同一邊；按「換身分」清掉重登。
+     門市只看 9 張卡；總部看全部，專案推動／新品申請表／海外代理商（data-scope="hq"）排在「總部專用」區。身分存 hub_role（hq／store），回首頁自動用同一邊；右上角大的「🏪 門市｜🏢 總部」切換鈕（10/21 晚改，原小字「換身分」）點另一邊＝清掉登入、密碼框預選那一邊。
      緊急繞過只塞 hub_unlocked＝門市畫面；要總部畫面再加 hub_role=hq -->
 <!-- 2026-10-07 經營者指示：「📋 自己做決策中心」卡移到第一張（原第 8 張，其餘順序不變） -->
 <!-- 2026-10-07 經營者指示：新增「🎤 口語應對訓練站」卡放第二張（連網站根目錄 /，即員工口語應對訓練站；員工用自己的員工編號登入，不走權限中心）；標題 10→11 -->
@@ -73,9 +73,13 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .role-pick button.on { border-color: var(--primary); background: #FBEDE8; color: var(--primary-dark); }
 .header.hq { background: linear-gradient(135deg, #2F3B4C, #44546A, #5D7089); box-shadow: 0 4px 20px rgba(47,59,76,.3); }
 .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.role-chip { display: none; background: rgba(255,255,255,.95); color: var(--primary-dark); border-radius: 20px; padding: 6px 14px; font-size: 13px; font-weight: 800; white-space: nowrap; }
-.header.hq .role-chip { color: #2F3B4C; }
-.role-switch { display: none; background: none; border: 1px solid rgba(255,255,255,.5); color: #fff; border-radius: 20px; padding: 5px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+/* 2026-10-21 經營者：右上角門市／總部切換不夠明顯 → 改成大的兩段切換鈕（目前那邊實心白底，另一邊點了就換） */
+.role-seg { display: none; background: rgba(0,0,0,.18); border: 2px solid rgba(255,255,255,.85); border-radius: 999px; padding: 3px; gap: 2px; }
+.role-seg button { border: none; background: none; color: #fff; font-size: 16px; font-weight: 800; padding: 9px 20px; border-radius: 999px; cursor: pointer; white-space: nowrap; font-family: inherit; }
+.role-seg button:hover:not(.on) { background: rgba(255,255,255,.18); }
+.role-seg button.on { background: #fff; color: var(--primary-dark); box-shadow: 0 2px 8px rgba(0,0,0,.18); cursor: default; }
+.header.hq .role-seg button.on { color: #2F3B4C; }
+.role-hint { display: none; font-size: 11px; opacity: .85; text-align: center; margin-top: 4px; }
 body:not(.role-hq) .hub-card[data-scope="hq"] { display: none; }   /* 沒以總部登入前，總部卡連模糊背景都不出現 */
 .sec-title { font-size: 15px; font-weight: 800; color: var(--text); margin: 0 0 12px; }
 .sec-title.gap { margin-top: 32px; }
@@ -381,7 +385,7 @@ cursor: pointer; transition: background .15s;
 <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
 <p id="hdrSub">自己做烘焙聚樂部 ｜ 12 間門市</p>
 </div>
-<div class="header-right"><span class="role-chip" id="roleChip"></span><button type="button" class="role-switch" id="roleSwitch" onclick="switchRole()">換身分</button><div class="header-badge" id="updateBadge">載入中…</div></div>
+<div class="header-right"><div><div class="role-seg" id="roleSeg" role="group" aria-label="切換門市／總部"><button type="button" data-r="store" onclick="switchRole('store')">🏪 門市</button><button type="button" data-r="hq" onclick="switchRole('hq')">🏢 總部</button></div><div class="role-hint" id="roleHint">點另一邊切換（要輸入那邊的密碼）</div></div><div class="header-badge" id="updateBadge">載入中…</div></div>
 </div>
 
 <!-- MAIN -->
@@ -624,14 +628,19 @@ if (e.key === 'Enter') checkPwdA();
 // ── 2026-10-21 總部／門市分區 ─────────────────────────────
 // 門市＝權限中心 hub 列（原密碼）；總部＝hub_hq（2026-10-21 經營者：另設一組，不沿用其他密碼）。身分存 hub_role，沒有就當門市
 let _hubRole = (function(){ try { return window.__dashAuth.get('hub_role') === 'hq' ? 'hq' : 'store'; } catch (e) { return 'store'; } })();
+/* 從右上角切換鈕過來：密碼框預先選好要切去的那一邊 */
+try { const _pk = sessionStorage.getItem('hub_pick'); if (_pk) { sessionStorage.removeItem('hub_pick'); if (!isUnlockedRaw()) _hubRole = _pk === 'hq' ? 'hq' : 'store'; } } catch (e) {}
+function isUnlockedRaw() { try { return !!window.__dashAuth.get('hub_unlocked'); } catch (e) { return false; } }
 function pickRole(r) {
 _hubRole = r === 'hq' ? 'hq' : 'store';
 document.querySelectorAll('#rolePick button').forEach(b => b.classList.toggle('on', b.getAttribute('data-r') === _hubRole));
 const i = document.getElementById('inputA'); i.placeholder = _hubRole === 'hq' ? '總部密碼' : '門市密碼'; i.focus();
 document.getElementById('errorA').textContent = '';
 }
-function switchRole() {
+function switchRole(to) {
+if (to && to === _hubRole) return;   // 點目前這一邊不動作
 const A = window.__dashAuth;
+try { if (to) sessionStorage.setItem('hub_pick', to); } catch (e) {}
 A.del('hub_unlocked'); A.del('hub_unlocked_ttl'); A.del('hub_role');
 try { sessionStorage.removeItem('hub_stat_v1'); } catch (e) {}
 location.reload();
@@ -652,8 +661,9 @@ hqCards.forEach(c => c.remove());
 const n = document.querySelectorAll('.hub-card').length;
 document.getElementById('hdr').classList.toggle('hq', hq);
 document.body.classList.toggle('role-hq', hq);
-const chip = document.getElementById('roleChip'); chip.textContent = hq ? '🏢 總部' : '🏪 門市'; chip.style.display = 'inline-block';
-document.getElementById('roleSwitch').style.display = 'inline-block';
+document.getElementById('roleSeg').style.display = 'inline-flex';
+document.getElementById('roleHint').style.display = 'block';
+document.querySelectorAll('#roleSeg button').forEach(b => { const on = b.getAttribute('data-r') === _hubRole; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.title = on ? '目前在這一邊' : '切換到這一邊（要輸入密碼）'; });
 document.getElementById('hdrSub').textContent = (hq ? '總部入口' : '門市入口') + ' ｜ ' + n + ' 個系統 ｜ 12 間門市';
 document.title = (hq ? '總部' : '門市') + '｜自己做經營儀表板';
 }
