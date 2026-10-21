@@ -149,6 +149,11 @@ window.__ime=(function(){
   .dev-up{color:#A3321F;font-weight:700}.dev-dn{color:#8A5A00;font-weight:700}
   .chg{color:#23436E;font-weight:800}
   table.t.evo{min-width:880px}table.t.evo th{white-space:nowrap}
+  table.t.spec{min-width:860px}table.t.spec th{white-space:nowrap}table.t.spec td.click{cursor:pointer}
+  table.t.spec tr.dirty td{background:#FFF8E6}
+  .sp-in{font-family:inherit;font-size:14px;padding:5px 7px;border:1px solid #CFC6BF;border-radius:7px;background:#fff}
+  .sp-in.sp-g{width:84px;text-align:right}.sp-in.sp-other{width:76px;margin-left:4px}
+  .sp-in:focus-visible{outline:2px solid #F4D35E;outline-offset:1px}
   table.t.evo td:first-child{min-width:150px}table.t.evo td:nth-child(2){min-width:96px}table.t.evo td:nth-child(3){white-space:nowrap}
   #slBody .sp-ctl label{max-width:100%}#slBody .sp-ctl select{max-width:100%}
   /* 對話框 */
@@ -451,7 +456,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       </ol>
       <div style="margin-top:6px"><b>📌 本週要做</b>：首頁最上面把所有專案 7 天內的事排在一起：🔴 要處理（檢查點過期、該開始沒開始、卡關、待決定過期）、🟡 7 天內到期、📅 7 天內開始。可以用「只看誰的」篩選。</div>
       <div style="margin-top:6px"><b>📣 每日提醒信</b>：每天 08:00 自動寄。負責人收自己的、專案窗口收該專案的、經營者收全部。收件人與 Email 在首頁下方「👥 人員」維護（姓名要跟階段「負責人」寫的一樣）。</div>
-      <div style="margin-top:6px"><b>📒 平匙規格與演進</b>：①「每種食材的平匙規格」記每個食材最後用的量匙（2.5～40 ml）與 1 平匙幾 g，分兩個數字：<b>食譜用克數</b>（換算平匙用的整數，例泡打粉 2 g）和<b>真實克數</b>（量匙實測，例 1.8 g）；以後要換回真正用了幾 g，就是「平匙數 × 真實克數」。點一列看這個食材規格改過幾次。②「換成平匙的演進」每支甜點每一處乾料：秤重版幾 g → 第一版（9 月台灣匙版，食譜後台「台灣匙版備份」）寫幾平匙 → 之後每一版；可用食材或甜點篩選。最右欄「目前試算」用現在存的規格算，還沒上線；切換那天按「📌 記成新版本」留下紀錄。</div>
+      <div style="margin-top:6px"><b>📒 平匙規格與演進</b>：①「每種食材的平匙規格」記每個食材最後用的量匙（2.5～40 ml，表格裡直接選）與 1 平匙幾 g（直接填，改完按「💾 儲存變更」），分兩個數字：<b>食譜用克數</b>（換算平匙用的整數，例泡打粉 2 g）和<b>真實克數</b>（量匙實測，例 1.8 g）；以後要換回真正用了幾 g，就是「平匙數 × 真實克數」。點一列看這個食材規格改過幾次。②「換成平匙的演進」每支甜點每一處乾料：秤重版幾 g → 第一版（9 月台灣匙版，食譜後台「台灣匙版備份」）寫幾平匙 → 之後每一版；可用食材或甜點篩選。最右欄「目前試算」用現在存的規格算，還沒上線；切換那天按「📌 記成新版本」留下紀錄。</div>
       <div style="margin-top:6px"><b>🥄 平匙換算怎麼用</b>：選食材 → 填量匙實測「一平匙＝幾 g」→ 看每支甜點要幾平匙、哪些不能換。只有剛好整數或半平匙（例 1.5 平匙）的才算「可更換」。覺得這個克數可以，按「💾 存成這個食材的設定」。</div>
     </div>
   </div>
@@ -1001,72 +1006,124 @@ function tabSpoonLog(p){
   if (S.lsub === 'spec') slSpec(p); else slEvo(p);
 }
 
-/* ① 每種食材最後用的規格 */
+/* ① 每種食材最後用的規格（2026-10-21 晚：經營者要「量匙規格可以直接選、食譜用／真實 1 平匙可以直接填」→ 表格裡就是選單＋輸入框）
+   打字只記在 S.specPend、只更新同一列的「真實比食譜」與上方儲存鈕，不重畫表格（中文輸入／游標不會被打斷）；按「💾 儲存」才寫入（要密碼、兩層確認） */
+function specVal(st){ return { ml: st && st.spoon_ml != null ? String(st.spoon_ml) : '', g: st && st.g_per_spoon != null ? String(st.g_per_spoon) : '', r: st && st.real_g != null ? String(st.real_g) : '' }; }
+function specCur(i){ return S.specPend[i] || specVal(spoonSetOf(i)); }
+function specDirty(i){ var p = S.specPend[i]; if (!p) return false; var o = specVal(spoonSetOf(i)); return Number(p.ml || 0) !== Number(o.ml || 0) || Number(p.g || 0) !== Number(o.g || 0) || Number(p.r || 0) !== Number(o.r || 0); }
+function specDiffHtml(c){
+  var g = Number(c.g), r = Number(c.r);
+  if (!(g > 0 && r > 0)) return '';
+  var d = (r - g) / g;
+  return '<span class="' + (Math.abs(d) < 0.005 ? '' : d > 0 ? 'dev-up' : 'dev-dn') + '">' + (d > 0 ? '+' : '') + num(d * 100, 1) + '%</span>';
+}
+function mlSelect(i, ml){
+  var inList = ml === '' || SPEC_ML.indexOf(Number(ml)) >= 0;
+  return '<select class="sp-in" data-k="ml" data-ing="' + esc(i) + '" aria-label="' + esc(i) + ' 量匙規格"><option value=""' + (ml === '' ? ' selected' : '') + '>未定</option>'
+    + SPEC_ML.map(function(m){ return '<option value="' + m + '"' + (ml !== '' && Number(ml) === m ? ' selected' : '') + '>' + esc(mlTxt(m)) + '</option>'; }).join('')
+    + (inList ? '' : '<option value="' + esc(ml) + '" selected>' + esc(mlTxt(ml)) + '</option>')
+    + '<option value="other">其他（自己填 ml）…</option></select>';
+}
 function slSpec(p){
   var lines = slLines().lines, cnt = {}, logs = {};
+  S.specPend = S.specPend || {};
   lines.forEach(function(L){ cnt[L.ingredient] = (cnt[L.ingredient] || 0) + 1; });
   (S.spoon.spec_log || []).forEach(function(x){ (logs[x.ingredient] = logs[x.ingredient] || []).push(x); });
   Object.keys(logs).forEach(function(k){ logs[k].sort(function(a, b){ return (a.eff_date + a.saved_at) < (b.eff_date + b.saved_at) ? -1 : 1; }); });
   var v1 = function(i){ return (logs[i] || []).filter(function(x){ return /^第一版/.test(x.version); })[0]; };
   var ings = slIngs().sort(function(a, b){ return (cnt[b] || 0) - (cnt[a] || 0) || (a < b ? -1 : 1); });
   S.slOpen = S.slOpen || {};
-  var h = '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline"><b>每種食材最後使用的平匙規格</b><span class="muted">食譜用克數＝換算平匙數用（寫進食譜）；真實克數＝量匙實測（平匙數 × 真實克數＝真正用了幾 g）。點一列看改過的紀錄。</span></div>'
-    + '<div class="tw" style="margin-top:8px"><table class="t"><thead><tr><th>食材</th><th>量匙規格</th><th style="text-align:right">食譜用<br>1 平匙</th><th style="text-align:right">真實<br>1 平匙</th><th style="text-align:right">真實比食譜</th><th>第一版（9 月）</th><th style="text-align:right">用到幾處</th><th>最後更新</th>' + (editing() ? '<th></th>' : '') + '</tr></thead><tbody>'
+  var h = '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center"><b>每種食材最後使用的平匙規格</b>'
+    + '<button class="btn" type="button" id="specSaveAll" disabled>💾 儲存變更</button><button class="btn ghost" type="button" id="specUndo" hidden>復原</button></div>'
+    + '<div class="muted" style="margin-top:4px">直接在表格裡選量匙、填克數，改完按「💾 儲存變更」。食譜用＝換算平匙數用（寫進食譜）；真實＝量匙實測（平匙數 × 真實＝真正用了幾 g），還沒測就空白。點食材名稱看改過的紀錄。</div>'
+    + '<div class="tw" style="margin-top:8px"><table class="t spec"><thead><tr><th>食材</th><th>量匙規格</th><th style="text-align:right">食譜用 1 平匙（g）</th><th style="text-align:right">真實 1 平匙（g）</th><th style="text-align:right">真實比食譜</th><th>第一版（9 月）</th><th style="text-align:right">用到幾處</th><th>最後更新</th></tr></thead><tbody>'
     + ings.map(function(i){
-      var st = spoonSetOf(i), f = v1(i), rg = st && st.real_g !== '' ? Number(st.real_g) : 0, g = st ? Number(st.g_per_spoon) : 0;
-      var d = rg > 0 && g > 0 ? (rg - g) / g : null;
-      var row = '<tr class="click' + (S.slOpen[i] ? ' sel' : '') + '" data-si="' + esc(i) + '"><td><b>' + esc(i) + '</b></td>'
-        + '<td>' + (st && st.spoon_ml !== '' ? esc(mlTxt(st.spoon_ml)) : '<span class="muted">未定</span>') + '</td>'
-        + '<td class="n">' + (st ? '<b>' + esc(gTxt(st.g_per_spoon)) + '</b>' : '—') + '</td>'
-        + '<td class="n">' + (rg > 0 ? '<b>' + esc(gTxt(rg)) + '</b>' : '<span class="muted">未實測</span>') + '</td>'
-        + '<td class="n">' + (d == null ? '' : '<span class="' + (Math.abs(d) < 0.005 ? '' : d > 0 ? 'dev-up' : 'dev-dn') + '">' + (d > 0 ? '+' : '') + num(d * 100, 1) + '%</span>') + '</td>'
+      var st = spoonSetOf(i), f = v1(i), c = specCur(i);
+      var row = '<tr data-row="' + esc(i) + '"' + (specDirty(i) ? ' class="dirty"' : '') + '><td class="click" data-si="' + esc(i) + '"><b>' + esc(i) + '</b><span class="sm">' + (S.slOpen[i] ? '▾ 收起紀錄' : '▸ 看紀錄') + '</span></td>'
+        + '<td>' + mlSelect(i, c.ml) + '<input class="sp-in sp-other" data-k="mlo" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.1" step="0.05" placeholder="ml" aria-label="' + esc(i) + ' 其他規格 ml" hidden></td>'
+        + '<td class="n"><input class="sp-in sp-g" data-k="g" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(c.g) + '" placeholder="例 2" aria-label="' + esc(i) + ' 食譜用 1 平匙克數"></td>'
+        + '<td class="n"><input class="sp-in sp-g" data-k="r" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.01" step="0.01" value="' + esc(c.r) + '" placeholder="未實測" aria-label="' + esc(i) + ' 真實 1 平匙克數"></td>'
+        + '<td class="n" data-diff="' + esc(i) + '">' + specDiffHtml(c) + '</td>'
         + '<td>' + (f ? esc(mlTxt(f.spoon_ml)) + '<span class="sm">1 平匙 ' + esc(gTxt(f.recipe_g)) + '</span>' : '<span class="muted">沒有用</span>') + '</td>'
         + '<td class="n">' + (cnt[i] || 0) + '</td>'
-        + '<td><span class="sm">' + esc(st ? (st.saved_at || '').slice(0, 10) : '') + '</span>' + (st && st.note ? '<span class="sm" style="white-space:normal">' + esc(st.note) + '</span>' : '') + '</td>'
-        + (editing() ? '<td><button class="chip" type="button" data-sed="' + esc(i) + '">✏️ 改規格</button></td>' : '') + '</tr>';
+        + '<td><span class="sm">' + esc(st ? (st.saved_at || '').slice(0, 10) : '') + '</span>' + (st && st.note ? '<span class="sm" style="white-space:normal">' + esc(st.note) + '</span>' : '') + '</td></tr>';
       if (S.slOpen[i]) {
         var lg = logs[i] || [];
-        row += '<tr class="hist"><td colspan="' + (editing() ? 9 : 8) + '"><b>「' + esc(i) + '」規格紀錄</b>　<a href="#" data-sgo="' + esc(i) + '">看這個食材的食譜演進 →</a>'
+        row += '<tr class="hist"><td colspan="8"><b>「' + esc(i) + '」規格紀錄</b>　<a href="#" data-sgo="' + esc(i) + '">看這個食材的食譜演進 →</a>'
           + (lg.length ? '<div class="tw"><table class="t" style="margin-top:6px"><thead><tr><th>生效日</th><th>版本</th><th>量匙規格</th><th style="text-align:right">食譜用</th><th style="text-align:right">真實</th><th>備註</th></tr></thead><tbody>'
             + lg.map(function(x){ return '<tr><td class="v">' + esc(x.eff_date) + '</td><td>' + esc(x.version) + '</td><td>' + esc(mlTxt(x.spoon_ml) || '未定') + '</td><td class="n">' + esc(gTxt(x.recipe_g)) + '</td><td class="n">' + esc(gTxt(x.real_g) || '—') + '</td><td class="muted">' + esc(x.note) + '</td></tr>'; }).join('')
             + '</tbody></table></div>' : '<div class="muted">還沒有紀錄。</div>') + '</td></tr>';
       }
       return row;
     }).join('') + '</tbody></table></div>'
-    + '<div class="muted" style="margin-top:8px">第一版規格來自公司換算表「工作表1」（《平匙換算表_20261007》）。改規格會同時改「🥄 平匙換算」用的克數，並在紀錄留一列。</div></div>';
+    + '<div class="muted" style="margin-top:8px">第一版規格來自公司換算表「工作表1」（《平匙換算表_20261007》）。食譜用克數改了，「🥄 平匙換算」和演進頁的「目前試算」會跟著變；每次儲存都會在紀錄留一列。</div></div>';
   $('slBody').innerHTML = h;
-  Array.prototype.forEach.call(document.querySelectorAll('[data-si]'), function(el){ el.onclick = function(e){ if (e.target.closest('button,a')) return; var i = el.getAttribute('data-si'); S.slOpen[i] = !S.slOpen[i]; slSpec(p); }; });
+  specPaintBtn();
+  Array.prototype.forEach.call(document.querySelectorAll('[data-si]'), function(el){ el.onclick = function(){ var i = el.getAttribute('data-si'); S.slOpen[i] = !S.slOpen[i]; slSpec(p); }; });
   Array.prototype.forEach.call(document.querySelectorAll('[data-sgo]'), function(el){ el.onclick = function(e){ e.preventDefault(); S.lf = { ing: el.getAttribute('data-sgo'), rec: '', chg: false }; S.lsub = 'evo'; tabSpoonLog(p); window.scrollTo(0, 0); }; });
-  Array.prototype.forEach.call(document.querySelectorAll('[data-sed]'), function(el){ el.onclick = function(){ specForm(p, el.getAttribute('data-sed')); }; });
+  Array.prototype.forEach.call(document.querySelectorAll('.sp-in'), function(el){
+    var i = el.getAttribute('data-ing'), k = el.getAttribute('data-k');
+    var upd = function(){
+      var c = S.specPend[i] || (S.specPend[i] = specVal(spoonSetOf(i)));
+      if (k === 'ml') {
+        var o = el.parentNode.querySelector('.sp-other');
+        if (el.value === 'other') { o.hidden = false; o.focus(); c.ml = o.value; }
+        else { o.hidden = true; c.ml = el.value; }
+      } else if (k === 'mlo') c.ml = el.value.trim();
+      else c[k] = el.value.trim();
+      if (!specDirty(i)) delete S.specPend[i];
+      var td = document.querySelector('[data-diff="' + CSS.escape(i) + '"]'); if (td) td.innerHTML = specDiffHtml(specCur(i));
+      var tr = el.closest('tr'); if (tr) tr.classList.toggle('dirty', specDirty(i));
+      specPaintBtn();
+    };
+    el.addEventListener(k === 'ml' ? 'change' : 'input', upd);   /* 只改資料與同一列，不重畫 */
+  });
+  $('specUndo').onclick = function(){ S.specPend = {}; slSpec(p); };
+  $('specSaveAll').onclick = function(){ specSaveAll(p); };
 }
-function specForm(p, ing){
-  var st = spoonSetOf(ing) || {}, ml = st.spoon_ml || '', inList = ml === '' || SPEC_ML.indexOf(Number(ml)) >= 0;
-  dlg('✏️ 「' + ing + '」平匙規格', '<div class="fm">'
-    + '<label>量匙規格<select id="sfMl"><option value=""' + (ml === '' ? ' selected' : '') + '>未定</option>' + SPEC_ML.map(function(m){ return '<option value="' + m + '"' + (Number(ml) === m ? ' selected' : '') + '>' + esc(mlTxt(m)) + '</option>'; }).join('') + '<option value="other"' + (inList ? '' : ' selected') + '>其他（自己填 ml）</option></select></label>'
-    + '<label id="sfOtherL"' + (inList ? ' hidden' : '') + '>其他規格（ml）<input id="sfOther" type="number" inputmode="decimal" min="0.1" step="0.05" value="' + esc(inList ? '' : ml) + '"></label>'
-    + '<div class="row2"><label>食譜用克數（1 平匙＝幾 g）<input id="sfG" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(st.g_per_spoon || '') + '"></label>'
-    + '<label>真實克數（實測；沒測留空白）<input id="sfR" type="number" inputmode="decimal" min="0.01" step="0.01" value="' + esc(st.real_g || '') + '"></label></div>'
+function specPaintBtn(){
+  var n = Object.keys(S.specPend).filter(specDirty).length, b = $('specSaveAll');
+  if (!b) return;
+  b.disabled = !n; b.textContent = n ? '💾 儲存變更（' + n + ' 項）' : '💾 儲存變更';
+  $('specUndo').hidden = !n;
+}
+function specSaveAll(p){
+  var ks = Object.keys(S.specPend).filter(specDirty);
+  if (!ks.length) return;
+  if (!editing()) { toast('請先輸入專案推動密碼，改的數字會留著'); $('editBtn').click(); return; }
+  for (var x = 0; x < ks.length; x++) {
+    var c = S.specPend[ks[x]];
+    if (c.ml !== '' && !(Number(c.ml) > 0)) { toast('「' + ks[x] + '」量匙規格請填 ml 數字'); return; }
+    if (!(Number(c.g) > 0)) { toast('「' + ks[x] + '」請填食譜用克數'); return; }
+    if (c.r !== '' && !(Number(c.r) > 0)) { toast('「' + ks[x] + '」真實克數要大於 0，沒測就留空白'); return; }
+  }
+  var list = '<table class="t" style="margin:6px 0"><thead><tr><th>食材</th><th>量匙</th><th>食譜用</th><th>真實</th></tr></thead><tbody>' + ks.map(function(i){
+    var o = specVal(spoonSetOf(i)), c = S.specPend[i];
+    var cell = function(a, b, fmt){ return Number(a || 0) === Number(b || 0) ? esc(fmt(b) || '—') : '<span class="muted">' + esc(fmt(a) || '空白') + '</span> → <b>' + esc(fmt(b) || '空白') + '</b>'; };
+    return '<tr><td>' + esc(i) + '</td><td>' + cell(o.ml, c.ml, mlTxt) + '</td><td>' + cell(o.g, c.g, gTxt) + '</td><td>' + cell(o.r, c.r, gTxt) + '</td></tr>';
+  }).join('') + '</tbody></table>';
+  dlg('💾 儲存平匙規格（' + ks.length + ' 項）', '<div class="fm"><div>' + list + '</div>'
     + '<label>這次改的原因（記在紀錄的「版本」欄，例：量匙實測、主廚定案）<input id="sfV" value="規格更新"></label>'
-    + '<label>備註（例：量匙品牌、誰實測、量幾次）<input id="sfN" value="' + esc(st.note || '') + '"></label>'
-    + '<div class="muted">食譜用克數改了，「🥄 平匙換算」和演進頁的「目前試算」會跟著變。</div></div>', [
+    + '<label>備註（例：量匙品牌、誰實測、量幾次；空白＝「頁面填寫」）<input id="sfN" value=""></label></div>', [
     { t: '取消', ghost: 1 },
     { t: '下一步：確認', fn: function(){
-      var sel = $('sfMl').value, m = sel === 'other' ? ($('sfOther').value || '').trim() : sel, g = Number($('sfG').value), r = ($('sfR').value || '').trim();
-      if (sel === 'other' && !(Number(m) > 0)) { $('dlgE').textContent = '請填其他規格的 ml'; return; }
-      if (!(g > 0)) { $('dlgE').textContent = '請填食譜用克數'; return; }
-      if (r !== '' && !(Number(r) > 0)) { $('dlgE').textContent = '真實克數要大於 0，沒測就留空白'; return; }
-      var body = { action: 'specSave', ingredient: ing, spoon_ml: m, g_per_spoon: g, real_g: r, version: ($('sfV').value || '').trim() || '規格更新', note: ($('sfN').value || '').trim() };
-      confirmSave('確定要儲存？', '「' + esc(ing) + '」量匙 <b>' + esc(mlTxt(m) || '未定') + '</b>、食譜用 <b>' + esc(gTxt(g)) + '</b>、真實 <b>' + esc(r === '' ? '未實測' : gTxt(r)) + '</b>'
-        + (st.g_per_spoon ? '<div class="muted">原本：' + esc(mlTxt(st.spoon_ml) || '未定') + '、食譜用 ' + esc(gTxt(st.g_per_spoon)) + '、真實 ' + esc(st.real_g ? gTxt(st.real_g) : '未實測') + '</div>' : ''), function(){
-        return post(body).then(function(res){
-          var d = res.data, arr = S.spoon.set, i = arr.findIndex(function(x){ return x.ingredient === d.ingredient; }); if (i >= 0) arr[i] = d; else arr.push(d);
-          S.spoon.spec_log.push({ ingredient: d.ingredient, version: body.version, eff_date: today(), spoon_ml: d.spoon_ml, recipe_g: d.g_per_spoon, real_g: d.real_g, note: d.note, saved_at: d.saved_at });
-          S.g = ''; slSpec(p); return '已儲存';
-        });
+      var ver = ($('sfV').value || '').trim() || '規格更新', note = ($('sfN').value || '').trim() || '頁面填寫';
+      confirmSave('確定要儲存 ' + ks.length + ' 項？', '「' + esc(ver) + '」：' + ks.map(esc).join('、'), function(){
+        var done = 0;
+        return ks.reduce(function(pr, i){
+          return pr.then(function(){
+            var c = S.specPend[i];
+            return post({ action: 'specSave', ingredient: i, spoon_ml: c.ml, g_per_spoon: Number(c.g), real_g: c.r, version: ver, note: note }).then(function(res){
+              var d = res.data, arr = S.spoon.set, k = arr.findIndex(function(x){ return x.ingredient === d.ingredient; }); if (k >= 0) arr[k] = d; else arr.push(d);
+              S.spoon.spec_log.push({ ingredient: d.ingredient, version: ver, eff_date: today(), spoon_ml: d.spoon_ml, recipe_g: d.g_per_spoon, real_g: d.real_g, note: d.note, saved_at: d.saved_at });
+              delete S.specPend[i]; done++;
+            });
+          });
+        }, Promise.resolve()).then(function(){ S.g = ''; slSpec(p); return '已儲存 ' + done + ' 項'; })
+          .catch(function(e){ slSpec(p); throw new Error((done ? '已存 ' + done + ' 項；' : '') + e.message); });
       });
     } }
   ]);
-  $('sfMl').onchange = function(){ $('sfOtherL').hidden = this.value !== 'other'; };
 }
 
 /* ② 換成平匙的演進：每一處乾料 秤重 g → 第一版 → 之後各版 → 目前試算 */
