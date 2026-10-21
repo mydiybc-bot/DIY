@@ -13,6 +13,7 @@
  *   {action:'del', table, id}                        刪除（標記 deleted=Y，不真的刪）
  *   {action:'spoonSave', ingredient, g_per_spoon, max_spoons, tol_pct, note}
  *   {action:'specSave', ingredient, spoon_ml, g_per_spoon, real_g, note}      量匙規格（ml）＋食譜用克數＋真實克數；同時記一列 spoon_spec_log
+ *                                                                              （2026-10-21 經營者：「儲存變更改成不需要密碼」→ 這個動作免 pw，其他寫入照舊要密碼）
  *   {action:'evoSnap', version, ver_date, rows:[…]}                           把頁面算好的換算記成一個版本（同一行同版本名稱會先標刪除再寫）
  *   {action:'authSetup'}（免密碼）                   權限中心 dim_auth 補「project」列（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 所有儲存格一律存純文字（避免數字、日期被試算表自動轉格式）。
@@ -28,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.2';
+var VER = 'v1.3';   /* v1.3（2026-10-21）：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -68,6 +69,7 @@ function doPost(e) {
   try {
     var b = JSON.parse((e && e.postData && e.postData.contents) || '{}'), a = b.action;
     if (a === 'authSetup') res = authSetup_();
+    else if (a === 'specSave') res = withLock_(function () { return specSave_(b); });   /* 平匙規格表「💾 儲存變更」免密碼 */
     else {
       auth_(b.pw);
       if (a === 'auth') res = { ok: true };
@@ -75,7 +77,6 @@ function doPost(e) {
         if (a === 'save') return save_(b.table, b.row || {});
         if (a === 'del') return del_(b.table, b.id);
         if (a === 'spoonSave') return spoonSave_(b);
-        if (a === 'specSave') return specSave_(b);
         if (a === 'evoSnap') return evoSnap_(b);
         throw new Error('不認得的動作：' + a);
       });
