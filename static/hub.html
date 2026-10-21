@@ -17,6 +17,9 @@
 <!-- 2026-10-02 新增第 11 張卡「📢 公告及工作清單」→ dashboard-announce.html（取代 NUEIP 公告／工作清單；後端＝獨立 GAS「公告及工作清單 API」）；標題 10→11；新增 ANNOUNCE_API 與 loadAnnounceStat()（只讀公開數字，不含內容） -->
 <!-- 2026-10-02 登入穩定化（待處理事項 1002 #3）：<head> 加入全站共用 AUTH-CORE v2（權限中心慢／回 404 自動補發、預熱、瀏覽器空間滿不卡）；authVerify／setUnlock／isUnlocked 改走它，AUTH_API 常數移到那一段；解鎖後與點卡片前先預熱 -->
 <!-- 2026-10-07 經營者裁定「原物料成本用不到」：移除「🧾 原物料成本」卡（dashboard-materials.html 一併刪除；廠商單價 Sheet 與 vendor-price-tracker 不動）；標題 11→10；移除 VENDOR_SHEET 與 loadVendorStat() -->
+<!-- 2026-10-21 經營者裁定「首頁分總部／各店，避免混用」：密碼框先選 🏪 門市（權限中心 hub 列，原密碼不變）或 🏢 總部（權限中心新列 hub_hq，經營者另設密碼）；
+     門市只看 9 張卡；總部看全部，專案推動／新品申請表／海外代理商（data-scope="hq"）排在「總部專用」區。身分存 hub_role（hq／store），回首頁自動用同一邊；按「換身分」清掉重登。
+     緊急繞過只塞 hub_unlocked＝門市畫面；要總部畫面再加 hub_role=hq -->
 <!-- 2026-10-07 經營者指示：「📋 自己做決策中心」卡移到第一張（原第 8 張，其餘順序不變） -->
 <!-- 2026-10-07 經營者指示：新增「🎤 口語應對訓練站」卡放第二張（連網站根目錄 /，即員工口語應對訓練站；員工用自己的員工編號登入，不走權限中心）；標題 10→11 -->
 <!DOCTYPE html>
@@ -65,6 +68,18 @@ body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-ser
 .header { background: linear-gradient(135deg, var(--primary-dark), var(--primary), var(--primary-light)); color: white; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 20px rgba(196,65,47,.3); }
 .header-left h1 { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
 .header-left p { font-size: 12px; opacity: .85; margin-top: 4px; }
+.role-pick { display: flex; gap: 8px; margin-bottom: 12px; }
+.role-pick button { flex: 1; padding: 10px 6px; border-radius: 10px; border: 2px solid #E5D5CC; background: #fff; font-size: 15px; font-weight: 700; cursor: pointer; color: var(--text); }
+.role-pick button.on { border-color: var(--primary); background: #FBEDE8; color: var(--primary-dark); }
+.header.hq { background: linear-gradient(135deg, #2F3B4C, #44546A, #5D7089); box-shadow: 0 4px 20px rgba(47,59,76,.3); }
+.header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.role-chip { display: none; background: rgba(255,255,255,.95); color: var(--primary-dark); border-radius: 20px; padding: 6px 14px; font-size: 13px; font-weight: 800; white-space: nowrap; }
+.header.hq .role-chip { color: #2F3B4C; }
+.role-switch { display: none; background: none; border: 1px solid rgba(255,255,255,.5); color: #fff; border-radius: 20px; padding: 5px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+body:not(.role-hq) .hub-card[data-scope="hq"] { display: none; }   /* 沒以總部登入前，總部卡連模糊背景都不出現 */
+.sec-title { font-size: 15px; font-weight: 800; color: var(--text); margin: 0 0 12px; }
+.sec-title.gap { margin-top: 32px; }
+@media (max-width: 600px) { .header { padding: 18px 16px; flex-wrap: wrap; gap: 10px; } .container { padding: 24px 16px; } }
 .header-badge { background: rgba(255,255,255,.2); border-radius: 20px; padding: 6px 16px; font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,.3); white-space: nowrap; }
 
 /* CONTAINER */
@@ -347,7 +362,8 @@ cursor: pointer; transition: background .15s;
 <div class="modal-box">
 <div class="modal-icon">🏠</div>
 <div class="modal-title">經營儀表板</div>
-<div class="modal-sub">自己做烘焙聚樂部・請輸入密碼</div>
+<div class="modal-sub">自己做烘焙聚樂部・先選身分，再輸入密碼</div>
+<div class="role-pick" id="rolePick"><button type="button" data-r="store" onclick="pickRole('store')">🏪 門市</button><button type="button" data-r="hq" onclick="pickRole('hq')">🏢 總部</button></div>
 <div style="position:relative">
 <input class="modal-input" type="password" id="inputA" placeholder="請輸入密碼" autocomplete="new-password" name="pw-hub" data-lpignore="true" data-1p-ignore style="padding-right:44px">
 <button type="button" id="inputAEye" aria-label="顯示密碼" onclick="var i=document.getElementById('inputA');var s=i.type==='password';i.type=s?'text':'password';this.textContent=s?'🙈':'👁';i.focus()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>
@@ -360,12 +376,12 @@ cursor: pointer; transition: background .15s;
 <!-- 密碼 Modal（P&L 第二道） -->
 
 <!-- HEADER -->
-<div class="header">
+<div class="header" id="hdr">
 <div class="header-left">
 <h1>🍰 自己做烘焙聚樂部・經營儀表板</h1>
-<p>整合 12 個營運系統 ｜ 12 間門市</p>
+<p id="hdrSub">自己做烘焙聚樂部 ｜ 12 間門市</p>
 </div>
-<div class="header-badge" id="updateBadge">載入中…</div>
+<div class="header-right"><span class="role-chip" id="roleChip"></span><button type="button" class="role-switch" id="roleSwitch" onclick="switchRole()">換身分</button><div class="header-badge" id="updateBadge">載入中…</div></div>
 </div>
 
 <!-- MAIN -->
@@ -402,7 +418,7 @@ cursor: pointer; transition: background .15s;
 
 <!-- 專案推動（2026-10-17 經營者：未來所有新專案都在這裡管理）：project-hub.html，閘門 DASH_ID=project；
      資料在試算表「專案推動_資料庫」（專案推動 API）；不是每天更新的資料表，不放「最後更新」列 -->
-<div class="hub-card project" onclick="goTo('project-hub.html')">
+<div class="hub-card project" data-scope="hq" onclick="goTo('project-hub.html')">
 <div class="card-icon">🚀</div>
 <div class="card-title">專案推動</div>
 <div class="card-desc">要看或更新專案進度時點這張：每個專案的階段、負責人、檢查點日期、待決定事項。</div>
@@ -483,7 +499,7 @@ cursor: pointer; transition: background .15s;
 </div>
 
 <!-- 食譜系統（2026-09-05 由原物料成本頁搬出；2026-09-29 起＝新品申請表＋半成品/材料包） -->
-<div class="hub-card recipe" onclick="goTo('dashboard-recipe.html')">
+<div class="hub-card recipe" data-scope="hq" onclick="goTo('dashboard-recipe.html')">
 <div class="card-icon">📝</div>
 <div class="card-title">新品申請表 <span class="upd upd-auto">🟢 自動</span></div>
 <div class="card-desc">要送新品申請、送件到檔期，或維護半成品、材料包配方時點這張。</div>
@@ -497,7 +513,7 @@ cursor: pointer; transition: background .15s;
 
 <!-- 海外代理商購買平台（2026-10-19 經營者交辦，原名「新品供應商查詢」，同日改名）：dashboard-supplier.html，免密碼（10/19 晚經營者：不需要密碼，閘門已拿掉）；
      資料＝Drive「新品研發工作申請單／2026」每份檔的新品通知表，GAS 每天 06:00 自動彙整；決策中心 action=fresh 沒有這一項，不放「最後更新」列 -->
-<div class="hub-card supplier" onclick="goTo('dashboard-supplier.html')">
+<div class="hub-card supplier" data-scope="hq" onclick="goTo('dashboard-supplier.html')">
 <div class="card-icon">🔎</div>
 <div class="card-title">海外代理商購買平台 <span class="upd upd-auto">🟢 自動</span></div>
 <div class="card-desc">要找新品用的食材、器模具跟誰買、購買連結在哪時點這張。</div>
@@ -575,12 +591,14 @@ _hubBusy = true;
 const err = document.getElementById('errorA');
 err.style.color = '';
 err.textContent = '驗證中…';
-authVerify('hub', val, function(r) {
+const role = _hubRole;
+authVerify(role === 'hq' ? 'hub_hq' : 'hub', val, function(r) {
 _hubBusy = false;
 err.style.color = '';
 if (r && r.ok) {
 err.textContent = '';
 setUnlock('hub_unlocked', r.ttl_hours);
+window.__dashAuth.put('hub_role', role);
 document.getElementById('modalA').classList.remove('show');
 onUnlocked();
 } else {
@@ -603,6 +621,43 @@ document.getElementById('inputA').addEventListener('keydown', e => {
 if (e.key === 'Enter') checkPwdA();
 });
 
+// ── 2026-10-21 總部／門市分區 ─────────────────────────────
+// 門市＝權限中心 hub 列（原密碼）；總部＝hub_hq（2026-10-21 經營者：另設一組，不沿用其他密碼）。身分存 hub_role，沒有就當門市
+let _hubRole = (function(){ try { return window.__dashAuth.get('hub_role') === 'hq' ? 'hq' : 'store'; } catch (e) { return 'store'; } })();
+function pickRole(r) {
+_hubRole = r === 'hq' ? 'hq' : 'store';
+document.querySelectorAll('#rolePick button').forEach(b => b.classList.toggle('on', b.getAttribute('data-r') === _hubRole));
+const i = document.getElementById('inputA'); i.placeholder = _hubRole === 'hq' ? '總部密碼' : '門市密碼'; i.focus();
+document.getElementById('errorA').textContent = '';
+}
+function switchRole() {
+const A = window.__dashAuth;
+A.del('hub_unlocked'); A.del('hub_unlocked_ttl'); A.del('hub_role');
+try { sessionStorage.removeItem('hub_stat_v1'); } catch (e) {}
+location.reload();
+}
+function applyRole() {
+const hq = _hubRole === 'hq';
+const grid = document.getElementById('cardGrid');
+const hqCards = Array.prototype.slice.call(grid.querySelectorAll('.hub-card[data-scope="hq"]'));
+if (hq) {
+const t1 = document.createElement('div'); t1.className = 'sec-title'; t1.textContent = '🏢 總部專用';
+const g1 = document.createElement('div'); g1.className = 'card-grid'; g1.id = 'hqGrid';
+hqCards.forEach(c => g1.appendChild(c));
+const t2 = document.createElement('div'); t2.className = 'sec-title gap'; t2.textContent = '🏪 各店儀表板';
+grid.parentNode.insertBefore(t1, grid); grid.parentNode.insertBefore(g1, grid); grid.parentNode.insertBefore(t2, grid);
+} else {
+hqCards.forEach(c => c.remove());
+}
+const n = document.querySelectorAll('.hub-card').length;
+document.getElementById('hdr').classList.toggle('hq', hq);
+document.body.classList.toggle('role-hq', hq);
+const chip = document.getElementById('roleChip'); chip.textContent = hq ? '🏢 總部' : '🏪 門市'; chip.style.display = 'inline-block';
+document.getElementById('roleSwitch').style.display = 'inline-block';
+document.getElementById('hdrSub').textContent = (hq ? '總部入口' : '門市入口') + ' ｜ ' + n + ' 個系統 ｜ 12 間門市';
+document.title = (hq ? '總部' : '門市') + '｜自己做經營儀表板';
+}
+
 function goTo(url) {
 /* 2026-10-02 換頁前先預熱權限中心（全站 90 秒節流；keepalive 換頁後照樣送達），下一頁跳出密碼框時引擎已暖 */
 try { window.__dashAuth.warm(true); } catch (e) {}
@@ -613,6 +668,7 @@ window.location.href = url;
 
 // ── 載入後檢查 ──────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+pickRole(_hubRole);
 if (isUnlocked('hub_unlocked')) {
 document.getElementById('modalA').classList.remove('show');
 onUnlocked();
@@ -628,6 +684,7 @@ window.__dashAuth.warm();
 });
 
 function onUnlocked() {
+applyRole();
 /* 2026-10-02 hub 一解鎖就預熱權限中心（90 秒節流），接著點進任何儀表板要密碼時引擎已暖 */
 window.__dashAuth.warm();
 const now = new Date();
