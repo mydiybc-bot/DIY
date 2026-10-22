@@ -952,7 +952,9 @@ function tabSpoon(p){
     + '<label>容許誤差<select id="spTol">' + [['0','0%（要剛好）'],['5','±5%'],['10','±10%'],['15','±15%']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.tol) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
     + (editing() ? '<button class="btn" type="button" id="spSave"' + (g > 0 ? '' : ' disabled') + '>💾 存成「' + esc(S.ing) + '」的設定</button>' : '')
     + '<button class="btn ghost" type="button" id="spXls" title="下載 Excel：可選只匯出目前畫面，或完整匯出">📥 匯出 Excel</button>'
+    + '<button class="btn ghost" type="button" id="spRef" title="重新讀門市食譜後台（台灣繁中啟用中），更新前自動備份">🔄 更新食譜用量</button>'
     + '</div>'
+    + '<div class="muted" style="margin-top:6px">食譜用量：' + esc(S.spoon.snap_date || '') + ' 讀取（' + esc(S.spoon.source || '') + '，共 ' + S.spoon.lines.length + ' 項）；每天早上 6 點自動更新</div>'
     + '<div class="muted" style="margin-top:8px">' + (set ? '目前存的設定：一平匙 ' + esc(set.g_per_spoon) + ' g、最多 ' + (Number(set.max_spoons) ? esc(set.max_spoons) + ' 平匙' : '不限') + '、誤差 ' + esc(set.tol_pct || 0) + '%（' + esc(set.note || '') + '，' + esc(set.saved_at || '') + '）' : '這個食材還沒存設定。') + '</div></div>';
   if (g > 0) {
     var res = lines.map(function(l){ return { l: l, j: judge(Number(l.grams), g, maxn, tol) }; });
@@ -985,7 +987,7 @@ function tabSpoon(p){
       var st = spoonSetOf(i), r = st && Number(st.g_per_spoon) > 0 ? rate(by[i], Number(st.g_per_spoon), Number(st.max_spoons) || 0, Number(st.tol_pct) || 0) : null;
       return '<tr class="click' + (i === S.ing ? ' sel' : '') + '" data-ing="' + esc(i) + '"><td>' + esc(i) + '</td><td class="n">' + by[i].length + '</td><td class="n">' + (st ? esc(st.g_per_spoon) + ' g' : '—') + '</td><td class="n">' + (st ? (Number(st.max_spoons) ? esc(st.max_spoons) : '不限') : '') + '</td><td class="n">' + (r == null ? '—' : '<b>' + Math.round(r * 100) + '%</b>') + '</td><td class="muted">' + esc(st ? st.note : '') + '</td></tr>';
     }).join('') + '</tbody></table></div>'
-    + '<div class="muted" style="margin-top:8px">資料：' + esc(S.spoon.source) + '，' + esc(S.spoon.snap_date) + ' 快照（共 ' + S.spoon.lines.length + ' 項）。食譜有改要更新，請 Claude 重新讀門市食譜後台。</div></div>';
+    + '<div class="muted" style="margin-top:8px">資料：' + esc(S.spoon.source) + '，' + esc(S.spoon.snap_date) + ' 讀取（共 ' + S.spoon.lines.length + ' 項）。每天早上 6 點自動重讀門市食譜後台；剛改完食譜想馬上看，按上面「🔄 更新食譜用量」。</div></div>';
   $('tabBody').innerHTML = h;
   var re = function(){ tabSpoon(p); };
   $('spIng').onchange = function(){ S.ing = this.value; S.g = ''; re(); };
@@ -995,6 +997,7 @@ function tabSpoon(p){
   $('spTol').onchange = function(){ S.tol = this.value; re(); };
   if ($('spNo')) $('spNo').onchange = function(){ S.onlyNo = this.checked; re(); };
   if ($('spSort')) $('spSort').onchange = function(){ S.sortNo = this.checked; re(); };
+  $('spRef').onclick = function(){ spoonRefreshUI(); };
   $('spXls').onclick = function(){   /* 2026-10-22：先問要匯出哪一種 */
     var b = $('spXls'), go = function(mode){ close(); b.disabled = true; spoonXls(by, ings, mode).then(function(n){ toast('✅ 已下載「' + n + '」（在瀏覽器的「下載」資料夾）'); }, function(e){ toast('❌ 匯出失敗：' + (e.message || e)); }).then(function(){ b.disabled = false; }); };
     var curOk = g > 0;
@@ -1024,6 +1027,35 @@ function tabSpoon(p){
       } }
     ]);
   };
+}
+
+/* ----- 🔄 更新食譜用量（2026-10-22）：叫食譜系統後端（有後台登入帳號）重讀門市食譜後台，寫回本試算表 spoon_lines（寫前自動備份）。免密碼 ----- */
+var RQ_API = 'https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+function spoonRefreshUI(){
+  dlg('🔄 更新食譜用量', '<div>重新讀門市食譜後台「台灣・繁體中文・啟用中」的全部食譜，找出平匙規格表裡的乾料（單位 g）每一處用量，換掉目前的資料（' + S.spoon.lines.length + ' 項，' + esc(S.spoon.snap_date || '') + ' 讀取）。</div><div class="muted" style="margin-top:6px">更新前會自動備份；跟現在完全一樣就不寫。大約要 1～2 分鐘，請不要關掉頁面。</div>', [
+    { t: '取消', ghost: 1 },
+    { t: '下一步：確認', fn: function(){
+      confirmSave('確定要更新食譜用量？', '會讀後台約 140 支食譜，有變動才寫入（先備份）', function(){
+        return fetch(RQ_API, { method: 'POST', body: JSON.stringify({ action: 'spoonRefresh' }), redirect: 'follow' }).then(function(r){ return r.text(); }).then(function(t){
+          var r; try { r = JSON.parse(t); } catch(e){ throw new Error('食譜系統沒有回應，請稍後再按一次'); }
+          if (!r.ok) throw new Error(r.msg || '更新失敗');
+          var d = r.data || {};
+          S.spoonRef = d; S.spoon = null; S.slLines = null;
+          setTimeout(function(){ spoonRefreshShow(d); }, 50);
+          return d.changed ? '已更新：' + d.before + ' → ' + d.after + ' 項' : '後台沒有變動，資料維持原樣';
+        });
+      });
+    } }
+  ]);
+}
+function spoonRefreshShow(d){
+  var li = function(a){ return a && a.length ? '<ul style="margin:4px 0 0 18px">' + a.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '<span class="muted">無</span>'; };
+  dlg(d.changed ? '✅ 食譜用量已更新' : 'ℹ️ 後台沒有變動', '<div class="fm">'
+    + '<div><b>前後筆數</b>：' + d.before + ' 項（' + d.recipes_before + ' 支）→ <b>' + d.after + ' 項（' + d.recipes_after + ' 支）</b>；後台啟用繁中共 ' + d.backend + ' 支，用到規格表 ' + d.ings + ' 種食材</div>'
+    + (d.changed ? '<div>多了 ' + d.add + ' 處、少了 ' + d.del + ' 處；備份分頁：' + esc(d.backup || '') + '（' + esc(d.snap_date || '') + '）</div>' : '')
+    + '<div><b>新加入的食譜</b>' + li(d.add_recipes) + '</div><div><b>不再列入的食譜</b>（停用或不再用這些乾料）' + li(d.del_recipes) + '</div>'
+    + (d.other_g && d.other_g.length ? '<div class="muted">規格表沒有、但後台有用 g 的粉／糖類（沒算進來）：' + esc(d.other_g.join('、')) + '</div>' : '')
+    + '<div class="muted">花了 ' + d.took + ' 秒</div></div>', [{ t: '知道了', fn: function(){ close(); if (route().tab === 'spoon') tabSpoon(); } }]);
 }
 
 /* ----- 📥 平匙換算匯出 Excel（2026-10-22）：總覽＋全部明細（各食材存的設定）＋目前畫面（畫面上的試算值） ----- */
