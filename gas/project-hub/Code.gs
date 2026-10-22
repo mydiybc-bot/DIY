@@ -29,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.5';   /* v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v1.6';   /* v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -43,7 +43,7 @@ var T = {
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
   people:    { id: 'person_id', cols: ['person_id', 'name', 'role', 'email', 'note', 'updated_at', 'deleted'] },
   spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source'] },
-  spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g'] },
+  spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g', 'kind'] },   /* kind（v1.6）：deco＝裝飾乾料，只登記量匙與 1 匙實測克數，不做換算 */
   spoon_spec_log: { id: 'log_id', cols: ['log_id', 'ingredient', 'version', 'eff_date', 'spoon_ml', 'recipe_g', 'real_g', 'note', 'saved_at', 'deleted'] },
   spoon_evo: { id: 'evo_id', cols: ['evo_id', 'line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'version', 'ver_date', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note', 'source', 'updated_at', 'deleted'] },
   log:       { id: '', cols: ['ts', 'action', 'table', 'target', 'detail'] }
@@ -231,11 +231,12 @@ function specSave_(b) {
   var ing = String(b.ingredient || '').trim(), ml = String(b.spoon_ml == null ? '' : b.spoon_ml).trim(), g = Number(b.g_per_spoon), rg = String(b.real_g == null ? '' : b.real_g).trim();
   if (!ing) throw new Error('缺食材');
   if (ml !== '' && !(Number(ml) > 0 && Number(ml) <= 500)) throw new Error('量匙規格要填 ml 數字');
-  if (!(g > 0 && g < 1000)) throw new Error('食譜用克數要大於 0');
-  if (rg !== '' && !(Number(rg) > 0 && Number(rg) < 1000)) throw new Error('真實克數要大於 0（還沒實測就留空白）');
   var hit = rows_('spoon_set').filter(function (r) { return r.ingredient === ing; })[0];
-  var o = hit ? clean_(hit) : { ingredient: ing, max_spoons: '6', tol_pct: '0' };
-  o.spoon_ml = ml === '' ? '' : String(Number(ml)); o.g_per_spoon = String(g); o.real_g = rg === '' ? '' : String(Number(rg));
+  var deco = hit ? hit.kind === 'deco' : String(b.kind || '') === 'deco';   /* 裝飾乾料：沒有食譜用克數 */
+  if (!deco && !(g > 0 && g < 1000)) throw new Error('食譜用克數要大於 0');
+  if (rg !== '' && !(Number(rg) > 0 && Number(rg) < 1000)) throw new Error('真實克數要大於 0（還沒實測就留空白）');
+  var o = hit ? clean_(hit) : deco ? { ingredient: ing, max_spoons: '', tol_pct: '', kind: 'deco' } : { ingredient: ing, max_spoons: '6', tol_pct: '0' };
+  o.spoon_ml = ml === '' ? '' : String(Number(ml)); o.g_per_spoon = deco ? '' : String(g); o.real_g = rg === '' ? '' : String(Number(rg));
   o.note = String(b.note || '').slice(0, 300); o.saved_at = now_();
   if (hit) writeRow_('spoon_set', hit._row, o);
   else append_('spoon_set', [o]);

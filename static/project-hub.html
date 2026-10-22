@@ -1078,6 +1078,8 @@ function tabSpoonLog(p){
 /* ① 每種食材最後用的規格（2026-10-21 晚：經營者要「量匙規格可以直接選、食譜用／真實 1 平匙可以直接填」→ 表格裡就是選單＋輸入框）
    打字只記在 S.specPend、只更新同一列的「真實比食譜」與上方儲存鈕，不重畫表格（中文輸入／游標不會被打斷）；按「💾 儲存」才寫入（要密碼、兩層確認） */
 function specVal(st){ return { ml: st && st.spoon_ml != null ? String(st.spoon_ml) : '', g: st && st.g_per_spoon != null ? String(st.g_per_spoon) : '', r: st && st.real_g != null ? String(st.real_g) : '' }; }
+/* 裝飾乾料（kind=deco，2026-10-22）：只登記量匙與 1 匙實測克數，不做換算 */
+function specDeco(i){ var st = spoonSetOf(i); return !!(st && st.kind === 'deco'); }
 function specCur(i){ return S.specPend[i] || specVal(spoonSetOf(i)); }
 function specDirty(i){ var p = S.specPend[i]; if (!p) return false; var o = specVal(spoonSetOf(i)); return Number(p.ml || 0) !== Number(o.ml || 0) || Number(p.g || 0) !== Number(o.g || 0) || Number(p.r || 0) !== Number(o.r || 0); }
 function specDiffHtml(c){
@@ -1107,14 +1109,14 @@ function slSpec(p){
     + '<div class="muted" style="margin-top:4px">直接在表格裡選量匙、填克數，改完按「💾 儲存變更」（不用密碼）。食譜用＝換算平匙數用（寫進食譜）；真實＝量匙實測（平匙數 × 真實＝真正用了幾 g），還沒測就空白。點食材名稱看改過的紀錄。</div>'
     + '<div class="tw" style="margin-top:8px"><table class="t spec"><thead><tr><th>食材</th><th>量匙規格</th><th style="text-align:right">食譜用 1 平匙（g）</th><th style="text-align:right">真實 1 平匙（g）</th><th style="text-align:right">真實比食譜</th><th>第一版（9 月）</th><th style="text-align:right">用到幾處</th><th>最後更新</th></tr></thead><tbody>'
     + ings.map(function(i){
-      var st = spoonSetOf(i), f = v1(i), c = specCur(i);
-      var row = '<tr data-row="' + esc(i) + '"' + (specDirty(i) ? ' class="dirty"' : '') + '><td class="click" data-si="' + esc(i) + '"><b>' + esc(i) + '</b><span class="sm">' + (S.slOpen[i] ? '▾ 收起紀錄' : '▸ 看紀錄') + '</span></td>'
+      var st = spoonSetOf(i), f = v1(i), c = specCur(i), dc = specDeco(i);
+      var row = '<tr data-row="' + esc(i) + '"' + (specDirty(i) ? ' class="dirty"' : '') + '><td class="click" data-si="' + esc(i) + '"><b>' + esc(i) + '</b>' + (dc ? ' <span class="pill">裝飾・不換算</span>' : '') + '<span class="sm">' + (S.slOpen[i] ? '▾ 收起紀錄' : '▸ 看紀錄') + '</span></td>'
         + '<td>' + mlSelect(i, c.ml) + '<input class="sp-in sp-other" data-k="mlo" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.1" step="0.05" placeholder="ml" aria-label="' + esc(i) + ' 其他規格 ml" hidden></td>'
-        + '<td class="n"><input class="sp-in sp-g" data-k="g" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(c.g) + '" placeholder="例 2" aria-label="' + esc(i) + ' 食譜用 1 平匙克數"></td>'
+        + (dc ? '<td class="n muted">不換算</td>' : '<td class="n"><input class="sp-in sp-g" data-k="g" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(c.g) + '" placeholder="例 2" aria-label="' + esc(i) + ' 食譜用 1 平匙克數"></td>')
         + '<td class="n"><input class="sp-in sp-g" data-k="r" data-ing="' + esc(i) + '" type="number" inputmode="decimal" min="0.01" step="0.01" value="' + esc(c.r) + '" placeholder="未實測" aria-label="' + esc(i) + ' 真實 1 平匙克數"></td>'
         + '<td class="n" data-diff="' + esc(i) + '">' + specDiffHtml(c) + '</td>'
         + '<td>' + (f ? esc(mlTxt(f.spoon_ml)) + '<span class="sm">1 平匙 ' + esc(gTxt(f.recipe_g)) + '</span>' : '<span class="muted">沒有用</span>') + '</td>'
-        + '<td class="n">' + (cnt[i] || 0) + '</td>'
+        + '<td class="n">' + (dc ? '<span class="sm">後台寫「1 匙」</span>' : (cnt[i] || 0)) + '</td>'
         + '<td><span class="sm">' + esc(st ? (st.saved_at || '').slice(0, 10) : '') + '</span>' + (st && st.note ? '<span class="sm" style="white-space:normal">' + esc(st.note) + '</span>' : '') + '</td></tr>';
       if (S.slOpen[i]) {
         var lg = logs[i] || [];
@@ -1163,7 +1165,7 @@ function specSaveAll(p){
   for (var x = 0; x < ks.length; x++) {
     var c = S.specPend[ks[x]];
     if (c.ml !== '' && !(Number(c.ml) > 0)) { toast('「' + ks[x] + '」量匙規格請填 ml 數字'); return; }
-    if (!(Number(c.g) > 0)) { toast('「' + ks[x] + '」請填食譜用克數'); return; }
+    if (!specDeco(ks[x]) && !(Number(c.g) > 0)) { toast('「' + ks[x] + '」請填食譜用克數'); return; }
     if (c.r !== '' && !(Number(c.r) > 0)) { toast('「' + ks[x] + '」真實克數要大於 0，沒測就留空白'); return; }
   }
   var list = '<table class="t" style="margin:6px 0"><thead><tr><th>食材</th><th>量匙</th><th>食譜用</th><th>真實</th></tr></thead><tbody>' + ks.map(function(i){
@@ -1182,7 +1184,7 @@ function specSaveAll(p){
         return ks.reduce(function(pr, i){
           return pr.then(function(){
             var c = S.specPend[i];
-            return post({ action: 'specSave', ingredient: i, spoon_ml: c.ml, g_per_spoon: Number(c.g), real_g: c.r, version: ver, note: note }).then(function(res){
+            return post({ action: 'specSave', ingredient: i, spoon_ml: c.ml, g_per_spoon: specDeco(i) ? '' : Number(c.g), real_g: c.r, version: ver, note: note }).then(function(res){
               var d = res.data, arr = S.spoon.set, k = arr.findIndex(function(x){ return x.ingredient === d.ingredient; }); if (k >= 0) arr[k] = d; else arr.push(d);
               S.spoon.spec_log.push({ ingredient: d.ingredient, version: ver, eff_date: today(), spoon_ml: d.spoon_ml, recipe_g: d.g_per_spoon, real_g: d.real_g, note: d.note, saved_at: d.saved_at });
               delete S.specPend[i]; done++;
