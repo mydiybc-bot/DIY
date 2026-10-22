@@ -135,6 +135,7 @@ table.t{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
 table.t th{background:var(--tint);color:var(--main-dark);text-align:left;padding:8px 10px;font-weight:800;white-space:nowrap;position:sticky;top:0}
 table.t td{border-top:1px solid var(--border);padding:8px 10px;vertical-align:top}
 table.t tr.r{cursor:pointer}table.t tr.r:hover td{background:var(--hover)}
+table.t th.sk{cursor:pointer;user-select:none}table.t th.sk:hover{background:var(--hover)}table.t th.sk .ar{opacity:.35;font-size:11px;margin-left:3px}table.t th.sk.on .ar{opacity:1}
 .late{color:var(--red);font-weight:800}
 /* 對話框 */
 .mask{position:fixed;inset:0;background:rgba(20,35,33,.55);z-index:900;display:none;align-items:flex-start;justify-content:center;padding:24px 12px;overflow-y:auto}
@@ -323,7 +324,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <button class="btn pubonly" id="wkNew">＋ 新增工作</button>
     </div>
     <div class="bar"><input type="search" id="wkQ" placeholder="🔍 搜尋工作項目、負責人、內容"><button class="btn ghost" id="wkClr">清除條件</button></div>
-    <div class="tblw"><table class="t"><thead><tr><th>工作項目</th><th>負責人</th><th>日期</th><th>期限</th><th>進度</th><th>重要性</th><th>來源</th><th>留言</th><th>最新留言</th></tr></thead><tbody id="wkBody"></tbody></table></div>
+    <div class="tblw"><table class="t"><thead><tr><th>工作項目</th><th>負責人</th><th class="sk" data-sk="date" title="點一下依日期排序，再點一下反過來">日期<span class="ar"></span></th><th class="sk" data-sk="due_date" title="點一下依期限排序，再點一下反過來">期限<span class="ar"></span></th><th>進度</th><th>重要性</th><th>來源</th><th>留言</th><th class="sk" data-sk="last" title="點一下依最新留言時間排序，再點一下反過來">最新留言<span class="ar"></span></th></tr></thead><tbody id="wkBody"></tbody></table></div>
   </section>
 
   <!-- 匯入 -->
@@ -344,7 +345,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
   </section>
 </div>
 
-<div class="footer">自己做烘焙聚樂部 ｜ 工作清單儀表板（原「公告及工作清單」）v1.6（2026-10-07）</div>
+<div class="footer">自己做烘焙聚樂部 ｜ 工作清單儀表板（原「公告及工作清單」）v1.7（2026-10-22）</div>
 
 <!-- 讀公告 -->
 <div class="mask" id="mView"><div class="dlg">
@@ -431,7 +432,8 @@ try { var qa = new URLSearchParams(location.search).get('annapi'); if (qa && /^(
 /* 權限中心網址（只拿來預熱；密碼本身由公告 GAS 在伺服器端拿去驗）。與 12 頁 AUTH-CORE v2 的 AUTH_API 同一條：權限中心換網址時這裡也要改（auth-center skill 地雷 5） */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var K_VIEW = 'ann:pw', K_PUB = 'ann:pub', MAX_FILE = 10*1024*1024, MAX_ATT = 10, PAGE = 40, BATCH = 20;
-var S = { pw:'', pub:'', anns:[], works:[], opts:{}, loadedAt:'', annSt:'on', wkSt:'open', annShown:PAGE, cur:null, curWork:null, editId:'', editBase:'', editAtts:[], newFiles:[], imp:null };
+var S = { pw:'', pub:'', anns:[], works:[], opts:{}, loadedAt:'', annSt:'on', wkSt:'open', wkSort:{k:'due_date',d:1}, annShown:PAGE, cur:null, curWork:null, editId:'', editBase:'', editAtts:[], newFiles:[], imp:null };
+try { var _ws=JSON.parse(localStorage.getItem('ann:wksort')||'null'); if (_ws && /^(date|due_date|last)$/.test(_ws.k) && (_ws.d===1||_ws.d===-1)) S.wkSort=_ws; } catch(_){}
 
 /* ===== 小工具 ===== */
 function $(id){ return document.getElementById(id); }
@@ -808,7 +810,18 @@ function wkFiltered(stOverride){
     if (og && w.origin!==og) return false;
     if (ts.length && !hit(w.item+' '+w.owner+' '+w.text+' '+w.creator+' '+(w.discuss||[]).map(function(d){ return d.author+' '+(d.role||'')+' '+d.text+' '+(d.att||[]).map(function(a){ return a.name; }).join(' '); }).join(' '), ts)) return false;
     return true;
-  }).sort(function(a,b){ return (a.due_date||'9999').localeCompare(b.due_date||'9999') || (b.date||'').localeCompare(a.date||''); });
+  }).sort(wkCmp);
+}
+/* v1.7（2026-10-22）：點表頭「日期／期限／最新留言」排序，再點一下反過來；空白一律排最後；記在這台裝置 localStorage ann:wksort */
+function lastTs(w){ return (w.discuss||[]).reduce(function(m,d){ var x=String(d.ts||''); return x>m?x:m; }, ''); }
+function wkKey(w,k){ return k==='last' ? lastTs(w) : String(w[k]||''); }
+function wkCmp(a,b){
+  var k=S.wkSort.k, d=S.wkSort.d, x=wkKey(a,k), y=wkKey(b,k);
+  if (x!==y) { if (!x) return 1; if (!y) return -1; return d*x.localeCompare(y); }
+  return (a.due_date||'9999').localeCompare(b.due_date||'9999') || (b.date||'').localeCompare(a.date||'');
+}
+function wkSortMark(){
+  document.querySelectorAll('#p-work th.sk').forEach(function(th){ var on=th.dataset.sk===S.wkSort.k; th.classList.toggle('on', on); th.querySelector('.ar').textContent = on ? (S.wkSort.d>0?'▲':'▼') : '⇅'; });
 }
 function renderWork(){
   if (S.workLocked) {
@@ -819,6 +832,7 @@ function renderWork(){
   }
   ['open','done','all'].forEach(function(k){ var b=document.querySelector('#wkSt [data-v="'+k+'"] .c'); if(b) b.textContent=wkFiltered(k).length; });
   $('cWork').textContent=S.works.filter(function(w){ return !isDone(w); }).length;
+  wkSortMark();
   var rows=wkFiltered(), ts=terms($('wkQ').value), t=today();
   $('wkBody').innerHTML = rows.length ? rows.map(function(w){
     var late = !isDone(w) && w.due_date && w.due_date<t, ds=w.discuss||[], ld=ds.reduce(function(m,d){ return (!m || String(d.ts)>=String(m.ts)) ? d : m; }, null);
@@ -831,6 +845,7 @@ document.querySelectorAll('#wkSt button').forEach(function(b){ b.onclick=functio
 var wT; $('wkQ').oninput=function(){ clearTimeout(wT); wT=setTimeout(renderWork, 200); };
 $('wkClr').onclick=function(){ ['wkProg','wkImp','wkOrigin','wkQ'].forEach(function(id){ $(id).value=''; }); renderWork(); };
 $('wkBody').onclick=function(e){ var tr=e.target.closest('tr.r'); if(tr) openWork(tr.dataset.id); };
+document.querySelectorAll('#p-work th.sk').forEach(function(th){ th.onclick=function(){ var k=th.dataset.sk; S.wkSort = S.wkSort.k===k ? {k:k, d:-S.wkSort.d} : {k:k, d:(k==='due_date'?1:-1)}; try { localStorage.setItem('ann:wksort', JSON.stringify(S.wkSort)); } catch(_){} renderWork(); }; });
 function openWork(id){
   var w=id ? S.works.filter(function(x){ return x.work_id===id; })[0] : null;
   if (id && !w) { alert('找不到這件工作（可能已刪除）。'); return; }

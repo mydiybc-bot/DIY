@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v7';   // 2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v7.1';   // 2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
@@ -934,4 +934,29 @@ function storeAuthSetup_() {
   sh.getRange(last + 1, 3, rows.length, 1).setNumberFormat('@');
   sh.getRange(last + 1, 1, rows.length, 7).setValues(rows);
   return { msg: '補 ' + rows.length + ' 列；備份 ' + bk, data: { added: rows.length, backup: bk, before: last - 1 } };
+}
+/* v7.1 一次性（2026-10-22，經營者「期限在 2026/10/15 以前的工作清單都調整為已完成」；在編輯器執行，可重跑）：
+   ①先把 fact_work 整張複製成「backup_fact_work_20261022」（已存在就不再複製）
+   ②沒刪除、期限有填且 ≤ 2026-10-15、還沒完成（進度不是已完成且完成日空白）的工作 → 進度「已完成」、完成日 2026-10-22（批次調整日）
+   ③只改 progress／done_date／updated_at／updated_by 四欄；資料列數前後要相同 ④清工作清單暫存（不然最多 5 分鐘後才看到） */
+function closeWorkDue20261015() {
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var ss = ss_(), name = 'fact_work', sh = ss.getSheetByName(name);
+    if (!sh) throw new Error('找不到分頁 ' + name);
+    var bk = 'backup_' + name + '_20261022', before = Math.max(0, sh.getLastRow() - 1);
+    if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+    var t = load_(name, true), CUT = '2026-10-15', DONE = '2026-10-22', who = '批次調整（經營者 10/22 交辦）', ids = [];
+    var isOpen = function (w) { return w.deleted !== 'Y' && w.progress !== '已完成' && !w.done_date; };
+    var openBefore = t.rows.filter(isOpen).length;
+    t.rows.forEach(function (w) {
+      if (!isOpen(w) || !w.due_date || w.due_date > CUT) return;
+      putCols_(t, w._row, { progress: '已完成', done_date: DONE, updated_at: now_(), updated_by: who }, function (h) { return h === 'progress' || h === 'done_date' || h === 'updated_at' || h === 'updated_by'; });
+      ids.push(w.work_id);
+    });
+    var after = Math.max(0, sh.getLastRow() - 1), openAfter = load_(name, true).rows.filter(isOpen).length;
+    listCacheClear_(); try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
+    var msg = name + ' 批次改已完成 ' + ids.length + ' 件（期限 ≤ ' + CUT + '）；未完成 ' + openBefore + ' → ' + openAfter + '；資料列 ' + before + ' → ' + after + '（應相同）；備份分頁 ' + bk;
+    log_('批次程式', 'closeWorkDue20261015', ids.join(',').slice(0, 300), true, msg); Logger.log(msg); Logger.log(ids.join('\n')); return msg;
+  } finally { lock.releaseLock(); }
 }
