@@ -29,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.4';   /* v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v1.5';   /* v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -163,6 +163,14 @@ function bundle_() {
 }
 function spoon_() {
   var lines = rows_('spoon_lines').map(clean_);
+  /* 使用目的（2026-10-22，資料在 purpose.gs）：同一支食譜同食材同克數出現多次，依快照順序對應 */
+  var seen = {}, PU = typeof PURPOSE === 'undefined' ? {} : PURPOSE;
+  lines.forEach(function (l) {
+    var k = l.recipe + '|' + l.ingredient + '|' + l.grams, n = seen[k] = (seen[k] || 0), p = PU[k] || [];
+    seen[k]++;
+    var x = p.length ? p[Math.min(n, p.length - 1)] : null;
+    l.use_step = x ? x[0] : ''; l.purpose = x ? x[1] : '';
+  });
   return { lines: lines, set: rows_('spoon_set').map(clean_), snap_date: lines.length ? lines[0].snap_date : '', source: lines.length ? lines[0].source : '',
     spec_log: live_('spoon_spec_log'), evo: live_('spoon_evo') };
 }
