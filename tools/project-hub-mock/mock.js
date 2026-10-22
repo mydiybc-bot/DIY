@@ -69,7 +69,7 @@ var G = {
   Session: { getEffectiveUser: function () { return { getEmail: function () { return 'mock@example.com'; } }; } }
 };
 var ctx = vm.createContext(Object.assign({ console: console }, G));
-['Code.gs', 'seed.gs'].forEach(function (f) { vm.runInContext(fs.readFileSync(path.join(GAS, f), 'utf8'), ctx, { filename: f }); });
+['Code.gs', 'seed.gs'].concat(fs.readdirSync(GAS).filter(function (f) { return /^zz_.*\.gs$/.test(f); })).forEach(function (f) {   /* zz_*.gs＝要在編輯器跑一次的暫時檔，本機先跑 /mock/run?fn= 驗證 */ vm.runInContext(fs.readFileSync(path.join(GAS, f), 'utf8'), ctx, { filename: f }); });
 vm.runInContext('function __call(fn, arg){ return this[fn](arg); }', ctx);
 
 /* ---------- HTTP ---------- */

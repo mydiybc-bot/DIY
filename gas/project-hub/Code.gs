@@ -29,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.3';   /* v1.3（2026-10-21）：specSave 免密碼 */
+var VER = 'v1.4';   /* v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -37,7 +37,7 @@ var DASH_URL = 'https://diybc-training.onrender.com/static/project-hub.html';
 var REMIND_DAYS = 7;   /* 提醒信與「本週要做」看未來幾天 */
 
 var T = {
-  projects:  { id: 'project_id', cols: ['project_id', 'name', 'goal', 'owner', 'start', 'due', 'status', 'tools', 'sort', 'note', 'created_at', 'updated_at', 'deleted'] },
+  projects:  { id: 'project_id', cols: ['project_id', 'name', 'goal', 'owner', 'start', 'due', 'status', 'tools', 'sort', 'note', 'created_at', 'updated_at', 'deleted', 'files'] },   /* files（v1.4，2026-10-22）：📎 專案檔案，一行一個「名稱｜網址」 */
   phases:    { id: 'phase_id', cols: ['phase_id', 'project_id', 'no', 'title', 'start', 'end', 'owners', 'content', 'checkpoint', 'check_due', 'status', 'done_at', 'note', 'updated_at', 'deleted', 'lead', 'done_items'] },
   decisions: { id: 'dec_id', cols: ['dec_id', 'project_id', 'no', 'question', 'suggestion', 'answer', 'status', 'decided_at', 'updated_at', 'deleted', 'due', 'blocks'] },
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
