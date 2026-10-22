@@ -34,7 +34,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.3-hct';
+var DCO_VER = 'v1.4-id';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -295,7 +295,9 @@ function dcoCreate_(b) {
     for (var i = 0; i < t.rows.length; i++) if (dcoStr_(t.rows[i]['cid']) === cid) return { ok: true, id: dcoStr_(t.rows[i]['訂單號']), dup: true };
   }
   var now = new Date();
-  var prefix = 'DC' + Utilities.formatDate(now, DCO_TZ, 'yyMMdd') + '-' + dcoPad_(store) + '-';
+  /* 2026-10-22（經營者 10/22）：訂單號改全數字＝年月日 8 碼＋店號 2 碼＋流水號 2 碼（例 202610180201），跟 Shopline 一樣；
+     之前的 DC261018-02-01 舊單號不動。訂單號欄是文字格式（dcoEnsure_），不會被試算表轉成數字 */
+  var prefix = Utilities.formatDate(now, DCO_TZ, 'yyyyMMdd') + dcoPad_(store);
   var seen = {};
   t.rows.forEach(function (r) { var id = dcoStr_(r['訂單號']); if (id.indexOf(prefix) === 0) seen[id] = 1; });
   var seq = Object.keys(seen).length + 1, id = prefix + dcoPad_(seq);
