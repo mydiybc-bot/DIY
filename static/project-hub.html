@@ -951,7 +951,7 @@ function tabSpoon(p){
     + '<label>一項最多幾平匙<select id="spMax">' + [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10'],['12','12'],['15','15']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.maxn) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
     + '<label>容許誤差<select id="spTol">' + [['0','0%（要剛好）'],['5','±5%'],['10','±10%'],['15','±15%']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.tol) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
     + (editing() ? '<button class="btn" type="button" id="spSave"' + (g > 0 ? '' : ' disabled') + '>💾 存成「' + esc(S.ing) + '」的設定</button>' : '')
-    + '<button class="btn ghost" type="button" id="spXls" title="下載 Excel：總覽、全部食材明細、目前畫面">📥 匯出 Excel</button>'
+    + '<button class="btn ghost" type="button" id="spXls" title="下載 Excel：可選只匯出目前畫面，或完整匯出">📥 匯出 Excel</button>'
     + '</div>'
     + '<div class="muted" style="margin-top:8px">' + (set ? '目前存的設定：一平匙 ' + esc(set.g_per_spoon) + ' g、最多 ' + (Number(set.max_spoons) ? esc(set.max_spoons) + ' 平匙' : '不限') + '、誤差 ' + esc(set.tol_pct || 0) + '%（' + esc(set.note || '') + '，' + esc(set.saved_at || '') + '）' : '這個食材還沒存設定。') + '</div></div>';
   if (g > 0) {
@@ -995,7 +995,16 @@ function tabSpoon(p){
   $('spTol').onchange = function(){ S.tol = this.value; re(); };
   if ($('spNo')) $('spNo').onchange = function(){ S.onlyNo = this.checked; re(); };
   if ($('spSort')) $('spSort').onchange = function(){ S.sortNo = this.checked; re(); };
-  $('spXls').onclick = function(){ var b = this; b.disabled = true; spoonXls(by, ings).then(function(n){ toast('✅ 已下載「' + n + '」（在瀏覽器的「下載」資料夾）'); }, function(e){ toast('❌ 匯出失敗：' + (e.message || e)); }).then(function(){ b.disabled = false; }); };
+  $('spXls').onclick = function(){   /* 2026-10-22：先問要匯出哪一種 */
+    var b = $('spXls'), go = function(mode){ close(); b.disabled = true; spoonXls(by, ings, mode).then(function(n){ toast('✅ 已下載「' + n + '」（在瀏覽器的「下載」資料夾）'); }, function(e){ toast('❌ 匯出失敗：' + (e.message || e)); }).then(function(){ b.disabled = false; }); };
+    var curOk = g > 0;
+    dlg('📥 要匯出哪一種？', '<div class="fm"><div><b>① 只匯出目前畫面</b>：「' + esc(S.ing) + '」' + by[S.ing].length + ' 項，用畫面上的數字（一平匙 ' + (curOk ? num(g, 2) + ' g' : '還沒填') + '｜最多 ' + (maxn ? maxn + ' 平匙' : '不限') + '｜誤差 ' + tol + '%）' + (curOk ? '' : '<div class="muted">要先填「一平匙＝幾 g」才能匯出這種。</div>') + '</div>'
+      + '<div style="margin-top:8px"><b>② 完整匯出</b>：總覽＋全部食材明細（' + S.spoon.lines.length + ' 項，用各食材存的設定）＋目前畫面＋說明，共 4 張表</div></div>', [
+      { t: '取消', ghost: 1 },
+      { t: '② 完整匯出', ghost: 1, fn: function(){ go('all'); } },
+      { t: '① 只匯出目前畫面', fn: function(){ if (curOk) go('cur'); else $('dlgE').textContent = '要先填「一平匙＝幾 g」。'; } }
+    ]);
+  };
   Array.prototype.forEach.call(document.querySelectorAll('[data-g]'), function(el){ el.onclick = function(){ S.g = el.getAttribute('data-g'); re(); }; });
   Array.prototype.forEach.call(document.querySelectorAll('[data-ing]'), function(el){ el.onclick = function(){ S.ing = el.getAttribute('data-ing'); S.g = ''; re(); window.scrollTo(0, 0); }; });
   if ($('spSave')) $('spSave').onclick = function(){
@@ -1030,7 +1039,7 @@ function spXlsRows(ing, lines, g, maxn, tol){   /* 一個食材的明細列（�
     return [ing, l.recipe, Number(l.grams), g, j.ok ? Number(num(j.h, 1)) : Number(num(j.n, 2)), j.ok ? '可更換' : '不可更換', j.ok ? '' : j.why, note, sl ? sl.q : '', l.purpose || '', l.use_step || ''];
   });
 }
-function spoonXls(by, ings){
+function spoonXls(by, ings, mode){   /* mode：'cur'＝只匯出目前畫面那一張；其他＝完整 4 張 */
   return loadXlsx().then(function(X){
     var ym = S.sales && S.sales.ym ? Number(S.sales.ym.slice(5)) + ' 月使用次數（12 店）' : '上月使用次數';
     var head = ['食材', '甜點食譜名稱', '食材重量(g)', '一平匙(g)', '平匙數量', '可否更換', '不可更換原因', '說明', ym, '使用目的', '用在哪一步'];
@@ -1044,13 +1053,20 @@ function spoonXls(by, ings){
     });
     var wb = X.utils.book_new(), add = function(name, aoa, w){ var ws = X.utils.aoa_to_sheet(aoa); ws['!cols'] = w.map(function(x){ return { wch: x }; }); X.utils.book_append_sheet(wb, ws, name); };
     var W = [12, 40, 11, 10, 9, 10, 18, 34, 14, 16, 22];
-    add('總覽', sum, [12, 9, 10, 11, 11, 11, 12, 30, 18]);
-    add('全部明細（存的設定）', all, W);
-    var g = Number(S.g);
-    if (S.ing && g > 0) {
+    var g = Number(S.g), cur = function(){
       var mx = Number(S.maxn) || 0, tl = Number(S.tol) || 0;
       add(('目前畫面_' + S.ing).replace(/[\[\]:*?\/\\]/g, '').slice(0, 31), [['食材：' + S.ing + '｜一平匙 ' + num(g, 2) + ' g｜最多 ' + (mx ? mx + ' 平匙' : '不限') + '｜容許誤差 ' + tl + '%（畫面上的試算值，不一定已存檔）'], []].concat([head], spXlsRows(S.ing, by[S.ing], g, mx, tl)), W);
+    };
+    if (mode === 'cur') {
+      if (!(S.ing && g > 0)) throw new Error('要先填「一平匙＝幾 g」');
+      cur();
+      var nm = ('平匙換算_' + S.ing + '_' + today().replace(/-/g, '') + '.xlsx').replace(/[\\\/:*?"<>|]/g, '');
+      X.writeFile(wb, nm);
+      return nm;
     }
+    add('總覽', sum, [12, 9, 10, 11, 11, 11, 12, 30, 18]);
+    add('全部明細（存的設定）', all, W);
+    if (S.ing && g > 0) cur();
     add('說明', [['平匙換算匯出', today()], ['資料', (S.spoon.source || '') + '，' + (S.spoon.snap_date || '') + ' 快照，共 ' + S.spoon.lines.length + ' 項'], ['判斷規則', '平匙數＝食材重量 ÷ 一平匙克數；剛好整數或 .5 平匙（或在容許誤差內）、至少半平匙、不超過最多幾平匙，才算可更換'], ['總覽／全部明細', '用各食材「存的設定」計算'], ['目前畫面', '用頁面上正在試算的數字計算（沒填一平匙克數時不會有這張）'], ['使用次數', S.sales && S.sales.q ? '收銀機 ' + S.sales.ym + ' 12 店合計；空白＝對不到收銀機品名' : '使用次數還沒讀到，這次匯出是空白']], [16, 90]);
     var name = '平匙換算_' + today().replace(/-/g, '') + '.xlsx';
     X.writeFile(wb, name);
