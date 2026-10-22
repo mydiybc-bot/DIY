@@ -29,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.6';   /* v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v1.7';   /* v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -42,7 +42,7 @@ var T = {
   decisions: { id: 'dec_id', cols: ['dec_id', 'project_id', 'no', 'question', 'suggestion', 'answer', 'status', 'decided_at', 'updated_at', 'deleted', 'due', 'blocks'] },
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
   people:    { id: 'person_id', cols: ['person_id', 'name', 'role', 'email', 'note', 'updated_at', 'deleted'] },
-  spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source'] },
+  spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose'] },
   spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g', 'kind'] },   /* kind（v1.6）：deco＝裝飾乾料，只登記量匙與 1 匙實測克數，不做換算 */
   spoon_spec_log: { id: 'log_id', cols: ['log_id', 'ingredient', 'version', 'eff_date', 'spoon_ml', 'recipe_g', 'real_g', 'note', 'saved_at', 'deleted'] },
   spoon_evo: { id: 'evo_id', cols: ['evo_id', 'line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'version', 'ver_date', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note', 'source', 'updated_at', 'deleted'] },
@@ -169,7 +169,8 @@ function spoon_() {
     var k = l.recipe + '|' + l.ingredient + '|' + l.grams, n = seen[k] = (seen[k] || 0), p = PU[k] || [];
     seen[k]++;
     var x = p.length ? p[Math.min(n, p.length - 1)] : null;
-    l.use_step = x ? x[0] : ''; l.purpose = x ? x[1] : '';
+    /* v1.7：快照由食譜系統每天自動讀（spoon_feed.gs），列上自帶 use_step／purpose；purpose.gs 有人工修正的仍優先 */
+    l.use_step = x ? x[0] : (l.use_step || ''); l.purpose = x ? x[1] : (l.purpose || '');
   });
   return { lines: lines, set: rows_('spoon_set').map(clean_), snap_date: lines.length ? lines[0].snap_date : '', source: lines.length ? lines[0].source : '',
     spec_log: live_('spoon_spec_log'), evo: live_('spoon_evo') };
