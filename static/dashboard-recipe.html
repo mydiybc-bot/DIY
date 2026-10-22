@@ -7432,7 +7432,7 @@ window.TrMod=(function(){
     q.addEventListener('compositionstart',function(){comp=true});
     q.addEventListener('compositionend',function(){comp=false;S.q=q.value;renderRes()});
     q.addEventListener('input',function(e){if(comp||e.isComposing||(window.__ime&&__ime.on))return;S.q=q.value;renderRes()});
-    Array.prototype.forEach.call(document.querySelectorAll('#tab-translate input[data-l]'),function(c){c.onchange=function(){S.want[c.dataset.l]=c.checked?1:0;lsSet('tr:want',S.want);renderGo()}});
+    Array.prototype.forEach.call(document.querySelectorAll('#tab-translate input[data-l]'),function(c){c.onchange=function(){S.want[c.dataset.l]=c.checked?1:0;lsSet('tr:want',S.want);renderGo();if(S.src&&!S.busy)renderOut()}});
     $('trGo').onclick=start;
     $('trDictR').onclick=function(){setMsg('⏳ 重讀後台食材名稱對照表（約 20 秒）…');loadDict(true).then(function(){setMsg('✅ 食材名稱對照表已更新（後台 '+S.dict.raw.rows.length+' 個品項，'+S.dict.at+'）');renderOut()},function(e){setMsg('❌ '+e.message,true)})};
     var gq=$('trGq'),gc=false;
@@ -7461,7 +7461,7 @@ window.TrMod=(function(){
     S.pick=r;S.src=null;
     $('trPick').innerHTML='<div class="tr-pick"><span>已選：</span><b>'+esc(r.name)+'</b>'+(r.lang?'<span class="tr-muted">'+esc(r.lang)+'</span>':'')+'<a href="'+BACK+esc(id)+'" target="_blank" rel="noopener" style="font-size:13px">後台 ↗</a></div>';
     renderGo();
-    var has=LANGS.filter(function(k){return lsGet('tr:draft:'+id+':'+k)});
+    var has=LANGS.filter(function(k){return S.want[k]&&lsGet('tr:draft:'+id+':'+k)});   /* 2026-10-22 經營者：只顯示勾選的語言 */
     if(has.length){loadSrc().then(function(){S.view=has[0];renderOut();setMsg('這支上次翻譯過（'+has.map(function(k){return L(k).label}).join('、')+'），稿子在下面；要重翻按「🌐 開始翻譯」。')},function(e){setMsg('❌ '+e.message,true)})}
     else{$('trOut').innerHTML='';setMsg('')}}
   function renderGo(){var b=$('trGo');if(b)b.disabled=S.busy||!S.pick||!LANGS.some(function(k){return S.want[k]})}
@@ -7483,10 +7483,15 @@ window.TrMod=(function(){
       .then(function(){S.busy=false;renderGo()})}
 
   /* ---- 結果：每個語言一頁，左原文、右翻譯稿 ---- */
-  function renderOut(){var box=$('trOut');if(!box||!S.src)return;var src=S.src,ks=LANGS.filter(function(k){return lsGet('tr:draft:'+src.id+':'+k)});
-    if(!ks.length){box.innerHTML='';return}if(ks.indexOf(S.view)<0)S.view=ks[0];
+  /* 2026-10-22 經營者：「選了澳門中文，卻連菲律賓英文、越南文都出現」→ 那兩個是 10/19 留在這台電腦的舊稿。
+     結果區只顯示上面有勾的語言；沒勾的舊稿只提一句（勾起來才顯示），分頁標上翻譯日期 */
+  function trDay(o){var m=String(o&&o.at||'').match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);return m?(+m[2])+'/'+(+m[3]):''}
+  function renderOut(){var box=$('trOut');if(!box||!S.src)return;var src=S.src,all=LANGS.filter(function(k){return lsGet('tr:draft:'+src.id+':'+k)}),
+      ks=all.filter(function(k){return S.want[k]}),hid=all.filter(function(k){return !S.want[k]});
+    var hidNote=hid.length?'<div class="tr-muted" style="margin:0 0 8px">這支還有沒勾選的舊翻譯稿：'+hid.map(function(k){return esc(L(k).label)+'（'+esc(trDay(lsGet('tr:draft:'+src.id+':'+k)))+'）'}).join('、')+'；要看就在上面「② 翻成哪些語言」把它勾起來。</div>':'';
+    if(!ks.length){box.innerHTML=hidNote?'<div class="tr-card">'+hidNote+'</div>':'';return}if(ks.indexOf(S.view)<0)S.view=ks[0];
     var k=S.view,o=lsGet('tr:draft:'+src.id+':'+k),c=checks(k,src,o),stale=o.src!==sig(src);
-    var h='<div class="tr-card"><div class="tr-h">③ 翻譯稿：'+esc(src.name)+'</div><div class="tr-tabs">'+ks.map(function(x){return '<button type="button" class="tr-tab'+(x===k?' on':'')+'" data-v="'+x+'">'+esc(L(x).label)+'</button>'}).join('')+'</div>'
+    var h='<div class="tr-card"><div class="tr-h">③ 翻譯稿：'+esc(src.name)+'</div><div class="tr-tabs">'+ks.map(function(x){return '<button type="button" class="tr-tab'+(x===k?' on':'')+'" data-v="'+x+'">'+esc(L(x).label)+' <span style="font-size:12px;opacity:.75">'+esc(trDay(lsGet('tr:draft:'+src.id+':'+x)))+'</span></button>'}).join('')+'</div>'+hidNote
       +'<div class="tr-muted" style="margin-bottom:8px">翻譯時間 '+esc(o.at)+'・'+esc(o.model)+(stale?'　<b style="color:#A3321F">⚠ 後台原文在這之後改過，建議重翻</b>':'')+'</div>'
       +'<div class="tr-sum">'
       +(c.miss?'<span class="tr-flag tr-f-miss">⚠ 食材名稱對照表沒有'+esc(L(k).label)+'名稱 '+c.miss+' 項（AI 暫譯，請代理商確認後補進後台）</span>':'<span class="tr-flag tr-f-ok">✅ 品項全部有'+esc(L(k).label)+'名稱</span>')
