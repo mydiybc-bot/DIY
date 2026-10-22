@@ -7181,7 +7181,7 @@ window.TrMod=(function(){
       if(!j||j.act!==body.action){var e2=new Error('系統忙碌（回錯動作）');e2.retry=true;throw e2}return j},function(e){clearTimeout(tm);var e3=new Error(e&&e.name==='AbortError'?'等太久沒有回應':'連線失敗');e3.retry=true;throw e3});
   }
   function call(action,extra,ms,tries){var n=0,go=function(){n++;var cr=getCred();var b={action:action,role:cr.role,password:cr.pw};for(var k in extra)b[k]=extra[k];
-      return post(b,ms).then(function(j){if(!j.ok){var e=new Error(j.msg||'失敗');e.code=j.code;throw e}return j.data})
+      return post(b,ms).then(function(j){if(!j.ok){var e=new Error(j.msg||'失敗');e.code=j.code;e.data=j.data;throw e}return j.data})
         .catch(function(e){if(e.retry&&n<(tries||3))return new Promise(function(r){setTimeout(r,1500*n)}).then(go);throw e})};return go()}
   /* 身分密碼：跟新品申請表、找食譜共用這個分頁記住的（sessionStorage rcp:cred），沒有才問 */
   function getCred(){try{var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
@@ -7246,7 +7246,7 @@ window.TrMod=(function(){
       if(n.nodeType===3){out+=esc(n.nodeValue.replace(/ /g,' '));return}
       if(n.nodeType!==1)return;var t=n.tagName.toLowerCase(),inner=clean(n,imgs);
       if(t==='br'){out+='<br>';return}
-      if(t==='img'){imgs.push(n.getAttribute('src')||'');out+='[[IMG'+imgs.length+']]';return}
+      if(t==='img'){imgs.push(n.getAttribute('src')||'');(imgs.tags=imgs.tags||[]).push('<img src="'+esc(n.getAttribute('src')||'')+'"'+(n.getAttribute('style')?' style="'+esc(n.getAttribute('style'))+'"':'')+'>');out+='[[IMG'+imgs.length+']]';return}
       if(t==='p'||t==='div'){inner=inner.replace(/^(\s*<br>)+/,'').replace(/(<br>\s*)+$/,'');if(inner.trim())out+='<p>'+inner+'</p>';return}   /* 平板上用來往下推的空行不帶 */
       if(t==='u'){out+=inner.trim()?'<u>'+inner+'</u>':inner;return}
       var col=(t==='font'&&n.getAttribute('color'))||(n.style&&n.style.color)||'',fw=n.style&&n.style.fontWeight;
@@ -7454,11 +7454,12 @@ window.TrMod=(function(){
           +nm.map(function(x){return '<span class="tr-w name">⚠ 原文提到「'+esc(x.zh)+'」，翻譯沒用清單上的「'+esc(x.tr)+'」</span>'}).join('')+itemsHTML(items,true))});
     h+='</tbody></table>';
     h+=confHTML(k,src,o);
+    h+=upHTML(k,o,stale);
     h+='<div class="tr-act"><button type="button" class="tr-btn" id="trDoc">⬇ 下載 Word 翻譯稿</button><button type="button" class="tr-btn2" id="trCopy">📋 複製全文</button><button type="button" class="tr-btn2" id="trDel">🗑 刪掉這個語言的稿子</button></div><div class="tr-msg" id="trOmsg"></div></div>';
     box.innerHTML=h;
     Array.prototype.forEach.call(box.querySelectorAll('.tr-tab'),function(b){b.onclick=function(){S.view=b.dataset.v;renderOut()}});
     Array.prototype.forEach.call(box.querySelectorAll('[data-ed]'),function(el){el.addEventListener('input',function(){saveEdit(k,el)})});
-    $('trDoc').onclick=function(){doc(k)};$('trCopy').onclick=function(){copy(k)};bindConf(k,src,o);
+    $('trDoc').onclick=function(){doc(k)};$('trCopy').onclick=function(){copy(k)};bindConf(k,src,o);bindUp(k);upListLoad(src);
     $('trDel').onclick=function(){if(!confirm('刪掉「'+src.name+'」的'+L(k).label+'翻譯稿？'))return;if(!confirm('確定刪除？刪了要重新翻譯才會有。'))return;try{localStorage.removeItem('tr:draft:'+src.id+':'+k)}catch(e){}renderOut()}}
   function row(lb,cls,a,b){return '<tr'+(cls?' class="'+cls+'"':'')+'><td class="lb">'+esc(lb)+'</td><td class="src">'+a+'</td><td class="dst">'+b+'</td></tr>'}
   function ed(kind,key,v,pre){return '<div class="tr-ed'+(pre?' pre':'')+'" contenteditable="true" data-ed="'+kind+'" data-key="'+esc(key)+'">'+esc(v)+'</div>'}
@@ -7557,6 +7558,59 @@ window.TrMod=(function(){
       if(!confirm(msg+'\n\n把這 '+ok.length+' 筆存進各地確認用語？'))return;
       confirmItems(ok,'');if(notes.length)setTimeout(function(){var e=$('trCmsg');if(e)e.textContent+='\n代理商備註：'+notes.join('；')},4000)})
       .catch(function(e){cmsg('❌ 匯入失敗：'+e.message,true)})}
+  /* ---- 📤 上傳到自己做食譜系統（2026-10-22 經營者：「翻譯完成後加一個按鍵，直接上傳到自己做食譜系統的後台」）----
+     申請單 API trUpload（tr_upload.gs）：用後台「複製食譜」把原文複製成這個語言的版本（步驟、食材、圖片影片後台自己複製），
+     再換成翻譯稿的名稱、說明、步驟文字，食材單位換成當地單位；建好是停用、不公開，原文一格不動。要主廚或管理者密碼。
+     一次做不完（每段約 35 秒）就帶上傳編號接著送，直到做完；中途斷線按「▶ 繼續上傳」。結果記在稿子 o.up。 */
+  var UPS={};   /* 後台已上傳過的翻譯版（trUpList，每支原文讀一次）：{原文id:{語言:[…]}} */
+  function upListLoad(src){if(UPS[src.id]||!getCred())return;UPS[src.id]={};
+    call('trUpList',{src:src.id},45000,2).then(function(d){UPS[src.id]=d||{};var b=$('trUpPast');if(b)b.innerHTML=upPastHTML(S.view,src)},function(){delete UPS[src.id]})}
+  function upPastHTML(k,src){var a=(UPS[src.id]||{})[k]||[];if(!a.length)return '';
+    return '後台已有 '+a.length+' 次'+esc(L(k).label)+'上傳：'+a.slice(-3).map(function(x){return (x.link?'<a href="'+esc(x.link)+'" target="_blank" rel="noopener">'+esc(x.ts.slice(5,16))+'</a>':esc(x.ts.slice(5,16)))+'（'+esc(x.by)+(x.done?'':'，沒做完')+'）'}).join('、')}
+  function upHTML(k,o,stale){var u=o.up,lb=L(k).label,h='<div class="tr-card" style="background:#F1F8F6;border-color:#B2DFDB;margin-top:12px"><div class="tr-h">📤 上傳到自己做食譜系統（'+esc(lb)+'）</div>'
+      +'<div class="tr-muted">用後台的「複製食譜」建一支新的'+esc(lb)+'版（步驟、食材、圖片影片跟原文一樣），再換成上面的翻譯稿；建好是<b>停用、不公開</b>，原文食譜一格都不動。食材名稱後台會自動顯示當地名稱，單位換成當地單位。要主廚或管理者密碼。</div>';
+    if(u&&u.done)h+='<div class="tr-msg" style="color:#2E6B43;font-weight:700">✅ '+esc(u.at)+' 已上傳：<a href="'+esc(u.link)+'" target="_blank" rel="noopener">打開後台這支 ↗</a>（請負責的夥伴檢查後再勾「啟用」）'+(u.keepIng&&u.keepIng.length?'<br><span style="color:#8A5A00;font-weight:400">⚠ 這幾步的食材單位沒換（照原文）：'+esc(u.keepIng.join('；'))+'</span>':'')+(u.edited?'<br><span style="color:#8A5A00;font-weight:400">⚠ 上傳之後稿子又改過，後台不會自動跟著改</span>':'')+'</div>';
+    else if(u&&u.tr_id)h+='<div class="tr-msg bad">⏸ 上次上傳沒做完（'+esc(u.at)+(u.err?'：'+esc(u.err):'')+'）'+(u.link?'，<a href="'+esc(u.link)+'" target="_blank" rel="noopener">後台這支 ↗</a>':'')+'</div>';
+    h+='<div class="tr-muted" id="trUpPast" style="margin-top:4px">'+upPastHTML(k,S.src)+'</div>';
+    h+='<div class="tr-act"><button type="button" class="tr-btn" id="trUp"'+(stale?' disabled title="原文改過，請先重翻"':'')+'>'+(u&&u.tr_id&&!u.done?'▶ 繼續上傳到後台':(u&&u.done?'📤 再上傳一支新的':'📤 上傳到自己做食譜系統'))+'</button></div><div class="tr-msg" id="trUpMsg"></div></div>';
+    return h}
+  function upMsg(m,bad){var e=$('trUpMsg');if(e){e.innerHTML=m;e.className='tr-msg'+(bad?' bad':'')}}
+  function contCode(c){c=norm(c);return c==='彩色塑膠碗'?'container1':c==='白色瓷碗'?'container2':''}
+  function upPayload(k){var src=S.src,o=lsGet('tr:draft:'+src.id+':'+k);
+    return {src:src.id,lang:k,st:src.s.map(function(s){return s.t}),tr:{name:plain(o.name),size:o.f['尺寸']||'',desc:o.f['產品特色']||'',preserve:o.f['保存方式']||'',
+      steps:src.s.map(function(s,i){var t=o.s[i]||{t:'',h:''},tags=s.imgs.tags||[];
+        return {t:plain(t.t),h:safe(t.h).replace(/\[\[IMG(\d+)\]\]/g,function(m,n){return tags[n-1]||''}),
+          ing:s.i.map(function(it){return [it.n,it.q,it.u,contCode(it.c),look(it.n,it.u,k).unit||'']})}})}}}
+  function bindUp(k){var b=$('trUp');if(b)b.onclick=function(){upStart(k)}}
+  function upStart(k){var src=S.src,key='tr:draft:'+src.id+':'+k,o=lsGet(key),lb=L(k).label;if(!o||S.upBusy)return;flushSave();o=lsGet(key);
+    var resume=o.up&&o.up.tr_id&&!o.up.done;
+    if(!resume){var c=checks(k,src,o),empty=src.s.filter(function(s,i){return !o.s[i]||!plain(o.s[i].t)}).length,w=[];
+      if(!plain(o.name)){alert('翻譯稿的食譜名稱是空的，請先填好');return}
+      if(empty){alert('翻譯稿有 '+empty+' 步沒有標題，請先補好（或重新翻譯）');return}
+      if(c.num.length)w.push('⚠ 有 '+c.num.length+' 步的數字跟原文不一樣（第 '+c.num.map(function(i){return i+1}).join('、')+' 步）');
+      if(c.miss)w.push('⚠ 有 '+c.miss+' 項品項後台「食材名稱對照表」沒有'+lb+'名稱，平板上那幾項會顯示「--Data Missing--」，要先到後台食材管理補名稱');
+      if(c.name.length)w.push('⚠ 有 '+c.name.length+' 處步驟內文的品名跟清單不一致');
+      if(!confirm('上傳「'+(plain(o.name)||src.name)+'」到自己做食譜系統（'+lb+'版）？\n\n・用後台「複製食譜」從原文「'+src.name+'」建一支新的'+lb+'版，'+src.s.length+' 步\n・名稱、說明、每步文字換成這份翻譯稿；食材單位換成當地單位；圖片影片沿用原文的\n・建好是停用、不公開；原文食譜一格都不動'+(w.length?'\n\n'+w.join('\n'):'')))return;
+      if(!confirm('確定上傳？會在後台新增一支'+lb+'食譜（停用）。'))return}
+    upGo(k,resume?{tr_id:o.up.tr_id}:{rq:'tr'+Date.now().toString(36)+Math.random().toString(36).slice(2,8)},resume)}
+  function upGo(k,first,resume){var src=S.src,key='tr:draft:'+src.id+':'+k,lb=L(k).label,t0=Date.now(),btn=$('trUp');S.upBusy=true;if(btn)btn.disabled=true;
+    var body=first.tr_id?{tr_id:first.tr_id}:(function(){var b=upPayload(k);b.rq=first.rq;if(first.again)b.again=1;return b})(),save=function(p){var o=lsGet(key);if(!o)return;o.up=p;lsSet(key,o)};
+    var tick=setInterval(function(){upMsg('⏳ 上傳中…已 '+Math.round((Date.now()-t0)/1000)+' 秒（每段約 35 秒，請不要關掉這頁）')},1000);
+    var step=function(b){return call('trUpload',b,120000,3).then(function(d){
+        save({tr_id:d.tr_id,backend_id:d.backend_id,link:d.link,done:!!d.done,at:new Date().toLocaleString('zh-TW',{hour12:false}),keepIng:d.keepIng||[]});
+        if(d.done)return d;upMsg('⏳ 已換好第 '+d.next+'／'+d.total+' 步，繼續…');return step({tr_id:d.tr_id})})};
+    var perm=function(b){return step(b).catch(function(e){if(e.code==='perm'){return askCred('上傳到自己做食譜系統要「主廚」或「管理者」密碼。').then(function(c){if(!c)throw new Error('沒有輸入主廚或管理者密碼');return step(b)})}throw e})};
+    withCred('上傳要主廚或管理者的身分密碼。',function(){return perm(body)}).then(function(d){clearInterval(tick);delete UPS[src.id];renderOut();
+        upMsg('✅ 已上傳成'+esc(lb)+'版（停用、不公開），花 '+Math.round((Date.now()-t0)/1000)+' 秒：<a href="'+esc(d.link)+'" target="_blank" rel="noopener">打開後台這支 ↗</a>。請負責的夥伴檢查後再勾「啟用」。'+((d.keepIng&&d.keepIng.length)?'<br>⚠ 這幾步的食材單位沒換（照原文）：'+esc(d.keepIng.join('；')):'')+((d.warn&&d.warn.length)?'<br>⚠ '+esc(d.warn.join('；')):''))},
+      function(e){clearInterval(tick);
+        if(e.code==='again'){var past=(e.data&&e.data.past)||[];S.upBusy=false;
+          if(confirm(lb+'版以前上傳過 '+past.length+' 次：\n'+past.slice(-5).map(function(p){return '・'+p.ts+'（'+p.by+(p.done?'':'，沒做完')+'）'+(p.link?' '+p.link:'')}).join('\n')+'\n\n再上傳會在後台再建一支新的'+lb+'版（舊的不會被改或刪）。確定要再建一支？'))return upGo(k,{rq:first.rq+'a',again:1},false);
+          renderOut();return}
+        var o=lsGet(key),d=e.data||{};
+        if(d.tr_id&&!(d.retry))save({tr_id:d.tr_id,backend_id:d.backend_id||'',link:d.link||'',done:false,at:new Date().toLocaleString('zh-TW',{hour12:false}),err:e.message});
+        else if(o&&o.up&&!o.up.done&&d.retry){o.up=null;lsSet(key,o)}
+        renderOut();upMsg('❌ 上傳沒有完成：'+esc(e.message)+(d.tr_id&&!d.retry?'<br>已做的部分有記下來，問題排除後按「▶ 繼續上傳到後台」接著做。':''),true)})
+      .then(function(){S.upBusy=false;var b2=$('trUp');if(b2)b2.disabled=false})}
   /* ---- 匯出：Word（跟後台「匯出食譜」同版面）、純文字 ---- */
   function docHTML(k){var src=S.src,o=lsGet('tr:draft:'+src.id+':'+k),h='<h3 style="text-align:center">'+esc(o.name||src.name)+'</h3>'
       +'<p style="color:#888;font-size:12px">'+esc(L(k).label)+' 翻譯稿｜原文：'+esc(src.name)+'｜'+esc(o.at)+(o.edited?'（人工修改 '+esc(o.edited)+'）':'')+'｜尚未寫進門市食譜後台</p>';
