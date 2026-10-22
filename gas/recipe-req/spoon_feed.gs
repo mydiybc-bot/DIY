@@ -99,6 +99,9 @@ function sfRun_(p, by) {
   }
   rbSaveSession_(sess);
   if (!lines.length) throw fail_('一處都沒讀到，先不更新（可能是「匯出食譜」頁改版）', 'rbpage');
+  var tRead = Math.round((Date.now() - t0) / 1000);
+  /* Google 一次最多跑 6 分鐘：後台太慢、讀完已超過 4 分半 → 這次不寫（資料維持原樣），下次再更新 */
+  if (tRead > 270 && !p.dry) throw fail_('門市食譜後台這次很慢（讀了 ' + tRead + ' 秒），為了安全這次不寫入，資料維持原樣；請過幾分鐘再按一次', 'slow');
   /* ④ 跟現在的快照比 */
   var cur = sfTable_(ss, 'spoon_lines'), key = function (o) { return o.recipe + '|' + o.ingredient + '|' + Number(o.grams); };
   var cnt = function (arr) { var o = {}; arr.forEach(function (x) { var k = key(x); o[k] = (o[k] || 0) + 1; }); return o; };
@@ -111,7 +114,7 @@ function sfRun_(p, by) {
     add_recipes: Object.keys(rb).filter(function (r) { return !ra[r]; }), del_recipes: Object.keys(ra).filter(function (r) { return !rb[r]; }),
     add: add.length, del: del.length, add_lines: add.slice(0, 60), del_lines: del.slice(0, 60),
     other_g: Object.keys(miss).sort(function (x, y) { return miss[y] - miss[x]; }).slice(0, 30).map(function (n) { return n + ' ' + miss[n]; }),
-    ings: Object.keys(ings).length, by: by || 'button' };
+    ings: Object.keys(ings).length, by: by || 'button', t_read: tRead };
   var curHasUse = cur.head.indexOf('use_step') >= 0;
   if (p.dry) { res.dry = true; res.changed = !!(add.length || del.length || !curHasUse); res.took = Math.round((Date.now() - t0) / 1000); return { msg: '試讀（沒寫）', data: res }; }
   if (!add.length && !del.length && curHasUse && !p.force) { res.changed = false; res.took = Math.round((Date.now() - t0) / 1000); return { msg: '沒有變動', data: res }; }
@@ -129,10 +132,13 @@ function sfRun_(p, by) {
       return head.map(function (h) { return o[h] == null ? '' : String(o[h]); });
     }));
     var sh = cur.sh || ss.insertSheet('spoon_lines');
-    sh.clearContents();
+    /* 先蓋上新資料，再清掉多出來的舊列（不先清空：中途被中斷也不會留下空白分頁） */
     sh.getRange(1, 1, vals.length, head.length).setNumberFormat('@').setValues(vals);
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    if (lr > vals.length) sh.getRange(vals.length + 1, 1, lr - vals.length, Math.max(lc, head.length)).clearContent();
+    if (lc > head.length) sh.getRange(1, head.length + 1, vals.length, lc - head.length).clearContent();
     SpreadsheetApp.flush();
-    var back = sh.getLastRow() - 1;
+    var back = sh.getRange('A:A').getValues().filter(function (r) { return r[0] !== ''; }).length - 1;
     if (back !== lines.length) throw fail_('寫入後讀回 ' + back + ' 列，跟要寫的 ' + lines.length + ' 列不一樣；備份在分頁 ' + bk, 'verify');
     res.changed = true; res.backup = bk; res.snap_date = stamp;
   } finally { lock.releaseLock(); }
