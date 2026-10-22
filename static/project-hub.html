@@ -478,10 +478,12 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 var API = 'https://script.google.com/macros/s/AKfycbwBSEYcJb3iVwfcRAWQok5_v2EzRL9Lq55R80EtLEvxRSWhPoGfePMZdx7dCcwe4bD9Ig/exec';
 /* 只有本機測試（127.0.0.1／localhost）可以用 ?api= 換成模擬後端；線上網址不受影響 */
 if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) { var _api = new URLSearchParams(location.search).get('api'); if (_api && _api.charAt(0) === '/') API = _api; }
+/* 上月各甜點 12 店銷售件數：讀 POS 銷售儀表板的品項月報（action=product_monthly，公開唯讀；2026-10-22 經營者要在平匙換算表看「上個月使用總次數」） */
+var POS_API = 'https://script.google.com/macros/s/AKfycbxvD8dQdWJdaK9Ih9ZZc3PRT8rICcqbCrk5cKQY3s6zF1MmZgWL2g803zrJTBsuE3p4pQ/exec';
 var PST = ['未開始','進行中','完成','暫停'], HST = ['未開始','進行中','完成','卡關'], DST = ['待決定','已決定'], RST = ['追蹤中','已解除'];
 var TOOLS = { spoon: '🥄 平匙換算' };
 var TOOL_TABS = { spoon: [['spoon', '🥄 平匙換算'], ['spoonlog', '📒 平匙規格與演進']] };   /* 2026-10-21：勾「平匙換算」的專案多一頁規格與演進 */
-var S = { b: null, spoon: null, at: '', pw: '', tab: 'plan', ing: '', g: '', maxn: '8', tol: '0', onlyNo: false, sortNo: false, who: '', pend: {} };
+var S = { b: null, spoon: null, at: '', pw: '', tab: 'plan', ing: '', g: '', maxn: '8', tol: '0', onlyNo: false, sortNo: false, who: '', pend: {}, sales: null };
 var WEEK_DAYS = 7;   /* 「本週要做」與提醒信看未來幾天（跟 GAS REMIND_DAYS 一致） */
 try { S.pw = sessionStorage.getItem('ph_pw') || ''; } catch(e){}
 
@@ -874,6 +876,60 @@ function judge(grams, g, maxn, tol){
 }
 function rate(lines, g, maxn, tol){ var ok = 0; lines.forEach(function(l){ if (judge(Number(l.grams), g, maxn, tol).ok) ok++; }); return lines.length ? ok / lines.length : 0; }
 function spoonSetOf(ing){ return (S.spoon.set || []).filter(function(x){ return x.ingredient === ing; })[0]; }
+/* ----- 上月使用次數（POS 品項月報） ----- */
+/* 食譜名稱跟收銀機品名不一樣、又猜不出來的，寫在這裡（一支食譜可對多個品名，次數相加） */
+var RECIPE_POS = {
+  '奧利奧 (限當日壽星)': ['Oreo巧克力'],
+  '大眼怪抹茶餅乾(半成品版)': ['大眼怪抹茶餅乾'],   /* 跟原版同一個收銀品項，兩列都顯示同一個總數 */
+  '裝飾蛋糕 (價格依選擇內容 而有所不同)': ['原味蛋糕體', '巧克力蛋糕體', '抹茶蛋糕體']
+};
+function lastYm(){ var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.getFullYear() + '-' + pad(d.getMonth() + 1); }
+function loadSales(){
+  if (S.sales) return;
+  var ym = lastYm();
+  S.sales = { ym: ym, loading: true };
+  var u = POS_API + '?action=product_monthly';
+  jsonp(u, 60000).catch(function(){ return jsonp(u, 90000); }).then(function(r){
+    if (!r || !r.rows) throw new Error('讀不到');
+    var all = {}, q = {};
+    r.rows.forEach(function(x){ all[x.p] = 1; if (x.ym === ym) q[x.p] = (q[x.p] || 0) + Number(x.q || 0); });
+    S.sales = { ym: ym, all: all, q: q, at: r.lastUpdated || '' };
+  }).catch(function(e){ S.sales = { ym: ym, err: e.message || '讀不到' }; }).then(function(){
+    if (route().tab !== 'spoon' || !S.spoon || (window.__ime && __ime.on)) return;
+    var a = document.activeElement, onG = a && a.id === 'spG', pos = onG ? a.selectionStart : 0;
+    tabSpoon(); if (onG) { var n = $('spG'); n.focus(); try { n.setSelectionRange(pos, pos); } catch(e){} }
+  });
+}
+/* 食譜名稱 → 收銀機品名：先查 RECIPE_POS；再拿掉「115 11月大菜單_」、「 | …」、括號，(全素) 對「品名(素)」；
+   對不到再拿掉「某某的」、最後試前後包含（至少 4 個字）。回傳 { q, names, guess } 或 null（對不到） */
+function salesOf(recipe){
+  var sl = S.sales; if (!sl || !sl.all) return null;
+  var hit = function(names, guess){ return { q: names.reduce(function(t, n){ return t + (sl.q[n] || 0); }, 0), names: names, guess: guess }; };
+  if (RECIPE_POS[recipe]) return hit(RECIPE_POS[recipe], true);
+  var veg = /[(（]全素[)）]/.test(recipe);
+  var base = recipe.replace(/^\d+\s*\d+月大菜單_/, '').replace(/\s*\|.*$/, '').replace(/\s*[(（][^)）]*[)）]/g, '').replace(/_.*$/, '').trim();
+  var tries = [base], m = base.match(/^.{1,6}?的(.{2,})$/);
+  if (m && base !== '我的生日蛋糕') tries.push(m[1]);
+  for (var i = 0; i < tries.length; i++) {
+    var b = tries[i], key = veg ? b + '(素)' : b;
+    if (sl.all[key]) return hit([key], false);
+    if (veg && sl.all[b]) return hit([b], true);
+  }
+  for (i = 0; i < tries.length; i++) {
+    b = tries[i]; if (b.length < 4) continue;
+    var near = Object.keys(sl.all).filter(function(n){ return /[(（]素[)）]$/.test(n) === veg && n.length >= 4 && (n.indexOf(b) === 0 || b.indexOf(n) === 0); });
+    if (near.length === 1) return hit(near, true);
+  }
+  return null;
+}
+function salesCell(recipe){
+  var sl = S.sales;
+  if (!sl || sl.loading) return '<td class="n muted">讀取中…</td>';
+  if (sl.err) return '<td class="n muted" title="' + esc(sl.err) + '">—</td>';
+  var r = salesOf(recipe);
+  if (!r) return '<td class="n muted" title="對不到收銀機品名（新品或活動品項）">—</td>';
+  return '<td class="n" title="收銀機品名：' + esc(r.names.join('＋')) + '（' + esc(sl.ym) + ' 12 店合計）">' + r.q.toLocaleString() + (r.guess ? '<div class="muted" style="font-size:12px;white-space:normal;max-width:10em;margin-left:auto">' + esc(r.names.join('＋')) + '</div>' : '') + '</td>';
+}
 function tabSpoon(p){
   if (!S.spoon) {
     $('tabBody').innerHTML = '<div class="card empty">讀取食譜用量中…</div>';
@@ -881,6 +937,7 @@ function tabSpoon(p){
       .catch(function(e){ $('tabBody').innerHTML = '<div class="card">讀不到：' + esc(e.message) + '</div>'; });
     return;
   }
+  loadSales();
   var by = {};
   S.spoon.lines.forEach(function(l){ (by[l.ingredient] = by[l.ingredient] || []).push(l); });
   var ings = Object.keys(by).sort(function(a, b){ return by[b].length - by[a].length; });
@@ -915,10 +972,10 @@ function tabSpoon(p){
     h += '<div class="card"><div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:0 0 8px"><b>用到「' + esc(S.ing) + '」的甜點</b>'
       + '<label style="font-size:13px"><input type="checkbox" id="spNo"' + (S.onlyNo ? ' checked' : '') + '> 只看不可更換</label>'
       + '<label style="font-size:13px"><input type="checkbox" id="spSort"' + (S.sortNo ? ' checked' : '') + '> 不可更換的排前面</label></div>'
-      + '<div class="tw"><table class="t"><thead><tr><th>甜點食譜名稱</th><th style="text-align:right">食材重量</th><th style="text-align:right">平匙數量</th><th>可否更換</th><th>說明</th></tr></thead><tbody>'
+      + '<div class="tw"><table class="t"><thead><tr><th>甜點食譜名稱</th><th style="text-align:right">食材重量</th><th style="text-align:right">平匙數量</th><th style="text-align:right">上月使用次數<div style="font-weight:400">' + esc(S.sales ? Number(S.sales.ym.slice(5)) + ' 月 12 店合計' : '') + '</div></th><th>可否更換</th><th>說明</th></tr></thead><tbody>'
       + rows.map(function(x){
         var j = x.j, note = j.ok ? (Math.abs(j.n - j.h) < 1e-6 ? '剛好' : '換算 ' + num(j.n, 2) + ' 平匙，在誤差內（' + num(j.h * g, 1) + ' g）') : (j.h >= 0.5 && j.why !== '不到半平匙' ? '最接近 ' + num(j.h, 1) + ' 平匙＝' + num(j.h * g, 1) + ' g（差 ' + (j.diff > 0 ? '+' : '') + num(j.diff * 100, 1) + '%）' : '');
-        return '<tr class="' + (j.ok ? '' : 'no') + '"><td>' + esc(x.l.recipe) + '</td><td class="n">' + esc(x.l.grams) + ' g</td><td class="n">' + (j.ok ? '<b>' + num(j.h, 1) + '</b>' : num(j.n, 2)) + '</td><td>' + (j.ok ? '<span class="pill st-完成">✅ 可更換</span>' : '<span class="pill late">❌ ' + esc(j.why) + '</span>') + '</td><td class="muted">' + note + '</td></tr>';
+        return '<tr class="' + (j.ok ? '' : 'no') + '"><td>' + esc(x.l.recipe) + '</td><td class="n">' + esc(x.l.grams) + ' g</td><td class="n">' + (j.ok ? '<b>' + num(j.h, 1) + '</b>' : num(j.n, 2)) + '</td>' + salesCell(x.l.recipe) + '<td>' + (j.ok ? '<span class="pill st-完成">✅ 可更換</span>' : '<span class="pill late">❌ ' + esc(j.why) + '</span>') + '</td><td class="muted">' + note + '</td></tr>';
       }).join('') + '</tbody></table>' + (rows.length ? '' : '<div class="empty">全部都可更換。</div>') + '</div></div>';
   } else h += '<div class="card empty">填入「一平匙＝幾 g」就會算出每支甜點要幾平匙。</div>';
   /* 全部食材總覽（用各自存的設定） */
