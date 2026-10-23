@@ -86,7 +86,10 @@ var I18N_HELD = false;   /* 已經在全系統的鎖裡（一般寫入路徑，�
 function i18nLock_(fn) {
   if (I18N_HELD) return fn();
   var lk = LockService.getScriptLock(); lk.waitLock(30000);
-  try { return fn(); } finally { lk.releaseLock(); }
+  /* 放開鎖之前一定要 flush：Google 試算表的寫入會先暫存，沒送出就放鎖，下一個程序讀到舊資料會把剛寫的蓋掉
+     （2026-10-24 四支同時翻譯，詞典的韓／越／印／泰譯名被互相蓋掉） */
+  I18N_HELD = true;   /* 鎖裡面再呼叫 i18nLock_（例：寫紀錄）就直接做，不會提早放鎖 */
+  try { return fn(); } finally { I18N_HELD = false; try { SpreadsheetApp.flush(); } catch (e) { } lk.releaseLock(); }
 }
 function i18nLog_(by, act, id, lang, result, msg, sec) {
   try {
@@ -691,6 +694,7 @@ function i18nApprove_(p, auth) {
   var who = auth.role + (p.who ? '：' + String(p.who).slice(0, 20) : '');
   var o = p.undo ? { key: key, appr_by: '', appr_at: '', appr_fp: '' } : { key: key, appr_by: who, appr_at: now_(), appr_fp: src.fp };
   i18nLock_(function () { i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', o, null); });
+  SpreadsheetApp.flush();   /* 一般寫入路徑放鎖前不會 flush，這裡自己送出 */
   i18nLog_(who, p.undo ? 'unapprove' : 'approve', id, lang, 'ok', r.status === 'review' ? '核准時仍有自動檢查提醒：' + r.check : '');
   return { id: key, msg: (p.undo ? '收回 ' : '核准 ') + key, data: { key: key, state: p.undo ? (r.status === 'ok' ? 'wait' : r.status) : 'live', appr_by: o.appr_by, appr_at: o.appr_at } };
 }
@@ -726,6 +730,26 @@ function i18nAuthSetup_(p) {
 }
 ACTIONS.i18nAuthSetup = function (p, a) { return i18nAuthSetup_(p, a); };
 NOAUTH.i18nAuthSetup = 1; SELFLOCK.i18nAuthSetup = 1;
+/* 詞典整理：同一個 kind＋英文名重複的列合併成一列（各語言取有值的，衝突取最早那列並列出），其餘刪掉；唯讀預覽通行碼才能跑 */
+function i18nDictRepair_(p) {
+  if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) throw fail_('要通行碼', 'auth');
+  return { data: i18nLock_(function () {
+    var m = i18nMeta_('i18n_items', I18N_ITEM_HEAD), first = {}, dels = [], conflicts = [], merged = 0, before = m.rows.length;
+    m.rows.forEach(function (r) {
+      var k = r.kind + '|' + String(r.en).toLowerCase(), f = first[k];
+      if (!f) { first[k] = r; return; }
+      I18N_LANGS.forEach(function (l) { var a = String(f[l] || '').trim(), b = String(r[l] || '').trim(); if (!a && b) f[l] = b; else if (a && b && a !== b) conflicts.push(r.en + '［' + l + '］' + a + '／' + b); });
+      f.how = [f.how, r.how].filter(Boolean).join(' '); f._dirty = 1; dels.push(r._r); merged++;
+    });
+    Object.keys(first).forEach(function (k) { var f = first[k]; if (!f._dirty) return; m.sh.getRange(f._r, 1, 1, I18N_ITEM_HEAD.length).setNumberFormat('@').setValues([I18N_ITEM_HEAD.map(function (h) { return f[h] == null ? '' : String(f[h]); })]); });
+    dels.sort(function (a, b) { return b - a; }).forEach(function (r) { m.sh.deleteRow(r); });
+    var empty = {}; I18N_LANGS.forEach(function (l) { empty[l] = Object.keys(first).filter(function (k) { return !String(first[k][l] || '').trim(); }).length; });
+    i18nLog_('Claude', 'dictRepair', '', '', 'ok', '合併重複 ' + merged + ' 列；' + before + '→' + (before - merged) + ' 列' + (conflicts.length ? '；衝突 ' + conflicts.join('、') : ''));
+    return { before: before, after: before - merged, merged: merged, conflicts: conflicts, empty: empty };
+  }) };
+}
+ACTIONS.i18nDictRepair = function (p, a) { return i18nDictRepair_(p, a); };
+NOAUTH.i18nDictRepair = 1; SELFLOCK.i18nDictRepair = 1;
 ACTIONS.i18nStatus = function (p, a) { return i18nStatus_(p, a); };
 ACTIONS.i18nList = function (p, a) { return i18nList_(p, a); };
 ACTIONS.i18nGet = function (p, a) { return i18nGet_(p, a); };
