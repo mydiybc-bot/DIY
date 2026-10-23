@@ -93,7 +93,7 @@ function dailyFutureAndSnapshot() {
   try {
     var t0 = Date.now();          // ★全新計時起點，保險絲不會一開始就跳
     var cookie = login_();
-    rebuildFuture_(cookie, t0);   // 沿用既有函式，完全不修改
+    rebuildFuture_(t0);           // 2026-10-23：原本誤傳 (cookie, t0)，cookie 被當成計時起點，300 秒保險絲永遠不會跳；login_() 仍先叫一次確保登入態新鮮
     futureCacheRefresh_();        // 2026-10-06：記下重建時間、換新 fn=future 暫存（失敗只記 log）
     PropertiesService.getScriptProperties().setProperty('FN_NEAR_AT', String(Date.now()));   // 2026-10-13：整份重建也算一次近期更新
     var n = snapshotFuture_();

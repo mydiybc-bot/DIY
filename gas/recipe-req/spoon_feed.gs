@@ -11,6 +11,7 @@
 var SF_SHEET = '1VE1dsSPk0Bl2dyTWrNo3G_oasD4pCR3ihllNedcOOT4';   /* 專案推動_資料庫 */
 var SF_LANG = '42575226-23b1-4ac3-b123-3cba50e3cee8';             /* 繁體中文 */
 var SF_RUN = 'spoonfeed:run', SF_HOUR = 6;
+var SF_BATCH = 5;   /* 2026-10-23 經營者裁定：一批同時讀 5 支（原 20；10/19 曾因 8 條同時讀 3,696 支把後台壓到 503，後台同時也是客人平板看食譜的站） */
 var SF_PURPOSE = [
   [/甘納許/, '甘納許'], [/夾餡/, '夾餡'], [/奶凍/, '奶凍'], [/凍|寒天/, '果凍／茶凍'], [/乳酪麵糊/, '乳酪蛋糕體'],
   [/餡/, '內餡'], [/塔皮/, '塔皮'], [/派皮/, '派皮'], [/餅乾底/, '餅乾底'], [/餅糰|麵糰|麵團/, '餅乾麵糰'],
@@ -80,10 +81,10 @@ function sfRun_(p, by) {
   if (lr.code !== 200) throw rbErr_('讀不到後台食譜清單（HTTP ' + lr.code + '）', 'rbnet');
   var recs = rbListRows_(lr.text).filter(function (r) { return r.lang === '繁體中文' && /^Active$/i.test(r.status); });
   if (recs.length < 50) throw fail_('後台清單只讀到 ' + recs.length + ' 支啟用繁中食譜，太少了，先不更新（可能是後台頁面改版）', 'rbpage');
-  /* ③ 每支讀「匯出食譜」頁，20 支一批 */
+  /* ③ 每支讀「匯出食譜」頁，SF_BATCH 支一批同時送 */
   var lines = [], miss = {};
-  for (var b = 0; b < recs.length; b += 20) {
-    var part = recs.slice(b, b + 20), htmls = sfFetch_(sess, part.map(function (r) { return r.id; }));
+  for (var b = 0; b < recs.length; b += SF_BATCH) {
+    var part = recs.slice(b, b + SF_BATCH), htmls = sfFetch_(sess, part.map(function (r) { return r.id; }));
     part.forEach(function (r, j) {
       var steps = sfSteps_(htmls[j]);
       steps.forEach(function (s, k) {
