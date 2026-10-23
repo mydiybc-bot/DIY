@@ -30,7 +30,10 @@ function out_(res, cb) {
 }
 function data_() { return { ok: true, status: status_(), items: readItems_() }; }
 function status_() {
-  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('status') || '{}'); } catch (e) { return {}; }
+  var s;
+  try { s = JSON.parse(PropertiesService.getScriptProperties().getProperty('status') || '{}'); } catch (e) { s = {}; }
+  try { s.schedule = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === 'sync'; }).length; } catch (e) { s.schedule = -1; }
+  return s;
 }
 
 /* ---------- 編輯器用 ---------- */
