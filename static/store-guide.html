@@ -113,6 +113,13 @@ section { min-width: 0; }
 .dloc { font-size: 14px; font-weight: 700; color: var(--ink); }
 .dmore { font-size: 13px; font-weight: 700; color: var(--berry); margin-top: 2px; }
 .dprice { font: 800 16px var(--f-display); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.hqp { border: 2px solid var(--ink); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; }
+.hqp p, .hqp ul { margin: 0; }
+.hqp ul { padding-left: 20px; }
+.hqtop { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 17px; }
+.hqtop a { color: var(--ink); font-weight: 700; }
+.hqnote { color: var(--muted); }
+.hqp .btn { align-self: flex-start; font-size: 15px; }
 .ototal { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-weight: 800; }
 .ototal span { font-size: 16px; }
 .ototal b { font: 800 26px var(--f-display); font-variant-numeric: tabular-nums; }
@@ -158,6 +165,12 @@ footer a { color: var(--ink); font-weight: 700; }
 </head>
 <body>
 <div class="wrap">
+  <section id="hqPanel" class="hqp" hidden lang="zh-Hant">
+    <div class="hqtop"><b>🏢 總部：甜點資料更新狀態</b><a href="hub.html">⬅ 回首頁</a></div>
+    <div id="hqBody"></div>
+    <p class="hqnote">每天 23:00 自動從官網 English Menu 讀品項、售價、說明、照片，檢查沒問題才換新；官網改了，隔天客人就看到新的。下面是客人看到的畫面（免密碼）。</p>
+    <button type="button" class="btn" id="hqSync">🔄 立刻從官網更新</button>
+  </section>
   <header>
     <div class="brand">DIYBC<small>自己做烘焙聚樂部</small></div>
     <div class="langs" role="group" aria-label="Language">
@@ -749,6 +762,11 @@ footer a { color: var(--ink); font-weight: 700; }
       th: ["ทาร์ตชีสเลมอนยูซุโฮจิฉะ", "แป้งทาร์ตโฮจิฉะ", "ครีมชีสยูซุ เยลลี่โฮจิฉะ", "วิปครีม เยลลี่โฮจิฉะ ผงโกโก้ เม็ดน้ำตาลสีทอง", ""] } }
   };
   var HALLO_END = "2026-11-02";
+  /* 2026-10-23 晚起：甜點資料改讀「外國客人到店須知 API」（每天 23:00 從官網 English Menu 同步、檢查過才發佈）；
+     上面 DESSERTS／INFO 只當備用（API 讀不到時顯示）。統一成 d = [英文品名(key), 英文品名, 中文品名, 照片網址, 標記]，INFO 以英文品名對應。 */
+  var API = "https://script.google.com/macros/s/AKfycbzKmiZv95tW2b_1oAr-DiJf90cmpadfkb0MI2WBikqD_uVE6uUSUf_vTNa6KcbjMYc4BQ/exec";
+  var ITEMS = DESSERTS.map(function (d) { return [d[1], d[1], d[2], IMG + d[3], d[4]]; }), HE = {}, STATUS = null, SRC = "builtin";
+  (function () { var m = {}; DESSERTS.forEach(function (d) { m[d[1]] = INFO[d[0]]; }); INFO = m; })();
   var cur = "en", qty = {}, extra = 0;
   var nodes = document.querySelectorAll("[data-t]");
   var en = {};
@@ -779,11 +797,11 @@ footer a { color: var(--ink); font-weight: 700; }
   }
   function list() {
     var t = today();
-    return DESSERTS.filter(function (d) { return d[4].indexOf("hallo") < 0 || t < HALLO_END; });
+    return ITEMS.filter(function (d) { return d[4].indexOf("hallo") < 0 || t < (HE[d[0]] || HALLO_END); });
   }
   function esc(x) { return String(x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function total() { var n = 0; for (var k in qty) n += qty[k]; return n; }
-  function soloTotal() { var n = 0; DESSERTS.forEach(function (d) { if (d[4].indexOf("pair") < 0) n += qty[d[0]] || 0; }); return n; }
+  function soloTotal() { var n = 0; ITEMS.forEach(function (d) { if (d[4].indexOf("pair") < 0) n += qty[d[0]] || 0; }); return n; }
   function show(id) {
     ["v-guide", "v-pick", "v-order"].forEach(function (v) { document.getElementById(v).hidden = v !== id; });
     window.scrollTo(0, 0);
@@ -808,7 +826,7 @@ footer a { color: var(--ink); font-weight: 700; }
       var q = qty[d[0]] || 0, tags = tagHtml(d), loc = locName(d), p = priceOf(d);
       h += '<li class="dcard' + (q ? " on" : "") + '">'
         + '<button type="button" class="dopen" data-o="' + i + '">'
-        + '<img class="dimg" loading="lazy" alt="" src="' + IMG + d[3] + '" onerror="this.style.visibility=\'hidden\'">'
+        + '<img class="dimg" loading="lazy" alt="" src="' + esc(d[3]) + '" onerror="this.style.visibility=\'hidden\'">'
         + '<span class="dhead"><span class="dname" lang="en">' + esc(d[1]) + '</span><span class="dzh" lang="zh-Hant">' + esc(d[2]) + "</span>"
         + (loc ? '<span class="dloc" lang="' + htmlLang[cur] + '">' + esc(loc) + "</span>" : "")
         + (p !== null ? '<span class="dprice">' + esc(money(p)) + "</span>" : "")
@@ -857,7 +875,7 @@ footer a { color: var(--ink); font-weight: 700; }
     list().forEach(function (x) { if (x[0] === openK) d = x; });
     if (!d) { closeDetail(); return; }
     var inf = info(d), L = DL[cur], tx = inf.t[cur] || inf.t.en || ["", "", "", "", ""], loc = locName(d), q = qty[d[0]] || 0, p = priceOf(d);
-    document.getElementById("dsImg").src = IMG + d[3];
+    document.getElementById("dsImg").src = d[3];
     document.getElementById("dsName").textContent = d[1];
     document.getElementById("dsZh").textContent = d[2];
     var dl = document.getElementById("dsLoc");
@@ -924,6 +942,58 @@ footer a { color: var(--ink); font-weight: 700; }
     b.addEventListener("click", function () { apply(b.getAttribute("data-lang")); });
   });
 
+  /* 讀 API（JSONP）；讀到才換成官網最新資料，讀不到就留備用資料 */
+  function jsonp(url, ok, fail) {
+    var cb = "__sg" + Date.now(), s = document.createElement("script"), done = false;
+    var t = setTimeout(function () { if (!done) { done = true; cleanup(); fail && fail("逾時"); } }, 20000);
+    function cleanup() { try { delete window[cb]; } catch (e) { window[cb] = undefined; } s.remove(); clearTimeout(t); }
+    window[cb] = function (res) { if (done) return; done = true; cleanup(); ok(res); };
+    s.onerror = function () { if (!done) { done = true; cleanup(); fail && fail("連不上"); } };
+    s.src = url + (url.indexOf("?") < 0 ? "?" : "&") + "callback=" + cb;
+    document.head.appendChild(s);
+  }
+  function useData(res) {
+    if (res && res.status) STATUS = res.status;
+    if (res && res.ok && res.items && res.items.length) {
+      ITEMS = res.items.map(function (it) { return [it.en, it.en, it.zh, it.img, it.tags || []]; });
+      INFO = {}; HE = {};
+      res.items.forEach(function (it) { INFO[it.en] = { p: it.p, s: it.s, f: it.f, t: it.t }; if (it.hallo_end) HE[it.en] = it.hallo_end; });
+      for (var k in qty) if (!INFO[k]) delete qty[k];
+      if (extra > soloTotal()) extra = soloTotal();
+      SRC = "api";
+      renderPick(); renderOrder(); renderDetail();
+    }
+    renderHq();
+  }
+  function load(action) {
+    jsonp(API + "?action=" + (action || "data"), useData, function (why) { if (HQ) { HQERR = why; renderHq(); } });
+  }
+
+  /* 總部看的更新狀態（首頁總部卡帶 ?hq=1 進來才顯示；客人看不到） */
+  var HQ = /[?&]hq=1/.test(location.search), HQERR = "";
+  function renderHq() {
+    if (!HQ) return;
+    var box = document.getElementById("hqPanel"), s = STATUS || {};
+    box.hidden = false;
+    var res = { ok: "✅ 檢查通過", warn: "⚠️ 已更新，但讀回有提醒", fail: "❌ 檢查沒過，沒有更新（客人看到的是上一版）" }[s.result] || "尚未同步";
+    var li = function (name, arr) { return arr && arr.length ? "<li><b>" + name + "</b>：" + arr.map(esc).join("、") + "</li>" : ""; };
+    document.getElementById("hqBody").innerHTML =
+      "<p><b>" + res + "</b>　最後同步 " + esc(s.at || "—") + "（" + esc(s.by || "") + "）" + (s.last_ok && s.last_ok !== s.at ? "；最後一次成功 " + esc(s.last_ok) : "") + "</p>"
+      + "<p>客人現在看到 <b>" + (SRC === "api" ? list().length + " 款（官網最新）" : "備用資料 " + list().length + " 款") + "</b>" + (HQERR ? "　⚠️ 讀取 API " + esc(HQERR) : "") + "</p>"
+      + "<ul>" + li("新上架", s.added) + li("下架", s.removed) + li("改價", s.price) + li("說明有改", s.text)
+      + li("機器翻譯（建議請人看一下）", s.auto) + li("問題", (s.errors || []).concat(s.warnings || [])) + "</ul>";
+  }
+  document.getElementById("hqSync").addEventListener("click", function () {
+    if (!confirm("要現在從官網重新讀一次甜點資料嗎？（每 10 分鐘最多一次）")) return;
+    if (!confirm("確定更新？檢查沒過會保留目前這一版，不會清空。")) return;
+    var b = this; b.disabled = true; b.textContent = "更新中…（約 1 分鐘）";
+    jsonp(API + "?action=sync", function (res) {
+      b.disabled = false; b.textContent = "🔄 立刻從官網更新";
+      if (!res.ok && res.error) alert(res.error);
+      load();
+    }, function (why) { b.disabled = false; b.textContent = "🔄 立刻從官網更新"; alert("更新失敗：" + why); });
+  });
+
   var start = (location.hash || "").replace("#", "");
   if (!T[start]) {
     try { start = localStorage.getItem("diybc_guide_lang") || ""; } catch (e) { start = ""; }
@@ -933,6 +1003,7 @@ footer a { color: var(--ink); font-weight: 700; }
     start = nav.indexOf("ja") === 0 ? "ja" : nav.indexOf("ko") === 0 ? "ko" : nav.indexOf("id") === 0 ? "id" : nav.indexOf("th") === 0 ? "th" : nav.indexOf("vi") === 0 ? "vi" : nav.indexOf("zh") === 0 ? "zh" : "en";
   }
   apply(start);
+  load();
 })();
 </script>
 </body>
