@@ -575,6 +575,7 @@ function i18nKick_(p) {
   var ref = null, last = i18nProp_('I18N_REFRESH_AT'), age = last ? Date.now() - new Date(last.replace(' ', 'T') + '+08:00').getTime() : Infinity;
   if (age > 20 * 3600e3 || (id && !i18nSrc_(id))) ref = i18nRefresh_(false, t0 + 150000);
   if (p.recheck && id && lang) return { data: i18nRecheck_(id, lang, p.by || 'recheck') };
+  if (p.redo || p.redict) i18nBossOrKey_(p);   /* 重翻會再花錢 → 要主廚／管理者密碼（或唯讀預覽通行碼＝Claude 驗證用） */
   var pend = i18nPending_().filter(function (x) { return (!id || x.id === id) && (!lang || x.lang === lang); });
   if (p.redo && id && lang && !pend.length && i18nSrc_(id)) pend = [{ id: id, lang: lang }];   /* 指定重翻（例：翻譯規則改了）；重翻後核准會失效 */
   if (id && lang && !pend.length) {
@@ -616,7 +617,14 @@ function i18nStatus_() {
   var lg = [], sh = ss_().getSheetByName('i18n_log');
   if (sh && sh.getLastRow() > 1) { var n = Math.min(20, sh.getLastRow() - 1); lg = sh.getRange(sh.getLastRow() - n + 1, 1, n, I18N_LOG_HEAD.length).getDisplayValues().reverse(); }
   var trig = -1; try { trig = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === 'i18nDaily'; }).length; } catch (e) { }
-  return { data: { langs: I18N_LANGS, sources: src.filter(function (s) { return s.state === 'ok'; }).length, src_err: src.filter(function (s) { return s.state === 'err'; }).map(function (s) { return { id: s.id, name: s.name, err: s.err }; }),
+  var rcm = {}; rc.forEach(function (r) { rcm[r.key] = r; });
+  var guide = {}; try { guide = i18nGuideNames_(); } catch (e) { }
+  var matrix = src.filter(function (s) { return s.state === 'ok'; }).map(function (s) {
+    var o = { id: s.id, name: s.name, cover: s.cover, slides: s.slides, upd: s.upd, local: guide[i18nNameKey_(s.name)] || {}, st: {}, appr: {} };
+    I18N_LANGS.forEach(function (l) { var r = rcm[s.id + '|' + l]; o.st[l] = i18nState_(r, s.fp); if (r && o.st[l] === 'live') o.appr[l] = r.appr_by + ' ' + r.appr_at; });
+    return o;
+  });
+  return { data: { langs: I18N_LANGS, matrix: matrix, sources: src.filter(function (s) { return s.state === 'ok'; }).length, src_err: src.filter(function (s) { return s.state === 'err'; }).map(function (s) { return { id: s.id, name: s.name, err: s.err }; }),
     count: cnt, pending: i18nPending_().length, wait: wait, review: review, fail: fail, auto: i18nProp_('I18N_AUTO') === '1', refresh_at: i18nProp_('I18N_REFRESH_AT'), schedule: trig, log: lg } };
 }
 /* 平板密碼：問權限中心 verify（dim_auth 的 tablet_i18n），通過快取 2 小時（只存雜湊） */
@@ -636,8 +644,8 @@ function i18nList_(p) {
   var src = i18nMeta_('i18n_src', I18N_SRC_HEAD), rc = {}, guide = i18nGuideNames_();
   i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
   var out = src.rows.filter(function (s) { return s.state === 'ok'; }).map(function (s) {
-    var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, local: guide[i18nNameKey_(s.name)] || {} };
-    I18N_LANGS.forEach(function (l) { o.langs[l] = i18nState_(rc[s.id + '|' + l], s.fp); });
+    var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: guide[i18nNameKey_(s.name)] || {} };
+    I18N_LANGS.forEach(function (l) { var r = rc[s.id + '|' + l]; o.langs[l] = i18nState_(r, s.fp); if (o.langs[l] === 'live') o.ver[l] = String(s.fp).slice(0, 8) + '|' + r.appr_at; });   /* ver：平板快取用，核准或原文改了就換 */
     return o;
   });
   return { data: { at: now_(), items: out } };
@@ -655,11 +663,13 @@ function i18nGet_(p) {
 function i18nBoss_(auth) { if (!auth || auth.kind !== 'role' || ['主廚', '管理者'].indexOf(auth.role) < 0) throw fail_('要主廚或管理者的密碼', 'perm'); }
 /* 對照預覽：譯文合成＋原文英文（每頁並排看） */
 var I18N_PREVIEW_HASH = 'Fdcs8oo7F0UkiLkKLN3Arb';   /* 唯讀預覽通行碼的雜湊（原文只在經營者本機 ~/.config/diybc/secrets.env 的 I18N_PREVIEW_KEY；只能看對照，不能核准） */
+function i18nBossOrKey_(p) {
+  if (p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH) return;
+  var auth; try { auth = auth_(p); } catch (e) { Utilities.sleep(1000); throw e; }
+  i18nBoss_(auth);
+}
 function i18nPreview_(p) {
-  if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) {
-    var auth; try { auth = auth_(p); } catch (e) { Utilities.sleep(1000); throw e; }
-    i18nBoss_(auth);
-  }
+  i18nBossOrKey_(p);
   var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
   var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
   var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
@@ -700,6 +710,22 @@ function i18nBuild_(src, tr, D, lang, row) {
     status: row.status, check: row.check, at: row.at, model: row.model };
 }
 
+/* 一次性：權限中心 dim_auth 補「tablet_i18n」列（只補沒有的；先整張複製成備份分頁；密碼空白＝還不能用，經營者在權限管理後台設定） */
+var I18N_AUTHC_SS = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4';
+function i18nAuthSetup_(p) {
+  if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) throw fail_('要通行碼', 'auth');
+  var ss = SpreadsheetApp.openById(I18N_AUTHC_SS), sh = ss.getSheetByName('dim_auth');
+  if (!sh) throw fail_('找不到權限中心 dim_auth', 'bad');
+  var last = sh.getLastRow(), ids = last > 1 ? sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return String(r[0]).trim(); }) : [];
+  if (ids.indexOf(I18N_AUTH_DASH) >= 0) return { data: { msg: '已經有 tablet_i18n 列，不用補', rows: last - 1 } };
+  var bk = 'dim_auth_備份_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmm');
+  if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+  sh.getRange(last + 1, 1, 1, 7).setNumberFormat('@').setValues([[I18N_AUTH_DASH, '平板外語食譜', '', '720', 'Y', now_(), '店內平板看日韓越印泰食譜（tablet-recipe.html）；720 小時＝平板輸入一次記 30 天。2026-10-24 補；密碼空白＝還不能用，請在權限管理後台設定']]);
+  var after = sh.getLastRow() - 1, chk = sh.getRange(last + 1, 1, 1, 5).getValues()[0];
+  return { data: { msg: '已補 tablet_i18n 列', before: last - 1, after: after, backup: bk, row: last + 1, check: [chk[0], chk[1], chk[2] ? '(有值)' : '(空白)', chk[3], chk[4]] } };
+}
+ACTIONS.i18nAuthSetup = function (p, a) { return i18nAuthSetup_(p, a); };
+NOAUTH.i18nAuthSetup = 1; SELFLOCK.i18nAuthSetup = 1;
 ACTIONS.i18nStatus = function (p, a) { return i18nStatus_(p, a); };
 ACTIONS.i18nList = function (p, a) { return i18nList_(p, a); };
 ACTIONS.i18nGet = function (p, a) { return i18nGet_(p, a); };

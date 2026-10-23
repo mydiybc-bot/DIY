@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<!-- 2026-10-24 新建「🌏 平板外語食譜｜對照核准」（經營者 10/24：「完成後還是要一一打開比對，確認沒有問題才可以放行」）。
+     總表：後台台灣區啟用中的英文食譜 × 日／韓／越／印尼／泰，每格一個狀態（已放行／待核准／待檢查／失敗／還沒翻）。
+     點一格 → 主廚／管理者密碼 → 原文（英文）與譯文一頁一頁並排、食材名稱對照、自動檢查提醒 →「✅ 核准放行」（兩層確認）才會出現在店內平板（tablet-recipe.html）。
+     還沒翻的格子可以按「🤖 翻譯這一份」（約 1～2 分鐘）；「🔁 重翻」要主廚／管理者密碼。
+     閘門 DASH_ID=recipe（跟新品申請表同一組密碼）；核准、預覽在伺服器再驗主廚／管理者身分密碼（跟新品申請表共用這個分頁記住的 rcp:cred）。
+     資料：申請單 API（GAS recipe-req，i18n.gs）i18nStatus／i18nPreview／i18nApprove／i18nKick。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>平板外語食譜 對照核准｜自己做烘焙聚樂部</title>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'recipe';
+  var DASH_NAME = '新品申請表';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<style>
+:root{--brown:#4A3228;--y:#fdd35d;--bg:#FBF7F3;--line:#E6D8CF;--muted:#6F4E45;--ok:#2f7d32;--warn:#b26a00;--bad:#c43030}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;font-size:14px}
+.wrap{max-width:1280px;margin:0 auto;padding:0 16px 40px}
+.dsb{font-size:12px;color:var(--muted);background:#fff;border-bottom:1px solid var(--line);padding:6px 16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.dsb b{color:var(--brown)}
+.hd{display:flex;align-items:center;gap:12px;padding:14px 0 8px;flex-wrap:wrap}
+.hd h1{margin:0;font-size:20px;flex:1;min-width:240px}
+.hd a{color:var(--muted);font-size:13px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px;font-weight:700;color:var(--brown);cursor:pointer}
+.btn.p{background:#7B4B36;color:#fff;border-color:#7B4B36}.btn.g{background:var(--ok);color:#fff;border-color:var(--ok)}.btn.r{color:var(--bad)}
+.btn[disabled]{opacity:.5;cursor:default}
+details.uhelp{margin:0 0 12px;background:#fff;border:1px solid var(--line);border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;padding:8px 14px;font-weight:800;color:#8B3A2A}
+details.uhelp .b{padding:0 14px 12px;line-height:1.7}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.bar input{padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;min-width:220px}
+.chips button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer;color:var(--brown)}
+.chips button.on{background:var(--y);border-color:#e7b93a;font-weight:800}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+#tbl{overflow-x:auto}#tbl table{min-width:720px}
+th,td{border-bottom:1px solid #f0e6df;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f6eee8;font-size:12px;position:sticky;top:0;z-index:1}
+td.nm{min-width:220px}td.nm img{width:46px;height:34px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:6px;background:#f1e9e2}
+.st{display:inline-block;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:800;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.st.live{background:#e5f3e6;color:var(--ok)}.st.wait{background:#fff3c4;color:#7a5a00}.st.review{background:#ffe2c2;color:var(--warn)}.st.fail{background:#fde2e2;color:var(--bad)}.st.none{background:#f1ece8;color:#9a8a80}
+.st.sel{outline:2px solid #7B4B36}
+.panel{background:#fff;border:2px solid #7B4B36;border-radius:12px;margin:14px 0;padding:14px}
+.panel h2{margin:0 0 6px;font-size:18px}
+.note{background:#fff8e6;border:1px solid #f0d58a;border-radius:8px;padding:8px 10px;margin:8px 0;font-size:13px;line-height:1.6}
+.note.bad{background:#fdecec;border-color:#f3b6b6}
+.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.acts input{padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;width:150px}
+.cmp td{width:50%}.cmp td.no{width:46px;font-weight:800;color:var(--muted);text-align:center}
+.cmp tr.flag td{background:#fff4e5}
+.cmp .tt{font-weight:800;background:#fdd35d;border-radius:4px;padding:2px 6px;display:inline-block;margin-bottom:4px}
+.cmp .md{font-size:12px;color:var(--muted);margin-bottom:4px}.cmp .md a{color:#1b6ec2}
+.cmp .hb p{margin:0 0 .4em}.cmp .hb p.c{text-align:center}.cmp .hb img{max-width:160px;height:auto}
+.cmp .ig{font-size:12px;margin-top:4px;color:#3b2a20}.cmp .ig div{padding:1px 0}
+.cmp .fl{color:var(--warn);font-weight:800;font-size:12px;margin-bottom:4px}
+.dict td{font-size:12px}
+.muted{color:var(--muted);font-size:12px}
+.dlg{position:fixed;inset:0;z-index:9600;background:rgba(74,50,40,.55);display:flex;align-items:center;justify-content:center}
+.dlg .box{background:#fff;border-radius:14px;padding:20px;width:min(360px,92vw)}
+.dlg select,.dlg input{width:100%;padding:9px;font-size:15px;border:1px solid var(--line);border-radius:8px;margin:6px 0}
+.spin{display:inline-block;animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+@media (max-width:760px){.cmp,.cmp tbody,.cmp tr,.cmp td{display:block;width:100%!important}.cmp td.no{text-align:left}}
+</style>
+</head>
+<body>
+<div class="dsb" id="dsb">資料狀態：讀取中…</div>
+<div class="wrap">
+<div class="hd"><h1>🌏 平板外語食譜｜原文譯文對照核准</h1><button type="button" class="btn" id="reload">🔄 重新讀取</button><a href="tablet-recipe.html" target="_blank">📱 開平板頁</a><a href="hub.html">⬅ 回首頁</a></div>
+<details class="uhelp"><summary>📖 使用說明（點開）</summary><div class="b">
+① 下面總表每一列是一支後台「台灣區、英文、啟用中」的食譜，五欄是日／韓／越南／印尼／泰文。<br>
+② 狀態：<span class="st live">已放行</span> 平板看得到｜<span class="st wait">待核准</span> 自動檢查通過、等人看過｜<span class="st review">待檢查</span> 自動檢查有提醒（數字、圖片位置）｜<span class="st fail">失敗</span> 沒翻完｜<span class="st none">還沒翻</span>。<br>
+③ 點格子 → 輸入主廚或管理者密碼 → 一頁一頁看「英文原文 ↔ 譯文」；有提醒的頁會標橘色。看完按「✅ 核准放行」才會出現在店內平板。<br>
+④ 食材名稱是照後台中文原名翻的（英文名常有歧義）。例：脆笛可可英文版寫 Whipping cream，中文版是「克林姆」，所以日文是カスタードクリーム——這是對的，不是翻錯。<br>
+⑤ 英文原版食譜在後台改了，會自動重翻，<b>之前的核准會失效</b>，要再看一次。<br>
+⑥「🤖 翻譯這一份」約 1～2 分鐘；「🔁 重翻」會覆蓋現在的譯文、核准一起失效。
+</div></details>
+<div class="bar"><input type="search" id="q" placeholder="搜尋食譜名稱（中文或英文）" autocomplete="off">
+<span class="chips" id="chips"><button type="button" data-f="all" class="on">全部</button><button type="button" data-f="wait">有待核准</button><button type="button" data-f="review">有待檢查／失敗</button><button type="button" data-f="none">有還沒翻</button><button type="button" data-f="live">有已放行</button></span></div>
+<div id="panel"></div>
+<div id="tbl"></div>
+</div>
+<script src="tablet-recipe-view.js"></script>
+<script>
+(function () {
+  'use strict';
+  var API = 'https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+  var LANGS = ['ja', 'ko', 'vi', 'id', 'th'], LN = { ja: '日文', ko: '韓文', vi: '越南文', id: '印尼文', th: '泰文' };
+  var STN = { live: '✅ 已放行', wait: '🟡 待核准', review: '🟠 待檢查', fail: '🔴 失敗', '': '⚪ 還沒翻' };
+  var CRED_KEY = 'rcp:cred';
+  var S = { st: null, q: '', f: 'all', sel: null, pv: null, busy: false };
+  function $(id) { return document.getElementById(id); }
+  var esc = function (s) { return window.TRView.esc(s); };
+  function getCred() { try { var o = JSON.parse(sessionStorage.getItem(CRED_KEY) || 'null'); if (o && o.role && o.pw) return o; } catch (e) { } return null; }
+  function setCred(o) { try { if (o) sessionStorage.setItem(CRED_KEY, JSON.stringify(o)); else sessionStorage.removeItem(CRED_KEY); } catch (e) { } }
+  function post(body, ms) {
+    var n = 0;
+    var go = function () {
+      n++;
+      var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function () { ctl.abort(); }, ms || 60000) : 0;
+      return fetch(API, { method: 'POST', body: JSON.stringify(body), redirect: 'follow', signal: ctl ? ctl.signal : undefined })
+        .then(function (r) { return r.text(); })
+        .then(function (t) { clearTimeout(tm); var j; try { j = JSON.parse(t); } catch (e) { throw { retry: 1, msg: '系統回應看不懂' }; } if (!j || j.act !== body.action) throw { retry: 1, msg: '系統忙碌（回錯動作）' }; return j; },
+          function () { clearTimeout(tm); throw { retry: 1, msg: '連線失敗或太久沒有回應' }; })
+        .catch(function (e) { if (e && e.retry && n < (body.action === 'i18nKick' ? 1 : 3)) return new Promise(function (r) { setTimeout(r, 1500 * n); }).then(go); throw e; });
+    };
+    return go();
+  }
+  function errText(e) { return (e && (e.message || e.msg)) || String(e); }
+  /* 主廚／管理者密碼（跟新品申請表共用這個分頁記住的） */
+  function askCred(why) {
+    return new Promise(function (res) {
+      var d = document.createElement('div'); d.className = 'dlg';
+      d.innerHTML = '<div class="box"><div style="font-weight:800;font-size:16px">🔑 主廚／管理者密碼</div><div class="muted" style="margin:4px 0 8px">' + esc(why) + ' 密碼只記在這個分頁，關掉分頁就要重新輸入。</div>'
+        + '<select id="crR"><option>主廚</option><option>管理者</option></select><input type="password" id="crP" autocomplete="new-password">'
+        + '<div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn p" id="crOk" style="flex:1">確定</button><button type="button" class="btn" id="crNo" style="flex:1">取消</button></div></div>';
+      document.body.appendChild(d); var c = getCred(); if (c && (c.role === '主廚' || c.role === '管理者')) $('crR').value = c.role;
+      setTimeout(function () { $('crP').value = ''; $('crP').focus(); }, 60);
+      var ok = function () { var p = $('crP').value.trim(), r = $('crR').value; if (!p) return; d.parentNode.removeChild(d); setCred({ role: r, pw: p }); res(getCred()); };
+      $('crOk').onclick = ok; $('crP').onkeydown = function (e) { if (e.key === 'Enter') ok(); };
+      $('crNo').onclick = function () { d.parentNode.removeChild(d); res(null); };
+    });
+  }
+  function withBoss(why, fn) {
+    var c = getCred(), p = c && (c.role === '主廚' || c.role === '管理者') ? Promise.resolve(c) : askCred(why);
+    return p.then(function (c2) {
+      if (!c2) throw new Error('沒有輸入密碼');
+      return fn(c2).then(function (j) {
+        if (!j.ok && (j.code === 'auth' || j.code === 'perm')) { setCred(null); return askCred(j.code === 'perm' ? '要主廚或管理者的密碼。' : '密碼不對，請重新輸入。').then(function (c3) { if (!c3) throw new Error('沒有輸入密碼'); return fn(c3); }); }
+        return j;
+      });
+    });
+  }
+
+  /* ---- 總表 ---- */
+  function load() {
+    $('dsb').textContent = '資料狀態：讀取中…';
+    return post({ action: 'i18nStatus' }, 60000).then(function (j) {
+      if (!j.ok) throw new Error(j.msg || '讀取失敗');
+      S.st = j.data; renderDsb(); renderTable();
+    }).catch(function (e) { $('dsb').textContent = '資料狀態：讀取失敗（' + errText(e) + '）'; });
+  }
+  function cnt(k) { var n = 0; (S.st.matrix || []).forEach(function (r) { LANGS.forEach(function (l) { if ((r.st[l] || '') === k) n++; }); }); return n; }
+  function renderDsb() {
+    var d = S.st;
+    $('dsb').innerHTML = '資料狀態：原文 <b>' + d.sources + '</b> 支（後台原文最後檢查 ' + esc(d.refresh_at || '—') + '）｜已放行 <b>' + cnt('live') + '</b>｜待核准 <b>' + cnt('wait') + '</b>｜待檢查 <b>' + cnt('review') + '</b>｜失敗 ' + cnt('fail') + '｜還沒翻 ' + cnt('') + '｜每天 06:30 檢查原文' + (d.schedule > 0 ? '' : '（⚠ 排程不在）') + (d.auto ? '、自動翻譯開啟' : '');
+  }
+  function keep(r) {
+    if (S.q) { var t = (r.name + ' ' + LANGS.map(function (l) { return (r.local || {})[l] || ''; }).join(' ')).toLowerCase(); if (!S.q.split(/\s+/).every(function (w) { return t.indexOf(w) >= 0; })) return false; }
+    if (S.f === 'all') return true;
+    return LANGS.some(function (l) { var s = r.st[l] || ''; return S.f === 'none' ? s === '' : S.f === 'review' ? (s === 'review' || s === 'fail') : s === S.f; });
+  }
+  function renderTable() {
+    if (!S.st) return;
+    var rows = (S.st.matrix || []).filter(keep);
+    $('tbl').innerHTML = '<table><thead><tr><th>食譜（' + rows.length + '）</th><th>頁數</th>' + LANGS.map(function (l) { return '<th>' + LN[l] + '</th>'; }).join('') + '</tr></thead><tbody>'
+      + rows.map(function (r) {
+        return '<tr><td class="nm"><img src="' + esc(r.cover) + '" alt="" loading="lazy">' + esc(r.name) + '</td><td>' + esc(r.slides) + '</td>'
+          + LANGS.map(function (l) { var s = r.st[l] || '', sel = S.sel && S.sel.id === r.id && S.sel.lang === l; return '<td><span class="st ' + (s || 'none') + (sel ? ' sel' : '') + '" data-id="' + esc(r.id) + '" data-l="' + l + '" title="' + esc(r.appr && r.appr[l] ? '核准：' + r.appr[l] : '') + '">' + STN[s] + '</span></td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table>' + (rows.length ? '' : '<div class="muted" style="padding:12px">沒有符合的食譜</div>');
+  }
+  /* 搜尋框只建一次；打字只重畫總表；選字中不搜尋（IME-GUARD 也會攔，這裡再保險一次） */
+  var qi = $('q'), qt = 0;
+  qi.addEventListener('compositionend', function () { S.q = qi.value.trim().toLowerCase(); renderTable(); });
+  qi.addEventListener('input', function (e) { if (e.isComposing || (window.__ime && window.__ime.on)) return; clearTimeout(qt); qt = setTimeout(function () { if (window.__ime && window.__ime.on) return; S.q = qi.value.trim().toLowerCase(); renderTable(); }, 200); });
+
+  /* ---- 點一格 ---- */
+  function rowOf(id) { return (S.st.matrix || []).filter(function (r) { return r.id === id; })[0]; }
+  function pick(id, lang) {
+    S.sel = { id: id, lang: lang }; S.pv = null; renderTable();
+    var r = rowOf(id), s = r.st[lang] || '';
+    if (s === '' || s === 'fail') { panelTranslate(r, lang, s); return; }
+    $('panel').innerHTML = '<div class="panel"><span class="spin">⏳</span> 讀取「' + esc(r.name) + '」' + LN[lang] + '譯文…</div>';
+    withBoss('看譯文對照要主廚或管理者的密碼。', function (c) { return post({ action: 'i18nPreview', role: c.role, password: c.pw, id: id, lang: lang }, 90000); })
+      .then(function (j) { if (!j.ok) throw new Error(j.msg); S.pv = j.data; panelReview(r, lang); })
+      .catch(function (e) { $('panel').innerHTML = '<div class="panel note bad">讀不到：' + esc(errText(e)) + '</div>'; });
+    $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function panelTranslate(r, lang, s) {
+    $('panel').innerHTML = '<div class="panel"><h2>' + esc(r.name) + '｜' + LN[lang] + '</h2>'
+      + (s === 'fail' ? '<div class="note bad">上次沒翻完。可以再翻一次。</div>' : '<div class="muted">這一份還沒翻。翻譯約 1～2 分鐘（會用到一點翻譯費），翻好後狀態變「待核准」或「待檢查」，要看過核准才會上平板。</div>')
+      + '<div class="acts"><button type="button" class="btn p" id="doTr">🤖 翻譯這一份</button><button type="button" class="btn" data-close="1">關閉</button><span id="trMsg" class="muted"></span></div></div>';
+    $('doTr').onclick = function () {
+      if (S.busy) return;
+      if (!confirm('翻譯「' + r.name + '」的' + LN[lang] + '？\n約 1～2 分鐘，會用到一點翻譯費。')) return;
+      if (!confirm('確定開始翻譯？（翻好不會直接上平板，要核准）')) return;
+      S.busy = true; this.disabled = true; $('trMsg').innerHTML = '<span class="spin">⏳</span> 翻譯中，請不要關掉這頁…';
+      post({ action: 'i18nKick', id: r.id, lang: lang, by: '對照核准頁' }, 400000).then(function (j) {
+        S.busy = false;
+        if (!j.ok) throw new Error(j.msg);
+        var d = j.data || {};
+        $('trMsg').textContent = d.status ? '完成：' + (STN[d.status === 'ok' ? 'wait' : d.status] || d.status) + '（' + d.sec + ' 秒）' : (d.msg || '完成');
+        return load().then(function () { if (d.status && d.status !== 'fail') pick(r.id, lang); });
+      }).catch(function (e) { S.busy = false; $('trMsg').textContent = '沒有成功：' + errText(e); $('doTr').disabled = false; });
+    };
+  }
+  function flags(check) { var m = {}; String(check || '').split('；').forEach(function (p) { var x = p.match(/^第(\d+)頁：(.*)$/); if (x) m[Number(x[1]) - 1] = x[2]; }); return m; }
+  function ingHtml(list, tr) { return (list || []).map(function (g) { return '<div>• ' + esc(g.n) + ' <b>' + esc(window.TRView.qtyTxt(g.q, g.u)) + '</b></div>'; }).join(''); }
+  function media(s) { return s.video ? '🎬 <a href="' + esc(s.video) + '" target="_blank">影片</a>' : s.img ? '🖼 <a href="' + esc(s.img) + '" target="_blank">圖片</a>' : ''; }
+  function panelReview(r, lang) {
+    var d = S.pv, fl = flags(d.check), live = d.state === 'live';
+    var dict = {}, dl = [];
+    d.slides.forEach(function (s) { (s.ings || []).forEach(function (g) { if (!dict[g.en]) { dict[g.en] = 1; dl.push(g); } }); });
+    var areas = Object.keys(d.areas || {}).map(function (k) { return d.areas[k]; });
+    $('panel').innerHTML = '<div class="panel"><h2>' + esc(d.src_name) + '｜' + LN[lang] + '　<span class="st ' + (d.state || 'none') + '">' + STN[d.state || ''] + '</span></h2>'
+      + '<div class="muted">翻譯：' + esc(d.at) + '（' + esc(d.model) + '）' + (live ? '｜核准：' + esc(d.appr_by) + ' ' + esc(d.appr_at) : '') + '｜共 ' + d.slides.length + ' 頁</div>'
+      + (d.check ? '<div class="note">⚠ 自動檢查提醒（請特別看這幾頁，下面標橘色）：' + esc(d.check) + '</div>' : '<div class="note" style="background:#eef7ee;border-color:#b9dcb9">✔ 自動檢查：頁數、每頁數字、圖片位置都對得上。仍請一頁一頁看過。</div>')
+      + '<div class="acts"><button type="button" class="btn" id="pvTab">📱 用平板畫面看</button>'
+      + (live ? '<button type="button" class="btn r" id="unAp">↩ 收回核准</button>' : '<input type="text" id="who" placeholder="核准人姓名（選填）"><button type="button" class="btn g" id="doAp">✅ 核准放行</button>')
+      + '<button type="button" class="btn" id="redo">🔁 重翻</button><button type="button" class="btn" data-close="1">關閉</button><span id="apMsg" class="muted"></span></div>'
+      + '<table class="cmp"><thead><tr><th class="no">頁</th><th>英文原文</th><th>' + LN[lang] + '譯文</th></tr></thead><tbody>'
+      + '<tr><td class="no">名稱</td><td>' + esc(d.src_name) + '</td><td>' + esc(d.name) + '</td></tr>'
+      + d.slides.map(function (s, i) {
+        var o = d.src[i] || {};
+        return '<tr' + (fl[i] ? ' class="flag"' : '') + '><td class="no">' + (i + 1) + '</td>'
+          + '<td><div class="tt">' + esc(o.t) + '</div><div class="md">' + media(s) + '</div><div class="hb">' + window.TRView.safeHtml(o.h) + '</div><div class="ig">' + ingHtml(o.ings) + '</div></td>'
+          + '<td>' + (fl[i] ? '<div class="fl">⚠ ' + esc(fl[i]) + '</div>' : '') + '<div class="tt">' + esc(s.t) + '</div><div class="md">' + media(s) + '</div><div class="hb">' + window.TRView.safeHtml(s.h) + '</div><div class="ig">' + ingHtml(s.ings) + '</div></td></tr>';
+      }).join('')
+      + '<tr><td class="no">保存</td><td style="white-space:pre-wrap">' + esc(d.src_pres) + '</td><td style="white-space:pre-wrap">' + esc(d.pres) + '</td></tr>'
+      + '</tbody></table>'
+      + '<h3 style="font-size:15px;margin:14px 0 6px">📖 這支用到的食材工具、取放區譯名（所有食譜共用同一個譯名）</h3>'
+      + '<table class="dict"><thead><tr><th>英文（後台）</th><th>' + LN[lang] + '</th></tr></thead><tbody>'
+      + dl.map(function (g) { return '<tr><td>' + esc(g.en) + '</td><td>' + esc(g.n) + '</td></tr>'; }).join('')
+      + areas.map(function (a) { return '<tr><td>📍 ' + esc(a.en) + '</td><td>' + esc(a.name) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    $('pvTab').onclick = function () { window.TRView.mount(document.body, d, lang, { preview: true }); };
+    if ($('doAp')) $('doAp').onclick = function () {
+      if (!confirm('核准放行「' + d.src_name + '」的' + LN[lang] + '？\n核准後店內平板就看得到。' + (d.check ? '\n\n⚠ 這份還有自動檢查提醒：' + d.check : ''))) return;
+      if (!confirm('確定已經一頁一頁看過、沒有問題？')) return;
+      act({ action: 'i18nApprove', id: r.id, lang: lang, who: ($('who').value || '').trim(), rq: 'ap' + Date.now() }, '已核准放行');
+    };
+    if ($('unAp')) $('unAp').onclick = function () {
+      if (!confirm('收回「' + d.src_name + '」' + LN[lang] + '的核准？\n收回後店內平板就看不到這份。')) return;
+      if (!confirm('確定收回？')) return;
+      act({ action: 'i18nApprove', id: r.id, lang: lang, undo: 1, rq: 'un' + Date.now() }, '已收回核准');
+    };
+    $('redo').onclick = function () {
+      if (S.busy) return;
+      if (!confirm('重翻「' + d.src_name + '」的' + LN[lang] + '？\n現在的譯文會被覆蓋' + (live ? '，核准會失效（平板看不到，要重新核准）' : '') + '；約 1～2 分鐘。')) return;
+      if (!confirm('確定重翻？')) return;
+      S.busy = true; this.disabled = true; $('apMsg').innerHTML = '<span class="spin">⏳</span> 重翻中…';
+      withBoss('重翻要主廚或管理者的密碼。', function (c) { return post({ action: 'i18nKick', id: r.id, lang: lang, redo: 1, role: c.role, password: c.pw, by: '對照核准頁（重翻）' }, 400000); })
+        .then(function (j) { S.busy = false; if (!j.ok) throw new Error(j.msg); return load().then(function () { pick(r.id, lang); }); })
+        .catch(function (e) { S.busy = false; $('apMsg').textContent = '沒有成功：' + errText(e); $('redo').disabled = false; });
+    };
+  }
+  function act(body, okMsg) {
+    $('apMsg').innerHTML = '<span class="spin">⏳</span> 送出中…';
+    withBoss('核准要主廚或管理者的密碼。', function (c) { var b = {}; for (var k in body) b[k] = body[k]; b.role = c.role; b.password = c.pw; return post(b, 60000); })
+      .then(function (j) { if (!j.ok) throw new Error(j.msg); $('apMsg').textContent = okMsg; return load().then(function () { pick(body.id, body.lang); }); })
+      .catch(function (e) { $('apMsg').textContent = '沒有成功：' + errText(e); });
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest && e.target.closest('.st[data-id],[data-f],[data-close]'); if (!t) return;
+    if (t.hasAttribute('data-f')) { S.f = t.getAttribute('data-f'); document.querySelectorAll('#chips button').forEach(function (b) { b.classList.toggle('on', b === t); }); renderTable(); return; }
+    if (t.hasAttribute('data-close')) { S.sel = null; S.pv = null; $('panel').innerHTML = ''; renderTable(); return; }
+    if (S.busy) { alert('正在翻譯中，請等它完成'); return; }
+    pick(t.getAttribute('data-id'), t.getAttribute('data-l'));
+  });
+  $('reload').onclick = function () { load(); };
+  function start() { load(); }
+  if (window.__recipeAuthed) start(); else window.__recipeStartApp = start;
+})();
+</script>
+</body>
+</html>
