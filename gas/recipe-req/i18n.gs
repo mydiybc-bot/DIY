@@ -213,12 +213,13 @@ function i18nNums_(h) {
 /* 數字比對：原文的數字一個都不能少、不能變；譯文多出來的數字，原文要有對應的英文數量詞（a／one／two／second／both／half…，日韓泰常寫成「1本」「2枚目」） */
 var I18N_NUMW = { '1': /\b(a|an|one|once|single|first|each|half)\b/gi, '2': /\b(two|twice|second|both|pair|half|couple)\b/gi, '3': /\b(three|third|thrice)\b/gi,
   '4': /\b(four|fourth|quarter)\b/gi, '5': /\b(five|fifth)\b/gi, '6': /\b(six|sixth)\b/gi, '7': /\b(seven|seventh)\b/gi, '8': /\b(eight|eighth)\b/gi, '9': /\b(nine|ninth)\b/gi, '10': /\b(ten|tenth)\b/gi };
-function i18nNumDiff_(sh, th) {
+function i18nNumDiff_(sh, th, okx) {   /* okx：詞典譯名自帶的數字（例：4 吋刮板），出現在譯文不算多（只有投遞口會傳） */
   var a = i18nNums_(sh), b = i18nNums_(th), left = b.slice(), miss = [];
   a.forEach(function (x) { var j = left.indexOf(x); if (j < 0) miss.push(x); else left.splice(j, 1); });
   if (miss.length) return '原文的數字 ' + miss.join(',') + ' 譯文沒有（原文 ' + (a.join(',') || '無') + '／譯文 ' + (b.join(',') || '無') + '）';
   var pt = i18nPlain_(sh), extra = [], room = {};
   left.forEach(function (x) {
+    if (okx && okx[x]) return;
     if (room[x] == null) room[x] = I18N_NUMW[x] ? (pt.match(I18N_NUMW[x]) || []).length : 0;
     if (room[x] > 0) room[x]--; else extra.push(x);
   });
@@ -226,11 +227,11 @@ function i18nNumDiff_(sh, th) {
 }
 function i18nPh_(h) { return (String(h || '').match(/\[\[IMG\d+\]\]/g) || []).sort().join(','); }
 /* 一頁譯文對原文：回傳問題清單（空＝通過） */
-function i18nCheckSlide_(s, t) {
+function i18nCheckSlide_(s, t, okx) {
   var bad = [];
   if (!t) return ['少了這一頁'];
   if (s.h && !i18nPlain_(t.h) && !i18nPh_(t.h)) bad.push('內文是空的');
-  var d = i18nNumDiff_(s.h, t.h);
+  var d = i18nNumDiff_(s.h, t.h, okx);
   if (d) bad.push(d);
   if (i18nPh_(s.h) !== i18nPh_(t.h)) bad.push('圖片位置不一致');
   var tn = i18nNums_(t.t); if (!i18nNums_(s.t).every(function (x) { var j = tn.indexOf(x); if (j < 0) return false; tn.splice(j, 1); return true; })) bad.push('標題數字不見了');
@@ -840,7 +841,9 @@ function i18nPut_(p) {
   var local = (i18nGuideNames_()[i18nNameKey_(src.name)] || {})[lang] || '';
   if (local) out.name = local + '｜' + src.name.split('｜').slice(1).join('｜');
   var tt = {}; src.slides.forEach(function (s, i) { if (s.t && out.slides[i] && out.slides[i].t) tt[s.t] = out.slides[i].t; });
-  var P = {}; src.slides.forEach(function (s, i) { var b = i18nCheckSlide_(s, out.slides[i]); if (b.length) P[i] = b; });
+  var D2 = i18nDictRows_(), okx = {};   /* 這支食譜用到的詞典譯名裡的數字（尺寸、號數）不算「多出來的數字」 */
+  i18nTerms_(src).forEach(function (x) { var tr = i18nLook_(D2, x.kind, x.en, lang); if (tr) i18nNums_(tr).forEach(function (n) { okx[n] = 1; }); });
+  var P = {}; src.slides.forEach(function (s, i) { var b = i18nCheckSlide_(s, out.slides[i], okx); if (b.length) P[i] = b; });
   var bad = Object.keys(P), check = bad.map(function (i) { return '第' + (Number(i) + 1) + '頁：' + P[i].join('、'); }).join('；');
   if (src.pres && !out.pres) check += (check ? '；' : '') + '保存方式是空的';
   var status = !out.name ? 'fail' : (check ? 'review' : 'ok');
