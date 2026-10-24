@@ -761,6 +761,105 @@ NOAUTH.i18nStatus = 1; NOAUTH.i18nList = 1; NOAUTH.i18nGet = 1; NOAUTH.i18nKick 
 READS.i18nStatus = 1; READS.i18nList = 1; READS.i18nGet = 1;
 SELFLOCK.i18nKick = 1;   /* 一次要 1～4 分鐘，不能佔住全系統的鎖；同一件不重複做靠 i18nClaim_ */
 
+/* ================= 🤝 Claude Code 投遞口（2026-10-24 經營者：用 Claude Code 翻、不花 API；主廚不看，Claude 自己檢查就放行） =================
+   流程：Claude Code 呼叫 i18nPull 拿一支食譜某語言的原文＋詞典 → 自己翻 → 自己逐頁回讀 → 呼叫 i18nPut 投遞。
+   i18nPut 會照原本同一套「硬檢查」（頁數、每頁數字、圖片位置、標題數字、空白）再驗一次：
+     過 ＋ approve:1 → 狀態 ok 並直接放行（appr_by＝「Claude」，平板看得到）；
+     沒過 → 存成 review（待檢查），不放行，等經營者決定。
+   通行碼：投遞專用（跟唯讀預覽通行碼不同；原文只在經營者本機 ~/.config/diybc/secrets.env 的 I18N_PUT_KEY，程式只放雜湊）。
+   放行後仍可在核准頁抽查、按「收回」。原文改版 → 放行自動失效（appr_fp 對不上）。
+   ⚠ 只寫自己的分頁（i18n_rcp、i18n_items、i18n_log）；不寫食譜後台。 */
+var I18N_PUT_HASH = 'SqDmIh_9xBSvmNWjYG94Rb';
+function i18nWriteKey_(p) {
+  if (!(p.wkey && i18nHash_(String(p.wkey)) === I18N_PUT_HASH)) { Utilities.sleep(1000); throw fail_('要投遞通行碼', 'auth'); }
+}
+/* 拿原稿：不給 id＋lang → 回待翻清單；給了 → 回該份的原文、規則、詞典（已有的）、缺的詞（附後台中文原名當依據） */
+function i18nPull_(p) {
+  i18nWriteKey_(p);
+  var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
+  if (!(id && lang)) {
+    var pend = i18nPending_(), rc = {}; i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
+    return { data: { pending: pend.length, items: pend.slice(0, 400).map(function (x) { var r = rc[x.id + '|' + x.lang]; return { id: x.id, lang: x.lang, name: x.name, why: !r ? '還沒翻' : r.status === 'fail' ? '失敗' : '原文改版' }; }), at: now_() } };
+  }
+  if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言只能是 ' + I18N_LANGS.join('／'), 'bad');
+  var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜（不是台灣區啟用中的英文食譜？）', 'nosrc');
+  var D = i18nDictRows_(), terms = i18nTerms_(src), have = [], miss = [], nm = {};
+  try { nm = i18nNameMap_(); } catch (e) { }
+  terms.forEach(function (x) {
+    var tr = i18nLook_(D, x.kind, x.en, lang);
+    if (tr) { have.push({ kind: x.kind, en: x.en, tr: tr }); return; }
+    var h = nm[x.en.toLowerCase()] || {}, o = { kind: x.kind, en: x.en, zh: h.zh || '' };
+    if (lang === 'vi' && x.kind === 'item' && h.vi) o.backend = h.vi;   /* 越南文：後台已有的名稱優先 */
+    miss.push(o);
+  });
+  var guide = i18nGuideNames_()[i18nNameKey_(src.name)] || {}, local = guide[lang] || '';
+  var cur = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === id + '|' + lang; })[0];
+  return { data: { id: id, lang: lang, label: I18N_LABEL[lang], rules: I18N_RULES[lang], fp: src.fp, name: src.name, pres: src.pres, local: local,
+    slides: src.slides.map(function (s, i) { return { k: i, t: s.t, h: s.h }; }),
+    dict: have, missing: miss, brief: i18nSystem_(lang, src, D, local, {}),
+    now: cur ? { status: cur.status, state: i18nState_(cur, src.fp), at: cur.at, model: cur.model } : null } };
+}
+/* 把 Claude 翻好的詞放進詞典：只補空格、不蓋掉已有的（除非 overwrite）；只收這支食譜用到的詞 */
+function i18nPutDict_(list, lang, src, overwrite) {
+  var allowed = {}; i18nTerms_(src).forEach(function (x) { allowed[x.kind + '|' + x.en.toLowerCase()] = x; });
+  var got = {}, ignored = 0;
+  (list || []).forEach(function (x) {
+    var k = String(x.kind) + '|' + rbTrim_(x.en).toLowerCase(), tr = rbTrim_(x.tr);
+    if (allowed[k] && tr) got[k] = { x: allowed[k], tr: tr }; else ignored++;
+  });
+  var added = 0, kept = 0;
+  i18nLock_(function () {
+    var m = i18nMeta_('i18n_items', I18N_ITEM_HEAD), idx = {};
+    m.rows.forEach(function (r) { idx[r.kind + '|' + String(r.en).toLowerCase()] = r; });
+    Object.keys(got).forEach(function (k) {
+      var g = got[k], r = idx[k], vals;
+      if (r) {
+        if (String(r[lang] || '').trim() && !overwrite) { kept++; return; }
+        r[lang] = g.tr; r.how = (r.how ? r.how + ' ' : '') + lang + ':claude'; r.at = now_();
+        vals = I18N_ITEM_HEAD.map(function (h) { return r[h] == null ? '' : r[h]; }); m.sh.getRange(r._r, 1, 1, vals.length).setNumberFormat('@').setValues([vals]);
+      } else {
+        var o = { kind: g.x.kind, en: g.x.en, how: lang + ':claude', at: now_() }; o[lang] = g.tr;
+        vals = I18N_ITEM_HEAD.map(function (h) { return o[h] || ''; }); m.sh.appendRow(vals); idx[k] = o;
+      }
+      added++;
+    });
+  });
+  return { added: added, kept: kept, ignored: ignored };
+}
+/* 收翻譜：詞典 → 硬檢查 → 存 i18n_rcp →（過＋approve:1）放行 */
+function i18nPut_(p) {
+  i18nWriteKey_(p);
+  var t0 = Date.now(), id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim(), by = String(p.by || 'Claude Code').slice(0, 40);
+  if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言只能是 ' + I18N_LANGS.join('／'), 'bad');
+  var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
+  if (p.fp && String(p.fp) !== String(src.fp)) throw fail_('原文在你拿稿之後改版了（指紋不同），請重新拿稿再翻', 'stale');
+  var sl = p.slides; if (!sl || sl.length !== src.slides.length) throw fail_('頁數不對：原文 ' + src.slides.length + ' 頁，收到 ' + (sl ? sl.length : 0) + ' 頁', 'bad');
+  var out = { name: String(p.name || '').trim(), pres: String(p.pres || '').trim(), slides: [] };
+  sl.forEach(function (s) { var k = Number(s.k); if (!(k >= 0 && k < src.slides.length) || out.slides[k]) throw fail_('頁碼 k 不對或重複：' + s.k, 'bad'); out.slides[k] = { t: String(s.t || '').trim(), h: String(s.h || '') }; });
+  var dict = i18nPutDict_(p.dict, lang, src, !!p.overwrite);
+  var local = (i18nGuideNames_()[i18nNameKey_(src.name)] || {})[lang] || '';
+  if (local) out.name = local + '｜' + src.name.split('｜').slice(1).join('｜');
+  var tt = {}; src.slides.forEach(function (s, i) { if (s.t && out.slides[i] && out.slides[i].t) tt[s.t] = out.slides[i].t; });
+  var P = {}; src.slides.forEach(function (s, i) { var b = i18nCheckSlide_(s, out.slides[i]); if (b.length) P[i] = b; });
+  var bad = Object.keys(P), check = bad.map(function (i) { return '第' + (Number(i) + 1) + '頁：' + P[i].join('、'); }).join('；');
+  if (src.pres && !out.pres) check += (check ? '；' : '') + '保存方式是空的';
+  var status = !out.name ? 'fail' : (check ? 'review' : 'ok');
+  if (!out.name) check = '名稱是空的' + (check ? '；' + check : '');
+  var key = id + '|' + lang, prev = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === key; })[0];
+  var tries = prev && prev.fp === src.fp ? Number(prev.tries || 0) + 1 : 1, model = String(p.model || 'claude-code').slice(0, 60);
+  var approved = status === 'ok' && !!p.approve, sec = Math.round((Date.now() - t0) / 1000);
+  var json = { id: id, lang: lang, fp: src.fp, model: model, at: now_(), name: out.name, pres: out.pres, slides: out.slides, titles: tt };
+  i18nLock_(function () {
+    i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', { key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_(),
+      appr_by: approved ? 'Claude' : '', appr_at: approved ? now_() : '', appr_fp: approved ? src.fp : '' }, json);
+  });
+  i18nLog_(by, 'put', id, lang, status, (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (approved ? '自動放行；' : '') + (check || '通過'), sec);
+  return { id: key, msg: 'put ' + key + ' ' + status, data: { id: id, lang: lang, name: out.name, status: status, check: check, approved: approved, state: approved ? 'live' : (status === 'ok' ? 'wait' : status), slides: src.slides.length, dict: dict, left: i18nPending_().length } };
+}
+ACTIONS.i18nPull = function (p, a) { return i18nPull_(p, a); };
+ACTIONS.i18nPut = function (p, a) { return i18nPut_(p, a); };
+NOAUTH.i18nPull = 1; NOAUTH.i18nPut = 1; READS.i18nPull = 1; SELFLOCK.i18nPut = 1;   /* 通行碼在函式裡驗；Put 自己拿鎖 */
+
 /* 編輯器手動驗證：更新原文＋翻第一支的日文 */
 function i18nTestNow() {
   var r = i18nRefresh_(false, Date.now() + 200000); Logger.log(JSON.stringify(r));
