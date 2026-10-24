@@ -33,6 +33,7 @@ REQUIRED = [
     'recipe-studio.html', 'index.html',   # 訓練站首頁（核心檔；2026-10-18 經營者同意加）
     'dashboard-supplier.html',   # 新品供應商查詢（2026-10-19 新建）
     'tablet-recipe.html', 'tablet-recipe-review.html',   # 平板外語食譜＋對照核准（2026-10-24 新建）
+    'petty-cash.html',   # 零用金報銷（2026-10-24 新建）
 ]
 
 # 不加的頁面與原因

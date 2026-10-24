@@ -155,6 +155,33 @@ def verify_req_identity(role, password):
     return False, last
 
 
+# 🧾 零用金報銷（2026-10-24）：收據照片辨識也走這個入口 → content 可以是「文字＋圖片」區塊陣列（只收 base64 圖片，每則最多 4 張）
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
+IMAGE_MAX_CHARS = 3_000_000   # 單張 base64 上限（約 2.2MB 圖檔）；前端已先縮到 1600px
+
+
+def _clean_content(c):
+    """回傳 (乾淨的 content, 文字字數)；不合格回 (None, 0)"""
+    if isinstance(c, str):
+        return c, len(c)
+    if not isinstance(c, list):
+        return None, 0
+    out, n, imgs = [], 0, 0
+    for b in c[:8]:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "text" and isinstance(b.get("text"), str):
+            out.append({"type": "text", "text": b["text"]})
+            n += len(b["text"])
+        elif b.get("type") == "image" and imgs < 4:
+            s = b.get("source") if isinstance(b.get("source"), dict) else {}
+            if s.get("type") == "base64" and s.get("media_type") in IMAGE_TYPES \
+                    and isinstance(s.get("data"), str) and 0 < len(s["data"]) <= IMAGE_MAX_CHARS:
+                out.append({"type": "image", "source": {"type": "base64", "media_type": s["media_type"], "data": s["data"]}})
+                imgs += 1
+    return (out or None), n
+
+
 def clean_translate_payload(p: dict) -> dict:
     """只留翻譯用得到的欄位；模型、長度設上限"""
     p = p if isinstance(p, dict) else {}
@@ -163,14 +190,23 @@ def clean_translate_payload(p: dict) -> dict:
         mt = int(p.get("max_tokens") or TRANSLATE_MAX_TOKENS)
     except (TypeError, ValueError):
         mt = TRANSLATE_MAX_TOKENS
-    msgs = [m for m in (p.get("messages") or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-            and isinstance(m.get("content"), str)][:4]
+    msgs, total = [], 0
+    for m in (p.get("messages") or []):
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        content, n = _clean_content(m.get("content"))
+        if content is None:
+            continue
+        msgs.append({"role": m["role"], "content": content})
+        total += n
+        if len(msgs) >= 4:
+            break
     system = p.get("system") if isinstance(p.get("system"), str) else ""
-    total = len(system) + sum(len(m["content"]) for m in msgs)
+    total += len(system)
     if total > TRANSLATE_MAX_CHARS:
         msgs = []   # 太長 → 送空的 messages，Anthropic 直接回 400（不花錢），前端顯示錯誤
     out = {"model": model, "max_tokens": max(256, min(mt, TRANSLATE_MAX_TOKENS)), "system": system,
-           "messages": [{"role": m["role"], "content": m["content"]} for m in msgs]}
+           "messages": msgs}
     oc = p.get("output_config")
     if isinstance(oc, dict):
         keep = {}
