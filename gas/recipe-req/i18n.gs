@@ -843,6 +843,7 @@ function i18nPut_(p) {
   var tt = {}; src.slides.forEach(function (s, i) { if (s.t && out.slides[i] && out.slides[i].t) tt[s.t] = out.slides[i].t; });
   var D2 = i18nDictRows_(), okx = {};   /* 這支食譜用到的詞典譯名裡的數字（尺寸、號數）不算「多出來的數字」 */
   i18nTerms_(src).forEach(function (x) { var tr = i18nLook_(D2, x.kind, x.en, lang); if (tr) i18nNums_(tr).forEach(function (n) { okx[n] = 1; }); });
+  if (local) i18nNums_(local).forEach(function (n) { okx[n] = 1; });   /* 官網在地品名自帶的數字（例：오레오 2단）也放過 */
   var P = {}; src.slides.forEach(function (s, i) { var b = i18nCheckSlide_(s, out.slides[i], okx); if (b.length) P[i] = b; });
   var bad = Object.keys(P), check = bad.map(function (i) { return '第' + (Number(i) + 1) + '頁：' + P[i].join('、'); }).join('；');
   if (src.pres && !out.pres) check += (check ? '；' : '') + '保存方式是空的';
