@@ -21,6 +21,11 @@ for s, x in zip(src['slides'], tr['slides']):
     for tg in re.findall(r'</?\s*([a-zA-Z0-9]+)', x['h']):
         if tg.lower() not in ALLOWED: bad.append('第%d頁 多了標籤 <%s>' % (k + 1, tg)); break
     if s['t'] and not x.get('t', '').strip(): bad.append('第%d頁 標題空' % (k + 1))
+    for tg in ('p', 'b', 'u', 'font'):   # 開關標籤數量要跟原稿一致（缺 </p> 等會讓畫面壞掉）
+        co = lambda h, pat: len(re.findall(pat, h or '', re.I))
+        so, sc = co(s['h'], r'<%s[\s>]' % tg), co(s['h'], r'</%s>' % tg)
+        to, tc = co(x['h'], r'<%s[\s>]' % tg), co(x['h'], r'</%s>' % tg)
+        if to != tc: bad.append('第%d頁 <%s> 開關不成對（開%d關%d）' % (k + 1, tg, to, tc))
 if src['pres'] and not tr.get('pres', '').strip(): bad.append('保存方式空')
 if not tr.get('name', '').strip(): bad.append('名稱空')
 miss_terms = [m for m in src['missing'] if not any(d['kind'] == m['kind'] and d['en'].lower() == m['en'].lower() for d in tr.get('dict', []))]

@@ -50,3 +50,4 @@ cd ~/Desktop/Claude/Code/DIY/tools/i18n_claude && python3 precheck.py <tag>
 - **id 印尼文**：序數原文有數字就保留阿拉伯數字（ke-1，不要 pertama）；dessert 可保留英文。
 - **th 泰文**：數字一律阿拉伯數字 0-9；原文是英文單字 one／two／once 時用泰文數詞。
 - **回報格式（越短越好）**：預檢結果＋最多 2 點不確定處（各一行）。不要貼譯文。
+- **「10-dollar coin」**（出現在 Ruby Black Tea Chiffon 的擠花大小）是台幣 10 元硬幣：一律寫成「NT$10 硬幣」的當地說法（例：韓 NT$10 동전），**不要**直譯成 10 美元／10ドル／10 đô／10 dolar／10 ดอลลาร์。
