@@ -40,3 +40,4 @@ cd ~/Desktop/Claude/Code/DIY/tools/i18n_claude && python3 precheck.py <tag>
 - **越南文**：後台名稱（`backend`）可能開頭帶區域前綴「【Khu A】」或夾控制字元；內文句子不要硬帶區域前綴，控制字元一律去掉（put.py 也會自動清）。
 - **不要建立共用暫存腳本**（例：scratchpad 的 mk.py）：多個翻譯員並行時檔名會互相覆蓋。直接用 Write 寫 `<tag>.tr.json`。
 - **同一語言整份用詞一致**：batter（麵糊）≠ cake flour；scraper（刮板）≠ frosting scraper（抹面板）；Egg yolk wash（蛋黃液）不要只寫蛋黃。
+- **價格／貨幣**：原文的 `$39` 一律保留成 `$39` 或 `NT$39`，**不要**改成當地貨幣字樣（đồng、円、원、บาท、rupiah）——客人會看成當地幣。保存方式（pres）裡常有冰寶價格。
