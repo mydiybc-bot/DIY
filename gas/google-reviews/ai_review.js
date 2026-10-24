@@ -198,21 +198,25 @@ function aiReviewTick(limit) {
     pend.forEach(function (b) { if (!b.text && b.stars >= 5) quick.push(b); else ai.push(b); });
     var rows = quick.map(function (b) { return { b: b, r: airRow_(b, { people: false, partners: [], praise: [], neg_type: '', reply: '' }) }; });
     airWrite_(sh, rows); var ok = rows.length, fail = 0, stop = '';
-    var cred = ai.length ? airCred_() : null, batches = [], known = airKnown_(done);
+    var cred = ai.length ? airCred_() : null, batches = [], known = airKnown_(done), downWaves = 0;
     for (var i = 0; i < ai.length; i += AIR_BATCH) batches.push(ai.slice(i, i + AIR_BATCH));
     for (var w = 0; w < batches.length && !stop; w += AIR_PAR) {
       if (Date.now() - t0 > AIR_BUDGET_MS) { stop = 'time'; break; }
       var wave = batches.slice(w, w + AIR_PAR), rs;
       try { rs = UrlFetchApp.fetchAll(wave.map(function (bt) { return airReq_(bt, cred, known); })); }
       catch (e) { log.push('fetch ' + e); fail += wave.length; continue; }
-      var out = [];
+      var out = [], waveOk = 0;
       rs.forEach(function (resp, k) {
         var r = airRes_(resp), bt = wave[k];
         if (!r.ok) { fail += bt.length; log.push(r.err); if (r.credit) stop = 'credit'; return; }
         var byId = {}; r.items.forEach(function (it) { byId[String(it.id)] = it; });
+        waveOk++;
         bt.forEach(function (b) { var it = byId[b.id]; if (it) { out.push({ b: b, r: airRow_(b, it) }); ok++; } else fail++; });
       });
       airWrite_(sh, out);
+      /* 整波都失敗（多半是訓練站重新部署中回 502）→ 連 2 波就先停，下一輪再來 */
+      downWaves = waveOk ? 0 : downWaves + 1;
+      if (downWaves >= 2 && !stop) stop = 'down';
     }
     var msg = new Date().toISOString() + ' 完成 ' + ok + '／失敗 ' + fail + '／待判讀 ' + (pend.length - ok) + (stop ? '／停止:' + stop : '');
     props.setProperty('AIR_LAST_RUN', msg);
