@@ -106,7 +106,7 @@ import hashlib
 
 REQ_API_URL = "https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec"
 REQ_ID_TTL = 30 * 60
-TRANSLATE_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-5")
+TRANSLATE_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-5", "claude-haiku-5-5")   # haiku：Google 評論 AI 判讀（2026-10-24）
 TRANSLATE_MAX_TOKENS = 16000
 TRANSLATE_MAX_CHARS = 200000
 _id_ok = {}
