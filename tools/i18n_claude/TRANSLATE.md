@@ -41,3 +41,12 @@ cd ~/Desktop/Claude/Code/DIY/tools/i18n_claude && python3 precheck.py <tag>
 - **不要建立共用暫存腳本**（例：scratchpad 的 mk.py）：多個翻譯員並行時檔名會互相覆蓋。直接用 Write 寫 `<tag>.tr.json`。
 - **同一語言整份用詞一致**：batter（麵糊）≠ cake flour；scraper（刮板）≠ frosting scraper（抹面板）；Egg yolk wash（蛋黃液）不要只寫蛋黃。
 - **價格／貨幣**：原文的 `$39` 一律保留成 `$39` 或 `NT$39`，**不要**改成當地貨幣字樣（đồng、円、원、บาท、rupiah）——客人會看成當地幣。保存方式（pres）裡常有冰寶價格。
+
+## 各語言檢查表（派工時只要說「照 TRANSLATE.md 做 tag X」，這些自動適用）
+- **所有語言**：不建立暫存腳本，直接用 Write 寫 tr.json；`$` 金額保留 `$`／`NT$`；原文只有英文單字 once／twice／one 時用自然的當地說法即可，不必為了過數字檢查把句子寫生硬；`electronic mixer`（座式攪拌機）≠ `hand blender`（手持）；batter（麵糊）≠ cake flour。
+- **ja 日文**：electronic mixer 寫「ミキサー」不是「ハンドミキサー」；Whipping cream＝生クリーム／ホイップクリーム，不是卡士達。
+- **ko 韓文**：不要加原文沒有的「1장／1개」帶數字量詞；once／one 用「한 번／하나」；pomelo 不是 yuzu（詞典目前用「자몽」統一，照用）。
+- **vi 越南文**：`$` 不要寫 đồng；backend 名稱開頭的區域前綴「【Khu A】」不要帶進內文句子；有 backend 欄位就用它當詞典譯名並去掉控制字元。
+- **id 印尼文**：序數原文有數字就保留阿拉伯數字（ke-1，不要 pertama）；dessert 可保留英文。
+- **th 泰文**：數字一律阿拉伯數字 0-9；原文是英文單字 one／two／once 時用泰文數詞。
+- **回報格式（越短越好）**：預檢結果＋最多 2 點不確定處（各一行）。不要貼譯文。
