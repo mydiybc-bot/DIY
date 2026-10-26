@@ -13,6 +13,10 @@
      i18nList    平板：食譜清單（要平板密碼 tpw＝權限中心 tablet_i18n）
      i18nGet     平板：一支食譜某語言的完整內容（要 tpw）
      i18nPreview 主廚／管理者（或唯讀預覽通行碼 pkey）：原文與譯文對照（核准前一頁一頁看；待核准、待檢查都看得到）
+     i18nPick    主廚／管理者：勾選哪幾支給外國客人用（2026-10-26 經營者：「讓哪一些食譜可以被我新增到外國人可用的食譜中，讓我可以點選」）。
+                 沒勾的不翻、平板不列；取消勾譯文與核准都保留，再勾回來（原文沒改）馬上恢復。分頁 i18n_pick（id, name, on Y/N, by, at）。
+                 i18n_pick 還不存在＝還沒人勾過 → 全部當作有勾（上線前 39 支已全數放行，不能讓平板突然變空）；
+                 第一次勾選時把當下所有原文先記成 Y 再改那一支；之後後台新出現的英文食譜不在表上＝沒勾，要點了才加入。
      i18nApprove 主廚／管理者：核准放行（undo:1 收回）。**沒核准的平板看不到**（經營者 10/24：「完成後還是要一一打開比對，確認沒有問題才可以放行」）；
                  原文改版重翻 → 核准自動失效（appr_fp 對不上），要重新看過
      i18nKick    做下一件待翻譯的事：沒開自動（指令碼屬性 I18N_AUTO≠1）時只做指定的 id＋lang；同一件 6 分鐘內不會兩個人同時做
@@ -40,6 +44,7 @@ var I18N_SRC_HEAD = ['id', 'name', 'upd', 'fp', 'slides', 'cover', 'state', 'err
 var I18N_RCP_HEAD = ['key', 'id', 'lang', 'fp', 'status', 'tries', 'model', 'check', 'sec', 'at', 'appr_by', 'appr_at', 'appr_fp'];
 var I18N_ITEM_HEAD = ['kind', 'en', 'ja', 'ko', 'vi', 'id', 'th', 'how', 'at'];
 var I18N_LOG_HEAD = ['at', 'by', 'act', 'id', 'lang', 'result', 'msg', 'sec'];
+var I18N_PICK_HEAD = ['id', 'name', 'on', 'by', 'at'];
 var I18N_CHUNK = 4, I18N_CHUNK_CHARS = 5000, I18N_WAVE = 6, I18N_BUDGET = 270000, I18N_TRIES = 3;
 
 /* ---------------- 共用 ---------------- */
@@ -544,9 +549,39 @@ function i18nRecheck_(id, lang, by) {
   return { id: id, lang: lang, before: r.status, status: status, check: check };
 }
 
+/* ---------------- 勾選：哪幾支給外國客人用（2026-10-26） ---------------- */
+/* 回傳 null＝還沒人勾過（分頁不存在）→ 全部當作有勾；否則 {id: true/false}。只讀，不建分頁 */
+function i18nPickMap_() {
+  var sh = ss_().getSheetByName('i18n_pick'); if (!sh) return null;
+  var m = {}, n = sh.getLastRow() - 1;
+  if (n > 0) sh.getRange(2, 1, n, I18N_PICK_HEAD.length).getDisplayValues().forEach(function (r) { if (r[0]) m[r[0]] = r[2] === 'Y'; });
+  return m;
+}
+function i18nOn_(pm, id) { return !pm || pm[id] === true; }
+function i18nPick_(p, auth) {
+  i18nBoss_(auth); I18N_HELD = true;   /* 走一般寫入路徑（已在全系統的鎖裡） */
+  var ids = (Array.isArray(p.ids) ? p.ids : [p.id]).map(function (x) { return String(x || '').trim().toLowerCase(); }).filter(String);
+  if (!ids.length) throw fail_('沒有指定食譜', 'bad');
+  var on = !!Number(p.on) || p.on === true, who = auth.role + (p.who ? '：' + String(p.who).slice(0, 20) : ''), t = now_();
+  var src = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.filter(function (r) { return r.state === 'ok'; }), nm = {};
+  src.forEach(function (r) { nm[r.id] = r.name; });
+  ids.forEach(function (id) { if (!nm[id]) throw fail_('找不到這支食譜（' + id + '）：要是後台台灣區、啟用中的英文食譜', 'nosrc'); });
+  if (!ss_().getSheetByName('i18n_pick')) {   /* 第一次勾選：先把當下所有原文記成「有勾」（＝上線前的現況），再改這次指定的 */
+    var sh = i18nSheet_('i18n_pick', I18N_PICK_HEAD);
+    if (src.length) sh.getRange(2, 1, src.length, I18N_PICK_HEAD.length).setNumberFormat('@').setValues(src.map(function (r) { return [r.id, r.name, 'Y', '首次建立（原本就在平板上）', t]; }));
+    i18nLog_(who, 'pick-init', '', '', 'ok', '建立勾選表：' + src.length + ' 支全部記成有勾');
+  }
+  ids.forEach(function (id) { i18nUpsert_('i18n_pick', I18N_PICK_HEAD, 'id', { id: id, name: nm[id], on: on ? 'Y' : 'N', by: who, at: t }, null); });
+  SpreadsheetApp.flush();
+  ids.forEach(function (id) { i18nLog_(who, on ? 'pick' : 'unpick', id, '', 'ok', nm[id]); });
+  var pm = i18nPickMap_();
+  return { id: ids.join(','), msg: (on ? '勾選 ' : '取消勾選 ') + ids.join(','), data: { ids: ids, on: on, picked: src.filter(function (r) { return i18nOn_(pm, r.id); }).length, total: src.length, left: i18nPending_().length } };
+}
+
 /* ---------------- 待辦 ---------------- */
 function i18nPending_() {
-  var src = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.filter(function (r) { return r.state === 'ok'; });
+  var pm = i18nPickMap_();   /* 沒勾的不翻（2026-10-26） */
+  var src = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.filter(function (r) { return r.state === 'ok' && i18nOn_(pm, r.id); });
   var rc = {}; i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
   var out = [];
   src.forEach(function (s) {
@@ -623,13 +658,14 @@ function i18nStatus_() {
   var trig = -1; try { trig = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === 'i18nDaily'; }).length; } catch (e) { }
   var rcm = {}; rc.forEach(function (r) { rcm[r.key] = r; });
   var guide = {}; try { guide = i18nGuideNames_(); } catch (e) { }
+  var pm = i18nPickMap_();
   var matrix = src.filter(function (s) { return s.state === 'ok'; }).map(function (s) {
-    var o = { id: s.id, name: s.name, cover: s.cover, slides: s.slides, upd: s.upd, local: guide[i18nNameKey_(s.name)] || {}, st: {}, appr: {} };
+    var o = { id: s.id, name: s.name, cover: s.cover, slides: s.slides, upd: s.upd, local: guide[i18nNameKey_(s.name)] || {}, st: {}, appr: {}, on: i18nOn_(pm, s.id) };
     I18N_LANGS.forEach(function (l) { var r = rcm[s.id + '|' + l]; o.st[l] = i18nState_(r, s.fp); if (r && o.st[l] === 'live') o.appr[l] = r.appr_by + ' ' + r.appr_at; });
     return o;
   });
   return { data: { langs: I18N_LANGS, matrix: matrix, sources: src.filter(function (s) { return s.state === 'ok'; }).length, src_err: src.filter(function (s) { return s.state === 'err'; }).map(function (s) { return { id: s.id, name: s.name, err: s.err }; }),
-    count: cnt, pending: i18nPending_().length, wait: wait, review: review, fail: fail, auto: i18nProp_('I18N_AUTO') === '1', refresh_at: i18nProp_('I18N_REFRESH_AT'), schedule: trig, log: lg } };
+    count: cnt, pending: i18nPending_().length, wait: wait, review: review, fail: fail, auto: i18nProp_('I18N_AUTO') === '1', refresh_at: i18nProp_('I18N_REFRESH_AT'), schedule: trig, log: lg, pick_ready: true, pick_init: !!pm } };   /* pick_ready：前端認得這版後台有勾選功能 */
 }
 /* 平板密碼：問權限中心 verify（dim_auth 的 tablet_i18n），通過快取 2 小時（只存雜湊） */
 function i18nTabletAuth_(pw) {
@@ -647,7 +683,8 @@ function i18nList_(p) {
   i18nTabletAuth_(p.tpw);
   var src = i18nMeta_('i18n_src', I18N_SRC_HEAD), rc = {}, guide = i18nGuideNames_();
   i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
-  var out = src.rows.filter(function (s) { return s.state === 'ok'; }).map(function (s) {
+  var pm = i18nPickMap_();   /* 沒勾的平板不列 */
+  var out = src.rows.filter(function (s) { return s.state === 'ok' && i18nOn_(pm, s.id); }).map(function (s) {
     var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: guide[i18nNameKey_(s.name)] || {} };
     I18N_LANGS.forEach(function (l) { var r = rc[s.id + '|' + l]; o.langs[l] = i18nState_(r, s.fp); if (o.langs[l] === 'live') o.ver[l] = String(s.fp).slice(0, 8) + '|' + r.appr_at; });   /* ver：平板快取用，核准或原文改了就換 */
     return o;
@@ -659,6 +696,7 @@ function i18nGet_(p) {
   var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
   if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言不對', 'bad');
   var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
+  if (!i18nOn_(i18nPickMap_(), id)) throw fail_('這支食譜目前沒有開放給外國客人', 'notyet');
   var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
   if (!r || r.fp !== src.fp) throw fail_('這支食譜這個語言還沒翻好', 'notyet');
   if (!i18nLive_(r, src.fp)) throw fail_('這支食譜這個語言還沒核准放行', 'notyet');
@@ -760,6 +798,7 @@ ACTIONS.i18nGet = function (p, a) { return i18nGet_(p, a); };
 ACTIONS.i18nKick = function (p, a) { return i18nKick_(p, a); };
 ACTIONS.i18nPreview = function (p, a) { return i18nPreview_(p, a); };
 ACTIONS.i18nApprove = function (p, a) { return i18nApprove_(p, a); };
+ACTIONS.i18nPick = function (p, a) { return i18nPick_(p, a); };   /* 2026-10-26 勾選；跟 i18nApprove 一樣走一般寫入路徑（鎖、回條、身分密碼） */
 READS.i18nPreview = 1; NOAUTH.i18nPreview = 1;   /* 身分在函式裡驗（主廚／管理者密碼，或唯讀預覽通行碼） */   /* i18nApprove 走一般寫入路徑（有鎖、有回條、寫紀錄） */
 NOAUTH.i18nStatus = 1; NOAUTH.i18nList = 1; NOAUTH.i18nGet = 1; NOAUTH.i18nKick = 1;   /* 平板密碼在函式裡自己驗；Kick 只會做待辦，做完就沒事可做 */
 READS.i18nStatus = 1; READS.i18nList = 1; READS.i18nGet = 1;
