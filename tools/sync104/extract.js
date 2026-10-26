@@ -7,8 +7,12 @@ await (async () => {
     [8, '新店店'], [9, '中壢'], [10, '藝文'], [11, 'A13'], [12, 'SKM']];
   const post = (u, b) => fetch(u, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
   const login = await fetch('/hrm2/api/auth/checkLogin', { credentials: 'include' });
-  if (location.pathname.indexOf('signin') >= 0 || login.status !== 200) return 'SYNC104_BEGIN' + JSON.stringify({ ok: false, error: '104 沒有登入' }) + 'SYNC104_END';
-  const list = (await (await post('/hrm2/api/shift/grid/multi', { status: -1, $criteriaType: 'basic' })).json()).data.data;
+  // 104 登入過期時會轉到 /hrm2/signin 或 /user/verify-password（要重新輸入密碼）
+  if (location.pathname.indexOf('/hrm2/') !== 0 || login.status !== 200) return 'SYNC104_BEGIN' + JSON.stringify({ ok: false, error: '104 登入過期（停在 ' + location.pathname + '）' }) + 'SYNC104_END';
+  const lr = await post('/hrm2/api/shift/grid/multi', { status: -1, $criteriaType: 'basic' });
+  const lj = lr.ok ? await lr.json().catch(() => null) : null;
+  if (!lj || !lj.data) return 'SYNC104_BEGIN' + JSON.stringify({ ok: false, error: '104 登入過期或班表清單讀不到（' + lr.status + '）' }) + 'SYNC104_END';
+  const list = lj.data.data;
   const now = new Date(Date.now() + 8 * 3600e3);
   const yms = [0, 1].map(k => { const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + k, 1)); return d.getUTCFullYear() * 100 + d.getUTCMonth() + 1; });
   const pick = {};
