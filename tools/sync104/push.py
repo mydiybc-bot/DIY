@@ -10,8 +10,20 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
 import urllib.request
+
+
+def ssl_ctx():
+    """Mac 上 python.org 版 Python 沒帶憑證，連 https 會失敗 → 用 certifi，沒有就用系統的 /etc/ssl/cert.pem"""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        if os.path.exists("/etc/ssl/cert.pem"):
+            return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+        return ssl.create_default_context()
 
 
 def read_payload(path):
@@ -56,7 +68,7 @@ def main():
     req = urllib.request.Request(a.url.rstrip("/") + "/api/schedule/sync104", data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=180, context=ssl_ctx() if a.url.startswith("https") else None) as r:
             res = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         print(f"❌ 工作台回 {e.code}：{e.read().decode('utf-8', 'replace')[:300]}")
