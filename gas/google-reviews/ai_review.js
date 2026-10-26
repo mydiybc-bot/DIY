@@ -14,11 +14,12 @@ var AIR_SHEET = 'ai_review';
 var AIR_HEAD = ['reviewId', 'store', 'ym', 'stars', 'people', 'partners', 'praise', 'neg_type', 'reply', 'hash', 'model', 'at'];
 var AIR_AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var AIR_MODEL = 'claude-haiku-5-5';
-var AIR_PVER = 'p3';         // 提示詞版本：改提示詞就 +1，舊版判過的會自動重判（model 欄記成 模型|版本）
+var AIR_PVER = 'p4';         // 提示詞版本：改提示詞就 +1，舊版判過的會自動重判（model 欄記成 模型|版本）
 var AIR_REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   // 食譜系統_申請單（讀 dim_role 管理者密碼）
 var AIR_BATCH = 8;           // 一次送幾則（15 則時 AI 偶爾把結果對錯評論，2026-10-26 降到 8）
-var AIR_PAR = 6;             // 一波並行幾批
+var AIR_PAR = 10;            // 一波並行幾批（一般帳號排程每天合計上限 90 分鐘：每輪多做一點、輪數少一點）
 var AIR_BUDGET_MS = 240000;  // 每輪最多跑 4 分鐘（GAS 上限 6 分鐘）
+var AIR_BUDGET_MANUAL_MS = 320000;  // 從編輯器手動跑（aiReviewManual）可跑到 5 分 20 秒
 var AIR_NEG_TYPES = ['服務態度', '教學協助', '等候與流程', '訂位與規則', '價格與收費', '產品品質', '環境衛生', '設備器材', '其他'];
 
 /* 冠名甜點（與 google-reviews.html 的 NAMED_DESSERTS 同一份名單；新冠名甜點上市兩邊都要補） */
@@ -30,6 +31,8 @@ function airSystem_() {
     '逐則判讀使用者給的評論，每則回一筆結果，id 原樣帶回；head 照抄該則評論 text 的前 6 個字（沒有文字就給空字串），用來核對你沒有把結果對錯評論。每則只根據它自己的 text 判斷，不要混用別則的內容。',
     '',
     '【people】評論有沒有提到「與人有關的服務」：夥伴的協助、教學、說明、態度（親切、熱情、貼心、耐心、細心、溫柔）、點名稱讚夥伴（短名字也算，例「球球很棒」「瑄瑄讚」）、「人很好」「服務很好」。只講活動、甜點、好吃、好玩、體驗、環境、空間、價格、步驟 → false。負評也照同一標準判斷。',
+    '　⚠️ 店裡是「客人看平板自己做」：說明、介紹、教學、步驟、配方、影片、SOP、操作說明、位置標示，若沒有明講是夥伴／店員／老師／姐姐做的，就是在講平板或店家的準備 → 不算人（例「製作說明清楚」「操作說明很容易」「位置清楚介紹清楚」「配方都告訴你怎麼做」「平板教學很清楚」都是 false）。只有明講是人做的才算（例「老師說明很仔細」「店員教我抹奶油」）。',
+    '　反過來，沒寫名字但明顯是夥伴做的事也算人：救回或補救作品（「拯救了我的熊 太感謝了」「幫我補救」）、做超時「沒有趕人」「不會催」、主動提醒或關心。只是「可以問店員」「有店員在」這種說明，沒有稱讚也沒有描述夥伴做了什麼 → false。',
     '【partners】評論裡被點名的夥伴名字或綽號，必須是這則 text 裡真的出現的字，照原文寫法（英文名保留大小寫原樣）；兩個名字連寫要拆開（例「西瓜茹茹」→西瓜、茹茹；「瑄瑄姿姿」→瑄瑄、姿姿）。不要列：泛稱（店員、老師、小姐姐、哥哥、店長、服務人員）、客人自己的同行者（朋友、家人、小孩、男女朋友的名字）、評論者自己。',
     '　甜點名稱前面冠的名字不是在稱讚那個人（例「思思的無麩質生巧巴斯克」裡的思思），除非同一則評論也稱讚他本人的服務（例「謝謝思思的幫忙」）。冠名甜點：' + AIR_NAMED,
     '【praise】這則評論稱讚的重點 0～3 個短詞，每個 2～6 字（例：耐心教學、主動協助、幫忙拍照、親切、環境乾淨、甜點好吃、步驟清楚）。沒有稱讚就給空陣列。',
@@ -213,7 +216,7 @@ function aiReviewTick(limit) {
     var pend = airPending_(done, typeof limit === 'number' ? limit : 100000);
     if (!pend.length) { props.setProperty('AIR_LAST_RUN', new Date().toISOString() + ' 0 則待判讀'); airBackfillDone_(); return '0 pending'; }
     /* 待判讀很多（改提示詞版本、補舊評論）→ 自動切成每 10 分鐘一輪；補完由 airBackfillDone_ 切回每小時 */
-    if (typeof limit !== 'number' && pend.length > 300 && props.getProperty('AIR_BACKFILL') !== '1') { try { installAiReviewBackfill(); } catch (eT) { } }
+    if (typeof limit !== 'number' && pend.length > 300 && props.getProperty('AIR_BACKFILL') !== '1' && props.getProperty('AIR_NO_AUTO') !== '1') { try { installAiReviewBackfill(); } catch (eT) { } }
     /* 5 星沒有文字：不用叫 AI */
     var quick = [], ai = [];
     pend.forEach(function (b) { if (!b.text && b.stars >= 5) quick.push(b); else ai.push(b); });
@@ -260,6 +263,29 @@ function airWrite_(sh, rows) {
   SpreadsheetApp.flush();
 }
 
+/* 手動重判一輪（從編輯器按）：不吃排程每天 90 分鐘的額度；同時關掉「待判多自動切 10 分鐘」，避免排程把額度吃光 */
+function aiReviewManual() {
+  PropertiesService.getScriptProperties().setProperty('AIR_NO_AUTO', '1');
+  AIR_BUDGET_MS = AIR_BUDGET_MANUAL_MS;
+  return aiReviewTick();
+}
+/* 重判完成後恢復自動切換 */
+function aiReviewAutoOn() { PropertiesService.getScriptProperties().deleteProperty('AIR_NO_AUTO'); return 'ok'; }
+/* 指定幾則評論先判（抽測已知誤判用）：ids 為 reviewId 陣列 */
+function airJudgeIds_(ids) {
+  var sh = airSheet_(), done = airDone_(sh), want = {}; ids.forEach(function (x) { want[x] = 1; });
+  var all = airPending_({}, 100000).filter(function (b) { return want[b.id]; });
+  all.forEach(function (b) { var d = done[b.id]; b.upd = d ? d.row : 0; });
+  var cred = airCred_(), known = airKnown_(done), out = [];
+  for (var i = 0; i < all.length; i += AIR_BATCH) {
+    var bt = all.slice(i, i + AIR_BATCH), r = airRes_(UrlFetchApp.fetch(AIR_AI_URL, airReq_(bt, cred, known)));
+    if (!r.ok) continue;
+    var byId = {}; r.items.forEach(function (it) { byId[String(it.id)] = it; });
+    bt.forEach(function (b) { var it = byId[b.id]; if (it && airHeadOk_(b, it)) out.push({ b: b, r: airRow_(b, it) }); });
+  }
+  airWrite_(sh, out);
+  return out.map(function (x) { return x.r[1] + '｜' + x.r[4] + '｜' + x.r[5] + '｜' + x.b.text.slice(0, 30); });
+}
 /* 50 則樣本（最新的 50 則待判讀），人工抽查用 */
 function aiReviewSample50() { return aiReviewTick(50); }
 /* 試跑 5 則（驗證連線與額度用） */
@@ -280,6 +306,7 @@ function installAiReviewBackfill() {
   return 'ok';
 }
 function airBackfillDone_() {
+  PropertiesService.getScriptProperties().deleteProperty('AIR_NO_AUTO');   /* 手動重判做完 → 恢復自動切換 */
   if (PropertiesService.getScriptProperties().getProperty('AIR_BACKFILL') === '1') installAiReviewTrigger();
 }
 
@@ -331,3 +358,17 @@ function airStopTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'aiReviewTick') ScriptApp.deleteTrigger(t); });
   return 'stopped';
 }
+
+/* 抽測：已知誤判＋對照組，先用新版提示詞判，結果看執行記錄（2026-10-26 p4） */
+function aiReviewTestKnown() {
+  var pats = ['拯救了我的熊', '做超時了也沒有趕人', '操作說明很容易', '製作說明清楚，是個很有趣', '位置清楚介紹清楚', '配方都告訴你怎麼做',
+    '操作說明細節完善', '詳細說明、多樣器材', '介紹可以再多一些', '都很仔細說明',
+    '球球很棒', 'Angel, 胖胖', '謝謝胖胖 拉拉 小魚', '還教我抹奶油', '幸好有泥鰍', '可以隨時問店員', '平板教學清晰，如有不懂'];
+  var sh = SpreadsheetApp.openById(REVIEWS_SHEET_ID).getSheetByName(REVIEWS_SHEET_NAME);
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, 6).getValues(), ids = [];
+  v.forEach(function (r) { var t = String(r[4] || ''); if (r[5] && pats.some(function (p) { return t.indexOf(p) >= 0; })) ids.push(String(r[5])); });
+  var res = airJudgeIds_(ids);
+  Logger.log(res.join('\n'));
+  return res;
+}
+
