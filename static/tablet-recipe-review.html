@@ -531,11 +531,15 @@ tr.off td.nm{color:#a99a90}tr.off td.nm img{opacity:.45}tr.off .st{opacity:.4}
     var msg = on ? '把「' + r.name + '」加入外國客人可用的食譜？\n' + (live ? '已核准的 ' + live + ' 種語言會馬上出現在店內平板；' : '') + (live < LANGS.length ? '還沒翻好／還沒核准的語言會排進翻譯，核准後才上平板。' : '')
       : '把「' + r.name + '」從外國客人可用的食譜拿掉？\n店內平板馬上看不到這支（譯文和核准都會留著，之後再勾回來馬上恢復）。';
     if (!confirm(msg)) return;
-    if (!confirm(on ? '確定加入？' : '確定拿掉？')) return;
-    btn.disabled = true; btn.textContent = '⏳ 送出中';
-    withBoss('勾選要主廚或管理者的密碼。', function (c) { return post({ action: 'i18nPick', ids: [id], on: on ? 1 : 0, role: c.role, password: c.pw, rq: id + '|' + (on ? 1 : 0) + '|' + Date.now() }, 60000); })
-      .then(function (j) { if (!j.ok) throw new Error(j.msg); return load(); })
-      .catch(function (e) { alert('沒有成功：' + errText(e)); renderTable(); });
+    if (on && !confirm('確定加入？')) return;   /* 拿掉只確認一次；加入多一次（會排進翻譯） */
+    /* 2026-10-26 提速：先改畫面、後台排隊在背景送（一支一支依序，避免搶鎖）；成功不重讀整張總表，失敗才還原並提示 */
+    var was = r.on;
+    r.on = on; renderDsb(); renderTable();
+    S.pq = (S.pq || Promise.resolve()).then(function () {
+      return withBoss('勾選要主廚或管理者的密碼。', function (c) { return post({ action: 'i18nPick', ids: [id], on: on ? 1 : 0, role: c.role, password: c.pw, rq: id + '|' + (on ? 1 : 0) + '|' + Date.now() }, 60000); })
+        .then(function (j) { if (!j.ok) throw new Error(j.msg); })
+        .catch(function (e) { r.on = was; renderDsb(); renderTable(); alert('「' + r.name + '」勾選沒有成功，已還原：' + errText(e)); });
+    });
   }
   $('reload').onclick = function () { load(); };
   function start() { load(); }

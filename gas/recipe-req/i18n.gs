@@ -575,7 +575,7 @@ function i18nPick_(p, auth) {
   SpreadsheetApp.flush();
   ids.forEach(function (id) { i18nLog_(who, on ? 'pick' : 'unpick', id, '', 'ok', nm[id]); });
   var pm = i18nPickMap_();
-  return { id: ids.join(','), msg: (on ? '勾選 ' : '取消勾選 ') + ids.join(','), data: { ids: ids, on: on, picked: src.filter(function (r) { return i18nOn_(pm, r.id); }).length, total: src.length, left: i18nPending_().length } };
+  return { id: ids.join(','), msg: (on ? '勾選 ' : '取消勾選 ') + ids.join(','), data: { ids: ids, on: on, picked: src.filter(function (r) { return i18nOn_(pm, r.id); }).length, total: src.length } };   /* 2026-10-26 提速：不再算待翻清單（畫面沒用到） */
 }
 
 /* ---------------- 待辦 ---------------- */
