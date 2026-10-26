@@ -701,13 +701,16 @@ function i18nApprove_(p, auth) {
 }
 /* 合成平板要的完整內容：版面照原文，文字換譯文，食材／取放區／單位換詞典 */
 function i18nBuild_(src, tr, D, lang, row) {
-  var areas = {};
+  var areas = {}, NM = {};
+  try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文 */ }
+  var cut = function (n) { return rbTrim_(String(n || '').replace(/^【[^】]*】\s*/, '')); };
   var slides = src.slides.map(function (s, i) {
     var t = (tr.slides || [])[i] || {}, h = String(t.h || '');
     (s.imgs || []).forEach(function (u, j) { h = h.split('[[IMG' + (j + 1) + ']]').join('<img src="' + String(u).replace(/"/g, '&quot;') + '">'); });
     var ings = s.ings.map(function (g) {
       if (g.a && !areas[g.a]) areas[g.a] = { name: i18nLook_(D, 'area', g.an, lang) || g.an, en: g.an, img: src.areaPre && src.areaHas.indexOf(g.a) >= 0 ? '/img/MenuCateGroups/' + src.areaPre + '-' + g.a + '.jpg' : '' };
-      return { n: i18nItemName_(D, g.n, lang), en: g.n, q: g.q, u: i18nLook_(D, 'unit', g.u, lang) || g.u, c: g.c, a: g.a };
+      var nmk = NM[cut(g.n).toLowerCase()];
+      return { n: i18nItemName_(D, g.n, lang), en: g.n, zh: nmk && nmk.zh || '', q: g.q, u: i18nLook_(D, 'unit', g.u, lang) || g.u, c: g.c, a: g.a };
     });
     return { t: t.t || s.t, video: s.video, img: s.img, h: h, ings: ings };
   });

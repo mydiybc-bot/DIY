@@ -8,6 +8,11 @@
 (function () {
   'use strict';
   var BACK = 'https://diybc.azurewebsites.net';
+  /* 店內貼紙只有中文＋英文：取放區照後台的名稱（GUID → 中文／英文），品項的中文由後端附上（zh） */
+  var AREA_ORIG = { '5e1bd8a2-04b1-457a-8638-fef023c223f3': ['洞洞牆區', 'Pegboard wall area'], 'c1b9eaae-f1f0-4152-8392-d45507cbafa1': ['洞洞牆下方或蛋櫃區', 'Under the pegboard wall or egg cabinet area'],
+    '5c1f4ecf-2b35-45aa-bc7d-a2cd7710b405': ['冰箱區', 'Refrigerated area'], 'e796c6da-1b35-4a0a-8f9d-78e7619ad5ed': ['模具區', 'Mold area'], 'f7b9b79a-448f-44d1-8154-979dcaf68fed': ['烘烤區', 'Baking area'],
+    '796e6d72-bf7d-40eb-bbaf-fd678b64b871': ['請向店員拿取', 'Ask an attendant for help with this item'], '971ea9b5-095b-4fe8-a29e-fce186544e21': ['飲料區', 'Beverages'] };
+  function origTxt(zh, en) { en = String(en || '').replace(/^【[^】]*】\s*/, '').trim(); zh = String(zh || '').trim(); return zh && en ? zh + ' / ' + en : zh || en; }
   var AREA_ORDER = ['5e1bd8a2-04b1-457a-8638-fef023c223f3', 'c1b9eaae-f1f0-4152-8392-d45507cbafa1', '5c1f4ecf-2b35-45aa-bc7d-a2cd7710b405',
     'e796c6da-1b35-4a0a-8f9d-78e7619ad5ed', 'f7b9b79a-448f-44d1-8154-979dcaf68fed', '971ea9b5-095b-4fe8-a29e-fce186544e21', '796e6d72-bf7d-40eb-bbaf-fd678b64b871'];   /* 跟後台平板頁同順序 */
   var T = {
@@ -76,6 +81,7 @@
     + '.trv-where{border:1px solid #d8c8be;background:#fff;border-radius:999px;font-size:calc(var(--u)*2.6);padding:.2em .8em;cursor:pointer;color:#40210f;font-weight:700}'
     + '.trv-ings{display:flex;flex-wrap:wrap;padding:.5em 0 0}.trv-ing{width:50%;display:flex;align-items:center;gap:.5em;font-size:calc(var(--u)*3.2);padding:.35em 0}'
     + '.trv-ing img{width:calc(var(--u)*8);flex:0 0 auto}.trv-ing .q{font-weight:800;white-space:nowrap}'
+    + '.trv-ing .o{display:block;font-size:calc(var(--u)*2.9);color:#6b5242;font-weight:600;line-height:1.35}.trv-aname .o{font-size:calc(var(--u)*2.8);color:#6b5242;font-weight:600}'
     + '.trv-pres{position:absolute;left:0;right:0;bottom:0;background:#fff;padding:.8em 1.2em;font-size:calc(var(--u)*3);white-space:pre-wrap;line-height:1.6;max-height:55%;overflow:auto}'
     + '.trv-done{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:calc(var(--u)*4);padding:10%}'
     + '.trv-done h2{font-size:calc(var(--u)*7);margin:0}.trv-done p{font-size:calc(var(--u)*3.6);margin:0}'
@@ -130,8 +136,8 @@
         order.sort(function (a, b) { var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
         order.forEach(function (a) {
           var ar = (data.areas || {})[a] || {}, list = groups[a].slice().sort(function (x, y) { var r = function (c) { return c === 'container1' ? 1 : c === 'container2' ? 2 : 0; }; return r(x.c) - r(y.c); });
-          h += '<div class="trv-area"><div class="trv-aname">' + esc(ar.name || '') + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
-            + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span></span></div>'; }).join('') + '</div></div>';
+          var ao = AREA_ORIG[a] || ['', ar.en || '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
+            + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, g.en) ? '<span class="o">' + esc(origTxt(g.zh, g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
         });
         h += '<div style="height:calc(var(--u)*14)"></div>';
       } else {
