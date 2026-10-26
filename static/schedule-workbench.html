@@ -134,13 +134,13 @@ ol.sop li{margin:3px 0}
 
 <main id="app" class="hide">
   <div class="card">
-    <h2>① 上傳兩個檔</h2>
+    <h2>① 上傳每月排班設定表 <span class="mute" style="font-weight:normal">（104 範本會自動取得）</span></h2>
     <div class="row">
       <div class="file"><b>每月排班設定表（Excel）</b>
         <input type="file" id="fSet" accept=".xlsx,.xls,.xlsm,.csv,.txt">
         <div id="setList" class="mute"></div></div>
       <div class="file"><b>104 匯入範本（時間排班）</b>
-        <div class="mute">104 → 排班 → 本店當月班表 → 更多功能 → 匯入班表 → 選「時間排班」→ 下載範本（每月都要重新下載）</div>
+        <div class="mute">每天自動從 104 取得，不用上傳。只有 104 還沒建這個月的班表時，才需要自己下載上傳（104 → 排班 → 本店當月班表 → 更多功能 → 匯入班表 → 時間排班 → 下載範本）。</div>
         <input type="file" id="fTpl" accept=".xlsx">
         <div id="tplInfo" class="mute"></div></div>
     </div>
@@ -166,6 +166,7 @@ ol.sop li{margin:3px 0}
     <div class="legend"><span><i class="sw" style="background:var(--wk)"></i>假日</span><span><i class="sw" style="background:var(--rest)"></i>例假／休息</span>
       <span><i class="sw" style="background:var(--hol)"></i>國定假日／特休</span><span><i class="sw" style="background:var(--chg)"></i>剛改過</span>
       <span>點格子可以改班；也可以在下面對話框用講的</span></div>
+    <div id="s104" class="job hide" style="background:#eef5ff;border-color:#c9dcf5"></div>
     <div class="legend">人效燈號：<span class="lt-g">🟢 優秀（人力精實、人效高）</span><span class="lt-y">🟡 正常（人力與營收相稱）</span><span class="lt-r">🔴 偏低（人可能排太多）</span></div>
     <div class="tblwrap" id="tblWrap"><div class="mute" style="padding:12px">還沒有班表。先上傳兩個檔，再按「AI 排初稿」。</div></div>
   </div>
@@ -265,7 +266,7 @@ function apply(j,first){
   prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
   S=j;
   $('dsb').textContent='🕒 最後更新 '+(j.updated?j.updated.replace('T',' '):'（還沒有資料）')+'　·　'+j.store+' 號店 '+j.storeName+' '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月　·　本月 AI 費用約 NT$'+(j.cost||0);
-  renderFiles();renderJob();renderTable();renderCheck();renderReport();renderChat();
+  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();
   if(first&&j.note!==undefined)$('note').value=j.note||'';
   var running=j.job&&j.job.status==='running';
   $('draftBtn').disabled=running;$('chatBtn').disabled=running;$('undoBtn').disabled=running||!j.canUndo;$('expBtn').disabled=!j.schedule;
@@ -274,7 +275,21 @@ function apply(j,first){
 }
 function renderFiles(){
   var f=S.settingsFiles||[];$('setList').innerHTML=f.length?f.map(function(x){return '✅ '+esc(x.name)}).join('<br>'):'還沒上傳';
-  var t=S.template;$('tplInfo').innerHTML=t?('✅ '+esc(t.name)+'<br>班表：'+esc(t.info.title)+'｜'+t.info.days.length+' 天｜'+t.info.emps.length+' 人：'+t.info.emps.map(function(e){return esc(e.name)}).join('、')):'還沒上傳';
+  var t=S.template;$('tplInfo').innerHTML=t?((t.source==='104'?'✅ 104 自動取得（'+fmtTs(t.fetched*1000)+'）':'✅ '+esc(t.name))+'<br>班表：'+esc(t.info.title)+'｜'+t.info.days.length+' 天｜'+t.info.emps.length+' 人：'+t.info.emps.map(function(e){return esc(e.name)}).join('、')):'還沒上傳';
+}
+function fmtTs(ms){if(!ms)return '';var d=new Date(ms);return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+function render104(){
+  var x=S.s104,el=$('s104');if(!x){el.classList.add('hide');return}
+  el.classList.remove('hide');
+  var h='📥 <b>104 班表</b>：'+esc(x.name||'')+'（'+esc(x.status||'')+'）｜104 最後存檔 '+fmtTs(x.modify)+'｜工作台 '+fmtTs(x.fetched*1000)+' 讀取';
+  if(x.diff===null||x.diff===undefined)h+='<br>104 這份班表還沒有排班內容，工作台照現在的排。';
+  else if(!x.diff)h+='<br>✅ 工作台和 104 一模一樣。';
+  else{h+='<br>⚠ 工作台和 104 有 <b>'+x.diff+'</b> 格不同（工作台改的還沒匯入 104，或 104 有新修改還沒讀到）：';
+    h+='<div class="mute" style="max-height:120px;overflow:auto">'+x.diffs.map(function(d){return esc(d.name)+' '+d.day+' 號：工作台「'+esc(d.ws||'空白')+'」／104「'+esc(d.s104||'空白')+'」'}).join('<br>')+'</div>'}
+  if(x.missing&&x.missing.length)h+='<br>⚠ 104 班表裡有、範本名單沒有：'+x.missing.map(esc).join('、');
+  if(x.unknown)h+='<br><span class="mute">104 另有 '+x.unknown+' 筆沒有時段的特殊資料（例如請假類），沒有帶進工作台。</span>';
+  h+='<div class="mute">每天早上自動讀 104。店長直接在 104 改班也可以，隔天工作台就會跟上。</div>';
+  el.innerHTML=h;
 }
 function renderJob(){
   var j=S.job||{},el=$('job');

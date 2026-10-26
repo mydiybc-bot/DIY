@@ -670,6 +670,165 @@ def _chat_worker(store, ym, text):
         _job(k, status="error", step=f"對話失敗：{type(ex).__name__}: {str(ex)[:300]}")
 
 
+# ───────────────────────── 每天比對 104（2026-10-26 經營者：店長可直接在 104 改，儀表板每天自動跟上） ─────────────────────────
+# 資料由本機 Claude 每天用內建瀏覽器（經營者登入的 104）讀出（tools/sync104/extract.js），再由 tools/sync104/push.py 送到這裡。
+# 規則：104 班表有排班內容、而且 104 存檔時間比上次採用的新 → 工作台改成 104 的版本（舊的放進復原紀錄）；
+#       104 沒有內容（還沒排）→ 不動工作台，只記錄；工作台改了還沒匯入 104 → 不動，畫面顯示差幾格。
+STATUS_104 = {1: "還沒排", 3: "已發佈", 5: "排班中"}
+
+
+def _hm(ms, base_day):
+    """104 的毫秒時間 → 'HH:MM'（台灣時間；跨到隔天加「次日」）"""
+    t = dt.datetime.utcfromtimestamp(ms / 1000) + dt.timedelta(hours=8)
+    s = t.strftime("%H:%M")
+    return ("次日" + s) if t.date() > base_day else s
+
+
+def _cells_from_104(item, info, shifts_named):
+    """104 一份班表 → {工號: {日: 格子}}；回傳 (班表, 對不上的員工名, 看不懂的種類數)"""
+    by_name = {}
+    for e in info["emps"]:
+        by_name.setdefault(e["name"], e["id"])
+    emp_no = {}
+    missing = []
+    for e in item.get("emps") or []:
+        if e["name"] in by_name:
+            emp_no[str(e["empId"])] = by_name[e["name"]]
+        else:
+            missing.append(e["name"])
+    tags, pos, cls = item.get("tags") or {}, item.get("pos") or {}, item.get("cls") or {}
+    month_days = {d["d"] for d in info["days"]}
+    m0 = int(item["ym"][4:])
+    raw = {}
+    unknown = 0
+    for empId, base, typ, frm, to, tag_ids, pos_id, cls_id in item.get("shifts") or []:
+        no = emp_no.get(str(empId))
+        if not no:
+            continue
+        bd = (dt.datetime.utcfromtimestamp(base / 1000) + dt.timedelta(hours=8)).date()
+        if bd.month != m0 or bd.day not in month_days:
+            continue
+        c = raw.setdefault(no, {}).setdefault(bd.day, {"type": "", "segs": [], "dtag": []})
+        tag_names = [tags.get(str(t), "") for t in tag_ids if tags.get(str(t))]
+        if typ in (0, 8, 10) and cls.get(str(cls_id)):   # 休假類（例假日／休息日／國定假日…），種類看 classId
+            c["type"] = cls[str(cls_id)]
+        elif typ == 3 and frm and to:
+            c["segs"].append((frm, _hm(frm, bd), _hm(to, bd), "、".join(tag_names), pos.get(str(pos_id), "")))
+        elif typ == 2:
+            c["dtag"] += tag_names
+        else:
+            unknown += 1
+    out = {}
+    named = {tuple(map(tuple, v)): k for k, v in (shifts_named or {}).items()}
+    for no, days in raw.items():
+        row = {}
+        for d, c in days.items():
+            segs = sorted(c["segs"])
+            plain = tuple((s, e) for _, s, e, t, p in segs if not t and not p)
+            if segs and len(plain) == len(segs) and plain in named:
+                body = named[plain]
+            else:
+                body = ",".join(f"{s}-{e}" + (f"@{t}" if t else "") + (f"#{p}" if p else "") for _, s, e, t, p in segs)
+            if c["type"] and body:
+                body = c["type"] + ":" + body
+            elif c["type"]:
+                body = c["type"]
+            if c["dtag"]:
+                body = "[" + "、".join(dict.fromkeys(c["dtag"])) + "]" + body
+            row[str(d)] = body
+        out[no] = row
+    for e in info["emps"]:
+        out.setdefault(e["id"], {})
+        for d in info["days"]:
+            out[e["id"]].setdefault(str(d["d"]), "")
+    return out, missing, unknown
+
+
+def _canon(v, shifts, dtypes):
+    try:
+        c = parse_cell(v, shifts, dtypes)
+    except ValueError:
+        return "壞:" + (v or "")
+    return json.dumps([c["type"], c["dtag"], c["segs"]], ensure_ascii=False)
+
+
+def _diff(st, a, b):
+    """兩份班表不同的格子：[(工號, 日, a 格子, b 格子)]"""
+    shifts = (st.get("ext") or {}).get("shifts") or {}
+    dtypes = set(st["template"]["info"]["dayTypes"])
+    out = []
+    for e in st["template"]["info"]["emps"]:
+        for d in st["template"]["info"]["days"]:
+            k = str(d["d"])
+            va, vb = ((a or {}).get(e["id"]) or {}).get(k, ""), ((b or {}).get(e["id"]) or {}).get(k, "")
+            if _canon(va, shifts, dtypes) != _canon(vb, shifts, dtypes):
+                out.append((e["id"], d["d"], va, vb))
+    return out
+
+
+def sync104(payload):
+    """收 tools/sync104/push.py 送來的 104 班表；回傳每份的處理結果"""
+    results = []
+    for item in (payload or {}).get("items") or []:
+        try:
+            store, ym = int(item["store"]), str(item["ym"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if store not in STORES or not re.fullmatch(r"20\d{2}(0[1-9]|1[0-2])", ym):
+            continue
+        if item.get("error"):
+            results.append({"store": store, "ym": ym, "error": item["error"]})
+            continue
+        k = _key(store, ym)
+        with _glock:
+            if (_jobs.get(k) or {}).get("status") == "running":
+                results.append({"store": store, "ym": ym, "skipped": "AI 正在處理，下次再同步"})
+                continue
+        with _lock(k):
+            st = _load(store, ym)
+            res = {"store": store, "ym": ym, "name": item.get("name"), "status": STATUS_104.get(item.get("status"), str(item.get("status")))}
+            if item.get("template_b64"):
+                raw = base64.b64decode(item["template_b64"])
+                try:
+                    info = template_info(raw)
+                    st["template"] = {"name": f"{item.get('name', '')}（104 自動取得）.xlsx", "b64": item["template_b64"],
+                                      "info": info, "source": "104", "fetched": time.time()}
+                    res["template"] = "已更新"
+                except Exception as ex:   # noqa: BLE001
+                    res["template"] = f"範本讀不了：{ex}"
+            if not st.get("template"):
+                res["error"] = "沒有範本，無法對照"
+                results.append(res)
+                continue
+            cells, missing, unknown = _cells_from_104(item, st["template"]["info"], (st.get("ext") or {}).get("shifts"))
+            has_content = any(v for row in cells.values() for v in row.values())
+            emps = {e["empId"]: e for e in item.get("emps") or []}
+            st["s104"] = {"id": item.get("id"), "name": item.get("name"), "status": res["status"], "modify": item.get("modify"),
+                          "fetched": time.time(), "cells": cells, "missing": missing, "unknown": unknown,
+                          "emps": [{"name": e["name"], "mustHour": e.get("mustHour"), "annualHour": e.get("annualHour"),
+                                    "compHour": e.get("compHour")} for e in emps.values()]}
+            adopted = False
+            if has_content and (not st.get("schedule") or (item.get("modify") or 0) > (st.get("s104_adopted") or 0)):
+                d = _diff(st, st.get("schedule"), cells) if st.get("schedule") else [1]
+                if d:
+                    if st.get("schedule"):
+                        st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "104 同步前"}]
+                    st["schedule"] = cells
+                    adopted = True
+                    st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(), "text":
+                        f"📥 已照 104 的班表（{res['status']}，104 最後存檔 {dt.datetime.utcfromtimestamp((item.get('modify') or 0) / 1000) + dt.timedelta(hours=8):%m/%d %H:%M}）更新工作台"
+                        + (f"，跟原本差 {len(d)} 格。" if st.get("history") and isinstance(d[0], tuple) else "。")}]
+                st["s104_adopted"] = item.get("modify") or 0
+            if st.get("schedule"):
+                st["check"] = run_check(st)
+                st["s104"]["diff"] = len(_diff(st, st["schedule"], cells)) if has_content else None
+            res.update(adopted=adopted, has_content=has_content, missing=missing, unknown=unknown,
+                       diff=st["s104"].get("diff"))
+            _save(st)
+            results.append(res)
+    return results
+
+
 # ───────────────────────── 給前端的狀態 ─────────────────────────
 
 def _public(st):
@@ -691,10 +850,23 @@ def _public(st):
                     c = {"type": "", "segs": [], "dtag": "", "hours": 0, "bad": True}
                 cells[eid][d] = c
     month_cost = round(sum(u.get("twd", 0) for u in st.get("usage") or []), 2)
+    s104 = None
+    if st.get("s104"):
+        x = st["s104"]
+        diffs = []
+        if tpl and st.get("schedule") and x.get("diff"):
+            names = {e["id"]: e["name"] for e in tpl["info"]["emps"]}
+            for eid, d, a, b in _diff(st, st["schedule"], x["cells"])[:30]:
+                diffs.append({"name": names.get(eid, eid), "day": d, "ws": a, "s104": b})
+        s104 = {"name": x.get("name"), "status": x.get("status"), "modify": x.get("modify"), "fetched": x.get("fetched"),
+                "diff": x.get("diff"), "diffs": diffs, "missing": x.get("missing") or [], "emps": x.get("emps") or [],
+                "unknown": x.get("unknown") or 0}
     return {
         "ok": True, "store": st["store"], "storeName": STORES.get(st["store"], ""), "ym": st["ym"],
         "settingsFiles": [{"name": f["name"], "chars": len(f["text"])} for f in st.get("settings_files") or []],
-        "note": st.get("note", ""), "template": ({"name": tpl["name"], "info": tpl["info"]} if tpl else None),
+        "note": st.get("note", ""), "s104": s104,
+        "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
+                      "fetched": tpl.get("fetched")} if tpl else None),
         "ext": st.get("ext"), "schedule": st.get("schedule"), "cells": cells, "report": st.get("report", ""),
         "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
@@ -713,6 +885,24 @@ def handle(path, body):
         return 401, {"ok": False, "error": err}
     if act == "login":
         return 200, {"ok": True, "as": str(who), "stores": STORES}
+    if act == "sync104":
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以送 104 班表"}
+        return 200, {"ok": True, "results": sync104(body.get("payload"))}
+    if act == "sync104_status":
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以看"}
+        out = []
+        for p in sorted(_dir().glob("*-*.json")):
+            try:
+                s = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            x = s.get("s104") or {}
+            out.append({"store": s.get("store"), "ym": s.get("ym"), "name": x.get("name"), "status": x.get("status"),
+                        "fetched": x.get("fetched"), "diff": x.get("diff"),
+                        "template": (s.get("template") or {}).get("source")})
+        return 200, {"ok": True, "items": out}
     try:
         store = int(body.get("store") if str(who) == "hq" else who)
     except (TypeError, ValueError):
