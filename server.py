@@ -28,6 +28,7 @@ from scoreboard import build_public_scoreboard
 from training_logic import build_progress_snapshot, build_question_text, build_report_record, create_session, respond
 from voice_transcription import TranscriptionError, transcribe_audio
 from recipe_auth import recipe_auth, call_anthropic, verify_req_identity, clean_translate_payload
+import schedule_ws   # 🗓 門市排班工作台（2026-10-26，經營者同意加這一行）
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -279,6 +280,11 @@ class TrainingHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": err}, status=401)
                 return
             status_code, resp_data = call_anthropic(clean_translate_payload(body.get("payload") or {}))
+            self.send_json(resp_data, status=status_code)
+            return
+
+        if parsed.path.startswith("/api/schedule/"):   # 🗓 門市排班工作台：整個交給 schedule_ws.py（2026-10-26 經營者同意）
+            status_code, resp_data = schedule_ws.handle(parsed.path, self.read_json())
             self.send_json(resp_data, status=status_code)
             return
 

@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🗓 門市排班工作台</title>
+<!-- 2026-10-26 新建（經營者：各店店長在這一頁排每月班表，取代 Claude Chat 各店排班專案；先用高雄SKM 試做）。
+     流程：上傳「每月排班設定表」＋「104 匯入範本（時間排班）」→ AI 排初稿（Sonnet 5.5，檢查程式把關，沒過自動退回修正）
+     → 日曆點格子改／對話框用講的改 → 下載填好的 104 匯入檔。後端 schedule_ws.py（/api/schedule/*），身分＝權限中心 store_N／task_hq。
+     中文輸入：對話框只建一次，收到回覆只重畫對話紀錄（#chatLog），不碰 #chatIn。 -->
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--ink:#2b2b2b;--mute:#6b6b6b;--line:#e3ded3;--acc:#c0622f;--acc2:#8a4a25;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828;
+  --wk:#fbf3e6;--rest:#eef1f5;--hol:#fde8e8;--chg:#fff3a6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+a{color:var(--acc2)}
+header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+header h1{font-size:18px;margin:0}
+header .sp{flex:1}
+.btn{border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:8px;padding:7px 14px;font-size:14px;cursor:pointer}
+.btn.ghost{background:#fff;color:var(--acc)}
+.btn.sm{padding:4px 10px;font-size:13px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.arm{background:var(--bad);border-color:var(--bad)}
+.dsb{padding:6px 16px;font-size:12px;color:var(--mute);background:#fffaf2;border-bottom:1px solid var(--line)}
+main{max-width:1400px;margin:0 auto;padding:12px 16px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0}
+.card h2{font-size:16px;margin:0 0 8px}
+.mute{color:var(--mute);font-size:13px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+.file{border:1px dashed var(--line);border-radius:10px;padding:10px;flex:1;min-width:260px}
+.file b{display:block;margin-bottom:4px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;background:#f1ece2;margin:2px 4px 2px 0}
+.tag.ok{background:#e6f3e7;color:var(--ok)}.tag.bad{background:#fdeaea;color:var(--bad)}.tag.warn{background:#fff3e0;color:var(--warn)}
+textarea,input[type=text],input[type=password],select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff}
+textarea{width:100%;resize:vertical}
+#login{max-width:420px;margin:40px auto}
+#login label{display:block;margin:10px 0 4px}
+#login select,#login input{width:100%}
+.err{color:var(--bad);font-size:13px;min-height:1.2em}
+.job{padding:8px 12px;border-radius:8px;background:#fff7e8;border:1px solid #f1d9ae;margin-top:8px}
+.job.error{background:#fdeaea;border-color:#f3c1c1;color:var(--bad)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid #e2b77c;border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table.sch{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%}
+table.sch th,table.sch td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:3px 4px;text-align:center;white-space:nowrap}
+table.sch thead th{background:#faf7f1;position:sticky;top:0;z-index:2}
+table.sch .nm{position:sticky;left:0;background:#fff;z-index:3;text-align:left;min-width:92px}
+table.sch thead .nm{z-index:4;background:#faf7f1}
+table.sch th.wk{background:#f6e7cf}
+table.sch td.c{min-width:46px;cursor:pointer}
+table.sch td.c:hover{outline:2px solid var(--acc);outline-offset:-2px}
+td.c.wk{background:var(--wk)}
+td.c.rest{background:var(--rest);color:#56606b}
+td.c.hol{background:var(--hol);color:#9b2c2c}
+td.c.chg{background:var(--chg)!important}
+td.c.bad{color:var(--bad);font-weight:700}
+.c .h{display:block;font-size:11px;color:var(--mute)}
+.c .t{display:block;font-size:11px;color:var(--acc2)}
+tr.sum td{background:#faf7f1;font-size:11px}
+.lt-g{color:var(--ok)}.lt-y{color:var(--warn)}.lt-r{color:var(--bad)}
+.legend{font-size:12px;color:var(--mute);margin:6px 0}
+.legend span{display:inline-block;margin-right:10px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:3px;border:1px solid var(--line)}
+#chatLog{height:360px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fdfcf9}
+.msg{margin:6px 0;max-width:92%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-break:break-word}
+.msg.me{background:#f3e3d4;margin-left:auto}
+.msg.ai{background:#fff;border:1px solid var(--line)}
+.msg .meta{font-size:11px;color:var(--mute);margin-top:3px}
+#chatIn{min-height:64px;margin-top:8px}
+.chk li{margin:2px 0}
+.hrs{border-collapse:collapse;font-size:13px;margin:6px 0}
+.hrs td,.hrs th{border-bottom:1px solid var(--line);padding:3px 8px;text-align:right}
+.hrs td:first-child,.hrs th:first-child{text-align:left}
+.report{font-size:13px;overflow-x:auto}
+.report table{border-collapse:collapse;margin:6px 0}
+.report td,.report th{border:1px solid var(--line);padding:3px 7px}
+.report h1,.report h2,.report h3{font-size:15px;margin:12px 0 6px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modal .box{background:#fff;border-radius:12px;padding:16px;max-width:460px;width:100%}
+.modal label{display:block;margin:8px 0 4px;font-size:13px}
+.modal select,.modal input{width:100%}
+ol.sop li{margin:3px 0}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <a href="/static/hub.html">⬅ 回首頁</a>
+  <h1>🗓 門市排班工作台 <span class="tag">試做中</span></h1>
+  <span class="sp"></span>
+  <span id="who" class="mute"></span>
+  <select id="storeSel" class="hide"></select>
+  <select id="ymSel"></select>
+  <button class="btn ghost sm hide" id="logoutBtn">登出</button>
+</header>
+<div class="dsb" id="dsb">🕒 尚未載入</div>
+
+<div id="login" class="card">
+  <h2>登入</h2>
+  <div class="mute">用門市的密碼登入（跟「自己做決策中心」同一組）。</div>
+  <label>身分</label>
+  <select id="lgAs"></select>
+  <label>密碼</label>
+  <input type="password" id="lgPwd" autocomplete="current-password">
+  <div class="err" id="lgErr"></div>
+  <button class="btn" id="lgBtn">登入</button>
+</div>
+
+<main id="app" class="hide">
+  <div class="card">
+    <h2>① 上傳兩個檔</h2>
+    <div class="row">
+      <div class="file"><b>每月排班設定表（Excel）</b>
+        <input type="file" id="fSet" accept=".xlsx,.xls,.xlsm,.csv,.txt">
+        <div id="setList" class="mute"></div></div>
+      <div class="file"><b>104 匯入範本（時間排班）</b>
+        <div class="mute">104 → 排班 → 本店當月班表 → 更多功能 → 匯入班表 → 選「時間排班」→ 下載範本（每月都要重新下載）</div>
+        <input type="file" id="fTpl" accept=".xlsx">
+        <div id="tplInfo" class="mute"></div></div>
+    </div>
+    <details style="margin-top:8px"><summary class="mute">補充說明（選填，例：這個月週三晚班只排 1 人）</summary>
+      <textarea id="note" rows="3" placeholder="想交代 AI 的事寫這裡，存好再按「AI 排初稿」"></textarea>
+      <button class="btn ghost sm" id="noteBtn">存說明</button> <span id="noteMsg" class="mute"></span>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>② AI 排初稿</h2>
+    <div class="row">
+      <button class="btn" id="draftBtn">🤖 AI 排初稿</button>
+      <span class="mute">AI 會照設定表排整個月，再用檢查程式驗過（約 3～5 分鐘，可以先做別的事）。</span>
+    </div>
+    <div id="job" class="job hide"></div>
+  </div>
+
+  <div class="card" id="schCard">
+    <div class="row"><h2 style="margin:0">③ 班表</h2><span class="sp" style="flex:1"></span>
+      <button class="btn ghost sm" id="undoBtn">↩ 復原上一步</button>
+      <button class="btn sm" id="expBtn">⬇ 下載 104 匯入檔</button></div>
+    <div class="legend"><span><i class="sw" style="background:var(--wk)"></i>假日</span><span><i class="sw" style="background:var(--rest)"></i>例假／休息</span>
+      <span><i class="sw" style="background:var(--hol)"></i>國定假日／特休</span><span><i class="sw" style="background:var(--chg)"></i>剛改過</span>
+      <span>點格子可以改班；也可以在下面對話框用講的</span></div>
+    <div class="legend">人效燈號：<span class="lt-g">🟢 優秀（人力精實、人效高）</span><span class="lt-y">🟡 正常（人力與營收相稱）</span><span class="lt-r">🔴 偏低（人可能排太多）</span></div>
+    <div class="tblwrap" id="tblWrap"><div class="mute" style="padding:12px">還沒有班表。先上傳兩個檔，再按「AI 排初稿」。</div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>💬 跟 AI 說要怎麼改</h2>
+      <div id="chatLog"><div class="mute">例：「15 號把王大明改晚班」「李小美想 20 號休假，可以嗎？」「為什麼 22 號只有 2 個人？」</div></div>
+      <textarea id="chatIn" placeholder="打字跟 AI 說（Enter 送出，Shift+Enter 換行）"></textarea>
+      <div class="row" style="margin-top:6px"><button class="btn" id="chatBtn">送出</button><span id="chatMsg" class="mute"></span></div>
+    </div>
+    <div class="card">
+      <h2>✅ 檢查結果</h2>
+      <div id="chk" class="mute">排出初稿後會自動檢查（104 格式、七休一、連上天數、每天人力、時數）。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <details id="repBox"><summary><b>📋 排班分析報告</b> <span class="mute">（AI 排初稿時寫的，點開看）</span></summary>
+      <div id="report" class="report mute">還沒有報告。</div></details>
+  </div>
+
+  <div class="card">
+    <h2>④ 匯入 104（照順序，一步都不能省）</h2>
+    <ol class="sop">
+      <li>按上面「⬇ 下載 104 匯入檔」，存到電腦。</li>
+      <li>104 → 排班 → 本店當月班表 → 更多功能 → <b>匯入班表</b>。</li>
+      <li>選「<b>時間排班</b>」→ 員工<b>全選</b> → 拖入剛下載的檔 → 確定。</li>
+      <li>回到班表畫面後<b>一定要按右上「儲存」</b>（不按＝白做）。</li>
+      <li>確認「最後存檔時間」有更新、每人總工時不是 0。</li>
+      <li>「班表異常處理」視窗：全部是「提醒」可以發佈；出現「禁止」截圖回報總部。</li>
+      <li>104 登入有時效，逾時沒存檔的修改會全部不見；匯入後還要手動改，改一項存一次。</li>
+    </ol>
+    <div class="mute">匯入 104 之後，以 104 的班表為準；之後在 104 直接改班也可以。</div>
+  </div>
+</main>
+
+<div class="modal" id="edModal"><div class="box">
+  <h2 id="edTitle" style="font-size:16px;margin:0 0 6px">改班</h2>
+  <div class="mute" id="edNow"></div>
+  <label>改成</label>
+  <select id="edSel"></select>
+  <label>或自訂（進階）：例 10:20-12:00,12:30-15:00@交流會議</label>
+  <input type="text" id="edTxt">
+  <div class="err" id="edErr"></div>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn ghost" id="edCancel">取消</button>
+    <button class="btn" id="edOk">確定修改</button>
+  </div>
+</div></div>
+
+<script>
+(function(){
+var API='/api/schedule/';
+var STORES={1:'精明',2:'草悟道',3:'南京',4:'士林',5:'Focus',6:'新竹',7:'板橋',8:'新店',9:'中壢',10:'藝文',11:'A13',12:'SKM'};
+var AUTH_KEY='sw_auth_v1', TTL=12*3600*1000;
+var auth=null, S=null, prevRaw={}, chg={}, pollT=null, edCur=null, pendingText='';
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+
+function loadAuth(){try{var a=JSON.parse(localStorage.getItem(AUTH_KEY)||'null');if(a&&a.exp>Date.now())return a}catch(_){}return null}
+function saveAuth(a){try{localStorage.setItem(AUTH_KEY,JSON.stringify(a))}catch(_){}}
+function clearAuth(){try{localStorage.removeItem(AUTH_KEY)}catch(_){}}
+
+function post(act,data){
+  var body=Object.assign({as:auth&&auth.as,pwd:auth&&auth.pwd,store:curStore(),ym:$('ymSel').value},data||{});
+  return fetch(API+act,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json().then(function(j){if(r.status===401){clearAuth();showLogin(j.error||'請重新登入')}if(!j.ok)throw new Error(j.error||('錯誤 '+r.status));return j})});
+}
+function curStore(){return auth&&auth.as==='hq'?$('storeSel').value:(auth&&auth.as)}
+
+/* ── 登入 ── */
+(function(){var o='';for(var k in STORES)o+='<option value="'+k+'">'+k+' 號店　'+STORES[k]+'</option>';o+='<option value="hq">🏢 總部</option>';$('lgAs').innerHTML=o;$('lgAs').value='12';
+  var so='';for(var k2 in STORES)so+='<option value="'+k2+'">'+k2+' '+STORES[k2]+'</option>';$('storeSel').innerHTML=so;$('storeSel').value='12';
+  var d=new Date(),opts='';for(var i=-1;i<=2;i++){var x=new Date(d.getFullYear(),d.getMonth()+i,1);var v=x.getFullYear()+String(x.getMonth()+1).padStart(2,'0');opts+='<option value="'+v+'">'+x.getFullYear()+' 年 '+(x.getMonth()+1)+' 月</option>'}
+  $('ymSel').innerHTML=opts;var nx=new Date(d.getFullYear(),d.getMonth()+1,1);$('ymSel').value=nx.getFullYear()+String(nx.getMonth()+1).padStart(2,'0');})();
+function showLogin(msg){$('login').classList.remove('hide');$('app').classList.add('hide');$('logoutBtn').classList.add('hide');$('storeSel').classList.add('hide');$('who').textContent='';$('lgErr').textContent=msg||''}
+$('lgBtn').onclick=function(){
+  var a={as:$('lgAs').value,pwd:$('lgPwd').value};if(!a.pwd){$('lgErr').textContent='請輸入密碼';return}
+  $('lgBtn').disabled=true;$('lgErr').textContent='驗證中…';
+  fetch(API+'login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)}).then(function(r){return r.json()})
+   .then(function(j){$('lgBtn').disabled=false;if(!j.ok){$('lgErr').textContent=j.error||'登入失敗';return}
+     a.exp=Date.now()+TTL;auth=a;saveAuth(a);$('lgPwd').value='';enter()})
+   .catch(function(){$('lgBtn').disabled=false;$('lgErr').textContent='連不上伺服器，請再試一次'});
+};
+$('lgPwd').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.isComposing)$('lgBtn').click()});
+$('logoutBtn').onclick=function(){clearAuth();auth=null;showLogin('')};
+function enter(){$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');
+  if(auth.as==='hq'){$('storeSel').classList.remove('hide');$('who').textContent='🏢 總部'}else{$('who').textContent=auth.as+' 號店 '+STORES[auth.as]}
+  prevRaw={};chg={};refresh(true)}
+$('storeSel').onchange=$('ymSel').onchange=function(){prevRaw={};chg={};$('chatLog').innerHTML='';refresh(true)};
+
+/* ── 讀狀態、重畫結果區（不碰輸入框） ── */
+function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
+function apply(j,first){
+  if(S&&S.schedule){for(var eid in j.schedule||{}){var row=j.schedule[eid]||{};for(var d in row){var k=eid+'|'+d;if(prevRaw[k]!==undefined&&prevRaw[k]!==row[d])chg[k]=1}}}
+  prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
+  S=j;
+  $('dsb').textContent='🕒 最後更新 '+(j.updated?j.updated.replace('T',' '):'（還沒有資料）')+'　·　'+j.store+' 號店 '+j.storeName+' '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月　·　本月 AI 費用約 NT$'+(j.cost||0);
+  renderFiles();renderJob();renderTable();renderCheck();renderReport();renderChat();
+  if(first&&j.note!==undefined)$('note').value=j.note||'';
+  var running=j.job&&j.job.status==='running';
+  $('draftBtn').disabled=running;$('chatBtn').disabled=running;$('undoBtn').disabled=running||!j.canUndo;$('expBtn').disabled=!j.schedule;
+  if(running&&!pollT)pollT=setInterval(function(){refresh()},3000);
+  if(!running&&pollT){clearInterval(pollT);pollT=null}
+}
+function renderFiles(){
+  var f=S.settingsFiles||[];$('setList').innerHTML=f.length?f.map(function(x){return '✅ '+esc(x.name)}).join('<br>'):'還沒上傳';
+  var t=S.template;$('tplInfo').innerHTML=t?('✅ '+esc(t.name)+'<br>班表：'+esc(t.info.title)+'｜'+t.info.days.length+' 天｜'+t.info.emps.length+' 人：'+t.info.emps.map(function(e){return esc(e.name)}).join('、')):'還沒上傳';
+}
+function renderJob(){
+  var j=S.job||{},el=$('job');
+  if(!j.status||(j.status==='done'&&!j.step)){el.classList.add('hide');return}
+  el.classList.remove('hide');el.classList.toggle('error',j.status==='error');
+  el.innerHTML=(j.status==='running'?'<span class="spin"></span>':j.status==='error'?'⚠ ':'✅ ')+esc(j.step||'');
+}
+function isWk(d){var t=S.template.info.days.find(function(x){return x.d==d});return t&&(t.wd==='六'||t.wd==='日')}
+function short(raw){
+  raw=raw||'';var dt='',m=raw.match(/^\[([^\]]+)\](.*)$/);if(m){dt=m[1];raw=m[2]}
+  var typ='',sh=(S.ext&&S.ext.shifts)||{};var m2=raw.match(/^([^:：0-9]+)[:：](.+)$/);if(m2&&(S.template.info.dayTypes||[]).indexOf(m2[1])>=0){typ=m2[1];raw=m2[2]}
+  if((S.template.info.dayTypes||[]).indexOf(raw)>=0)return {main:raw.replace('假日','').replace('日','')||raw,dt:dt,typ:raw};
+  var main=sh[raw]?raw.replace(/^(平日|假日)/,''):(raw?raw.split(',')[0].split('@')[0].split('#')[0]+'…':'');
+  return {main:main,dt:dt,typ:typ};
+}
+function revOf(d){var r=(S.ext&&S.ext.revenue)||{};if(r.special&&r.special[d])return +r.special[d];return isWk(d)?+(r.weekend||0):+(r.weekday||0)}
+function light(d,v){var wk=isWk(d)||((S.ext&&S.ext.revenue&&S.ext.revenue.special)||{})[d];var lo=wk?1200:500,hi=wk?1500:750;return v>hi?'🟢':v>=lo?'🟡':'🔴'}
+function renderTable(){
+  if(!S.schedule||!S.template){return}
+  var info=S.template.info,h='<table class="sch"><thead><tr><th class="nm">夥伴</th>';
+  info.days.forEach(function(d){h+='<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});
+  h+='<th>時數</th></tr></thead><tbody>';
+  var hrs={};((S.check&&S.check.hours)||[]).forEach(function(x){hrs[x.id]=x});
+  var dayHrs={},dayN={};
+  info.emps.forEach(function(e){
+    h+='<tr><td class="nm">'+esc(e.name)+'<br><span class="mute">'+esc(e.id)+'</span></td>';
+    info.days.forEach(function(d){
+      var raw=((S.schedule[e.id]||{})[d.d])||'',c=((S.cells[e.id]||{})[d.d])||{segs:[]},sh=short(raw),cls='c';
+      if(isWk(d.d))cls+=' wk';
+      if(c.type==='例假日'||c.type==='休息日')cls+=' rest';
+      if(c.type==='國定假日'||c.type==='特休')cls+=' hol';
+      if(c.bad)cls+=' bad';
+      if(chg[e.id+'|'+d.d])cls+=' chg';
+      var onsite=(c.segs||[]).filter(function(s){return s[2].indexOf('支援')<0&&!s[3]});
+      if(onsite.length){dayN[d.d]=(dayN[d.d]||0)+1;dayHrs[d.d]=(dayHrs[d.d]||0)+onsite.reduce(function(a,s){return a+(mm(s[1])-mm(s[0]))/60},0)}
+      var tags=(c.segs||[]).map(function(s){return s[2]}).filter(Boolean);if(c.dtag)tags.unshift(c.dtag);
+      h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw)+'">'+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
+    });
+    var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td></tr>';
+  });
+  h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+='<td></td></tr>';
+  h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+='<td></td></tr>';
+  h+='<tr class="sum"><td class="nm">人效 rev/h</td>';info.days.forEach(function(d){var rv=revOf(d.d),hh=dayHrs[d.d]||0;h+='<td>'+(rv&&hh?light(d.d,rv/hh)+'<br>'+Math.round(rv/hh):'')+'</td>'});h+='<td></td></tr>';
+  h+='</tbody></table>';$('tblWrap').innerHTML=h;
+}
+function mm(t){var nx=t.indexOf('次日')===0;t=t.replace('次日','');var p=t.split(':');return (+p[0])*60+(+p[1])+(nx?1440:0)}
+function renderCheck(){
+  var c=S.check;if(!c){return}
+  var h='<div>'+(c.ok?'<span class="tag ok">✅ 沒有一定要改的問題</span>':'<span class="tag bad">❌ '+c.errors.length+' 項一定要改</span>')+(c.warns.length?'<span class="tag warn">⚠ '+c.warns.length+' 項請確認</span>':'')+'</div>';
+  if(c.errors.length)h+='<ul class="chk">'+c.errors.map(function(x){return '<li style="color:var(--bad)">❌ '+esc(x)+'</li>'}).join('')+'</ul>';
+  if(c.warns.length)h+='<ul class="chk">'+c.warns.map(function(x){return '<li style="color:var(--warn)">⚠ '+esc(x)+'</li>'}).join('')+'</ul>';
+  if(c.hours&&c.hours.length){h+='<table class="hrs"><tr><th>夥伴</th><th>天數</th><th>正常工時</th><th>休息日／國定出勤</th><th>例假</th><th>休息</th><th>國定</th><th>特休</th></tr>'+c.hours.map(function(x){return '<tr><td>'+esc(x.name)+'</td><td>'+x.days+'</td><td>'+(x.regular!=null?x.regular:x.hours)+'h</td><td>'+(x.ot?x.ot+'h':'—')+'</td><td>'+x['例假']+'</td><td>'+x['休息']+'</td><td>'+x['國定']+'</td><td>'+x['特休']+'</td></tr>'}).join('')+'</table>'}
+  $('chk').classList.remove('mute');$('chk').innerHTML=h;
+}
+function md(s){
+  var L=esc(s).split('\n'),out=[],i=0;
+  function inl(x){return x.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
+  while(i<L.length){var l=L[i];
+    if(/^\s*\|/.test(l)){var rows=[];while(i<L.length&&/^\s*\|/.test(L[i])){rows.push(L[i]);i++}
+      var t='<table>';rows.forEach(function(r,k){if(/^\s*\|[\s:\-|]+\|\s*$/.test(r))return;var cells=r.trim().replace(/^\||\|$/g,'').split('|');t+='<tr>'+cells.map(function(c){return (k===0?'<th>':'<td>')+inl(c.trim())+(k===0?'</th>':'</td>')}).join('')+'</tr>'});out.push(t+'</table>');continue}
+    var m=l.match(/^(#{1,4})\s+(.*)$/);if(m){out.push('<h3>'+inl(m[2])+'</h3>');i++;continue}
+    if(/^\s*[-*]\s+/.test(l)){var li=[];while(i<L.length&&/^\s*[-*]\s+/.test(L[i])){li.push('<li>'+inl(L[i].replace(/^\s*[-*]\s+/,''))+'</li>');i++}out.push('<ul>'+li.join('')+'</ul>');continue}
+    if(/^---+$/.test(l.trim())){out.push('<hr>');i++;continue}
+    out.push(l.trim()?'<p>'+inl(l)+'</p>':'');i++}
+  return out.join('');
+}
+function renderReport(){if(S.report){$('report').classList.remove('mute');$('report').innerHTML=md(S.report)}}
+function renderChat(){
+  var log=(S.chat||[]).filter(function(m){return !m.pending});
+  var running=S.job&&S.job.status==='running';
+  if(!running)pendingText='';
+  if(!log.length&&!pendingText){return}
+  var el=$('chatLog');
+  var h=log.map(function(m){return '<div class="msg '+(m.role==='me'?'me':'ai')+'">'+esc(m.text)+(m.changed?'<div class="meta">改了 '+m.changed+' 格（日曆上黃色的格子）</div>':'')+'</div>'}).join('');
+  if(running&&pendingText)h+='<div class="msg me">'+esc(pendingText)+'</div><div class="msg ai"><span class="spin"></span>'+esc(S.job.step||'AI 正在想…')+'</div>';
+  el.innerHTML=h;el.scrollTop=el.scrollHeight;
+}
+
+/* ── 上傳 ── */
+function readB64(file){return new Promise(function(ok,no){var r=new FileReader();r.onload=function(){ok(String(r.result).split(',')[1])};r.onerror=no;r.readAsDataURL(file)})}
+function upload(input,kind){var f=input.files[0];if(!f)return;
+  (kind==='template'?$('tplInfo'):$('setList')).innerHTML='<span class="spin"></span>上傳中…';
+  readB64(f).then(function(b){return post('upload',{kind:kind,name:f.name,b64:b})}).then(function(j){input.value='';apply(j)})
+   .catch(function(e){input.value='';alert('上傳失敗：'+e.message);refresh()})}
+$('fSet').onchange=function(){upload(this,'settings')};
+$('fTpl').onchange=function(){upload(this,'template')};
+$('noteBtn').onclick=function(){post('note',{note:$('note').value}).then(function(j){$('noteMsg').textContent='已存';setTimeout(function(){$('noteMsg').textContent=''},2000);apply(j)}).catch(function(e){alert(e.message)})};
+
+/* ── 兩段確認按鈕（第一次按變紅「再按一次確認」，3 秒內再按才執行） ── */
+function twoStep(btn,label,fn){var t=null,orig=btn.textContent;
+  btn.addEventListener('click',function(){if(btn.disabled)return;
+    if(!btn.classList.contains('arm')){btn.classList.add('arm');btn.textContent=label;t=setTimeout(function(){btn.classList.remove('arm');btn.textContent=orig},3500);return}
+    clearTimeout(t);btn.classList.remove('arm');btn.textContent=orig;fn()})}
+twoStep($('draftBtn'),'再按一次確認（會重排整個月）',function(){
+  if(!S.template||!(S.settingsFiles||[]).length){alert('要先上傳「每月排班設定表」和「104 匯入範本」');return}
+  post('draft').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
+twoStep($('undoBtn'),'再按一次確認復原',function(){post('undo').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
+$('expBtn').onclick=function(){
+  post('export').then(function(j){
+    if(!j.check.ok&&!confirm('檢查還有 '+j.check.errors.length+' 項 ❌，匯入 104 可能會被擋下。確定還是要下載？'))return;
+    var bin=atob(j.b64),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
+    var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([u],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download=j.filename;document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},2000);
+  }).catch(function(e){alert(e.message)})};
+
+/* ── 對話框：輸入框只建一次，送出後只清空字、不重建 ── */
+function sendChat(){var t=$('chatIn').value.trim();if(!t||$('chatBtn').disabled)return;
+  $('chatBtn').disabled=true;$('chatMsg').textContent='';
+  pendingText=t;post('chat',{text:t}).then(function(j){$('chatIn').value='';apply(j)}).catch(function(e){$('chatBtn').disabled=false;$('chatMsg').textContent='⚠ '+e.message})}
+$('chatBtn').onclick=sendChat;
+$('chatIn').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!(window.__ime&&__ime.on)){e.preventDefault();sendChat()}});
+
+/* ── 點格子改班 ── */
+$('tblWrap').addEventListener('click',function(e){var td=e.target.closest('td.c');if(!td||!S||!S.schedule)return;
+  if(S.job&&S.job.status==='running'){alert('AI 還在處理，等它完成再改');return}
+  var eid=td.dataset.e,d=+td.dataset.d,emp=S.template.info.emps.find(function(x){return x.id===eid}),raw=((S.schedule[eid]||{})[d])||'';
+  edCur={eid:eid,d:d};$('edTitle').textContent='改班：'+emp.name+'　'+S.template.info.days.find(function(x){return x.d===d}).label;
+  $('edNow').textContent='現在：'+(raw||'（空白）');
+  var sh=Object.keys((S.ext&&S.ext.shifts)||{}),wk=isWk(d);
+  sh.sort(function(a,b){var pa=(a.indexOf(wk?'假日':'平日')===0)?0:1,pb=(b.indexOf(wk?'假日':'平日')===0)?0:1;return pa-pb});
+  var o='<option value="__keep">（選一個）</option>';sh.forEach(function(x){var t=S.ext.shifts[x].map(function(s){return s[0]+'-'+s[1]}).join('、');o+='<option value="'+esc(x)+'">'+esc(x)+'　'+t+'</option>'});
+  ['例假日','休息日','國定假日'].forEach(function(x){o+='<option value="'+x+'">'+x+'（不上班）</option>'});o+='<option value="">空白（沒排）</option>';
+  $('edSel').innerHTML=o;$('edTxt').value='';$('edErr').textContent='';$('edModal').style.display='flex'});
+$('edCancel').onclick=function(){$('edModal').style.display='none'};
+$('edOk').onclick=function(){var v=$('edTxt').value.trim()||($('edSel').value==='__keep'?null:$('edSel').value);
+  if(v===null){$('edErr').textContent='請選一個或自訂';return}
+  $('edOk').disabled=true;post('edit',{changes:[{emp:edCur.eid,day:edCur.d,value:v}]}).then(function(j){$('edOk').disabled=false;$('edModal').style.display='none';apply(j)})
+   .catch(function(e){$('edOk').disabled=false;$('edErr').textContent=e.message})};
+
+auth=loadAuth();if(auth)enter();else showLogin('');
+})();
+</script>
+</body>
+</html>
