@@ -68,7 +68,7 @@ def main():
     req = urllib.request.Request(a.url.rstrip("/") + "/api/schedule/sync104", data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=180, context=ssl_ctx() if a.url.startswith("https") else None) as r:
+        with urllib.request.urlopen(req, timeout=600, context=ssl_ctx() if a.url.startswith("https") else None) as r:
             res = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         print(f"❌ 工作台回 {e.code}：{e.read().decode('utf-8', 'replace')[:300]}")
