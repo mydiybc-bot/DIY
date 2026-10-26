@@ -14,10 +14,10 @@ var AIR_SHEET = 'ai_review';
 var AIR_HEAD = ['reviewId', 'store', 'ym', 'stars', 'people', 'partners', 'praise', 'neg_type', 'reply', 'hash', 'model', 'at'];
 var AIR_AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var AIR_MODEL = 'claude-haiku-5-5';
-var AIR_PVER = 'p2';         // 提示詞版本：改提示詞就 +1，舊版判過的會自動重判（model 欄記成 模型|版本）
+var AIR_PVER = 'p3';         // 提示詞版本：改提示詞就 +1，舊版判過的會自動重判（model 欄記成 模型|版本）
 var AIR_REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   // 食譜系統_申請單（讀 dim_role 管理者密碼）
-var AIR_BATCH = 15;          // 一次送幾則
-var AIR_PAR = 4;             // 一波並行幾批
+var AIR_BATCH = 8;           // 一次送幾則（15 則時 AI 偶爾把結果對錯評論，2026-10-26 降到 8）
+var AIR_PAR = 6;             // 一波並行幾批
 var AIR_BUDGET_MS = 240000;  // 每輪最多跑 4 分鐘（GAS 上限 6 分鐘）
 var AIR_NEG_TYPES = ['服務態度', '教學協助', '等候與流程', '訂位與規則', '價格與收費', '產品品質', '環境衛生', '設備器材', '其他'];
 
@@ -27,10 +27,10 @@ var AIR_NAMED = '思思（無麩質、生巧巴斯克）、Yoyo（焙茶、奶�
 function airSystem_() {
   return [
     '你是「自己做烘焙聚樂部」的 Google 評論分析員。這是一家 DIY 烘焙教室（台灣 12 家門市）：客人在店裡看平板自己動手做甜點，「夥伴」是在旁協助、教學的店員。',
-    '逐則判讀使用者給的評論，每則回一筆結果，id 原樣帶回。',
+    '逐則判讀使用者給的評論，每則回一筆結果，id 原樣帶回；head 照抄該則評論 text 的前 6 個字（沒有文字就給空字串），用來核對你沒有把結果對錯評論。每則只根據它自己的 text 判斷，不要混用別則的內容。',
     '',
     '【people】評論有沒有提到「與人有關的服務」：夥伴的協助、教學、說明、態度（親切、熱情、貼心、耐心、細心、溫柔）、點名稱讚夥伴（短名字也算，例「球球很棒」「瑄瑄讚」）、「人很好」「服務很好」。只講活動、甜點、好吃、好玩、體驗、環境、空間、價格、步驟 → false。負評也照同一標準判斷。',
-    '【partners】評論裡被點名的夥伴名字或綽號，照原文寫法（英文名保留大小寫原樣）；兩個名字連寫要拆開（例「西瓜茹茹」→西瓜、茹茹；「瑄瑄姿姿」→瑄瑄、姿姿）。不要列：泛稱（店員、老師、小姐姐、哥哥、店長、服務人員）、客人自己的同行者（朋友、家人、小孩、男女朋友的名字）、評論者自己。',
+    '【partners】評論裡被點名的夥伴名字或綽號，必須是這則 text 裡真的出現的字，照原文寫法（英文名保留大小寫原樣）；兩個名字連寫要拆開（例「西瓜茹茹」→西瓜、茹茹；「瑄瑄姿姿」→瑄瑄、姿姿）。不要列：泛稱（店員、老師、小姐姐、哥哥、店長、服務人員）、客人自己的同行者（朋友、家人、小孩、男女朋友的名字）、評論者自己。',
     '　甜點名稱前面冠的名字不是在稱讚那個人（例「思思的無麩質生巧巴斯克」裡的思思），除非同一則評論也稱讚他本人的服務（例「謝謝思思的幫忙」）。冠名甜點：' + AIR_NAMED,
     '【praise】這則評論稱讚的重點 0～3 個短詞，每個 2～6 字（例：耐心教學、主動協助、幫忙拍照、親切、環境乾淨、甜點好吃、步驟清楚）。沒有稱讚就給空陣列。',
     '【neg_type】只有 1～4 星才填，從這些選最主要的一個：' + AIR_NEG_TYPES.join('、') + '。5 星填空字串。',
@@ -56,9 +56,9 @@ function airSchema_() {
       items: {
         type: 'array', items: {
           type: 'object', additionalProperties: false,
-          required: ['id', 'people', 'partners', 'praise', 'neg_type', 'reply'],
+          required: ['id', 'head', 'people', 'partners', 'praise', 'neg_type', 'reply'],
           properties: {
-            id: { type: 'string' }, people: { type: 'boolean' },
+            id: { type: 'string' }, head: { type: 'string' }, people: { type: 'boolean' },
             partners: { type: 'array', items: { type: 'string' } },
             praise: { type: 'array', items: { type: 'string' } },
             neg_type: { type: 'string' }, reply: { type: 'string' }
@@ -77,6 +77,25 @@ function airClean_(t) {
   m = t.match(/^([\s\S]+?)\s*\(Translated by Google\)/);
   if (m) return m[1].trim();
   return t.trim();
+}
+/* 比對用：去空白標點、全形轉半形、ㄚ→阿、小寫 */
+function airNorm_(s) {
+  return String(s || '').replace(/[\uFF01-\uFF5E]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+    .replace(/ㄚ/g, '阿').replace(/[\s\-_.、，,。！!？?～~「」『』（）()\[\]]/g, '').toLowerCase();
+}
+/* AI 回的 head 要對得上這則評論開頭（防止結果對錯評論） */
+function airLetters_(s) { return airNorm_(s).replace(/[^\p{L}\p{N}]/gu, ''); }
+function airHeadOk_(b, it) {
+  var t = airLetters_(b.text), h = airLetters_(it.head);
+  if (!t) return true;
+  if (!h) return false;
+  var k = Math.min(3, h.length, t.length);
+  return t.slice(0, k) === h.slice(0, k);
+}
+/* 夥伴名字一定要在原文找得到（emoji 綽號等例外由 AI 寫法不同造成者一併剔除） */
+function airPartnersInText_(b, list) {
+  var t = airNorm_(b.text);
+  return list.filter(function (n) { var x = airNorm_(n); return x && t.indexOf(x) >= 0; });
 }
 function airHash_(s) {
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, s, Utilities.Charset.UTF_8)).slice(0, 12);
@@ -179,7 +198,7 @@ function airRow_(b, it) {
   var neg = b.stars <= 4, nt = neg ? String(it.neg_type || '') : '';
   if (neg && AIR_NEG_TYPES.indexOf(nt) < 0) nt = '其他';
   var uniq = function (a) { var s = {}, o = []; (a || []).forEach(function (x) { x = String(x || '').trim(); if (x && !s[x]) { s[x] = 1; o.push(x); } }); return o; };
-  var ps = uniq(it.partners);
+  var ps = airPartnersInText_(b, uniq(it.partners));
   return [b.id, b.store, b.ym, b.stars, (it.people || ps.length) ? 'Y' : 'N', ps.join('、'), uniq(it.praise).slice(0, 3).join('、'),
     nt, neg ? String(it.reply || '').trim() : '', b.hash, AIR_MODEL + '|' + AIR_PVER, Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd HH:mm:ss')];
 }
@@ -193,12 +212,15 @@ function aiReviewTick(limit) {
     var sh = airSheet_(), done = airDone_(sh);
     var pend = airPending_(done, typeof limit === 'number' ? limit : 100000);
     if (!pend.length) { props.setProperty('AIR_LAST_RUN', new Date().toISOString() + ' 0 則待判讀'); airBackfillDone_(); return '0 pending'; }
+    /* 待判讀很多（改提示詞版本、補舊評論）→ 自動切成每 10 分鐘一輪；補完由 airBackfillDone_ 切回每小時 */
+    if (typeof limit !== 'number' && pend.length > 300 && props.getProperty('AIR_BACKFILL') !== '1') { try { installAiReviewBackfill(); } catch (eT) { } }
     /* 5 星沒有文字：不用叫 AI */
     var quick = [], ai = [];
     pend.forEach(function (b) { if (!b.text && b.stars >= 5) quick.push(b); else ai.push(b); });
     var rows = quick.map(function (b) { return { b: b, r: airRow_(b, { people: false, partners: [], praise: [], neg_type: '', reply: '' }) }; });
     airWrite_(sh, rows); var ok = rows.length, fail = 0, stop = '';
-    var cred = ai.length ? airCred_() : null, batches = [], known = airKnown_(done), downWaves = 0;
+    var cred = ai.length ? airCred_() : null, batches = [], known = airKnown_(done), downWaves = 0, mism = 0, miss = {};
+    try { miss = JSON.parse(props.getProperty('AIR_MISS') || '{}'); } catch (eM) { miss = {}; }
     for (var i = 0; i < ai.length; i += AIR_BATCH) batches.push(ai.slice(i, i + AIR_BATCH));
     for (var w = 0; w < batches.length && !stop; w += AIR_PAR) {
       if (Date.now() - t0 > AIR_BUDGET_MS) { stop = 'time'; break; }
@@ -211,14 +233,19 @@ function aiReviewTick(limit) {
         if (!r.ok) { fail += bt.length; log.push(r.err); if (r.credit) stop = 'credit'; return; }
         var byId = {}; r.items.forEach(function (it) { byId[String(it.id)] = it; });
         waveOk++;
-        bt.forEach(function (b) { var it = byId[b.id]; if (it) { out.push({ b: b, r: airRow_(b, it) }); ok++; } else fail++; });
+        bt.forEach(function (b) {
+          var it = byId[b.id];
+          if (it && (airHeadOk_(b, it) || (miss[b.id] || 0) >= 2)) { out.push({ b: b, r: airRow_(b, it) }); ok++; delete miss[b.id]; }
+          else { fail++; mism++; miss[b.id] = (miss[b.id] || 0) + 1; }   /* 對不上：下一輪重判；第 3 次起接受（夥伴名仍須在原文） */
+        });
       });
       airWrite_(sh, out);
       /* 整波都失敗（多半是訓練站重新部署中回 502）→ 連 2 波就先停，下一輪再來 */
       downWaves = waveOk ? 0 : downWaves + 1;
       if (downWaves >= 2 && !stop) stop = 'down';
     }
-    var msg = new Date().toISOString() + ' 完成 ' + ok + '／失敗 ' + fail + '／待判讀 ' + (pend.length - ok) + (stop ? '／停止:' + stop : '');
+    var msg = new Date().toISOString() + ' 完成 ' + ok + '／失敗 ' + fail + '（對不上 ' + mism + '）／待判讀 ' + (pend.length - ok) + (stop ? '／停止:' + stop : '');
+    try { props.setProperty('AIR_MISS', JSON.stringify(miss).slice(0, 8000)); } catch (eP) { }
     props.setProperty('AIR_LAST_RUN', msg);
     props.setProperty('AIR_LAST_ERR', log.length ? log.slice(-3).join(' | ').slice(0, 900) : '');
     Logger.log(msg); if (log.length) Logger.log(log.join('\n'));
