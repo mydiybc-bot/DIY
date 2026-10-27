@@ -525,7 +525,10 @@ function jsonp(url, ms){
 }
 function get(action){
   var u = API + '?action=' + action;
-  return jsonp(u, 30000).catch(function(){ return jsonp(u, 60000); }).then(function(r){ if (!r || !r.ok) throw new Error(r && r.error || '讀不到資料'); return r; });
+  /* 2026-10-27：手機 4G 下 Google 回應慢會「讀取失敗」→ 自動重試 4 次（等 30→60→90→90 秒，每次間隔 2 秒），不用手動按 */
+  var waits = [30000, 60000, 90000, 90000], i = 0;
+  function go(){ return jsonp(u, waits[i]).catch(function(e){ if (++i >= waits.length) throw e; return new Promise(function(r){ setTimeout(r, 2000); }).then(go); }); }
+  return go().then(function(r){ if (!r || !r.ok) throw new Error(r && r.error || '讀不到資料'); return r; });
 }
 function post(body){
   body.pw = S.pw;
@@ -638,7 +641,7 @@ function delRow(table, row){
 /* ---------- 資料 ---------- */
 function load(){
   return get('bundle').then(function(r){ S.b = r.data; S.b.people = S.b.people || []; S.at = r.at; $('dsbFresh').textContent = '🕒 最後讀取：' + r.at; render(); })
-    .catch(function(e){ $('app').innerHTML = '<div class="card">讀不到資料：' + esc(e.message) + '　<button class="btn" type="button" id="retry">再試一次</button></div>'; $('retry').onclick = load; });
+    .catch(function(e){ $('app').innerHTML = '<div class="card">讀不到資料：' + esc(e.message) + '（已自動重試 4 次，多半是網路慢，換 Wi-Fi 或稍後再試）　<button class="btn" type="button" id="retry">再試一次</button></div>'; $('retry').onclick = load; });
 }
 function sortNo(a, b){ return (Number(a.no) || 0) - (Number(b.no) || 0); }
 function of(table, pid){ return S.b[table].filter(function(x){ return x.project_id === pid; }).sort(sortNo); }
