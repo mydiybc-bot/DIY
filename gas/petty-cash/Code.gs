@@ -11,7 +11,7 @@
          → 用來抓「同一張發票／同一張照片已經報過」；不存照片本身。
    防濫用：網址公開在 repo，沒有密碼 → 每天全站最多 DAILY_CAP 次辨識（超過回 cap，隔天自動恢復）。
    ===================================================================== */
-var VER = 'pc-2026-10-24.1';
+var VER = 'pc-2026-10-27.1';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -78,8 +78,14 @@ function read_(b) {
   var t0 = Date.now(), r = ai_(img, mt);
   var md5 = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, img));
   var recs = (r.json.receipts || []).map(norm_);
-  var dups = findDups_(md5, recs);
-  logRows_(store, who, md5, recs, r.model, Date.now() - t0);
+  /* 查重複＋寫紀錄同一段排隊：多人同秒送時，不會寫到同一列互蓋，後到的也看得到先到的那筆（2026-10-27） */
+  logSheet_();
+  var lock = LockService.getScriptLock(), locked = lock.tryLock(30000), dups;
+  try {
+    dups = findDups_(md5, recs);
+    logRows_(store, who, md5, recs, r.model, Date.now() - t0);
+    SpreadsheetApp.flush();
+  } finally { if (locked) lock.releaseLock(); }
   return { receipts: recs, reason: String(r.json.reason || ''), dups: dups, model: r.model, left: left };
 }
 
