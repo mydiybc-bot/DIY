@@ -29,6 +29,7 @@ from training_logic import build_progress_snapshot, build_question_text, build_r
 from voice_transcription import TranscriptionError, transcribe_audio
 from recipe_auth import recipe_auth, call_anthropic, verify_req_identity, clean_translate_payload
 import schedule_ws   # 🗓 門市排班工作台（2026-10-26，經營者同意加這一行）
+import gas_proxy     # 儀表板 → Google Apps Script 代轉（2026-10-27，經營者同意加這一行）
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -176,6 +177,8 @@ class TrainingHandler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
+        if parsed.path.startswith("/api/gas/"):   # 儀表板資料代轉（2026-10-27 經營者同意）
+            _c, _t = gas_proxy.handle_get(parsed.path, parsed.query); self.send_json(json.loads(_t), status=_c); return
         file_path = parsed.path.lstrip("/")
         if file_path.startswith("static/"):
             local_name = file_path.replace("static/", "", 1)
@@ -283,6 +286,8 @@ class TrainingHandler(BaseHTTPRequestHandler):
             self.send_json(resp_data, status=status_code)
             return
 
+        if parsed.path.startswith("/api/gas/"):   # 儀表板寫入代轉（2026-10-27 經營者同意）
+            _c, _t = gas_proxy.handle_post(parsed.path, self.read_body_bytes()); self.send_json(json.loads(_t), status=_c); return
         if parsed.path.startswith("/api/schedule/"):   # 🗓 門市排班工作台：整個交給 schedule_ws.py（2026-10-26 經營者同意）
             status_code, resp_data = schedule_ws.handle(parsed.path, self.read_json())
             self.send_json(resp_data, status=status_code)

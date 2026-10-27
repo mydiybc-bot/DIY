@@ -523,12 +523,22 @@ function jsonp(url, ms){
     document.head.appendChild(s);
   });
 }
+/* 2026-10-27 經營者裁定：先走自家伺服器代轉（/api/gas/<部署ID>，server.py → gas_proxy.py），手機登什麼 Google 帳號都不會被 Google 擋；
+   代轉失敗（伺服器沒回、404）才退回原本直連 Google 的方式。本機 ?api= 模擬後端時沒有代轉。 */
+var PROXY = /^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/.test(API) ? API.replace(/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/, '/api/gas/$1') : '';
+function viaProxy(qs, opt, ms){
+  var ac = typeof AbortController !== 'undefined' ? new AbortController() : null, o = Object.assign({ cache: 'no-store' }, opt || {}); if (ac) o.signal = ac.signal;
+  var tm = setTimeout(function(){ if (ac) ac.abort(); }, ms || 70000);
+  return fetch(PROXY + qs, o).then(function(r){ clearTimeout(tm); if (r.status === 404) { var e = new Error('proxy-404'); e.noProxy = true; throw e; } return r.json(); })
+    .catch(function(e){ clearTimeout(tm); throw e; });
+}
 function get(action){
   var u = API + '?action=' + action;
-  /* 2026-10-27：手機 4G 下 Google 回應慢會「讀取失敗」→ 自動重試 4 次（等 30→60→90→90 秒，每次間隔 2 秒），不用手動按 */
+  /* 直連 Google：手機 4G 下回應慢會「讀取失敗」→ 自動重試 4 次（等 30→60→90→90 秒，每次間隔 2 秒） */
   var waits = [30000, 60000, 90000, 90000], i = 0;
   function go(){ return jsonp(u, waits[i]).catch(function(e){ if (++i >= waits.length) throw e; return new Promise(function(r){ setTimeout(r, 2000); }).then(go); }); }
-  return go().then(function(r){ if (!r || !r.ok) throw new Error(r && r.error || '讀不到資料'); return r; });
+  var first = PROXY ? viaProxy('?action=' + action).catch(function(){ return go(); }) : go();
+  return first.then(function(r){ if (!r || !r.ok) throw new Error(r && r.error || '讀不到資料'); return r; });
 }
 function post(body){
   body.pw = S.pw;
@@ -537,7 +547,10 @@ function post(body){
       try { return JSON.parse(t); } catch(e){ throw new Error('系統忙碌，請再按一次'); }
     });
   };
-  return once().catch(function(){ return new Promise(function(r){ setTimeout(r, 1500); }).then(once); }).then(function(r){
+  var direct = function(){ return once().catch(function(){ return new Promise(function(r){ setTimeout(r, 1500); }).then(once); }); };
+  /* 寫入走代轉；只有「根本沒送到伺服器」（連線失敗、404）才退回直連，避免同一筆寫兩次 */
+  var first = PROXY ? viaProxy('', { method: 'POST', body: JSON.stringify(body) }).catch(function(e){ if (e.noProxy || e instanceof TypeError) return direct(); throw new Error('系統忙碌，請再按一次'); }) : direct();
+  return first.then(function(r){
     if (!r || !r.ok) throw new Error(r && r.error || '儲存失敗');
     return r;
   });
