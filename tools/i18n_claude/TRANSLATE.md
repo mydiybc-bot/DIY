@@ -30,7 +30,7 @@
 
 ## 做完先自檢
 ```bash
-cd ~/Desktop/Claude/Code/DIY/tools/i18n_claude && python3 precheck.py <tag>
+python3 /Users/diybc/Desktop/Claude/Code/DIY/tools/i18n_claude/precheck.py <tag>
 ```
 有問題就改到過為止。**翻譯的人不投遞**，投遞和放行由主控端在獨立回讀之後做。
 
