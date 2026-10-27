@@ -7,6 +7,7 @@ Flask 單一服務（`server.py`），部署在 Render，同時提供：員工�
 - `static/hub.html` — 儀表板主入口（11 張卡）。
 - `static/dashboard-*.html`、`pos-dashboard.html`、`zijiren.html`、`google-reviews.html` — 各儀表板，**每頁自包含**（HTML+CSS+JS 同一檔，React/Recharts 走 CDN）。
 - `static/index.html`、`static/app.js`、`static/styles.css` — 訓練站前端。核心檔，改之前先提醒。
+- `gas_proxy.py` — 儀表板 → Google Apps Script 代轉（`/api/gas/<部署ID>`，2026-10-27；手機登任何 Google 帳號都能讀，只放行 static 裡出現過的部署 ID）。目前只有 project-hub.html 走它。
 - `gas/` — Google Apps Script 原始碼備份（生產版在 Google 端；改完 GAS 部署後必須同步這裡）。
 - `training_*.py`、`*_store.py` — 訓練站後端邏輯與資料存取。
 - `test_*.py` — 測試。
