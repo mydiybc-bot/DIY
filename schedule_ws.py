@@ -3,6 +3,13 @@
 店長上傳「每月排班設定表」＋「104 匯入範本（時間排班）」→ Claude（Sonnet 5.5）排初稿 → 檢查程式（schedule_check104）把關，
 沒過自動退回 Claude 修正（兩次不過換 Opus 5.5）→ 網頁日曆可點格子改、也可在對話框用講的改 → 下載填好的 104 匯入檔。
 
+2026-10-28 經營者裁定：設定表改成直接在工作台填（Excel 上傳留著當備用）——
+  ・店別基本設定（班別時段、每天需求人數、連上上限、晚接早、跨店夥伴、店規、挪假未補清單）：每店一份 store-<店號>.json，填一次每月自動帶入。
+  ・本月設定（正職基準、營收預估、每位夥伴正職／兼職與目標時數、指休／特休／兼職可上日點格子、特殊日）：存在該月 JSON 的 mset。
+  ・兩者組成跟 Excel 一樣的文字給 AI（form_text），AI 那段不用改；表單同時先算出 ext（班別、需求、員工），104 同步進來的班表也能直接檢查、顯示班別名。
+  ・班表加「營業額」（排班分析 GAS getStoreDailyData，含甜點券$100 加回）與「日獎金」列（口徑同排班儀表板：級距、跨級 ×2、每人 200×工時÷8），
+    另可下載「各店日獎金表」給會計（bonus_export；總部一次全店、店長只有自己店）。
+
 server.py 只把 /api/schedule/* 整個交給 handle()；身分用權限中心 store_N（店）／task_hq（總部）驗證，結果快取 10 分鐘（只存雜湊）。
 每店每月一份 JSON，存在 Render Disk：<TRAINING_DATA_DIR>/schedule_ws/<店號>-<YYYYMM>.json。
 """
@@ -16,6 +23,7 @@ import io
 import json
 import os
 import re
+import ssl
 import threading
 import time
 import urllib.parse
@@ -42,6 +50,23 @@ RULES = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "schedule_
 MAX_FILE_B64 = 4_000_000
 MAX_SETTINGS_CHARS = 80_000
 MAX_API_MESSAGES = 60
+
+# 營業額／日獎金（2026-10-28）：營收用排班分析 GAS（fact_daily_sales＋甜點券$100），口徑見 dashboard-schedule skill「🎁 日獎金口徑」
+REV_API = "https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec"
+REV_TTL = 2 * 3600
+BONUS_TIERS = [(10, 10000), (20, 14000), (30, 29000), (40, 42000), (50, 53000), (60, 65000), (70, 77000), (80, 88000), (90, 100000), (100, 110000)]
+BONUS_BASE, BONUS_STD_H = 200, 8
+BONUS_LEAVE_RE = re.compile(r"特休|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災")
+BONUS_MEET_RE = re.compile(r"會議|區會|上課|內訓|培訓|教育訓練|研習|經管會")
+BONUS_NOFLOOR_RE = re.compile(r"不計現場人力|不算現場人力")
+DEFAULT_SHIFTS = [  # 新店第一次打開表單的預設列（店長自己改）
+    {"name": "平日早班", "segs": [["10:20", "12:00"], ["12:30", "18:50"]], "wd": 1, "we": 0},
+    {"name": "平日晚班", "segs": [["13:00", "15:00"], ["15:30", "21:30"]], "wd": 1, "we": 0},
+    {"name": "假日早班", "segs": [["09:50", "12:00"], ["12:30", "18:20"]], "wd": 0, "we": 1},
+    {"name": "假日中班", "segs": [["12:00", "15:00"], ["15:30", "20:30"]], "wd": 0, "we": 1},
+    {"name": "假日晚班", "segs": [["13:30", "15:30"], ["16:00", "22:00"]], "wd": 0, "we": 1},
+]
+_rev_jobs: set = set()
 
 _auth_ok: dict[str, float] = {}
 _locks: dict[str, threading.Lock] = {}
@@ -267,8 +292,298 @@ def _mins(t):
     return c104.mins(t)
 
 
+def _elsewhere(pos, title):
+    """崗位填了別家店 → 那段人在別店（104 規則：在本店上班崗位留空；只有實際所在店≠本班表的店才填崗位）。
+    「支援」標籤本身不代表在別店：外店夥伴來本店支援時，在本店的班表上就是「支援」＋崗位空白（2026-10-28 用高雄SKM 10/3 張于歡實例確認）"""
+    pos = (pos or "").strip()
+    if not pos:
+        return False
+    return pos.replace("店", "") not in (title or "")
+
+
 def cell_hours(c):
     return sum(_mins(e) - _mins(s) for s, e, _, _ in c["segs"]) / 60
+
+
+# ───────────────────────── 設定表單（2026-10-28：取代 Excel 設定表） ─────────────────────────
+
+TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def _hhmm(v):
+    v = str(v or "").strip().replace("：", ":")
+    if not v:
+        return ""
+    m = re.match(r"^(\d{1,2}):?(\d{2})$", v)
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError(f"時間「{v}」要寫成 10:20")
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+def _num(v, default=None, lo=None, hi=None, what="數字"):
+    if v is None or str(v).strip() == "":
+        return default
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}「{v}」不是數字")
+    if (lo is not None and x < lo) or (hi is not None and x > hi):
+        raise ValueError(f"{what}「{v}」超出範圍")
+    return int(x) if x.is_integer() else x
+
+
+def _cfg_path(store):
+    return _dir() / f"store-{int(store)}.json"
+
+
+def cfg_load(store):
+    p = _cfg_path(store)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"shifts": [], "max_consec": 5, "late_early_limit": 0, "support": "", "rules": "", "carry": [], "updated": ""}
+
+
+def cfg_clean(body):
+    """店別基本設定：檢查＋整理（寫錯丟 ValueError）"""
+    out = {"shifts": [], "carry": []}
+    names = set()
+    for r in (body.get("shifts") or [])[:20]:
+        name = str(r.get("name") or "").strip()[:20]
+        segs = []
+        for a, b in (r.get("segs") or [])[:3]:
+            a, b = _hhmm(a), _hhmm(b)
+            if a and b:
+                if _mins(b) <= _mins(a):
+                    raise ValueError(f"班別「{name}」的時段 {a}-{b} 結束要晚於開始")
+                segs.append([a, b])
+            elif a or b:
+                raise ValueError(f"班別「{name}」有一段只填了一半")
+        if not name and not segs:
+            continue
+        if not name:
+            raise ValueError("有一列班別沒有名稱")
+        if not segs:
+            raise ValueError(f"班別「{name}」至少要填一段時間")
+        if name in names:
+            raise ValueError(f"班別名稱「{name}」重複")
+        names.add(name)
+        out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數")})
+    out["max_consec"] = _num(body.get("max_consec"), 5, 1, 12, "連續上班上限")
+    out["late_early_limit"] = _num(body.get("late_early_limit"), 0, 0, 31, "晚接早上限")
+    out["support"] = str(body.get("support") or "").strip()[:1000]
+    out["rules"] = str(body.get("rules") or "").strip()[:4000]
+    for r in (body.get("carry") or [])[:60]:
+        name = str(r.get("name") or "").strip()[:20]
+        if not name:
+            continue
+        out["carry"].append({"name": name, "type": ("B" if str(r.get("type") or "").strip().upper() == "B" else "A"),
+                             "date": str(r.get("date") or "").strip()[:12], "note": str(r.get("note") or "").strip()[:100]})
+    return out
+
+
+def cfg_save(store, cfg):
+    cfg["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    atomic_write_json(_cfg_path(store), cfg)
+    return cfg
+
+
+def _prev_ym(ym):
+    y, m = int(ym[:4]), int(ym[4:])
+    return f"{y - 1}12" if m == 1 else f"{y}{m - 1:02d}"
+
+
+def mset_view(st):
+    """本月設定（含預設值）：夥伴清單跟著 104 範本；正職／兼職、目標時數沒填的先抄上個月"""
+    ms = copy.deepcopy(st.get("mset") or {})
+    ms.setdefault("base", {})
+    ms.setdefault("revenue", {})
+    ms.setdefault("emps", {})
+    ms.setdefault("marks", {})
+    ms.setdefault("special", [])
+    prev = None
+    info = (st.get("template") or {}).get("info") or {}
+    s104 = {e.get("name"): e for e in ((st.get("s104") or {}).get("emps") or [])}
+    for e in info.get("emps") or []:
+        cur = ms["emps"].get(e["id"])
+        if cur is None:
+            if prev is None:
+                pp = _dir() / f"{_key(st['store'], _prev_ym(st['ym']))}.json"
+                prev = {}
+                if pp.exists():
+                    try:
+                        prev = (json.loads(pp.read_text(encoding="utf-8")).get("mset") or {}).get("emps") or {}
+                    except (OSError, json.JSONDecodeError):
+                        prev = {}
+            cur = dict(prev.get(e["id"]) or {"type": "正職", "target": None, "min_hours": None, "note": ""})
+            cur["_default"] = True
+            ms["emps"][e["id"]] = cur
+        if cur.get("type") == "正職" and not cur.get("target"):
+            must = (s104.get(e["name"]) or {}).get("mustHour")
+            cur["target_hint"] = must or ms["base"].get("std_hours")
+    ms["emps"] = {k: v for k, v in ms["emps"].items() if any(e["id"] == k for e in info.get("emps") or [])}
+    ms["marks"] = {k: v for k, v in ms["marks"].items() if any(e["id"] == k for e in info.get("emps") or [])}
+    return ms
+
+
+def mset_clean(st, body):
+    """本月設定（不含指休格子，那個走 mark）"""
+    ms = copy.deepcopy(st.get("mset") or {})
+    b = body.get("base") or {}
+    ms["base"] = {"std_hours": _num(b.get("std_hours"), None, 0, 400, "標準時數"), "off_days": _num(b.get("off_days"), None, 0, 31, "休假天數"),
+                  "holidays": _num(b.get("holidays"), None, 0, 31, "國定假日天數")}
+    r = body.get("revenue") or {}
+    ms["revenue"] = {"weekday": _num(r.get("weekday"), None, 0, 10_000_000, "平日營收"), "weekend": _num(r.get("weekend"), None, 0, 10_000_000, "假日營收")}
+    ids = {e["id"] for e in ((st.get("template") or {}).get("info") or {}).get("emps") or []}
+    emps = {}
+    for eid, v in (body.get("emps") or {}).items():
+        if eid not in ids:
+            continue
+        v = v or {}
+        emps[eid] = {"type": ("兼職" if str(v.get("type") or "") == "兼職" else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
+                     "min_hours": _num(v.get("min_hours"), None, 0, 400, "最低時數"), "note": str(v.get("note") or "").strip()[:300]}
+    ms["emps"] = emps
+    days = {d["d"] for d in ((st.get("template") or {}).get("info") or {}).get("days") or []}
+    sp = []
+    for x in (body.get("special") or [])[:40]:
+        d = _num(x.get("day"), None, 1, 31, "日期")
+        if d is None:
+            continue
+        if days and d not in days:
+            raise ValueError(f"這個月沒有 {d} 號")
+        sp.append({"day": int(d), "revenue": _num(x.get("revenue"), None, 0, 10_000_000, "營收預估"),
+                   "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200]})
+    ms["special"] = sorted(sp, key=lambda x: x["day"])
+    ms.setdefault("marks", st.get("mset", {}).get("marks") or {})
+    ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    return ms
+
+
+MARKS = ("指休", "特休", "可上")
+
+
+def mark_set(st, eid, day, value):
+    ids = {e["id"] for e in st["template"]["info"]["emps"]}
+    days = {d["d"] for d in st["template"]["info"]["days"]}
+    if eid not in ids:
+        raise ValueError(f"沒有工號 {eid}")
+    if int(day) not in days:
+        raise ValueError(f"這個月沒有 {day} 號")
+    if value and value not in MARKS:
+        raise ValueError("標記只能是 指休／特休／可上")
+    ms = st.setdefault("mset", {})
+    marks = ms.setdefault("marks", {}).setdefault(eid, {})
+    if value:
+        marks[str(int(day))] = value
+    else:
+        marks.pop(str(int(day)), None)
+    ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+
+
+def form_ready(st, cfg):
+    """表單填到可以排班了嗎（班別有填、營收預估有填）"""
+    ms = st.get("mset") or {}
+    return bool(cfg.get("shifts")) and bool((ms.get("revenue") or {}).get("weekday")) and bool((ms.get("revenue") or {}).get("weekend"))
+
+
+def form_text(st, cfg):
+    """把表單組成跟 Excel 設定表同樣結構的文字給 AI"""
+    info = st["template"]["info"]
+    ms = mset_view(st)
+    L = ["### 分頁「各店基本設定」", f"店名\t{info['title']}", "班別\t第1段\t第2段\t第3段\t平日每天需要幾人\t假日每天需要幾人"]
+    for r in cfg.get("shifts") or []:
+        segs = [f"{a}-{b}" for a, b in r["segs"]] + [""] * (3 - len(r["segs"]))
+        L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
+    L.append(f"連續上班上限\t{cfg.get('max_consec', 5)} 天")
+    L.append(f"晚班接隔天早班\t{'不允許' if not cfg.get('late_early_limit') else '最多 ' + str(cfg['late_early_limit']) + ' 次'}")
+    if cfg.get("support"):
+        L.append("跨店支援夥伴\t" + cfg["support"].replace("\n", "；"))
+    if cfg.get("rules"):
+        L.append("店規（一定要守）\t" + cfg["rules"].replace("\n", "；"))
+    L.append("")
+    L.append("### 分頁「每月排班」")
+    L.append(f"月份\t{st['ym'][:4]}-{st['ym'][4:]}")
+    b = ms["base"]
+    if any(b.get(k) is not None for k in ("std_hours", "off_days", "holidays")):
+        L.append(f"正職基準\t標準時數 {b.get('std_hours') or '—'}h／休假 {b.get('off_days') if b.get('off_days') is not None else '—'} 天／國定假日 {b.get('holidays') if b.get('holidays') is not None else '—'} 天")
+    r = ms["revenue"]
+    L.append(f"平日營收預估\t{r.get('weekday') or '—'}")
+    L.append(f"假日營收預估\t{r.get('weekend') or '—'}")
+    L.append("【夥伴】工號\t姓名\t正職/兼職\t目標時數\t兼職最低時數\t個人特殊班別／備註")
+    for e in info["emps"]:
+        v = ms["emps"].get(e["id"]) or {}
+        tgt = v.get("target") or v.get("target_hint") or ""
+        L.append(f"{e['id']}\t{e['name']}\t{v.get('type', '正職')}\t{tgt}\t{v.get('min_hours') or ''}\t{v.get('note') or ''}")
+    L.append("【指休／特休／兼職可上日】（指休＝那天一定要休；可上＝兼職只有這些天能排）")
+    for e in info["emps"]:
+        mk = ms["marks"].get(e["id"]) or {}
+        parts = []
+        for k in MARKS:
+            ds = sorted(int(d) for d, v in mk.items() if v == k)
+            if ds:
+                parts.append(f"{k} " + "、".join(map(str, ds)))
+        if parts:
+            L.append(f"{e['id']} {e['name']}：" + "；".join(parts))
+    if ms["special"]:
+        L.append("【特殊日】")
+        for x in ms["special"]:
+            bits = []
+            if x.get("revenue"):
+                bits.append(f"營收預估 {x['revenue']}")
+            if x.get("staff"):
+                bits.append(f"人力／班別調整：{x['staff']}")
+            if x.get("note"):
+                bits.append(f"備註：{x['note']}")
+            L.append(f"{x['day']} 日：" + "；".join(bits))
+    if cfg.get("carry"):
+        L.append("【挪假未補清單】姓名\t類型\t挪假日期\t備註")
+        for x in cfg["carry"]:
+            L.append(f"{x['name']}\t{x['type']}\t{x['date']}\t{x.get('note', '')}")
+    return "\n".join(L)
+
+
+def _ext_from_form(st, cfg):
+    """表單直接算得出來的設定（AI 還沒排也能檢查、顯示班別名）"""
+    if not cfg.get("shifts"):
+        return {}
+    ms = mset_view(st)
+    info = (st.get("template") or {}).get("info") or {}
+    shifts = {r["name"]: [list(x) for x in r["segs"]] for r in cfg["shifts"]}
+    special = {str(x["day"]): x.get("revenue") for x in ms["special"] if x.get("revenue")}
+    demand = {}
+    for d in info.get("days") or []:
+        wk = d["wd"] in ("六", "日")
+        need = []
+        for r in cfg["shifts"]:
+            need += [r["name"]] * int(r.get("we" if wk else "wd") or 0)
+        demand[str(d["d"])] = need
+    emps = []
+    for e in info.get("emps") or []:
+        v = ms["emps"].get(e["id"]) or {}
+        emps.append({"id": e["id"], "name": e["name"], "type": v.get("type", "正職"),
+                     "target_hours": v.get("target") or (v.get("target_hint") if v.get("type", "正職") == "正職" else None)})
+    return {"shifts": shifts, "demand": demand, "employees": emps, "max_consec": cfg.get("max_consec", 5),
+            "late_early_limit": cfg.get("late_early_limit", 0),
+            "late_shift_ends": sorted({r["segs"][-1][1] for r in cfg["shifts"] if "晚" in r["name"]}),
+            "early_shift_starts": sorted({r["segs"][0][0] for r in cfg["shifts"] if "早" in r["name"]}),
+            "revenue": {"weekday": ms["revenue"].get("weekday"), "weekend": ms["revenue"].get("weekend"), "special": special},
+            "notes": [], "from_form": True}
+
+
+def _ext(st, cfg=None):
+    """AI 排過用 AI 的（班別名以表單為準）；沒排過用表單算的"""
+    cfg = cfg if cfg is not None else cfg_load(st["store"])
+    form = _ext_from_form(st, cfg) if st.get("template") else {}
+    ai = st.get("ext") or {}
+    if not ai:
+        return form
+    if not form:
+        return ai
+    out = dict(form, **ai)
+    out["shifts"] = dict(ai.get("shifts") or {}, **form["shifts"])
+    return out
 
 
 # ───────────────────────── 填 104 範本 ─────────────────────────
@@ -280,7 +595,7 @@ def fill(st, schedule=None):
     wb = openpyxl.load_workbook(io.BytesIO(raw))
     ws = wb.worksheets[0]
     hdr, days, emps = c104.layout(ws)
-    shifts = (st.get("ext") or {}).get("shifts") or {}
+    shifts = _ext(st).get("shifts") or {}
     dtypes = set(st["template"]["info"]["dayTypes"])
     for e in emps:
         row = (schedule or {}).get(e["id"]) or {}
@@ -314,7 +629,7 @@ def fill(st, schedule=None):
 def run_check(st, schedule=None):
     """檢查程式：104 格式＋勞基法（check_104）＋本店需求人數／正職時數／晚接早。回傳 dict"""
     schedule = schedule if schedule is not None else st["schedule"]
-    ext = st.get("ext") or {}
+    ext = _ext(st)
     shifts = ext.get("shifts") or {}
     info = st["template"]["info"]
     dtypes = set(info["dayTypes"])
@@ -370,7 +685,7 @@ def run_check(st, schedule=None):
         working = []
         for eid in parsed:
             c = parsed[eid][d["d"]]
-            here = [s for s in c["segs"] if "支援" not in s[2] and not s[3]]
+            here = [s for s in c["segs"] if not _elsewhere(s[3], info["title"])]
             if here:
                 working.append(here)
         if len(working) < len(need):
@@ -395,6 +710,21 @@ def run_check(st, schedule=None):
         if tgt and h and abs(h["regular"] - float(tgt)) > 0.01:
             extra = f"（另有休息日／國定假日出勤 {h['ot']:g}h，104 列加班）" if h["ot"] else ""
             warns.append(f"{h['name']}：正常工時 {h['regular']:g}h，目標 {float(tgt):g}h{extra}")
+    marks = ((st.get("mset") or {}).get("marks") or {})
+    etype = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
+    for eid, mk in marks.items():
+        if eid not in parsed:
+            continue
+        allow = {int(d) for d, v in mk.items() if v == "可上"}
+        for d in info["days"]:
+            c = parsed[eid][d["d"]]
+            v = mk.get(str(d["d"]), "")
+            if v == "指休" and c["segs"]:
+                errors.append(f"{names[eid]} {d['label']}：本月設定是指休，卻排了班")
+            elif v == "特休" and "特休" not in (c["type"] + c["dtag"]):
+                warns.append(f"{names[eid]} {d['label']}：本月設定要特休，班表沒有標特休")
+            elif allow and etype.get(eid) == "兼職" and c["segs"] and d["d"] not in allow:
+                warns.append(f"{names[eid]} {d['label']}：兼職只有勾「可上」的日子能排，這天沒勾")
     limit = ext.get("late_early_limit")
     if late_starts and early_starts and limit is not None:
         for eid in parsed:
@@ -462,8 +792,11 @@ def _draft_user(st):
     parts.append("- 可用的出勤類型：" + "、".join(info["dayTypes"]))
     parts.append("- 可用的標籤：" + "、".join(info["tags"]))
     parts.append("- 可用的崗位：" + "、".join(info["positions"]))
+    cfg = cfg_load(st["store"])
+    if form_ready(st, cfg):
+        parts.append("## 每月排班設定表（店長在工作台填的；班別名稱請照這裡的用、不要自己取）\n" + form_text(st, cfg))
     for f in st["settings_files"]:
-        parts.append(f"## 每月排班設定表（{f['name']}）\n{f['text']}")
+        parts.append(f"## 每月排班設定表{'（Excel 補充）' if form_ready(st, cfg) else ''}（{f['name']}）\n{f['text']}")
     if st.get("note"):
         parts.append("## 店長補充說明\n" + st["note"])
     return "\n".join(parts)
@@ -524,6 +857,11 @@ def _draft_worker(store, ym):
                 messages.append({"role": "user", "content": f"程式讀不到你的 JSON：{ex}。請重新輸出完整的 ```json 區塊（settings＋schedule），報告不用重寫。"})
                 continue
             ext, sched = ext_i, sched_i
+            form = _ext_from_form(st, cfg_load(store))
+            if form:
+                ext["shifts"] = dict(ext.get("shifts") or {}, **form["shifts"])   # 班別名以表單為準
+                for kk in ("max_consec", "late_early_limit"):
+                    ext[kk] = form[kk]
             body = text[:text.rfind("```json")].strip()
             report = body if i == 0 or not report else report + f"\n\n---\n### 修正說明（第 {i} 次）\n" + body
             tmp = dict(st, ext=ext, schedule=sched)
@@ -576,7 +914,7 @@ TOOLS = [
 
 
 def _apply(st, changes, why):
-    shifts = (st.get("ext") or {}).get("shifts") or {}
+    shifts = _ext(st).get("shifts") or {}
     dtypes = set(st["template"]["info"]["dayTypes"])
     ids = {e["id"] for e in st["template"]["info"]["emps"]}
     days = {d["d"] for d in st["template"]["info"]["days"]}
@@ -603,7 +941,7 @@ def _undo(st):
 
 def _chat_system(st):
     return (RULES + CHAT_RULES + "\n## 本店這個月的設定（AI 從設定表讀到的）\n" +
-            json.dumps(st.get("ext") or {}, ensure_ascii=False) +
+            json.dumps(_ext(st), ensure_ascii=False) +
             "\n\n## 104 範本\n- 班表：" + st["template"]["info"]["title"] +
             "\n- 日期：" + "、".join(d["label"] for d in st["template"]["info"]["days"]) +
             "\n- 可用標籤：" + "、".join(st["template"]["info"]["tags"]) +
@@ -754,7 +1092,7 @@ def _canon(v, shifts, dtypes):
 
 def _diff(st, a, b):
     """兩份班表不同的格子：[(工號, 日, a 格子, b 格子)]"""
-    shifts = (st.get("ext") or {}).get("shifts") or {}
+    shifts = _ext(st).get("shifts") or {}
     dtypes = set(st["template"]["info"]["dayTypes"])
     out = []
     for e in st["template"]["info"]["emps"]:
@@ -800,7 +1138,7 @@ def sync104(payload):
                 res["error"] = "沒有範本，無法對照"
                 results.append(res)
                 continue
-            cells, missing, unknown = _cells_from_104(item, st["template"]["info"], (st.get("ext") or {}).get("shifts"))
+            cells, missing, unknown = _cells_from_104(item, st["template"]["info"], _ext(st).get("shifts"))
             has_content = any(v for row in cells.values() for v in row.values())
             emps = {e["empId"]: e for e in item.get("emps") or []}
             st["s104"] = {"id": item.get("id"), "name": item.get("name"), "status": res["status"], "modify": item.get("modify"),
@@ -829,6 +1167,260 @@ def sync104(payload):
     return results
 
 
+# ───────────────────────── 營業額與日獎金（2026-10-28 經營者：班表要有營業額及日獎金、產各店日獎金表給會計） ─────────────────────────
+
+def _ssl_ctx():
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def fetch_rev(store, ym):
+    """排班分析 GAS getStoreDailyData（bonus=1）→ {日: {net, voucher, qty, rev}}；失敗丟 Exception"""
+    url = REV_API + "?" + urllib.parse.urlencode({"action": "getStoreDailyData", "store_id": int(store), "month": f"{ym[:4]}-{ym[4:]}", "bonus": "1", "callback": "cb"})
+    with urllib.request.urlopen(url, timeout=90, context=_ssl_ctx()) as r:
+        t = r.read().decode("utf-8")
+    m = re.search(r"^\s*cb\((.*)\)\s*;?\s*$", t, re.S)
+    d = json.loads(m.group(1) if m else t)
+    if not d.get("ok"):
+        raise ValueError(str(d.get("error") or "營收資料讀不到"))
+    out = {}
+    for row in d.get("daily") or []:
+        try:
+            day = int(str(row.get("date"))[8:10])
+        except ValueError:
+            continue
+        net = float(row.get("revenue") or 0)
+        v = float(row.get("voucher100") or 0)
+        if net <= 0 and v <= 0:
+            continue
+        out[str(day)] = {"net": round(net), "voucher": round(v), "qty": int(row.get("voucher100_qty") or 0),
+                         "rev": round(float(row.get("bonus_rev") if row.get("bonus_rev") is not None else net + v))}
+    bonus = d.get("bonus") or {}
+    return {"days": out, "voucher_ok": bool(bonus.get("ok")), "fetched": time.time(), "error": ""}
+
+
+def _rev_refresh_bg(store, ym):
+    k = _key(store, ym)
+    with _glock:
+        if k in _rev_jobs:
+            return
+        _rev_jobs.add(k)
+
+    def run():
+        try:
+            data = fetch_rev(store, ym)
+        except Exception as ex:   # noqa: BLE001
+            data = None
+            err = f"{type(ex).__name__}: {str(ex)[:120]}"
+        with _lock(k):
+            st = _load(store, ym)
+            if data:
+                st["rev"] = data
+            else:
+                st["rev"] = dict(st.get("rev") or {"days": {}}, error=err, tried=time.time())
+            _save(st)
+        with _glock:
+            _rev_jobs.discard(k)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _rev_stale(st):
+    rv = st.get("rev") or {}
+    last = max(rv.get("fetched") or 0, rv.get("tried") or 0)
+    return time.time() - last > REV_TTL
+
+
+def _emp_day_work(c, title=""):
+    """一位夥伴一天「真正在本店工作」的時數與不算的原因（規則同排班儀表板 bonusNonWork，改成讀 104 格子）"""
+    if not c["segs"]:
+        return 0.0, ""
+    if c["type"]:
+        return 0.0, f"班表寫「{c['type']}」"
+    dtag = c.get("dtag") or ""
+    if BONUS_NOFLOOR_RE.search(dtag):
+        return 0.0, f"「{dtag}」"
+    any_tag = any(t or pz for _, _, t, pz in c["segs"])
+    if not any_tag and (BONUS_MEET_RE.search(dtag) or BONUS_LEAVE_RE.search(dtag)) and "指休" != dtag:
+        return 0.0, f"整天「{dtag}」"
+    work, why = 0.0, []
+    for s_, e_, t, pz in c["segs"]:
+        h = (_mins(e_) - _mins(s_)) / 60
+        if _elsewhere(pz, title):
+            why.append(f"{s_}-{e_} 在{pz}")
+        elif BONUS_MEET_RE.search(t) or BONUS_NOFLOOR_RE.search(t):
+            why.append(f"{s_}-{e_}「{t}」")
+        elif BONUS_LEAVE_RE.search(t) and "指休" not in t and "挪假" not in t:
+            why.append(f"{s_}-{e_}「{t}」")
+        else:
+            work += h
+    return round(work, 2), "、".join(why)
+
+
+def bonus_calc(st, ext=None):
+    """每天：獎金營收、店日工時、級距、達標、倍數、每人獎金。回傳 {days:{日:{…}}, month:{…}, rev_ok}"""
+    tpl = st.get("template")
+    if not tpl or not st.get("schedule"):
+        return None
+    ext = ext if ext is not None else _ext(st)
+    shifts = ext.get("shifts") or {}
+    dtypes = set(tpl["info"]["dayTypes"])
+    rev = (st.get("rev") or {}).get("days") or {}
+    emps = tpl["info"]["emps"]
+    days = {}
+    by_emp = {e["id"]: 0 for e in emps}
+    tot = hit_n = cross_n = biz = 0
+    for d in tpl["info"]["days"]:
+        k = str(d["d"])
+        staff = {}
+        hours = 0.0
+        for e in emps:
+            try:
+                c = parse_cell((st["schedule"].get(e["id"]) or {}).get(k, ""), shifts, dtypes)
+            except ValueError:
+                continue
+            w, why = _emp_day_work(c, tpl["info"]["title"])
+            if w <= 0 and not why:
+                continue
+            trainee = "實作" in e["name"]
+            staff[e["id"]] = {"work": w, "why": why, "trainee": trainee, "bonus": 0}
+            hours += w
+        hours = round(hours, 2)
+        r = rev.get(k) or {}
+        rv = r.get("rev") or 0
+        tier = next((i for i, (cap, _) in enumerate(BONUS_TIERS) if hours <= cap), -1)
+        row = {"hours": hours, "rev": rv, "net": r.get("net") or 0, "voucher": r.get("voucher") or 0, "qty": r.get("qty") or 0,
+               "cap": BONUS_TIERS[tier][0] if tier >= 0 else None, "threshold": BONUS_TIERS[tier][1] if tier >= 0 else None,
+               "next": BONUS_TIERS[tier + 1][1] if 0 <= tier < len(BONUS_TIERS) - 1 else None,
+               "hit": False, "cross": False, "mult": 0, "total": 0, "no_tier": hours > 0 and tier < 0, "staff": staff}
+        if hours > 0 and rv > 0:
+            biz += 1
+            if tier >= 0:
+                row["hit"] = rv >= row["threshold"]
+                row["cross"] = row["hit"] and row["next"] is not None and rv >= row["next"]
+                row["mult"] = 2 if row["cross"] else (1 if row["hit"] else 0)
+        if row["mult"]:
+            hit_n += 1
+            cross_n += 1 if row["cross"] else 0
+            for eid, x in staff.items():
+                if x["work"] > 0 and not x["trainee"]:
+                    x["bonus"] = int(BONUS_BASE * x["work"] / BONUS_STD_H * row["mult"] + 0.5)
+                    by_emp[eid] += x["bonus"]
+                    row["total"] += x["bonus"]
+        tot += row["total"]
+        days[k] = row
+    rvx = st.get("rev") or {}
+    return {"days": days, "month": {"total": tot, "hit_days": hit_n, "cross_days": cross_n, "biz_days": biz, "by_emp": by_emp},
+            "rev_fetched": rvx.get("fetched"), "rev_error": rvx.get("error") or "", "rev_days": len(rev), "voucher_ok": rvx.get("voucher_ok", False)}
+
+
+def _rev_refresh_all(stores, ym, wait=50):
+    """匯出前把過期的營收一次抓齊（並行，最多等 wait 秒）"""
+    todo = []
+    for store in stores:
+        with _lock(_key(store, ym)):
+            st = _load(store, ym)
+        if st.get("schedule") and _rev_stale(st):
+            todo.append(store)
+    if not todo:
+        return
+    res = {}
+
+    def run(store):
+        try:
+            res[store] = fetch_rev(store, ym)
+        except Exception as ex:   # noqa: BLE001
+            res[store] = {"error": f"{type(ex).__name__}: {str(ex)[:120]}"}
+    ths = [threading.Thread(target=run, args=(x,), daemon=True) for x in todo]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(wait)
+    for store, data in res.items():
+        with _lock(_key(store, ym)):
+            st = _load(store, ym)
+            st["rev"] = data if "days" in data else dict(st.get("rev") or {"days": {}}, error=data["error"], tried=time.time())
+            _save(st)
+
+
+def bonus_xlsx(stores, ym):
+    """各店日獎金表（給會計）：各店各人合計／每日明細／每人每日。回傳 (bytes, 有資料的店數)"""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    _rev_refresh_all(stores, ym)
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "各店各人合計"
+    ws2 = wb.create_sheet("每日明細")
+    ws3 = wb.create_sheet("每人每日")
+    ws4 = wb.create_sheet("說明")
+    bold = Font(bold=True)
+    fill = PatternFill("solid", fgColor="F3E9D8")
+    ws1.append(["店號", "店名", "工號", "姓名", "正職/兼職", "上班天數", "計獎工時", "日獎金合計"])
+    ws2.append(["店號", "店名", "日期", "星期", "POS 淨營收", "甜點券$100 加回", "獎金營收", "店日工時", "級距上限(h)", "門檻", "達標", "倍數", "當日獎金合計", "當天上班（工時）"])
+    hdr3 = None
+    n_store = 0
+    for store in stores:
+        st = _load(store, ym)
+        b = bonus_calc(st)
+        if not b:
+            continue
+        n_store += 1
+        info = st["template"]["info"]
+        ext = _ext(st)
+        etype = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
+        name = f"{store} {STORES.get(store, '')}"
+        if hdr3 is None:
+            hdr3 = ["店號", "店名", "工號", "姓名"] + [str(d["d"]) for d in info["days"]] + ["合計"]
+            ws3.append(hdr3)
+        for e in info["emps"]:
+            days_on = sum(1 for k, r in b["days"].items() if (r["staff"].get(e["id"]) or {}).get("work", 0) > 0)
+            work = round(sum((r["staff"].get(e["id"]) or {}).get("work", 0) for r in b["days"].values()), 2)
+            ws1.append([store, STORES.get(store, ""), e["id"], e["name"], etype.get(e["id"], ""), days_on, work, b["month"]["by_emp"].get(e["id"], 0)])
+            row = [store, STORES.get(store, ""), e["id"], e["name"]]
+            for d in info["days"]:
+                x = (b["days"].get(str(d["d"])) or {}).get("staff", {}).get(e["id"])
+                row.append(x["bonus"] if x and x["bonus"] else None)
+            row.append(b["month"]["by_emp"].get(e["id"], 0))
+            ws3.append(row)
+        names = {e["id"]: e["name"] for e in info["emps"]}
+        for d in info["days"]:
+            r = b["days"].get(str(d["d"])) or {}
+            if not r.get("hours") and not r.get("rev"):
+                continue
+            who = "、".join(f"{names.get(eid, eid)} {x['work']:g}h" + ("（實作）" if x["trainee"] else "") for eid, x in r["staff"].items() if x["work"] > 0)
+            ws2.append([store, STORES.get(store, ""), f"{ym[:4]}-{ym[4:]}-{d['d']:02d}", d["wd"], r.get("net"), r.get("voucher"), r.get("rev"), r.get("hours"),
+                        r.get("cap"), r.get("threshold"), ("跨級 ×2" if r.get("cross") else "達標" if r.get("hit") else ("超過100h" if r.get("no_tier") else "未達標")) if r.get("rev") else "沒有營收資料",
+                        r.get("mult"), r.get("total"), who])
+    for ws in (ws1, ws2, ws3):
+        for c in ws[1]:
+            c.font = bold
+            c.fill = fill
+            c.alignment = Alignment(horizontal="center")
+        ws.freeze_panes = "E2" if ws is ws3 else "A2"
+    ws1.column_dimensions["D"].width = 12
+    ws2.column_dimensions["N"].width = 60
+    ws2.column_dimensions["C"].width = 12
+    ws4["A1"] = "各店日獎金表（依門市排班工作台的班表估算）"
+    ws4["A1"].font = bold
+    for i, t in enumerate([
+        f"月份：{ym[:4]}-{ym[4:]}；產出時間：{dt.datetime.now():%Y-%m-%d %H:%M}",
+        "班表來源：門市排班工作台（每天早上自動跟 104 同步；店長在 104 改班，隔天會跟上）。實際發放請以出勤紀錄核對。",
+        "營收來源：排班分析資料倉（POS 淨營收，已扣全部折扣）＋「甜點券$100」折抵額加回（「自己人$100甜點券」不算）。",
+        "店日工時＝當天在本店真正工作的時數合計：假別（特休、病假…）、交流會議／區會／內訓／經管會、跨店支援（在別店）的時段不算；事務班、備品班、包館照算。",
+        "級距（店日工時→營收門檻）：≤10h 10,000／≤20h 14,000／≤30h 29,000／≤40h 42,000／≤50h 53,000／≤60h 65,000／≤70h 77,000／≤80h 88,000／≤90h 100,000／≤100h 110,000；超過 100h 不發。",
+        "達標＝獎金營收 ≥ 門檻（剛好等於也算）；營收 ≥ 下一級門檻＝跨級，獎金 ×2。",
+        "每人日獎金＝200 元 × 個人計獎工時 ÷ 8 × 倍數（四捨五入）；名字含「實作」的實作夥伴工時計入全店、但不發。",
+        "「沒有營收資料」：那天 POS 還沒進資料倉（當天與前一天常見），隔天再下載一次。",
+    ], start=2):
+        ws4.cell(i, 1, t)
+    ws4.column_dimensions["A"].width = 120
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), n_store
+
+
 # ───────────────────────── 給前端的狀態 ─────────────────────────
 
 def _public(st):
@@ -836,7 +1428,9 @@ def _public(st):
     with _glock:
         job = dict(_jobs.get(k) or {})
     tpl = st.get("template")
-    shifts = (st.get("ext") or {}).get("shifts") or {}
+    cfg = cfg_load(st["store"])
+    ext = _ext(st, cfg)
+    shifts = ext.get("shifts") or {}
     cells = {}
     if st.get("schedule") and tpl:
         dtypes = set(tpl["info"]["dayTypes"])
@@ -867,9 +1461,11 @@ def _public(st):
         "note": st.get("note", ""), "s104": s104,
         "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
                       "fetched": tpl.get("fetched")} if tpl else None),
-        "ext": st.get("ext"), "schedule": st.get("schedule"), "cells": cells, "report": st.get("report", ""),
+        "ext": ext or None, "schedule": st.get("schedule"), "cells": cells, "report": st.get("report", ""),
         "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
+        "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
+        "bonus": bonus_calc(st, ext),
     }
 
 
@@ -919,9 +1515,75 @@ def handle(path, body):
 
     if act == "state":
         with lk:
+            st = _load(store, ym)
+        if st.get("schedule") and _rev_stale(st):
+            _rev_refresh_bg(store, ym)
+        with lk:
             return 200, _public(_load(store, ym))
 
-    if act in ("upload", "draft", "edit", "undo", "chat", "note") and running:
+    if act == "cfg_save":
+        try:
+            cfg = cfg_clean(body.get("cfg") or {})
+        except ValueError as ex:
+            return 400, {"ok": False, "error": str(ex)}
+        with lk:
+            cfg_save(store, cfg)
+            st = _load(store, ym)
+            if st.get("schedule"):
+                st["check"] = run_check(st)
+                _save(st)
+            return 200, _public(st)
+
+    if act == "mset_save":
+        with lk:
+            st = _load(store, ym)
+            if not st.get("template"):
+                return 400, {"ok": False, "error": "還沒有 104 範本（每天早上自動取得；或自己上傳）"}
+            try:
+                st["mset"] = mset_clean(st, body.get("mset") or {})
+            except ValueError as ex:
+                return 400, {"ok": False, "error": str(ex)}
+            if st.get("schedule"):
+                st["check"] = run_check(st)
+            _save(st)
+            return 200, _public(st)
+
+    if act == "mark":
+        with lk:
+            st = _load(store, ym)
+            if not st.get("template"):
+                return 400, {"ok": False, "error": "還沒有 104 範本"}
+            try:
+                for c in (body.get("marks") or [])[:200]:
+                    mark_set(st, str(c.get("emp")), int(c.get("day", 0)), str(c.get("value") or ""))
+            except (ValueError, TypeError) as ex:
+                return 400, {"ok": False, "error": str(ex)}
+            if st.get("schedule"):
+                st["check"] = run_check(st)
+            _save(st)
+            return 200, _public(st)
+
+    if act == "rev_refresh":
+        with lk:
+            st = _load(store, ym)
+        if st.get("schedule"):
+            _rev_refresh_bg(store, ym)
+        return 200, {"ok": True}
+
+    if act == "bonus_export":
+        if str(who) == "hq" and body.get("all"):
+            stores = sorted(STORES)
+            label = "全店"
+        else:
+            stores = [store]
+            label = f"{store}{STORES[store]}店"
+        out, n = bonus_xlsx(stores, ym)
+        if not n:
+            return 400, {"ok": False, "error": "這個月還沒有班表，沒辦法算日獎金"}
+        return 200, {"ok": True, "b64": base64.b64encode(out).decode("ascii"), "stores": n,
+                     "filename": f"日獎金表_{ym}_{label}_{dt.datetime.now():%Y%m%d}.xlsx"}
+
+    if act in ("upload", "draft", "edit", "undo", "chat", "note", "cfg_save", "mset_save", "mark") and running:
         return 409, {"ok": False, "error": "AI 還在處理上一個動作，請等它完成"}
 
     if act == "upload":
@@ -962,8 +1624,10 @@ def handle(path, body):
     if act == "draft":
         with lk:
             st = _load(store, ym)
-        if not st.get("template") or not st.get("settings_files"):
-            return 400, {"ok": False, "error": "要先上傳「每月排班設定表」和「104 匯入範本」"}
+        if not st.get("template"):
+            return 400, {"ok": False, "error": "還沒有 104 範本（每天早上自動取得；或自己上傳）"}
+        if not form_ready(st, cfg_load(store)) and not st.get("settings_files"):
+            return 400, {"ok": False, "error": "請先填好「店別基本設定」的班別，和「本月設定」的平日／假日營收預估（或上傳 Excel 設定表）"}
         _job(k, status="running", step="AI 正在排班（約 3～5 分鐘）")
         threading.Thread(target=_draft_worker, args=(store, ym), daemon=True).start()
         with lk:

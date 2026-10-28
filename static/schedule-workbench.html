@@ -29,7 +29,11 @@ window.__ime=(function(){
 <!-- 2026-10-26 新建（經營者：各店店長在這一頁排每月班表，取代 Claude Chat 各店排班專案；先用高雄SKM 試做）。
      流程：上傳「每月排班設定表」＋「104 匯入範本（時間排班）」→ AI 排初稿（Sonnet 5.5，檢查程式把關，沒過自動退回修正）
      → 日曆點格子改／對話框用講的改 → 下載填好的 104 匯入檔。後端 schedule_ws.py（/api/schedule/*），身分＝權限中心 store_N／task_hq。
-     中文輸入：對話框只建一次，收到回覆只重畫對話紀錄（#chatLog），不碰 #chatIn。 -->
+     中文輸入：對話框只建一次，收到回覆只重畫對話紀錄（#chatLog），不碰 #chatIn。
+     2026-10-28（經營者裁定）：設定表改成直接在工作台填——「🏪 店別基本設定」（每店一份、填一次）＋「📅 本月設定」（正職基準、營收預估、
+     夥伴正職／兼職、指休／特休／可上日點格子、特殊日）；Excel 上傳留在「📎 備用」。表單只在第一次載入、換店月、存檔成功後重建
+     （renderForms），3 秒輪詢不碰表單；輸入框有焦點或正在選字時不重建。班表加「營業額」「日獎金」列與每人「日獎金」欄，
+     🎁 日獎金卡可下載給會計的日獎金表（總部一次全店）。 -->
 <style>
 :root{--bg:#f6f4ef;--card:#fff;--ink:#2b2b2b;--mute:#6b6b6b;--line:#e3ded3;--acc:#c0622f;--acc2:#8a4a25;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828;
   --wk:#fbf3e6;--rest:#eef1f5;--hol:#fde8e8;--chg:#fff3a6}
@@ -107,6 +111,30 @@ tr.sum td{background:#faf7f1;font-size:11px}
 .modal select,.modal input{width:100%}
 ol.sop li{margin:3px 0}
 .hide{display:none!important}
+/* 2026-10-28 設定表單／指休格子／日獎金 */
+table.frm{border-collapse:collapse;font-size:13px;margin:6px 0}
+table.frm th,table.frm td{border-bottom:1px solid var(--line);padding:3px 4px;text-align:center;white-space:nowrap}
+table.frm th{background:#faf7f1;font-weight:600}
+table.frm input[type=text],table.frm input[type=number],table.frm select{padding:3px 5px;border-radius:6px}
+table.frm input.tm{width:62px;text-align:center}
+table.frm input.n{width:58px;text-align:center}
+table.frm input.nm{width:96px}
+table.frm input.wide{width:220px}
+table.frm .x{color:var(--bad);cursor:pointer;font-weight:700;padding:0 6px}
+.fld{display:inline-flex;align-items:center;gap:6px;margin:4px 14px 4px 0;font-size:13px}
+.fld input[type=number]{width:80px;padding:3px 5px;border-radius:6px}
+.fld input[type=text]{padding:3px 5px;border-radius:6px}
+.sub{margin:10px 0 4px;font-weight:600}
+details.sec{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:8px 0;background:#fffdf9}
+details.sec>summary{cursor:pointer}
+table.mk td.m{min-width:34px;cursor:pointer;height:28px}
+table.mk td.m:hover{outline:2px solid var(--acc);outline-offset:-2px}
+td.m.k1{background:#e3eef9;color:#1b4d8a;font-weight:600}
+td.m.k2{background:#fde8e8;color:#9b2c2c;font-weight:600}
+td.m.k3{background:#e6f3e7;color:var(--ok);font-weight:600}
+tr.sum td.rv{font-weight:600}tr.sum td.rv.est{font-weight:400;color:var(--mute)}
+tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr.sum td.bn.miss{color:var(--mute);font-weight:400}
+.bsum{font-size:13px;margin:4px 0}
 </style>
 </head>
 <body>
@@ -134,19 +162,29 @@ ol.sop li{margin:3px 0}
 
 <main id="app" class="hide">
   <div class="card">
-    <h2>① 上傳每月排班設定表 <span class="mute" style="font-weight:normal">（104 範本會自動取得）</span></h2>
-    <div class="row">
-      <div class="file"><b>每月排班設定表（Excel）</b>
-        <input type="file" id="fSet" accept=".xlsx,.xls,.xlsm,.csv,.txt">
-        <div id="setList" class="mute"></div></div>
-      <div class="file"><b>104 匯入範本（時間排班）</b>
-        <div class="mute">每天自動從 104 取得，不用上傳。只有 104 還沒建這個月的班表時，才需要自己下載上傳（104 → 排班 → 本店當月班表 → 更多功能 → 匯入班表 → 時間排班 → 下載範本）。</div>
-        <input type="file" id="fTpl" accept=".xlsx">
-        <div id="tplInfo" class="mute"></div></div>
-    </div>
-    <details style="margin-top:8px"><summary class="mute">補充說明（選填，例：這個月週三晚班只排 1 人）</summary>
-      <textarea id="note" rows="3" placeholder="想交代 AI 的事寫這裡，存好再按「AI 排初稿」"></textarea>
-      <button class="btn ghost sm" id="noteBtn">存說明</button> <span id="noteMsg" class="mute"></span>
+    <h2>① 排班設定 <span class="mute" style="font-weight:normal">（店別基本設定填一次就好，每月自動帶入；104 範本每天自動取得）</span></h2>
+    <div id="tplInfo" class="mute" style="margin-bottom:6px"></div>
+    <details class="sec" id="cfgBox"><summary><b>🏪 店別基本設定</b> <span id="cfgSum" class="mute"></span></summary>
+      <div id="cfgForm"></div>
+    </details>
+    <details class="sec" id="msetBox" open><summary><b>📅 本月設定</b> <span id="msetSum" class="mute"></span></summary>
+      <div id="msetForm"></div>
+      <div class="sub">指休／特休／兼職可上日（點格子切換：正職 空→<span style="color:#1b4d8a">指休</span>→<span style="color:#9b2c2c">特休</span>→空；兼職 空→<span style="color:var(--ok)">可上</span>→<span style="color:#1b4d8a">指休</span>→空；點一下就存）</div>
+      <div class="tblwrap" id="markWrap"><div class="mute" style="padding:8px">要先有 104 範本才會有夥伴名單。</div></div>
+    </details>
+    <details class="sec"><summary class="mute">📎 備用：上傳 Excel 設定表／補充說明／自己上傳 104 範本</summary>
+      <div class="row" style="margin-top:8px">
+        <div class="file"><b>每月排班設定表（Excel，備用）</b>
+          <div class="mute">上面的表單填不了的情況才用；有上傳會跟表單一起給 AI 看。</div>
+          <input type="file" id="fSet" accept=".xlsx,.xls,.xlsm,.csv,.txt">
+          <div id="setList" class="mute"></div></div>
+        <div class="file"><b>104 匯入範本（時間排班）</b>
+          <div class="mute">每天自動從 104 取得。只有 104 還沒建這個月的班表時，才需要自己下載上傳（104 → 排班 → 本店當月班表 → 更多功能 → 匯入班表 → 時間排班 → 下載範本）。</div>
+          <input type="file" id="fTpl" accept=".xlsx"></div>
+      </div>
+      <div style="margin-top:8px"><b>補充說明</b><span class="mute">（選填，想交代 AI 的事，例：這個月週三晚班只排 1 人）</span>
+        <textarea id="note" rows="3" placeholder="存好再按「AI 排初稿」"></textarea>
+        <button class="btn ghost sm" id="noteBtn">存說明</button> <span id="noteMsg" class="mute"></span></div>
     </details>
   </div>
 
@@ -154,7 +192,7 @@ ol.sop li{margin:3px 0}
     <h2>② AI 排初稿</h2>
     <div class="row">
       <button class="btn" id="draftBtn">🤖 AI 排初稿</button>
-      <span class="mute">AI 會照設定表排整個月，再用檢查程式驗過（約 3～5 分鐘，可以先做別的事）。</span>
+      <span class="mute">AI 會照上面的設定排整個月，再用檢查程式驗過（約 3～5 分鐘，可以先做別的事）。</span>
     </div>
     <div id="job" class="job hide"></div>
   </div>
@@ -167,8 +205,22 @@ ol.sop li{margin:3px 0}
       <span><i class="sw" style="background:var(--hol)"></i>國定假日／特休</span><span><i class="sw" style="background:var(--chg)"></i>剛改過</span>
       <span>點格子可以改班；也可以在下面對話框用講的</span></div>
     <div id="s104" class="job hide" style="background:#eef5ff;border-color:#c9dcf5"></div>
-    <div class="legend">人效燈號：<span class="lt-g">🟢 優秀（人力精實、人效高）</span><span class="lt-y">🟡 正常（人力與營收相稱）</span><span class="lt-r">🔴 偏低（人可能排太多）</span></div>
-    <div class="tblwrap" id="tblWrap"><div class="mute" style="padding:12px">還沒有班表。先上傳兩個檔，再按「AI 排初稿」。</div></div>
+    <div class="legend">人效燈號：<span class="lt-g">🟢 優秀（人力精實、人效高）</span><span class="lt-y">🟡 正常（人力與營收相稱）</span><span class="lt-r">🔴 偏低（人可能排太多）</span>　營業額：粗體＝POS 實際（含甜點券$100 加回）、灰字「預」＝預估　🎁 日獎金：綠＝達標、紅 ×2＝跨級加倍（滑鼠移到格子看明細）</div>
+    <div class="tblwrap" id="tblWrap"><div class="mute" style="padding:12px">還沒有班表。先填好設定，再按「AI 排初稿」。</div></div>
+  </div>
+
+  <div class="card" id="bonusCard">
+    <div class="row"><h2 style="margin:0">🎁 日獎金 <span class="mute" style="font-weight:normal">（依班表與 POS 營收估算，實發以出勤為準）</span></h2><span class="sp" style="flex:1"></span>
+      <button class="btn ghost sm" id="revBtn">🔄 重新抓營業額</button>
+      <button class="btn sm" id="bonusBtn">⬇ 下載本店日獎金表</button>
+      <button class="btn sm hide" id="bonusAllBtn">⬇ 下載全店日獎金表（給會計）</button></div>
+    <div id="bonusBox" class="mute">排出班表後，這裡會顯示每天的營業額、達標情形與每位夥伴的日獎金。</div>
+    <details class="xhelp" style="margin-top:6px"><summary class="mute">ⓘ 日獎金怎麼算</summary><ul class="mute" style="margin:4px 0">
+      <li>獎金營收＝POS 淨營收＋「甜點券$100」折抵額（「自己人$100甜點券」不算）。</li>
+      <li>店日工時＝當天在本店真正工作的時數：假別、交流會議／區會／內訓／經管會、在別店（崗位填別店）的時段不算；事務班、備品班、包館照算。</li>
+      <li>級距：≤10h $10,000、≤20h $14,000、≤30h $29,000、≤40h $42,000、≤50h $53,000、≤60h $65,000、≤70h $77,000、≤80h $88,000、≤90h $100,000、≤100h $110,000；超過 100h 不發。</li>
+      <li>營收 ≥ 門檻＝達標；營收 ≥ 下一級門檻＝跨級，獎金 ×2。每人＝200 元 × 個人工時 ÷ 8 × 倍數。名字含「實作」的實作夥伴計工時、不發。</li>
+      <li>營業額每 2 小時自動更新一次；當天與前一天的 POS 常還沒進資料倉，隔天再看。</li></ul></details>
   </div>
 
   <div class="grid2">
@@ -223,7 +275,7 @@ ol.sop li{margin:3px 0}
 var API='/api/schedule/';
 var STORES={1:'精明',2:'草悟道',3:'南京',4:'士林',5:'Focus',6:'新竹',7:'板橋',8:'新店',9:'中壢',10:'藝文',11:'A13',12:'SKM'};
 var AUTH_KEY='sw_auth_v1', TTL=12*3600*1000;
-var auth=null, S=null, prevRaw={}, chg={}, pollT=null, edCur=null, pendingText='';
+var auth=null, S=null, prevRaw={}, chg={}, pollT=null, edCur=null, pendingText='', formKey='';
 function $(id){return document.getElementById(id)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
 
@@ -254,10 +306,10 @@ $('lgBtn').onclick=function(){
 };
 $('lgPwd').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.isComposing)$('lgBtn').click()});
 $('logoutBtn').onclick=function(){clearAuth();auth=null;showLogin('')};
-function enter(){$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');
+function enter(){$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');formKey='';
   if(auth.as==='hq'){$('storeSel').classList.remove('hide');$('who').textContent='🏢 總部'}else{$('who').textContent=auth.as+' 號店 '+STORES[auth.as]}
   prevRaw={};chg={};refresh(true)}
-$('storeSel').onchange=$('ymSel').onchange=function(){prevRaw={};chg={};$('chatLog').innerHTML='';refresh(true)};
+$('storeSel').onchange=$('ymSel').onchange=function(){prevRaw={};chg={};formKey='';$('chatLog').innerHTML='';refresh(true)};
 
 /* ── 讀狀態、重畫結果區（不碰輸入框） ── */
 function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
@@ -266,17 +318,126 @@ function apply(j,first){
   prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
   S=j;
   $('dsb').textContent='🕒 最後更新 '+(j.updated?j.updated.replace('T',' '):'（還沒有資料）')+'　·　'+j.store+' 號店 '+j.storeName+' '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月　·　本月 AI 費用約 NT$'+(j.cost||0);
-  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();
+  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();renderForms(first);renderBonus();
   if(first&&j.note!==undefined)$('note').value=j.note||'';
   var running=j.job&&j.job.status==='running';
   $('draftBtn').disabled=running;$('chatBtn').disabled=running;$('undoBtn').disabled=running||!j.canUndo;$('expBtn').disabled=!j.schedule;
+  $('bonusBtn').disabled=!j.bonus;$('revBtn').disabled=!j.schedule;$('bonusAllBtn').classList.toggle('hide',!(auth&&auth.as==='hq'));
   if(running&&!pollT)pollT=setInterval(function(){refresh()},3000);
   if(!running&&pollT){clearInterval(pollT);pollT=null}
 }
 function renderFiles(){
-  var f=S.settingsFiles||[];$('setList').innerHTML=f.length?f.map(function(x){return '✅ '+esc(x.name)}).join('<br>'):'還沒上傳';
-  var t=S.template;$('tplInfo').innerHTML=t?((t.source==='104'?'✅ 104 自動取得（'+fmtTs(t.fetched*1000)+'）':'✅ '+esc(t.name))+'<br>班表：'+esc(t.info.title)+'｜'+t.info.days.length+' 天｜'+t.info.emps.length+' 人：'+t.info.emps.map(function(e){return esc(e.name)}).join('、')):'還沒上傳';
+  var f=S.settingsFiles||[];$('setList').innerHTML=f.length?f.map(function(x){return '✅ '+esc(x.name)}).join('<br>'):'（沒有上傳）';
+  var t=S.template;$('tplInfo').innerHTML=t?('📄 104 範本：'+(t.source==='104'?'✅ 104 自動取得（'+fmtTs(t.fetched*1000)+'）':'✅ '+esc(t.name))+'｜'+esc(t.info.title)+'｜'+t.info.days.length+' 天｜'+t.info.emps.length+' 人：'+t.info.emps.map(function(e){return esc(e.name)}).join('、')):'⚠ 還沒有 104 範本（每天早上自動取得；104 還沒建這個月的班表時，請到下方「📎 備用」自己上傳）';
 }
+function inStore(pos){pos=(pos||'').trim();if(!pos)return true;return (S.template.info.title||'').indexOf(pos.replace(/店/g,''))>=0}
+
+/* ── 設定表單（2026-10-28）：只在第一次載入、換店月、存檔成功後重建；輪詢不碰（中文輸入規則） ── */
+function formFocused(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT')&&($('cfgForm').contains(a)||$('msetForm').contains(a))}
+function renderForms(force){
+  var cfg=S.cfg||{},ms=S.mset,emps=S.template?S.template.info.emps.map(function(e){return e.id}).join(','):'';
+  var key=[S.store,S.ym,emps,cfg.updated||'',ms&&ms.updated||''].join('|');
+  var cfgN=(cfg.shifts||[]).length;
+  $('cfgSum').textContent=cfgN?('已設 '+cfgN+' 個班別'+(cfg.updated?'（'+cfg.updated.slice(0,10)+' 存）':'')):'還沒設定（先填這裡）';
+  $('msetSum').textContent=S.formReady?'✅ 可以排班':(cfgN?'還缺平日／假日營收預估':'');
+  if(!force&&key===formKey)return;
+  if(!force&&(formFocused()||(window.__ime&&__ime.on)))return;
+  formKey=key;
+  if(!cfgN)$('cfgBox').open=true;
+  renderCfgForm(cfg);renderMsetForm(ms);renderMarks();
+}
+function tmIn(v){return '<input type="text" class="tm" value="'+esc(v||'')+'" placeholder="10:20" maxlength="5">'}
+function shiftRow(r){r=r||{};var sg=r.segs||[];
+  return '<tr><td><input type="text" class="nm" value="'+esc(r.name||'')+'" placeholder="例：平日早班"></td>'+[0,1,2].map(function(i){return '<td>'+tmIn(sg[i]&&sg[i][0])+'–'+tmIn(sg[i]&&sg[i][1])+'</td>'}).join('')+
+    '<td><input type="number" class="n" min="0" max="20" value="'+esc(r.wd==null?'':r.wd)+'"></td><td><input type="number" class="n" min="0" max="20" value="'+esc(r.we==null?'':r.we)+'"></td><td class="x" title="刪除這列">✕</td></tr>'}
+function carryRow(r){r=r||{};return '<tr><td><input type="text" class="nm" value="'+esc(r.name||'')+'"></td><td><select><option value="A"'+(r.type!=='B'?' selected':'')+'>A</option><option value="B"'+(r.type==='B'?' selected':'')+'>B</option></select></td><td><input type="text" class="nm" value="'+esc(r.date||'')+'" placeholder="2026-10-05"></td><td><input type="text" class="wide" value="'+esc(r.note||'')+'"></td><td class="x" title="已補回，刪除">✕</td></tr>'}
+function renderCfgForm(cfg){
+  var sh=(cfg.shifts&&cfg.shifts.length)?cfg.shifts:[{name:'平日早班',segs:[['10:20','12:00'],['12:30','18:50']],wd:1,we:0},{name:'平日晚班',segs:[['13:00','15:00'],['15:30','21:30']],wd:1,we:0},{name:'假日早班',segs:[['09:50','12:00'],['12:30','18:20']],wd:0,we:1},{name:'假日中班',segs:[['12:00','15:00'],['15:30','20:30']],wd:0,we:1},{name:'假日晚班',segs:[['13:30','15:30'],['16:00','22:00']],wd:0,we:1}];
+  var h='<div class="mute">這些是本店固定的規則，改了會存起來，每個月自動帶入。'+((cfg.shifts||[]).length?'':'（下面是預設範例，請改成本店實際的班別）')+'</div>';
+  h+='<div class="sub">班別與每天需要的人數</div><div class="tblwrap"><table class="frm" id="shiftTbl"><thead><tr><th>班別名稱</th><th>第 1 段</th><th>第 2 段</th><th>第 3 段（全天班才用）</th><th>平日每天<br>幾人</th><th>假日每天<br>幾人</th><th></th></tr></thead><tbody>'+sh.map(shiftRow).join('')+'</tbody></table></div>';
+  h+='<button class="btn ghost sm" id="shiftAdd" type="button">＋ 加一個班別</button><span class="mute">　名稱請含「早」「中」「晚」字（檢查晚接早要用）；平日／假日分開取名。</span>';
+  h+='<div class="sub">規則</div><label class="fld">連續上班最多 <input type="number" id="cMax" min="1" max="12" value="'+esc(cfg.max_consec==null?5:cfg.max_consec)+'"> 天</label>'+
+     '<label class="fld">晚班接隔天早班最多 <input type="number" id="cLate" min="0" max="31" value="'+esc(cfg.late_early_limit==null?0:cfg.late_early_limit)+'"> 次（0＝不允許）</label>';
+  h+='<div class="sub">跨店支援夥伴 <span class="mute">（誰、哪家店、通常什麼時候來）</span></div><textarea id="cSupport" rows="2">'+esc(cfg.support||'')+'</textarea>';
+  h+='<div class="sub">店規 <span class="mute">（AI 排班一定會守的，一行一條，例：週三晚班只排 1 人）</span></div><textarea id="cRules" rows="3">'+esc(cfg.rules||'')+'</textarea>';
+  h+='<div class="sub">挪假未補清單 <span class="mute">（跨月自動保留；補回了就按 ✕）</span></div><table class="frm" id="carryTbl"><thead><tr><th>姓名</th><th>類型</th><th>挪假日期</th><th>備註</th><th></th></tr></thead><tbody>'+(cfg.carry||[]).map(carryRow).join('')+'</tbody></table><button class="btn ghost sm" id="carryAdd" type="button">＋ 加一筆</button>';
+  h+='<div class="row" style="margin-top:10px"><button class="btn" id="cfgSave" type="button">💾 存店別基本設定</button><span id="cfgMsg" class="mute"></span></div>';
+  $('cfgForm').innerHTML=h;
+  $('shiftAdd').onclick=function(){$('shiftTbl').tBodies[0].insertAdjacentHTML('beforeend',shiftRow())};
+  $('carryAdd').onclick=function(){$('carryTbl').tBodies[0].insertAdjacentHTML('beforeend',carryRow())};
+  $('cfgSave').onclick=saveCfg;
+}
+function collectCfg(){
+  var shifts=[];Array.prototype.forEach.call($('shiftTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');var segs=[];for(var i=0;i<3;i++){var a=ins[1+i*2].value.trim(),b=ins[2+i*2].value.trim();if(a||b)segs.push([a,b])}
+    shifts.push({name:ins[0].value.trim(),segs:segs,wd:ins[7].value,we:ins[8].value})});
+  var carry=[];Array.prototype.forEach.call($('carryTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input'),sel=tr.querySelector('select');carry.push({name:ins[0].value,type:sel.value,date:ins[1].value,note:ins[2].value})});
+  return {shifts:shifts,max_consec:$('cMax').value,late_early_limit:$('cLate').value,support:$('cSupport').value,rules:$('cRules').value,carry:carry};
+}
+function saveCfg(){$('cfgSave').disabled=true;$('cfgMsg').textContent='存檔中…';
+  post('cfg_save',{cfg:collectCfg()}).then(function(j){$('cfgMsg').textContent='✅ 已存';apply(j);renderForms(true);setTimeout(function(){var m=$('cfgMsg');if(m)m.textContent=''},2500)})
+   .catch(function(e){$('cfgSave').disabled=false;$('cfgMsg').textContent='⚠ '+e.message})}
+function specialRow(r,days){r=r||{};var o=days.map(function(d){return '<option value="'+d.d+'"'+(r.day==d.d?' selected':'')+'>'+d.d+' 日（'+d.wd+'）</option>'}).join('');
+  return '<tr><td><select>'+o+'</select></td><td><input type="number" class="n" style="width:90px" min="0" value="'+esc(r.revenue==null?'':r.revenue)+'"></td><td><input type="text" class="wide" value="'+esc(r.staff||'')+'" placeholder="例：加 1 人中班／早班改 09:00 開始"></td><td><input type="text" class="wide" value="'+esc(r.note||'')+'" placeholder="例：週年慶、包館"></td><td class="x" title="刪除">✕</td></tr>'}
+function renderMsetForm(ms){
+  if(!S.template||!ms){$('msetForm').innerHTML='<div class="mute">要先有 104 範本（夥伴名單從範本來）。</div>';return}
+  var info=S.template.info,b=ms.base||{},rv=ms.revenue||{};
+  var h='<div class="sub">正職基準（這個月）</div><label class="fld">標準時數 <input type="number" id="mStd" min="0" value="'+esc(b.std_hours==null?'':b.std_hours)+'"> h</label><label class="fld">休假 <input type="number" id="mOff" min="0" max="31" value="'+esc(b.off_days==null?'':b.off_days)+'"> 天</label><label class="fld">國定假日 <input type="number" id="mHol" min="0" max="31" value="'+esc(b.holidays==null?'':b.holidays)+'"> 天</label>';
+  h+='<div class="sub">營收預估（人效燈號用）<span class="mute">　必填</span></div><label class="fld">平日每天 $<input type="number" id="mWd" min="0" value="'+esc(rv.weekday==null?'':rv.weekday)+'"></label><label class="fld">假日每天 $<input type="number" id="mWe" min="0" value="'+esc(rv.weekend==null?'':rv.weekend)+'"></label>';
+  h+='<div class="sub">夥伴 <span class="mute">（名單跟著 104 範本；正職／兼職上個月填過會自動帶入）</span></div><div class="tblwrap"><table class="frm" id="empTbl"><thead><tr><th>工號</th><th>姓名</th><th>正職／兼職</th><th>目標時數</th><th>兼職最低時數</th><th>個人特殊班別／備註</th></tr></thead><tbody>';
+  info.emps.forEach(function(e){var v=(ms.emps||{})[e.id]||{};
+    h+='<tr data-e="'+esc(e.id)+'"><td>'+esc(e.id)+'</td><td>'+esc(e.name)+'</td><td><select><option'+(v.type!=='兼職'?' selected':'')+'>正職</option><option'+(v.type==='兼職'?' selected':'')+'>兼職</option></select></td>'+
+      '<td><input type="number" class="n" min="0" value="'+esc(v.target==null?'':v.target)+'" placeholder="'+esc(v.target_hint||'')+'"></td><td><input type="number" class="n" min="0" value="'+esc(v.min_hours==null?'':v.min_hours)+'"></td><td><input type="text" class="wide" value="'+esc(v.note||'')+'" placeholder="例：週二固定南京上課／區主管週四在板橋"></td></tr>'});
+  h+='</tbody></table></div>';
+  h+='<div class="sub">特殊日 <span class="mute">（營收特別高或低的日子、要加人或調班的日子）</span></div><table class="frm" id="spTbl"><thead><tr><th>日期</th><th>營收預估</th><th>人力／班別調整</th><th>備註</th><th></th></tr></thead><tbody>'+(ms.special||[]).map(function(r){return specialRow(r,info.days)}).join('')+'</tbody></table><button class="btn ghost sm" id="spAdd" type="button">＋ 加一天</button>';
+  h+='<div class="row" style="margin-top:10px"><button class="btn" id="msetSave" type="button">💾 存本月設定</button><span id="msetMsg" class="mute"></span></div>';
+  $('msetForm').innerHTML=h;
+  $('spAdd').onclick=function(){$('spTbl').tBodies[0].insertAdjacentHTML('beforeend',specialRow(null,info.days))};
+  $('msetSave').onclick=saveMset;
+}
+function collectMset(){
+  var emps={};Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');emps[tr.dataset.e]={type:tr.querySelector('select').value,target:ins[0].value,min_hours:ins[1].value,note:ins[2].value}});
+  var sp=[];Array.prototype.forEach.call($('spTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');sp.push({day:tr.querySelector('select').value,revenue:ins[0].value,staff:ins[1].value,note:ins[2].value})});
+  return {base:{std_hours:$('mStd').value,off_days:$('mOff').value,holidays:$('mHol').value},revenue:{weekday:$('mWd').value,weekend:$('mWe').value},emps:emps,special:sp};
+}
+function saveMset(){$('msetSave').disabled=true;$('msetMsg').textContent='存檔中…';
+  post('mset_save',{mset:collectMset()}).then(function(j){$('msetMsg').textContent='✅ 已存';apply(j);renderForms(true);setTimeout(function(){var m=$('msetMsg');if(m)m.textContent=''},2500)})
+   .catch(function(e){$('msetSave').disabled=false;$('msetMsg').textContent='⚠ '+e.message})}
+var MK={'指休':'k1','特休':'k2','可上':'k3'};
+function renderMarks(){
+  if(!S.template||!S.mset){return}
+  var info=S.template.info,marks=S.mset.marks||{},emps=S.mset.emps||{};
+  var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){h+='<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});h+='</tr></thead><tbody>';
+  info.emps.forEach(function(e){var t=(emps[e.id]||{}).type||'正職';h+='<tr><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
+    info.days.forEach(function(d){var v=(marks[e.id]||{})[d.d]||'';h+='<td class="m '+(MK[v]||'')+(isWk(d.d)?' wk':'')+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" data-t="'+esc(t)+'">'+esc(v)+'</td>'});h+='</tr>'});
+  $('markWrap').innerHTML=h+'</tbody></table>';
+}
+$('markWrap').addEventListener('click',function(e){var td=e.target.closest('td.m');if(!td||!S||!S.mset)return;
+  if(S.job&&S.job.status==='running'){alert('AI 還在處理，等它完成再改');return}
+  var cyc=td.dataset.t==='兼職'?['','可上','指休']:['','指休','特休'],cur=td.textContent.trim(),nx=cyc[(cyc.indexOf(cur)+1)%cyc.length];
+  td.textContent=nx;td.className='m '+(MK[nx]||'')+(isWk(+td.dataset.d)?' wk':'');
+  S.mset.marks[td.dataset.e]=S.mset.marks[td.dataset.e]||{};if(nx)S.mset.marks[td.dataset.e][td.dataset.d]=nx;else delete S.mset.marks[td.dataset.e][td.dataset.d];
+  post('mark',{marks:[{emp:td.dataset.e,day:+td.dataset.d,value:nx}]}).then(function(j){var k=formKey;apply(j);formKey=k;if(j.mset)S.mset.marks=j.mset.marks;renderMarks()}).catch(function(er){alert(er.message);refresh()})});
+
+/* ── 日獎金（2026-10-28） ── */
+function money(n){return '$'+Math.round(n||0).toLocaleString()}
+function bonusTitle(r,names){if(!r)return '';var t=[];if(r.rev)t.push('獎金營收 '+money(r.rev)+'（POS '+money(r.net)+(r.voucher?' ＋ 甜點券$100 '+money(r.voucher)+'×'+r.qty+'張':'')+'）');else t.push('還沒有 POS 營收資料');
+  t.push('店日工時 '+r.hours+'h'+(r.cap?' → 級距 ≤'+r.cap+'h 門檻 '+money(r.threshold)+(r.next?'、下一級 '+money(r.next):''):r.no_tier?' → 超過 100h 沒有級距':''));
+  t.push(r.cross?'跨級 ×2':r.hit?'達標 ×1':(r.rev?'未達標':''));
+  for(var k in r.staff){var x=r.staff[k];t.push((names[k]||k)+'：'+x.work+'h'+(x.bonus?' → '+money(x.bonus):'')+(x.why?'（不算：'+x.why+'）':'')+(x.trainee?'（實作夥伴不發）':''))}
+  return t.filter(Boolean).join('\n')}
+function renderBonus(){
+  var b=S.bonus,el=$('bonusBox');if(!b){el.className='mute';el.textContent='排出班表後，這裡會顯示每天的營業額、達標情形與每位夥伴的日獎金。';return}
+  el.className='';var m=b.month,info=S.template.info;
+  var h='<div class="bsum">'+(b.rev_days?'🎁 <b>本月日獎金合計 '+money(m.total)+'</b>　達標 '+m.hit_days+' 天（跨級加倍 '+m.cross_days+' 天）／有營收 '+m.biz_days+' 天　<span class="mute">營業額 '+fmtTs(b.rev_fetched*1000)+' 更新'+(b.voucher_ok?'':'（甜點券$100 這次沒抓到，先用 POS 淨營收）')+'</span>':(b.rev_fetched?'ℹ 這個月還沒有 POS 營收資料（還沒開始營業的月份；營業額先用預估）。':'⚠ 還沒抓到這個月的營業額'+(b.rev_error?'（'+esc(b.rev_error)+'）':'（抓取中，幾秒後重新整理）')+'，日獎金先不算。'))+'</div>';
+  h+='<table class="hrs"><tr><th>夥伴</th><th>上班天數</th><th>計獎工時</th><th>日獎金合計</th></tr>'+info.emps.map(function(e){var days=0,work=0;for(var k in b.days){var x=b.days[k].staff[e.id];if(x&&x.work>0){days++;work+=x.work}}
+    return '<tr><td>'+esc(e.name)+'</td><td>'+days+'</td><td>'+(Math.round(work*10)/10)+'h</td><td><b>'+money(m.by_emp[e.id]||0)+'</b></td></tr>'}).join('')+'</table>';
+  el.innerHTML=h;
+}
+function dlB64(b64,name){var bin=atob(b64),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
+  var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([u],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},2000)}
+$('bonusBtn').onclick=function(){post('bonus_export').then(function(j){dlB64(j.b64,j.filename)}).catch(function(e){alert(e.message)})};
+$('bonusAllBtn').onclick=function(){$('bonusAllBtn').disabled=true;post('bonus_export',{all:1}).then(function(j){$('bonusAllBtn').disabled=false;dlB64(j.b64,j.filename);alert('已產出 '+j.stores+' 家店的日獎金表')}).catch(function(e){$('bonusAllBtn').disabled=false;alert(e.message)})};
+$('revBtn').onclick=function(){post('rev_refresh').then(function(){$('revBtn').textContent='⏳ 抓取中…';setTimeout(function(){$('revBtn').textContent='🔄 重新抓營業額';refresh()},6000)}).catch(function(e){alert(e.message)})};
 function fmtTs(ms){if(!ms)return '';var d=new Date(ms);return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
 function render104(){
   var x=S.s104,el=$('s104');if(!x){el.classList.add('hide');return}
@@ -311,7 +472,8 @@ function renderTable(){
   if(!S.schedule||!S.template){return}
   var info=S.template.info,h='<table class="sch"><thead><tr><th class="nm">夥伴</th>';
   info.days.forEach(function(d){h+='<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});
-  h+='<th>時數</th></tr></thead><tbody>';
+  var B=S.bonus,names={};info.emps.forEach(function(e){names[e.id]=e.name});
+  h+='<th>時數</th>'+(B?'<th>日獎金</th>':'')+'</tr></thead><tbody>';
   var hrs={};((S.check&&S.check.hours)||[]).forEach(function(x){hrs[x.id]=x});
   var dayHrs={},dayN={};
   info.emps.forEach(function(e){
@@ -323,16 +485,23 @@ function renderTable(){
       if(c.type==='國定假日'||c.type==='特休')cls+=' hol';
       if(c.bad)cls+=' bad';
       if(chg[e.id+'|'+d.d])cls+=' chg';
-      var onsite=(c.segs||[]).filter(function(s){return s[2].indexOf('支援')<0&&!s[3]});
+      var onsite=(c.segs||[]).filter(function(s){return inStore(s[3])});
       if(onsite.length){dayN[d.d]=(dayN[d.d]||0)+1;dayHrs[d.d]=(dayHrs[d.d]||0)+onsite.reduce(function(a,s){return a+(mm(s[1])-mm(s[0]))/60},0)}
       var tags=(c.segs||[]).map(function(s){return s[2]}).filter(Boolean);if(c.dtag)tags.unshift(c.dtag);
       h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw)+'">'+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
     });
-    var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td></tr>';
+    var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td>'+(B?'<td><b>'+money((B.month.by_emp||{})[e.id]||0)+'</b></td>':'')+'</tr>';
   });
-  h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+='<td></td></tr>';
-  h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+='<td></td></tr>';
-  h+='<tr class="sum"><td class="nm">人效 rev/h</td>';info.days.forEach(function(d){var rv=revOf(d.d),hh=dayHrs[d.d]||0;h+='<td>'+(rv&&hh?light(d.d,rv/hh)+'<br>'+Math.round(rv/hh):'')+'</td>'});h+='<td></td></tr>';
+  var tail=B?'<td></td><td></td>':'<td></td>';
+  h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+=tail+'</tr>';
+  h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+=tail+'</tr>';
+  h+='<tr class="sum"><td class="nm">營業額</td>';info.days.forEach(function(d){var r=B&&B.days[d.d];if(r&&r.rev)h+='<td class="rv" title="'+esc(bonusTitle(r,names))+'">'+Math.round(r.rev/1000)+'k</td>';else{var ev=revOf(d.d);h+='<td class="rv est" title="預估 '+ev+'">'+(ev?'預'+Math.round(ev/1000)+'k':'')+'</td>'}});h+=tail+'</tr>';
+  h+='<tr class="sum"><td class="nm">人效 rev/h</td>';info.days.forEach(function(d){var r=B&&B.days[d.d],rv=(r&&r.rev)||revOf(d.d),hh=dayHrs[d.d]||0;h+='<td>'+(rv&&hh?light(d.d,rv/hh)+'<br>'+Math.round(rv/hh):'')+'</td>'});h+=tail+'</tr>';
+  if(B){h+='<tr class="sum"><td class="nm">🎁 日獎金</td>';info.days.forEach(function(d){var r=B.days[d.d];var tt=esc(bonusTitle(r,names));
+    if(!r||!r.rev||!r.hours)h+='<td class="bn miss" title="'+tt+'">'+(r&&r.hours&&!r.rev?'—':'')+'</td>';
+    else if(r.no_tier)h+='<td class="bn miss" title="'+tt+'">>100h</td>';
+    else if(!r.hit)h+='<td class="bn miss" title="'+tt+'">未達</td>';
+    else h+='<td class="bn'+(r.cross?' x2':'')+'" title="'+tt+'">'+money(r.total)+(r.cross?'<br>×2':'')+'</td>'});h+='<td></td><td><b>'+money(B.month.total)+'</b></td></tr>'}
   h+='</tbody></table>';$('tblWrap').innerHTML=h;
 }
 function mm(t){var nx=t.indexOf('次日')===0;t=t.replace('次日','');var p=t.split(':');return (+p[0])*60+(+p[1])+(nx?1440:0)}
@@ -384,7 +553,8 @@ function twoStep(btn,label,fn){var t=null,orig=btn.textContent;
     if(!btn.classList.contains('arm')){btn.classList.add('arm');btn.textContent=label;t=setTimeout(function(){btn.classList.remove('arm');btn.textContent=orig},3500);return}
     clearTimeout(t);btn.classList.remove('arm');btn.textContent=orig;fn()})}
 twoStep($('draftBtn'),'再按一次確認（會重排整個月）',function(){
-  if(!S.template||!(S.settingsFiles||[]).length){alert('要先上傳「每月排班設定表」和「104 匯入範本」');return}
+  if(!S.template){alert('還沒有 104 範本（每天早上自動取得；或到「📎 備用」自己上傳）');return}
+  if(!S.formReady&&!(S.settingsFiles||[]).length){alert('請先填好「店別基本設定」的班別、「本月設定」的平日／假日營收預估，按存檔（或上傳 Excel 設定表）');return}
   post('draft').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
 twoStep($('undoBtn'),'再按一次確認復原',function(){post('undo').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
 $('expBtn').onclick=function(){
