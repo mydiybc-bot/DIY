@@ -144,7 +144,7 @@ function uuid() { try { if (crypto.randomUUID) return crypto.randomUUID(); } cat
 var S = { q: FALLBACK_Q, a: {}, touched: false, t0: 0, id: uuid(), busy: false, cdTimer: null };
 var recipe = QS.recipe || QS.r || '', src = QS.src || 'tablet', lang = QS.lang || 'zh';
 var preStore = (function () {
-  var v = QS.store || lsGet('sv:store'); if (!v) return '';
+  var v = QS.preview === '1' ? '' : (QS.store || lsGet('sv:store')); if (!v) return '';
   for (var i = 0; i < STORES.length; i++) if (String(STORES[i][0]) === String(v) || STORES[i][1] === v) return STORES[i][1];
   return '';
 })();
@@ -337,9 +337,24 @@ function reset() {
 }
 $('btnAgain').onclick = reset;
 
+/* 預覽模式（?preview=1，給儀表板「✏️ 編輯題目」嵌在旁邊）：題目由儀表板用 postMessage 傳進來；不讀 GAS、不送出、不記店別 */
+if (QS.preview === '1') {
+  render();
+  var pb = $('btnSubmit'); pb.textContent = '預覽中（不會送出）';
+  pb.onclick = function () { var miss = validate(); $('hint').className = miss.length ? 'hint bad' : 'hint'; $('hint').textContent = miss.length ? '預覽：還有 ' + miss.length + ' 題沒回答（客人會看到這個提示）' : '預覽：全部填好了，客人按下去就會看到感謝畫面'; };
+  window.addEventListener('message', function (e) {
+    var d = e.data; if (!d || d.type !== 'sv-preview' || !Array.isArray(d.questions)) return;
+    var y = window.scrollY;
+    S.q = d.questions.filter(function (q) { return q.enabled !== false; }).map(function (q) { var o = { qid: q.qid, type: q.type, title: q.title || '（還沒寫題目）', options: q.type === 'text' ? [] : (q.options || []).filter(Boolean), required: !!q.required }; if (q.cond && q.cond.qid) o.cond = { qid: q.cond.qid, vals: q.cond.vals || [] }; return o; });
+    S.touched = false; render(); window.scrollTo(0, y);
+    if (d.focus) { var el = $('q_' + d.focus); if (el && !el.hidden) el.scrollIntoView({ block: 'center' }); }
+  });
+  if (window.parent !== window) window.parent.postMessage({ type: 'sv-preview-ready' }, '*');
+} else {
 render(); loadForm(); queueFlush();
 setInterval(queueFlush, 60000);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) queueFlush(); });
+}
 window.addEventListener('online', queueFlush);
 </script>
 </body>

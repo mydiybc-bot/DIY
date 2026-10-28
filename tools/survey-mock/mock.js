@@ -66,8 +66,8 @@ var G = {
     openById: function (id) { if (!FILES[id]) throw new Error('找不到試算表 ' + id); return FILES[id]; },
     flush: function () {}
   },
-  PropertiesService: { getScriptProperties: function () { return { getProperty: function (k) { return PROPS[k] == null ? null : PROPS[k]; }, setProperty: function (k, v) { PROPS[k] = String(v); }, getKeys: function () { return Object.keys(PROPS); }, deleteProperty: function (k) { delete PROPS[k]; } }; } },
-  CacheService: { getScriptCache: function () { return { get: function (k) { var e = CACHE[k]; if (!e) return null; if (e.exp < Date.now()) { delete CACHE[k]; return null; } return e.v; }, put: function (k, v, sec) { CACHE[k] = { v: String(v), exp: Date.now() + (sec || 600) * 1000 }; }, remove: function (k) { delete CACHE[k]; } }; } },
+  PropertiesService: { getScriptProperties: function () { return { getProperty: function (k) { return PROPS[k] == null ? null : PROPS[k]; }, setProperty: function (k, v) { PROPS[k] = String(v); }, setProperties: function (o) { for (var k in o) PROPS[k] = String(o[k]); }, getKeys: function () { return Object.keys(PROPS); }, deleteProperty: function (k) { delete PROPS[k]; } }; } },
+  CacheService: { getScriptCache: function () { return { get: function (k) { var e = CACHE[k]; if (!e) return null; if (e.exp < Date.now()) { delete CACHE[k]; return null; } return e.v; }, put: function (k, v, sec) { CACHE[k] = { v: String(v), exp: Date.now() + (sec || 600) * 1000 }; }, remove: function (k) { delete CACHE[k]; }, removeAll: function (ks) { ks.forEach(function (k) { delete CACHE[k]; }); } }; } },
   Utilities: { formatDate: fmt, getUuid: function () { return crypto.randomUUID(); } },
   ContentService: { MimeType: { JAVASCRIPT: 'js', JSON: 'json' }, createTextOutput: function (s) { return { text: s, mime: 'json', setMimeType: function (m) { this.mime = m; return this; } }; } },
   LockService: { getScriptLock: function () { return { tryLock: function () { return true; }, waitLock: function () { return true; }, releaseLock: function () {} }; } },

@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.8';
+var VER = 'survey-2026-10-28.9';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -72,6 +72,7 @@ function doGet(e) {
     else if (p.action === 'form') o = form_();
     else if (p.action === 'stats') o = stats_(p);
     else if (p.action === 'stats2') o = stats2_(p);
+    else if (p.action === 'qlist') o = qlist_();
     else throw fail_('不認得的動作', 'act');
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }
   if (p.callback && /^[A-Za-z_$][\w$]*$/.test(p.callback)) {
@@ -87,6 +88,9 @@ function doPost(e) {
     if (b.action === 'submit') o = submit_(b);
     else if (b.action === 'ping') o = { ver: VER, today: countToday_() };
     else if (b.action === 'import') o = import_(b);   /* 歷史匯入用，匯完會拿掉 */
+    else if (b.action === 'qsave') o = qsave_(b);
+    else if (b.action === 'qrestore') o = qrestore_(b);
+    else if (b.action === 'qauth') { authPwd_(b.pwd); o = { auth: true }; }
     else throw fail_('不認得的動作', 'act');
     o.ok = true; o.act = b.action;
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }
@@ -158,7 +162,7 @@ function questionsRead_(all) {
     var q = { qid: qid, order: Number(r[1]) || 999, type: String(r[2] || 'single').trim(), title: String(r[3] || '').trim(),
       options: String(r[4] || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean),
       required: String(r[5] || '').trim().toUpperCase() === 'Y', enabled: String(r[6] || 'Y').trim().toUpperCase() !== 'N',
-      cond: ci >= 0 ? parseCond_(r[ci]) : null };
+      cond: ci >= 0 ? parseCond_(r[ci]) : null, note: String(r[7] || '') };
     if (all || q.enabled) out.push(q);
   }
   out.sort(function (a, b) { return a.order - b.order; });
@@ -554,6 +558,116 @@ function rollbackImport() {
     lock.releaseLock(); lock = null;
     return msg + '；' + rebuildAgg();
   } finally { if (lock) lock.releaseLock(); }
+}
+
+/* ---------------- 儀表板「✏️ 編輯題目」（2026-10-28.9） ----------------
+   讀：GET qlist → 全部題目（含停用）＋版本紀錄；寫：POST qsave／qrestore，要帶「顧客問卷」那組密碼（權限中心 dim_auth survey 列），
+   後端直接讀 dim_auth 比對（明文存放，見 auth-center skill）；錯 10 次鎖 10 分鐘。每次存檔前把舊題目整份記進 dim_question_log。 */
+var KPI_LOCK = { q6: '是', q7: '是', q8: '是', q9: '是', q12: '是', q14: '會' };   /* 儀表板指標題：題型固定單選、這個答案一定要在 */
+function authPwd_(pwd) {
+  var c = CacheService.getScriptCache(), bad = Number(c.get('pwbad') || 0);
+  if (bad >= 10) throw fail_('密碼錯太多次，請 10 分鐘後再試', 'locked');
+  var v = SpreadsheetApp.openById(AUTH_SS).getSheetByName('dim_auth').getDataRange().getValues(), ok = false;
+  for (var i = 1; i < v.length; i++) if (String(v[i][0]) === DASH_ID) {
+    var real = String(v[i][2] == null ? '' : v[i][2]), on = String(v[i][4] || 'Y').toUpperCase() !== 'N';
+    ok = on && real !== '' && String(pwd == null ? '' : pwd) === real;
+  }
+  if (!ok) { c.put('pwbad', String(bad + 1), 600); throw fail_('密碼不對（要用「顧客問卷」這組密碼）', 'auth'); }
+}
+function qLogSheet_() { return sheet_('dim_question_log', ['saved_at', 'by', 'n', 'json'], [1]); }
+function qVer_() { return PropertiesService.getScriptProperties().getProperty('Q_VER') || ''; }
+function qlist_() {
+  var lg = qLogSheet_(), last = lg.getLastRow(), vers = [];
+  if (last >= 2) lg.getRange(Math.max(2, last - 29), 1, Math.min(30, last - 1), 3).getValues().forEach(function (r) { vers.push({ at: String(r[0]), by: String(r[1]), n: Number(r[2]) || 0 }); });
+  vers.reverse();
+  return { ok: true, ver: VER, qver: qVer_(), next_qid: 'q' + (qMax_() + 1), questions: questionsRead_(true), stores: STORES.map(function (s) { return s[1]; }), kpi: KPI_LOCK, versions: vers };
+}
+/* 檢查並整理成要寫進表的列；有問題就整批擋下，訊息用白話 */
+function qMax_() {   /* 用過的最大題號（目前題目＋所有舊版本），新題一律往上加，不重用 */
+  var m = Number(PropertiesService.getScriptProperties().getProperty('Q_MAX') || 0);
+  questionsRead_(true).forEach(function (q) { m = Math.max(m, Number(q.qid.slice(1)) || 0); });
+  var lg = qLogSheet_(), last = lg.getLastRow();
+  if (last >= 2) lg.getRange(2, 4, last - 1, 1).getValues().forEach(function (r) { try { JSON.parse(r[0] || '[]').forEach(function (x) { m = Math.max(m, Number(String(x[0]).slice(1)) || 0); }); } catch (e) { } });
+  return m;
+}
+function qValidate_(list, isRestore) {
+  if (!Array.isArray(list) || !list.length) throw fail_('沒有題目', 'input');
+  var errs = [], seen = {}, pos = {}, out = [], curIds = {}, qmax = isRestore ? 0 : qMax_();
+  if (!isRestore) questionsRead_(true).forEach(function (q) { curIds[q.qid] = 1; });
+  list.forEach(function (q, i) {
+    var qid = String(q.qid || ''), n = '「' + (clean_(q.title, 200).slice(0, 18) || '（沒寫題目）') + '」（' + (qid || '?') + '）';
+    if (!/^q\d{1,3}$/.test(qid)) { errs.push(n + '：題號不對'); return; }
+    if (seen[qid]) { errs.push(n + '：題號 ' + qid + ' 重複'); return; }
+    seen[qid] = 1; pos[qid] = i;
+    if (!isRestore && !curIds[qid] && Number(qid.slice(1)) <= qmax) errs.push(n + '：題號 ' + qid + ' 以前用過，新題要用 q' + (qmax + 1) + ' 以後（避免新舊答案混在一起）');
+    var type = ['single', 'multi', 'text'].indexOf(q.type) >= 0 ? q.type : '';
+    if (!type) errs.push(n + '：題型不對');
+    var title = clean_(q.title, 200); if (!title) errs.push(n + '：題目文字是空的');
+    var opts = (Array.isArray(q.options) ? q.options : []).map(function (o) { return clean_(o, 120); }).filter(Boolean);
+    if (qid === 'q1') opts = STORES.map(function (s) { return s[1]; });   /* 店別選項由系統管，不吃畫面的改動 */
+    if (type !== 'text') {
+      if (opts.length < 2) errs.push(n + '：選項至少要 2 個');
+      opts.forEach(function (o) { if (o.indexOf('|') >= 0) errs.push(n + '：選項不能有「|」符號（' + o + '）'); });
+      var dup = opts.filter(function (o, k) { return opts.indexOf(o) !== k; }); if (dup.length) errs.push(n + '：選項重複（' + dup.join('、') + '）');
+    } else opts = [];
+    if (KPI_LOCK[qid]) {
+      if (type !== 'single') errs.push(n + '是儀表板指標題，題型要維持單選');
+      if (opts.indexOf(KPI_LOCK[qid]) < 0) errs.push(n + '是儀表板指標題，選項一定要有「' + KPI_LOCK[qid] + '」');
+    }
+    var cond = q.cond && q.cond.qid ? { qid: String(q.cond.qid), vals: (q.cond.vals || []).map(String).filter(Boolean) } : null;
+    out.push({ qid: qid, type: type, title: title, opts: opts, req: q.required ? 'Y' : 'N', en: q.enabled === false ? 'N' : 'Y', note: clean_(q.note, 200), cond: cond, i: i });
+  });
+  if (!seen.q1) errs.push('店別題（q1）不能拿掉');
+  out.forEach(function (q) {
+    if (!q.cond) return;
+    var p = out.filter(function (x) { return x.qid === q.cond.qid; })[0], n = '「' + q.title.slice(0, 18) + '」的跳題條件';
+    if (!p) { errs.push(n + '：參考的題目不存在'); return; }
+    if (p.i >= q.i) errs.push(n + '：只能參考排在它前面的題目');
+    if (p.type === 'text') errs.push(n + '：不能參考文字題');
+    if (!q.cond.vals.length) errs.push(n + '：至少勾一個答案');
+    q.cond.vals.forEach(function (v) { if (p.opts.indexOf(v) < 0) errs.push(n + '：「' + v + '」不是「' + p.title.slice(0, 18) + '」的選項'); });
+    if (p.en === 'N' && q.en === 'Y') errs.push(n + '：參考的題目已停用，這題永遠不會出現');
+  });
+  if (errs.length) throw fail_('還有 ' + errs.length + ' 個地方要改：\n' + errs.slice(0, 12).join('\n'), 'input');
+  return out.map(function (q, k) { return [q.qid, k + 1, q.type, q.title, q.opts.join('|'), q.req, q.en, q.note, q.cond ? q.cond.qid + '=' + q.cond.vals.join('|') : '']; });
+}
+function qWrite_(rows, by) {
+  var sh = qSheet_(), last = sh.getLastRow(), cur = last >= 2 ? sh.getRange(2, 1, last - 1, Q_HEAD.length).getValues() : [];
+  var lg = qLogSheet_(); lg.appendRow([tz_(new Date(), 'yyyy-MM-dd HH:mm:ss'), by, cur.length, JSON.stringify(cur)]);   /* 存檔前留舊版 */
+  if (lg.getLastRow() > 61) lg.deleteRows(2, lg.getLastRow() - 61);   /* 只留最近 60 版 */
+  sh.getRange(1, 1, 1, Q_HEAD.length).setValues([Q_HEAD]);
+  if (last >= 2) sh.getRange(2, 1, last - 1, Math.max(sh.getLastColumn(), Q_HEAD.length)).clearContent();
+  growTo_(sh, rows.length + 1);
+  sh.getRange(2, 1, rows.length, Q_HEAD.length).setValues(rows);
+  SpreadsheetApp.flush();
+  var c = CacheService.getScriptCache(); c.removeAll(['form:v2', 'qs:0', 'qs:1']);
+  var mx = Number(PropertiesService.getScriptProperties().getProperty('Q_MAX') || 0); rows.forEach(function (r) { mx = Math.max(mx, Number(String(r[0]).slice(1)) || 0); });
+  var v = tz_(new Date(), 'yyyyMMddHHmmss') + Math.floor(Math.random() * 1000); PropertiesService.getScriptProperties().setProperties({ Q_VER: v, Q_MAX: String(mx) }); bumpStats_();
+  return v;
+}
+function qsave_(b) {
+  authPwd_(b.pwd);
+  var rows = qValidate_(b.questions);
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    if (String(b.base || '') !== qVer_()) throw fail_('題目剛剛被別人（或另一個分頁）改過了，請按「重新讀取」再改', 'conflict');
+    var v = qWrite_(rows, '儀表板');
+    return { qver: v, n: rows.length };
+  } finally { lock.releaseLock(); }
+}
+function qrestore_(b) {
+  authPwd_(b.pwd);
+  var lg = qLogSheet_(), last = lg.getLastRow(), at = String(b.at || ''), row = null;
+  if (last >= 2) lg.getRange(2, 1, last - 1, 4).getValues().forEach(function (r) { if (String(r[0]) === at) row = r; });
+  if (!row) throw fail_('找不到這個版本', 'input');
+  var old = JSON.parse(row[3] || '[]').sort(function (a, b2) { return (Number(a[1]) || 0) - (Number(b2[1]) || 0); });
+  var list = old.map(function (r) { var cd = parseCond_(r[8]); return { qid: String(r[0]), type: String(r[2]), title: String(r[3]), options: String(r[4] || '').split('|').filter(Boolean), required: String(r[5]).toUpperCase() === 'Y', enabled: String(r[6]).toUpperCase() !== 'N', note: String(r[7] || ''), cond: cd }; });
+  var rows = qValidate_(list, true);
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    if (String(b.base || '') !== qVer_()) throw fail_('題目剛剛被別人改過了，請按「重新讀取」再試', 'conflict');
+    return { qver: qWrite_(rows, '復原到 ' + at), n: rows.length };
+  } finally { lock.releaseLock(); }
 }
 
 /* ---------------- 儀表板讀取 ---------------- */
