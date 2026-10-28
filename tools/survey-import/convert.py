@@ -52,13 +52,10 @@ STORE_MAP = {
 
 # 舊選項改過名／合併的（正規化後的舊值 → 新選項）。每一條都會列在預覽報告給經營者確認。
 SYN = {
-    'q4': {'難易度': '不容易失敗', '流行性': '現在流行'},
-    # 5.0 的「協助的地方」12 個細項，6.0 合併成「製作過程時的協助，如補救、教學、設備使用、蛋糕抹面、找食材／器模具…」
-    'q10': {
-        '找工具': 'MAKE', '找食材': 'MAKE', '設備使用，如烤箱、攪拌機、微波爐': 'MAKE', '甜點補救': 'MAKE', '製作技巧示範教學': 'MAKE',
-        '烤模拿取': 'MAKE', '確認烤熟了沒': 'MAKE', '蛋糕抹面': 'MAKE', '蛋糕裝飾': 'MAKE', '讚美鼓勵我': '給予讚美鼓勵',
-    },
+    'q4': {'難易度': '不容易失敗', '流行性': '現在流行', '其它': '其他'},
 }
+# 這幾題的舊選項跟新問卷不一樣（5.0 的「協助的地方」是 12 個細項，6.0 合併成 5 個）→ 不硬對，保留原文，儀表板會把舊選項列在新選項後面
+PASS_THROUGH = {'q10'}
 # 4.0 沒有 q9／q13；3.0、2.0 的結構會在讀到時補（見 profile）
 IGNORE_HEAD = {'填答時間', '填答秒數', 'IP紀錄', '額滿結束註記', '使用者紀錄', '會員時間', 'Hash', '會員編號', '自訂ID', '備註'}
 
@@ -111,6 +108,7 @@ def convert_version(label, folder, canon, outdir):
     canon_nz = {q: {nz(o): o for o in opts} for q, opts in canon.items() if opts}
     unmapped = collections.defaultdict(collections.Counter)      # qid -> 原值 -> 次數
     syn_used = collections.defaultdict(collections.Counter)      # qid -> "原值→新值" -> 次數
+    legacy = collections.defaultdict(collections.Counter)        # qid -> 保留原文的舊選項 -> 次數
     answered = collections.Counter()
     stores = collections.Counter(); months = collections.Counter()
     n = bad_time = no_store = 0; tmin = tmax = None; seen = set(); dup = 0
@@ -148,6 +146,8 @@ def convert_version(label, folder, canon, outdir):
                 if val is None:
                     # 「其他-xxx」自由填寫 → 歸「其他」（若該題有「其他」選項）
                     if key.startswith('其他') and nz('其他') in canon_nz.get(q, {}): val = '其他'
+                if val is None and q in PASS_THROUGH:
+                    val = p; legacy[q][p] += 1
                 if val is None: unmapped[q][p] += 1; continue
                 if val not in outv: outv.append(val)
             if outv:
@@ -171,8 +171,27 @@ def convert_version(label, folder, canon, outdir):
         'headers_mapped': {str(head[i]): q for i, q in hm.items()},
         'headers_unmapped': [str(h) for i, h in enumerate(head) if i not in hm and h not in IGNORE_HEAD and h is not None],
         'answered': dict(answered), 'unmapped': {q: dict(c) for q, c in unmapped.items()},
-        'syn_used': {q: dict(c) for q, c in syn_used.items()}, 'sample': sample,
+        'syn_used': {q: dict(c) for q, c in syn_used.items()}, 'legacy_kept': {q: dict(c) for q, c in legacy.items()}, 'sample': sample,
     }
+
+
+def dump_raw(label, folder, outdir):
+    """整張 Excel 原樣（全部欄位、全部文字）→ raw_<label>.json，給 GAS import_ op=raw 分批送；不放 IP 紀錄（客人 IP，用不到）"""
+    files = sorted(glob.glob(os.path.join(folder, '*.xlsx')))
+    if not files: return None
+    ws = openpyxl.load_workbook(files[0], read_only=True, data_only=True)
+    ws = ws[ws.sheetnames[0]]
+    it = ws.iter_rows(values_only=True); head = [str(h) if h is not None else '' for h in next(it)]
+    keep = [i for i, h in enumerate(head) if h != 'IP紀錄']
+    def cell(v):
+        if v is None: return ''
+        if isinstance(v, float) and v.is_integer(): return str(int(v))
+        return str(v)
+    rows = [[cell(r[i]) for i in keep] for r in it if any(x not in (None, '') for x in r)]
+    h2 = [head[i] for i in keep]
+    key = h2.index('Hash') if 'Hash' in h2 else -1
+    json.dump({'label': label, 'file': os.path.basename(files[0]), 'head': h2, 'key': h2[key] if key >= 0 else '', 'rows': rows}, open(os.path.join(outdir, 'raw_%s.json' % label), 'w', encoding='utf-8'), ensure_ascii=False)
+    return {'label': label, 'file': os.path.basename(files[0]), 'rows': len(rows), 'cols': len(h2), 'dropped': ['IP紀錄']}
 
 
 def main():
@@ -187,6 +206,12 @@ def main():
         r = convert_version(lab, os.path.join(inp, lab), canon, outdir)
         if r: res.append(r); print(lab, 'Excel', r['excel_rows'], '→ 轉出', r['written'], '｜未對應', sum(sum(c.values()) for c in r['unmapped'].values()), '｜', r['time_from'][:10], '~', r['time_to'][:10])
     json.dump(res, open(os.path.join(outdir, 'preview.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    raws = []
+    for lab in os.environ.get('RAW_LABELS', '').split(','):
+        if lab.strip():
+            r = dump_raw(lab.strip(), os.path.join(inp, lab.strip()), outdir)
+            if r: raws.append(r); print('封存', lab, r['rows'], '列 ×', r['cols'], '欄')
+    json.dump(raws, open(os.path.join(outdir, 'raw_preview.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 
 
 if __name__ == '__main__':

@@ -33,6 +33,7 @@ Sheet.prototype.getRange = function (r, c, nr, nc) {
     setNumberFormat: function () { return this; }, setFontWeight: function () { return this; },
     setValues: function (vals) { vals.forEach(function (vr, i) { var row = sh.cell_(r + i, c + nc - 1); vr.forEach(function (v, j) { row[c - 1 + j] = v == null ? '' : v; }); }); return this; },
     setValue: function (v) { sh.cell_(r, c)[c - 1] = v == null ? '' : v; return this; },
+    clearContent: function () { for (var i = 0; i < nr; i++) { var row = sh.rows[r - 1 + i]; if (row) for (var j = 0; j < nc; j++) row[c - 1 + j] = ''; } return this; },
     getValues: function () { var out = []; for (var i = 0; i < nr; i++) { var row = sh.rows[r - 1 + i] || [], o = []; for (var j = 0; j < nc; j++) { var x = row[c - 1 + j]; o.push(x == null ? '' : x); } out.push(o); } return out; },
     getDisplayValues: function () { return this.getValues().map(function (r) { return r.map(String); }); }
   };
@@ -95,7 +96,7 @@ function seed(n) {
     var st = stores[Math.floor(Math.random() * stores.length)], t = new Date(Date.now() - Math.floor(Math.random() * 700) * 864e5 - 864e5);
     rows.push({ t: t.toISOString(), id: 'mock-' + crypto.randomBytes(6).toString('hex'), sn: st[0], s: st[1], sec: Math.random() < 0.3 ? 60 + Math.floor(Math.random() * 200) : 7000, a: answers(i), ua: 'mock' });
   }
-  for (var b = 0; b < rows.length; b += 3000) made += JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'import', pwd: 'hqpw', rows: rows.slice(b, b + 3000) }) } }).text).added || 0;
+  for (var b = 0; b < rows.length; b += 3000) made += JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'import', code: ctx.importOpen().split('碼：')[1], rows: rows.slice(b, b + 3000) }) } }).text).added || 0;
   for (var j = 0; j < 12; j++) {
     var a = answers(j), st2 = stores[j % stores.length]; a.q1 = st2[1]; a.q17 = texts[j % 5] + '（' + (j + 1) + '）';
     Object.keys(a).forEach(function (k) { var q = qs.filter(function (x) { return x.qid === k; })[0]; if (q && q.type === 'multi') a[k] = a[k].split('|'); });

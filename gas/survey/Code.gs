@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.3';
+var VER = 'survey-2026-10-28.5';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -381,14 +381,29 @@ function rebuildAgg() {
   } finally { lock.releaseLock(); }
 }
 
-/* 歷史回覆匯入（臨時，2026-10-28）：由本機 Claude 分批送來，要帶總部密碼；匯完會拿掉這個動作
-   b.rows＝[{t:ISO時間, id:'sc-…', sn:店號, s:店名, sec:秒, a:{qid:答案}, ua:來源說明}]；同 id 已有就跳過（可重跑） */
+/* 匯入窗口：在編輯器執行 importOpen → 產生 60 分鐘有效的一次性隨機碼（寫在執行記錄），匯入的每個請求要帶這個碼（b.code）；importClose 或逾時就失效。不用任何真密碼 */
+function importOpen() {
+  var P = PropertiesService.getScriptProperties(), code = Utilities.getUuid().replace(/-/g, '').slice(0, 20), until = Date.now() + 60 * 60 * 1000;
+  P.setProperty('IMPORT_CODE', code); P.setProperty('IMPORT_UNTIL', String(until));
+  var msg = '匯入窗口開到 ' + tz_(new Date(until), 'HH:mm') + '，碼：' + code; Logger.log(msg); return msg;
+}
+function importClose() { var P = PropertiesService.getScriptProperties(); P.deleteProperty('IMPORT_CODE'); P.deleteProperty('IMPORT_UNTIL'); Logger.log('匯入窗口已關'); return '已關'; }
+function importAuth_(b) {
+  var P = PropertiesService.getScriptProperties(), code = P.getProperty('IMPORT_CODE'), until = Number(P.getProperty('IMPORT_UNTIL') || 0);
+  if (!code || Date.now() > until || String(b.code || '') !== code) throw fail_('匯入窗口沒開或碼不對', 'auth');
+}
+/* 歷史回覆匯入（臨時，2026-10-28）：由本機 Claude 分批送來；匯完會拿掉這個動作
+   op='rows'（預設）：b.rows＝[{t:ISO時間, id:'sc…', sn:店號, s:店名, sec:秒, a:{qid:答案}, ua:來源說明}]，同 id 已有就跳過（可重跑）
+   op='raw'：原樣封存表（舊問卷題型不同、對不上新題目的，整張原樣收）：b.sheet、b.head、b.rows（二維陣列）、b.key（去重欄名，如 Hash）
+   op='count'：各表筆數；op='backup'：把相關表各複製一份 backup_…_時間 */
 function import_(b) {
+  importAuth_(b);
+  var op = String(b.op || 'rows');
+  if (op === 'count') return counts_();
+  if (op === 'backup') return backup_();
+  if (op === 'raw') return importRaw_(b);
   var rows = Array.isArray(b.rows) ? b.rows : [];
   if (!rows.length || rows.length > 4000) throw fail_('rows 要 1～4000 筆', 'input');
-  var au = SpreadsheetApp.openById(AUTH_SS).getSheetByName('dim_auth').getDataRange().getValues(), hq = '';
-  for (var i = 1; i < au.length; i++) if (String(au[i][0]) === 'hub_hq') hq = String(au[i][2] || '');
-  if (!hq || String(b.pwd || '') !== hq) throw fail_('密碼不對', 'auth');
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
     var sh = rSheet_(), last = sh.getLastRow(), head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), have = {};
@@ -408,6 +423,58 @@ function import_(b) {
     SpreadsheetApp.flush();
     return { added: vals.length, skipped: skip, total: sh.getLastRow() - 1 };
   } finally { lock.releaseLock(); }
+}
+function counts_() {
+  var ss = db_(), o = {};
+  ss.getSheets().forEach(function (sh) { var n = sh.getName(); if (/^(fact_|agg_|raw_|dim_|backup_)/.test(n)) o[n] = Math.max(sh.getLastRow() - 1, 0); });
+  return { counts: o };
+}
+function backup_() {
+  var ss = db_(), ts = tz_(new Date(), 'yyyyMMdd-HHmm'), made = {};
+  ['fact_response', 'agg_daily', 'agg_month', 'fact_comment', 'dim_question'].forEach(function (n) {
+    var sh = ss.getSheetByName(n); if (!sh) return;
+    var c = sh.copyTo(ss); c.setName('backup_' + n + '_' + ts); made[c.getName()] = Math.max(c.getLastRow() - 1, 0);
+  });
+  return { backup: made, counts: counts_().counts };
+}
+function importRaw_(b) {
+  var name = String(b.sheet || ''); if (!/^raw_[A-Za-z0-9_一-鿿]{1,40}$/.test(name)) throw fail_('封存表名稱要 raw_ 開頭', 'input');
+  var rows = Array.isArray(b.rows) ? b.rows : [], head = Array.isArray(b.head) ? b.head.map(String) : [];
+  if (!rows.length || rows.length > 4000 || !head.length) throw fail_('rows 要 1～4000 筆、要附 head', 'input');
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var ss = db_(), sh = ss.getSheetByName(name), nc = head.length;
+    if (!sh) { sh = ss.insertSheet(name); sh.getRange(1, 1, 1, nc).setValues([head]); sh.setFrozenRows(1); }
+    var h0 = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(String);
+    if (h0.join('¦') !== head.join('¦')) throw fail_('欄位和已存在的封存表不同', 'input');
+    var last = sh.getLastRow(), have = {}, iK = b.key ? head.indexOf(String(b.key)) : -1;
+    if (iK >= 0 && last >= 2) sh.getRange(2, iK + 1, last - 1, 1).getValues().forEach(function (r) { have[String(r[0])] = 1; });
+    var vals = [], skip = 0;
+    rows.forEach(function (r) {
+      if (iK >= 0) { var k = String(r[iK] == null ? '' : r[iK]); if (k && have[k]) { skip++; return; } have[k] = 1; }
+      var row = []; for (var j = 0; j < nc; j++) row.push(r[j] == null ? '' : String(r[j]).slice(0, 45000)); vals.push(row);
+    });
+    if (vals.length) {
+      growTo_(sh, last + vals.length);
+      var rg = sh.getRange(last + 1, 1, vals.length, nc); rg.setNumberFormat('@'); rg.setValues(vals);   /* 一律當純文字，不讓 Sheets 把時間／數字自動轉型 */
+    }
+    SpreadsheetApp.flush();
+    return { sheet: name, added: vals.length, skipped: skip, total: sh.getLastRow() - 1 };
+  } finally { lock.releaseLock(); }
+}
+/* 還原匯入（編輯器選 rollbackImport → 執行）：把 src=surveycake 的列從 fact_response 拿掉，彙總表重建；raw_ 封存表另外手動刪 */
+function rollbackImport() {
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var sh = rSheet_(), last = sh.getLastRow(), nc = sh.getLastColumn(), v = last >= 2 ? sh.getRange(2, 1, last - 1, nc).getValues() : [];
+    var head = sh.getRange(1, 1, 1, nc).getValues()[0].map(String), iS = head.indexOf('src');
+    var keep = v.filter(function (r) { return String(r[iS]) !== 'surveycake'; });
+    if (last >= 2) sh.getRange(2, 1, last - 1, nc).clearContent();
+    if (keep.length) sh.getRange(2, 1, keep.length, nc).setValues(keep);
+    var msg = '已拿掉匯入的 ' + (v.length - keep.length) + ' 筆，保留 ' + keep.length + ' 筆';
+    lock.releaseLock(); lock = null;
+    return msg + '；' + rebuildAgg();
+  } finally { if (lock) lock.releaseLock(); }
 }
 
 /* ---------------- 儀表板讀取 ---------------- */
