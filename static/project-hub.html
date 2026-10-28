@@ -146,6 +146,8 @@ window.__ime=(function(){
   .sp-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px}
   /* 平匙規格與演進（2026-10-21） */
   .sl-sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+  .iu-r{cursor:pointer}.iu-r:hover td{background:#FBF6F0}.iu-d td{background:#FBF8F3;padding:8px 12px}.iu-d ul{margin:0;padding-left:18px;columns:2;column-gap:24px}.iu-d li{break-inside:avoid;margin:2px 0}@media(max-width:640px){.iu-d ul{columns:1}}
+  .iu-tag{display:inline-block;border-radius:999px;padding:0 7px;font-size:11px;background:#EEE;color:#555;margin-left:4px}.iu-tag.on{background:#E0F2F1;color:#00695C}.iu-tag.en{background:#E3F2FD;color:#1565C0}
   table.t td .sm{display:block;font-size:12px;color:#77706A;font-weight:400;white-space:nowrap}
   table.t td.v{white-space:nowrap;font-variant-numeric:tabular-nums}
   table.t tr.hist td{background:#FAF8F6;padding:6px 9px 12px}
@@ -488,7 +490,7 @@ if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) { var _api = new URLSe
 /* 上月各甜點 12 店銷售件數：讀 POS 銷售儀表板的品項月報（action=product_monthly，公開唯讀；2026-10-22 經營者要在平匙換算表看「上個月使用總次數」） */
 var POS_API = 'https://script.google.com/macros/s/AKfycbxvD8dQdWJdaK9Ih9ZZc3PRT8rICcqbCrk5cKQY3s6zF1MmZgWL2g803zrJTBsuE3p4pQ/exec';
 var PST = ['未開始','進行中','完成','暫停'], HST = ['未開始','進行中','完成','卡關'], DST = ['待決定','已決定'], RST = ['追蹤中','已解除'];
-var TOOLS = { spoon: '🥄 平匙換算' };
+var TOOLS = { spoon: '🥄 平匙換算', items: '🔎 品項使用查詢' };   /* items：2026-10-28 全品項改名專案（後台每個品項被哪些食譜用） */
 var TOOL_TABS = { spoon: [['spoon', '🥄 平匙換算'], ['spoonlog', '📒 平匙規格與演進'], ['spoonprog', '✅ 執行進度']] };   /* 2026-10-21：勾「平匙換算」的專案多一頁規格與演進；10/28 再加執行進度 */
 var S = { b: null, spoon: null, at: '', pw: '', tab: 'plan', ing: '', g: '', ml: '', maxn: '8', tol: '0', onlyNo: false, sortNo: false, who: '', pend: {}, sales: null };
 var WEEK_DAYS = 7;   /* 「本週要做」與提醒信看未來幾天（跟 GAS REMIND_DAYS 一致） */
@@ -787,6 +789,7 @@ function renderProject(p, tab){
   else if (tab === 'spoon') tabSpoon(p);
   else if (tab === 'spoonlog') tabSpoonLog(p);
   else if (tab === 'spoonprog') tabSpoonProg(p);
+  else if (tab === 'items') tabItems(p);
 }
 
 /* ----- 📅 進度 ----- */
@@ -1330,6 +1333,86 @@ function slIngs(){
   (S.spoon.spec_log || []).forEach(function(x){ o[x.ingredient] = 1; });
   slLines().lines.forEach(function(L){ o[L.ingredient] = 1; });
   return Object.keys(o);
+}
+/* ---------- 🔎 品項使用查詢（2026-10-28 全品項改名專案）----------
+   資料：GET items＝item_usage（後台 1,327 個品項：被幾支食譜用、台灣區食譜 id 清單）＋recipes_tw（台灣區食譜清單）。
+   由內建瀏覽器登入後台掃描後用 itemScanSave 上傳（做法見 project-hub skill）。搜尋框只建一次，打字只重畫結果（選字中不重畫）。 */
+var BIG = { R: '食材', RF: '食材', B: '食材', A: '食材／店員拿取', U: '器具', M: '模具', MC: '模具', MS: '耗材', BK: '耗材' };
+function iuBig(code){ var m = String(code || '').match(/^[A-Z]+/); return (m && BIG[m[0]]) || '其他'; }
+function tabItems(p){
+  if (!S.items) {
+    $('tabBody').innerHTML = '<div class="card empty">讀取品項資料中…</div>';
+    get('items').then(function(r){ S.items = r.data; S.iuMap = null; if (route().tab === 'items') tabItems(p); })
+      .catch(function(e){ $('tabBody').innerHTML = '<div class="card">讀不到：' + esc(e.message) + '</div>'; });
+    return;
+  }
+  var D = S.items, items = D.items || [];
+  if (!items.length) { $('tabBody').innerHTML = '<div class="card empty">還沒有掃描資料。請 Claude 用內建瀏覽器登入食譜後台掃一次（project-hub skill「品項使用查詢」）。</div>'; return; }
+  if (!S.iuMap) { S.iuMap = {}; (D.recipes || []).forEach(function(r){ S.iuMap[r.rid] = r; }); }
+  S.iu = S.iu || { q: '', zone: '', big: '', use: '', sort: 'act', open: '' };
+  var st = { all: items.length, tw: 0, act: 0, none: 0 };
+  items.forEach(function(x){ if (Number(x.n_tw) > 0) st.tw++; if (Number(x.n_act) > 0) st.act++; if (Number(x.n_all) === 0) st.none++; });
+  var zones = {}, bigs = {}; items.forEach(function(x){ if (x.zone) zones[x.zone] = 1; bigs[iuBig(x.code)] = 1; });
+  function opts(list, cur){ return list.map(function(z){ return '<option value="' + esc(z) + '"' + (z === cur ? ' selected' : '') + '>' + esc(z) + '</option>'; }).join(''); }
+  var h = '<div class="sp-big">'
+    + '<div><span class="muted">後台品項</span><b>' + st.all + ' 個</b><span class="muted">掃描 ' + esc((D.scanned_at || '').slice(0, 16)) + '</span></div>'
+    + '<div class="ok"><span class="muted">啟用中的台灣食譜有用到</span><b>' + st.act + ' 個</b><span class="muted">客人真的會拿的</span></div>'
+    + '<div><span class="muted">台灣繁中食譜用過</span><b>' + st.tw + ' 個</b><span class="muted">含停用的食譜</span></div>'
+    + '<div class="no"><span class="muted">沒有任何食譜用</span><b>' + st.none + ' 個</b><span class="muted">全部地區都沒用</span></div></div>'
+    + '<div class="card"><div class="sp-ctl">'
+    + '<label>找品項<input id="iuQ" type="search" placeholder="例：紙墊、貓咪、M0164" value="' + esc(S.iu.q) + '"></label>'
+    + '<label>大類<select id="iuBig"><option value="">全部</option>' + opts(Object.keys(bigs).sort(), S.iu.big) + '</select></label>'
+    + '<label>取放區<select id="iuZone"><option value="">全部</option>' + opts(Object.keys(zones).sort(), S.iu.zone) + '</select></label>'
+    + '<label>使用狀況<select id="iuUse"><option value="">全部</option><option value="act"' + (S.iu.use === 'act' ? ' selected' : '') + '>啟用中食譜有用</option><option value="twonly"' + (S.iu.use === 'twonly' ? ' selected' : '') + '>只有停用的台灣食譜用過</option><option value="other"' + (S.iu.use === 'other' ? ' selected' : '') + '>只有其他地區用</option><option value="none"' + (S.iu.use === 'none' ? ' selected' : '') + '>完全沒食譜用</option></select></label>'
+    + '<label>排序<select id="iuSort"><option value="act"' + (S.iu.sort === 'act' ? ' selected' : '') + '>啟用中食譜 多→少</option><option value="tw"' + (S.iu.sort === 'tw' ? ' selected' : '') + '>台灣繁中食譜 多→少</option><option value="last"' + (S.iu.sort === 'last' ? ' selected' : '') + '>最近使用 新→舊</option><option value="name"' + (S.iu.sort === 'name' ? ' selected' : '') + '>名稱</option></select></label>'
+    + '</div><div class="muted" style="margin-top:6px">點一列可以看它被哪些台灣食譜用到（繁中＋英文）。「啟用中」＝門市平板現在看得到的食譜。</div></div>'
+    + '<div id="iuBody"></div>';
+  $('tabBody').innerHTML = h;
+  var q = $('iuQ');
+  q.addEventListener('input', function(e){ if (e.isComposing || (window.__ime && __ime.on)) return; S.iu.q = q.value; iuPaint(); });
+  q.addEventListener('compositionend', function(){ S.iu.q = q.value; iuPaint(); });
+  ['iuBig', 'iuZone', 'iuUse', 'iuSort'].forEach(function(id){ $(id).onchange = function(){ S.iu[{ iuBig: 'big', iuZone: 'zone', iuUse: 'use', iuSort: 'sort' }[id]] = this.value; iuPaint(); }; });
+  iuPaint();
+}
+function iuRows(){
+  var items = S.items.items || [], q = (S.iu.q || '').trim().toLowerCase(), f = S.iu;
+  var out = items.filter(function(x){
+    if (f.big && iuBig(x.code) !== f.big) return false;
+    if (f.zone && x.zone !== f.zone) return false;
+    var act = Number(x.n_act) > 0, tw = Number(x.n_tw) > 0, all = Number(x.n_all) > 0;
+    if (f.use === 'act' && !act) return false;
+    if (f.use === 'twonly' && !(tw && !act)) return false;
+    if (f.use === 'other' && !(all && !tw)) return false;
+    if (f.use === 'none' && all) return false;
+    if (q && String(x.name).toLowerCase().indexOf(q) < 0 && String(x.code).toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  });
+  var k = f.sort;
+  out.sort(function(a, b){
+    if (k === 'name') return String(a.name).localeCompare(String(b.name), 'zh-Hant');
+    if (k === 'last') return String(b.last_used).localeCompare(String(a.last_used)) || Number(b.n_act) - Number(a.n_act);
+    if (k === 'tw') return Number(b.n_tw) - Number(a.n_tw) || Number(b.n_act) - Number(a.n_act);
+    return Number(b.n_act) - Number(a.n_act) || Number(b.n_tw) - Number(a.n_tw) || String(b.last_used).localeCompare(String(a.last_used));
+  });
+  return out;
+}
+function iuDetail(x){
+  var ids = String(x.rids || '').split(',').filter(Boolean), rs = ids.map(function(i){ return S.iuMap[i]; }).filter(Boolean);
+  rs.sort(function(a, b){ return (a.status === 'Active' ? 0 : 1) - (b.status === 'Active' ? 0 : 1) || (a.lang === '繁體中文' ? 0 : 1) - (b.lang === '繁體中文' ? 0 : 1) || String(b.updated).localeCompare(String(a.updated)); });
+  if (!rs.length) return '<div class="muted">台灣區沒有食譜用到這個品項' + (Number(x.n_all) ? '（其他地區 ' + x.n_all + ' 支）' : '') + '</div>';
+  return '<div style="margin-bottom:4px"><b>' + esc(x.name) + '</b>　台灣區 ' + rs.length + ' 支食譜用到（啟用中 ' + rs.filter(function(r){ return r.status === 'Active'; }).length + '）</div><ul>'
+    + rs.map(function(r){ return '<li>' + esc(r.name) + (r.status === 'Active' ? '<span class="iu-tag on">啟用中</span>' : '<span class="iu-tag">停用</span>') + (r.lang !== '繁體中文' ? '<span class="iu-tag en">' + esc(r.lang) + '</span>' : '') + ' <span class="muted">' + esc(String(r.updated || '').slice(0, 10)) + '</span></li>'; }).join('') + '</ul>';
+}
+function iuPaint(){
+  var rows = iuRows(), LIM = 300, body = $('iuBody'); if (!body) return;
+  var h = '<div class="card"><div class="muted" style="margin-bottom:6px">符合 ' + rows.length + ' 個' + (rows.length > LIM ? '，只列前 ' + LIM + ' 個，請再縮小條件' : '') + '</div><div class="tw"><table class="t"><thead><tr><th>編號</th><th>取放區</th><th>名稱</th><th>單位</th><th style="text-align:right">啟用中</th><th style="text-align:right">台灣繁中</th><th style="text-align:right">全部地區</th><th>最近使用</th></tr></thead><tbody>'
+    + rows.slice(0, LIM).map(function(x){
+      var open = S.iu.open === x.item_id, act = Number(x.n_act);
+      return '<tr class="iu-r" data-iu="' + esc(x.item_id) + '"><td>' + esc(x.code) + '</td><td>' + esc(x.zone) + '</td><td>' + (open ? '▾ ' : '▸ ') + esc(x.name) + '</td><td>' + esc(x.unit) + '</td><td class="n">' + (act ? '<b>' + act + '</b>' : '<span class="muted">0</span>') + '</td><td class="n">' + esc(x.n_tw) + '</td><td class="n">' + esc(x.n_all) + '</td><td>' + esc(String(x.last_used || '').slice(0, 10) || '—') + '</td></tr>'
+        + (open ? '<tr class="iu-d"><td colspan="8">' + iuDetail(x) + '</td></tr>' : '');
+    }).join('') + '</tbody></table></div></div>';
+  body.innerHTML = h;
+  Array.prototype.forEach.call(body.querySelectorAll('[data-iu]'), function(tr){ tr.onclick = function(){ var id = tr.getAttribute('data-iu'); S.iu.open = S.iu.open === id ? '' : id; iuPaint(); }; });
 }
 function tabSpoonLog(p){
   if (!S.spoon) {

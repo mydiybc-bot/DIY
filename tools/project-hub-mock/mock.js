@@ -11,6 +11,7 @@
  */
 'use strict';
 var http = require('http'), fs = require('fs'), path = require('path'), vm = require('vm'), crypto = require('crypto'), url = require('url');
+var PROPS = { SCAN_TOKEN: 'scan-test' };   /* 指令碼屬性（正式用 zz 暫時檔設 SCAN_TOKEN） */
 var ROOT = path.resolve(__dirname, '..', '..'), GAS = path.join(ROOT, 'gas', 'project-hub');
 var PORT = Number(process.env.PORT || 8766), PW = 'test';
 
@@ -65,6 +66,7 @@ var G = {
     getProjectTriggers: function () { return TRIGGERS.slice(); }, deleteTrigger: function (t) { TRIGGERS = TRIGGERS.filter(function (x) { return x !== t; }); },
     newTrigger: function (fn) { var t = { fn: fn, getHandlerFunction: function () { return fn; } }, b = { timeBased: function () { return b; }, everyDays: function () { return b; }, atHour: function (h) { t.hour = h; return b; }, nearMinute: function () { return b; }, inTimezone: function () { return b; }, create: function () { TRIGGERS.push(t); return t; } }; return b; }
   },
+  PropertiesService: { getScriptProperties: function () { return { getProperty: function (k) { return PROPS[k] || null; }, setProperty: function (k, v) { PROPS[k] = String(v); } }; } },
   Logger: { log: function (s) { LOGS.push(String(s)); console.log('[GAS]', s); } },
   Session: { getEffectiveUser: function () { return { getEmail: function () { return 'mock@example.com'; } }; } }
 };

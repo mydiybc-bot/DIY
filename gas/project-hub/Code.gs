@@ -29,7 +29,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.8';   /* v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v1.9';   /* v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -46,8 +46,11 @@ var T = {
   spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g', 'kind'] },   /* kind（v1.6）：deco＝裝飾乾料，只登記量匙與 1 匙實測克數，不做換算 */
   spoon_spec_log: { id: 'log_id', cols: ['log_id', 'ingredient', 'version', 'eff_date', 'spoon_ml', 'recipe_g', 'real_g', 'note', 'saved_at', 'deleted'] },
   spoon_evo: { id: 'evo_id', cols: ['evo_id', 'line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'version', 'ver_date', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note', 'source', 'updated_at', 'deleted'] },
+  item_usage: { id: '', cols: ['item_id', 'code', 'zone', 'name', 'unit', 'n_all', 'n_tw', 'n_zh', 'n_act', 'last_used', 'rids', 'scanned_at'] },   /* v1.9：每個後台品項被幾支食譜用；rids＝台灣區食譜 id 前 8 碼逗號分隔 */
+  recipes_tw: { id: '', cols: ['rid', 'name', 'lang', 'status', 'updated', 'scanned_at'] },   /* v1.9：台灣區食譜清單（繁中＋英文），rid＝後台 id 前 8 碼 */
   log:       { id: '', cols: ['ts', 'action', 'table', 'target', 'detail'] }
 };
+var SCAN_TABLES = { item_usage: 1, recipes_tw: 1 };
 var EDITABLE = { projects: 1, phases: 1, decisions: 1, risks: 1, people: 1 };
 var ID_PREFIX = { projects: 'P', phases: 'PH', decisions: 'D', risks: 'R', people: 'U' };
 
@@ -59,6 +62,7 @@ function doGet(e) {
     if (a === 'ping') res = { ok: true, ver: VER };
     else if (a === 'bundle') res = { ok: true, data: bundle_(), at: now_() };
     else if (a === 'spoon') res = { ok: true, data: spoon_(), at: now_() };
+    else if (a === 'items') res = { ok: true, data: items_(), at: now_() };
     else if (a === 'remind_preview') res = { ok: true, data: remindPublic_(remindBuild_()), at: now_() };
     else res = { ok: false, error: '不認得的動作：' + a };
   } catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
@@ -70,6 +74,7 @@ function doPost(e) {
     var b = JSON.parse((e && e.postData && e.postData.contents) || '{}'), a = b.action;
     if (a === 'authSetup') res = authSetup_();
     else if (a === 'specSave') res = withLock_(function () { return specSave_(b); });   /* 平匙規格表「💾 儲存變更」免密碼 */
+    else if (a === 'itemScanSave') res = withLock_(function () { return itemScanSave_(b); });   /* v1.9：瀏覽器掃描結果上傳，驗指令碼屬性 SCAN_TOKEN，不用儀表板密碼 */
     else {
       auth_(b.pw);
       if (a === 'auth') res = { ok: true };
@@ -160,6 +165,27 @@ function log_(action, table, target, detail) {
 /* ---------------- 讀 ---------------- */
 function bundle_() {
   return { projects: live_('projects'), phases: live_('phases'), decisions: live_('decisions'), risks: live_('risks'), people: live_('people') };
+}
+/* ---------- v1.9 🔎 品項使用查詢 ---------- */
+function items_() {
+  var items = rows_('item_usage').map(clean_), recipes = rows_('recipes_tw').map(clean_);
+  var at = items.length ? items[0].scanned_at : '';
+  return { items: items, recipes: recipes, scanned_at: at };
+}
+function scanToken_() { try { return String(PropertiesService.getScriptProperties().getProperty('SCAN_TOKEN') || ''); } catch (e) { return ''; } }
+/* {token, table:'item_usage'|'recipes_tw', reset:1(第一包先清掉舊資料), rows:[{…}]}；一包最多 600 列 */
+function itemScanSave_(b) {
+  var tk = scanToken_();
+  if (!tk || String(b.token || '') !== tk) throw new Error('掃描上傳的通行碼不對');
+  var table = String(b.table || ''), rows = b.rows || [];
+  if (!SCAN_TABLES[table]) throw new Error('不認得的表：' + table);
+  if (rows.length > 600) throw new Error('一次最多 600 列');
+  var sh = sheet_(table), cols = hdr_(table);
+  if (b.reset) { var n = sh.getLastRow(); if (n > 1) sh.getRange(2, 1, n - 1, Math.max(cols.length, sh.getLastColumn())).clearContent(); }
+  var t = now_();
+  append_(table, rows.map(function (r) { var o = {}; cols.forEach(function (c) { o[c] = r[c] == null ? '' : String(r[c]).slice(0, 40000); }); o.scanned_at = t; return o; }));
+  log_('scan', table, b.reset ? 'reset' : 'append', rows.length + ' 列');
+  return { ok: true, data: { table: table, added: rows.length, total: Math.max(sheet_(table).getLastRow() - 1, 0) } };
 }
 function spoon_() {
   var lines = rows_('spoon_lines').map(clean_);
