@@ -71,6 +71,7 @@ window.__ime=(function(){
   .btn.ghost{background:#fff;color:#40210F;border:2px solid #E6D2A8;box-shadow:none}
   #done{position:fixed;inset:0;z-index:20;background:#FFF8EC;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem;gap:1rem}
   #done[hidden]{display:none}
+  .q[hidden]{display:none}
   #done .big{font-size:3.5rem;line-height:1}
   #done h2{margin:0;font-size:1.8rem}
   #done p{margin:0;font-size:1.05rem;color:#6B4E3D;max-width:34rem}
@@ -115,12 +116,14 @@ var STORES = [[3, '台北南京'], [4, '台北士林'], [11, '吳寶春自己做
 var FALLBACK_Q = [
   { qid: 'q1', type: 'single', title: '您今日體驗的分店是？', options: STORES.map(function (s) { return s[1]; }), required: true },
   { qid: 'q2', type: 'single', title: '請問這是您「一年內」第幾次來做甜點呢？（不限店別）', options: ['第1次', '第2次', '第3次', '第4次', '第5次以上'], required: true },
+  { qid: 'q3', type: 'single', title: '請問您入座後，服務人員的解說：', options: ['清楚明瞭，我知道接下來該如何完成甜點製作', '解說太簡短，讓我不知該如何開始', '解說太冗長，根本聽不懂說什麼'], required: true, cond: { qid: 'q2', vals: ['第1次'] } },
   { qid: 'q4', type: 'single', title: '您今天選這款甜點時，第一個考慮的是？', options: ['外型', '價格', '口味', '不容易失敗', '易分享', '可否當生日蛋糕', '看過別人分享', '現在流行', '當季限定', '店內熱銷品', '其他'], required: true },
   { qid: 'q5', type: 'single', title: '您這次來的原因是？', options: ['重要的人生日', '自己生日', '情侶約會', '朋友聚會', '家人同樂', '喜歡烘焙', '送禮', '其他'], required: true },
   { qid: 'q6', type: 'single', title: '您是否滿意今天使用的平板教學影片？', options: ['是', '否'], required: true },
   { qid: 'q7', type: 'single', title: '您是否滿意今天店內的環境？', options: ['是', '否'], required: true },
   { qid: 'q8', type: 'single', title: '您是否滿意今天服務人員的服務？', options: ['是', '否'], required: true },
   { qid: 'q9', type: 'single', title: '在整體消費過程中，服務人員是否有提供您任何的協助？', options: ['是', '否'], required: true },
+  { qid: 'q10', type: 'multi', title: '服務人員協助您的地方是？（可複選）', options: ['報到時熱情問候', '協助甜點品項的選擇', '製作過程時的協助，如補救、教學、設備使用、蛋糕抹面、找食材／器模具…', '給予讚美鼓勵', '其他'], required: true, cond: { qid: 'q9', vals: ['是'] } },
   { qid: 'q11', type: 'multi', title: '您今天做的甜點是？（可複選）', options: ['乳酪類（名字有乳酪，包含巴斯克、提拉米蘇）', '慕斯類', '蛋糕類', '塔派類', '點心類', '餅乾類', '麵包類'], required: true },
   { qid: 'q12', type: 'single', title: '您今天的甜點有製作成功嗎？', options: ['是', '否'], required: true },
   { qid: 'q13', type: 'single', title: '您今天製作甜點的時間？', options: ['2 小時（含）以內', '2～2.5 小時（含）', '2.5～3 小時（含）', '3 小時以上'], required: true },
@@ -151,7 +154,7 @@ if (recipe) { $('recipeTag').textContent = '今天做的：' + recipe; $('recipe
 function render() {
   var h = '';
   S.q.forEach(function (q, i) {
-    h += '<section class="q ' + (q.type === 'multi' ? 'multi' : '') + '" id="q_' + esc(q.qid) + '" data-qid="' + esc(q.qid) + '" data-type="' + esc(q.type) + '">';
+    h += '<section class="q ' + (q.type === 'multi' ? 'multi' : '') + '" id="q_' + esc(q.qid) + '" data-qid="' + esc(q.qid) + '" data-type="' + esc(q.type) + '"' + (q.cond ? ' hidden' : '') + '>';
     h += '<h2><span class="n">' + (i + 1) + '</span><span>' + esc(q.title) + (q.required ? '<span class="req">＊</span>' : '') + (q.type === 'multi' ? '<span class="sub">可以選好幾個</span>' : '') + '</span></h2>';
     if (q.type === 'text') h += '<textarea data-qid="' + esc(q.qid) + '" maxlength="500" placeholder="想說什麼都可以：好吃、好玩、哪裡可以更好…"></textarea><div class="cnt"><span id="cnt_' + esc(q.qid) + '">0</span> / 500</div>';
     else { h += '<div class="opts">'; q.options.forEach(function (o) { h += '<button type="button" class="opt" data-qid="' + esc(q.qid) + '" data-v="' + esc(o) + '">' + esc(o) + '</button>'; }); h += '</div>'; }
@@ -160,7 +163,29 @@ function render() {
   $('qs').innerHTML = h;
   S.a = {};
   if (preStore && S.q.some(function (q) { return q.qid === 'q1'; })) { pick('q1', preStore, true); }
-  progress();
+  applyCond(); progress();
+}
+/* 條件題：前一題選了特定答案才出現（SurveyCake 6.0 的 q3、q10）；藏起來的題答案清掉、不算進度、不送出 */
+function shown(q) {
+  if (!q.cond) return true;
+  var v = S.a[q.cond.qid]; if (v == null || v === '') return false;
+  var arr = Array.isArray(v) ? v : [String(v)];
+  return q.cond.vals.some(function (x) { return arr.indexOf(x) >= 0; });
+}
+function applyCond() {
+  var n = 0;
+  S.q.forEach(function (q) {
+    var sec = $('q_' + q.qid); if (!sec) return;
+    var on = shown(q);
+    if (!on && !sec.hidden) {
+      delete S.a[q.qid];
+      sec.querySelectorAll('.opt.on').forEach(function (b) { b.classList.remove('on'); });
+      var ta = sec.querySelector('textarea'); if (ta) ta.value = '';
+      sec.classList.remove('ok', 'miss');
+    }
+    sec.hidden = !on;
+    if (on) { n++; var el = sec.querySelector('h2 .n'); if (el) el.textContent = n; }
+  });
 }
 /* 作答：只改按鈕 class，不重畫 */
 function pick(qid, v, silent) {
@@ -181,12 +206,12 @@ function pick(qid, v, silent) {
     sec.classList.add('ok');
   }
   sec.classList.remove('miss');
-  progress();
-  /* 選完單選題自動帶到下一題（留言題不帶） */
-  if (!silent && q.type === 'single') { var nx = sec.nextElementSibling; if (nx && nx.classList.contains('q') && !nx.classList.contains('ok')) setTimeout(function () { nx.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120); }
+  applyCond(); progress();
+  /* 選完單選題自動帶到下一題（留言題不帶；跳過藏起來的條件題） */
+  if (!silent && q.type === 'single') { var nx = sec.nextElementSibling; while (nx && nx.hidden) nx = nx.nextElementSibling; if (nx && nx.classList.contains('q') && !nx.classList.contains('ok')) setTimeout(function () { nx.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120); }
 }
 function progress() {
-  var need = S.q.filter(function (q) { return q.required; }), done = 0;
+  var need = S.q.filter(function (q) { return q.required && shown(q); }), done = 0;
   need.forEach(function (q) { var v = S.a[q.qid]; if (q.type === 'multi' ? (v && v.length) : (v && String(v).trim())) done++; });
   $('progBar').style.width = (need.length ? Math.round(done / need.length * 100) : 100) + '%';
   $('progTxt').textContent = done >= need.length ? '全部填好了，請按右下角「送出問卷」' : '已完成 ' + done + ' / ' + need.length + ' 題';
@@ -208,7 +233,7 @@ $('qs').addEventListener('input', function (e) {
 /* ---------- 題目：GAS 最新版（背景）---------- */
 function applyForm(d) {
   if (!d || !d.ok || !Array.isArray(d.questions) || !d.questions.length) return;
-  var qs = d.questions.map(function (q) { return { qid: q.qid, type: q.type, title: q.title, options: q.options || [], required: !!q.required }; });
+  var qs = d.questions.map(function (q) { var o = { qid: q.qid, type: q.type, title: q.title, options: q.options || [], required: !!q.required }; if (q.cond && q.cond.qid) o.cond = { qid: q.cond.qid, vals: q.cond.vals || [] }; return o; });
   if (JSON.stringify(qs) === JSON.stringify(S.q)) return;
   if (S.touched) { S.pendingQ = qs; return; }   /* 客人作答中不換題；送出後下一位才用新題目 */
   S.q = qs; render();
@@ -251,13 +276,13 @@ function apiPost(body) {
 /* ---------- 送出 ---------- */
 function validate() {
   var miss = [];
-  S.q.forEach(function (q) { if (!q.required) return; var v = S.a[q.qid]; var ok = q.type === 'multi' ? (v && v.length) : (v && String(v).trim()); if (!ok) miss.push(q.qid); });
+  S.q.forEach(function (q) { if (!q.required || !shown(q)) return; var v = S.a[q.qid]; var ok = q.type === 'multi' ? (v && v.length) : (v && String(v).trim()); if (!ok) miss.push(q.qid); });
   document.querySelectorAll('.q.miss').forEach(function (el) { el.classList.remove('miss'); });
   miss.forEach(function (qid) { var el = $('q_' + qid); if (el) el.classList.add('miss'); });
   return miss;
 }
 function payload() {
-  var a = {}; S.q.forEach(function (q) { var v = S.a[q.qid]; if (q.type === 'multi') a[q.qid] = v || []; else a[q.qid] = v == null ? '' : String(v); });
+  var a = {}; S.q.forEach(function (q) { if (!shown(q)) return; var v = S.a[q.qid]; if (q.type === 'multi') a[q.qid] = v || []; else a[q.qid] = v == null ? '' : String(v); });
   return { action: 'submit', id: S.id, a: a, recipe: recipe, src: src, lang: lang, sec: S.t0 ? Math.round((Date.now() - S.t0) / 1000) : 0, ua: (navigator.userAgent || '').slice(0, 160) };
 }
 function sendWithRetry(body, tries) {

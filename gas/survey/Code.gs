@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.1';
+var VER = 'survey-2026-10-28.2';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AUTH_SS = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4';   /* 儀表板權限中心（dim_auth） */
@@ -25,20 +25,24 @@ var DASH_ID = 'survey', DASH_NAME = '顧客問卷';
 var STORES = [[3, '台北南京'], [4, '台北士林'], [11, '吳寶春自己做（台北信義A13）'], [7, '新北板橋'], [8, '新北新店'],
   [9, '桃園中壢'], [10, '桃園藝文'], [6, '新竹文化'], [1, '台中精明'], [2, '台中草悟道'], [5, '台南Focus'], [12, '吳寶春自己做（高雄SKM Park）']];
 
-/* 題目種子（＝SurveyCake 6.0 原題；q3、q10 原問卷就沒有；q17 是新加的留言題）
-   欄：qid, order, type(single／multi／text), title, options（| 分隔）, required(Y/N), enabled(Y/N), note */
-var Q_HEAD = ['qid', 'order', 'type', 'title', 'options', 'required', 'enabled', 'note'];
+/* 題目種子（＝SurveyCake 6.0 原題；q3、q10 是 6.0 的條件題：前一題選特定答案才出現；q17 是新加的留言題）
+   欄：qid, order, type(single／multi／text), title, options（| 分隔）, required(Y/N), enabled(Y/N), note,
+       cond（出現條件，空白＝一定出現；寫法「q2=第1次」，多個答案用 | 分隔「q9=是|否」；條件不成立時這題不顯示、不必填） */
+var Q_HEAD = ['qid', 'order', 'type', 'title', 'options', 'required', 'enabled', 'note', 'cond'];
+var Q_SCHEMA = '2';   /* 2026-10-28.2：加 cond 欄＋補 q3、q10；舊表第一次讀取時自動補（qMigrate_） */
 function seedQuestions_() {
   var storeOpts = STORES.map(function (s) { return s[1]; }).join('|');
   return [
     ['q1', 1, 'single', '您今日體驗的分店是？', storeOpts, 'Y', 'Y', '店別；平板會記住上一次選的店'],
     ['q2', 2, 'single', '請問這是您「一年內」第幾次來做甜點呢？（不限店別）', '第1次|第2次|第3次|第4次|第5次以上', 'Y', 'Y', ''],
+    ['q3', 2.5, 'single', '請問您入座後，服務人員的解說：', '清楚明瞭，我知道接下來該如何完成甜點製作|解說太簡短，讓我不知該如何開始|解說太冗長，根本聽不懂說什麼', 'Y', 'Y', 'SurveyCake 6.0 條件題：第一次來的客人才問', 'q2=第1次'],
     ['q4', 3, 'single', '您今天選這款甜點時，第一個考慮的是？', '外型|價格|口味|不容易失敗|易分享|可否當生日蛋糕|看過別人分享|現在流行|當季限定|店內熱銷品|其他', 'Y', 'Y', ''],
     ['q5', 4, 'single', '您這次來的原因是？', '重要的人生日|自己生日|情侶約會|朋友聚會|家人同樂|喜歡烘焙|送禮|其他', 'Y', 'Y', ''],
     ['q6', 5, 'single', '您是否滿意今天使用的平板教學影片？', '是|否', 'Y', 'Y', '儀表板 KPI：平板教學滿意'],
     ['q7', 6, 'single', '您是否滿意今天店內的環境？', '是|否', 'Y', 'Y', '儀表板 KPI：環境滿意'],
     ['q8', 7, 'single', '您是否滿意今天服務人員的服務？', '是|否', 'Y', 'Y', '儀表板 KPI：服務滿意'],
     ['q9', 8, 'single', '在整體消費過程中，服務人員是否有提供您任何的協助？', '是|否', 'Y', 'Y', ''],
+    ['q10', 8.5, 'multi', '服務人員協助您的地方是？（可複選）', '報到時熱情問候|協助甜點品項的選擇|製作過程時的協助，如補救、教學、設備使用、蛋糕抹面、找食材／器模具…|給予讚美鼓勵|其他', 'Y', 'Y', 'SurveyCake 6.0 條件題：上一題回答「是」才問', 'q9=是'],
     ['q11', 9, 'multi', '您今天做的甜點是？（可複選）', '乳酪類（名字有乳酪，包含巴斯克、提拉米蘇）|慕斯類|蛋糕類|塔派類|點心類|餅乾類|麵包類', 'Y', 'Y', ''],
     ['q12', 10, 'single', '您今天的甜點有製作成功嗎？', '是|否', 'Y', 'Y', '儀表板 KPI：製作成功'],
     ['q13', 11, 'single', '您今天製作甜點的時間？', '2 小時（含）以內|2～2.5 小時（含）|2.5～3 小時（含）|3 小時以上', 'Y', 'Y', ''],
@@ -97,9 +101,32 @@ function qSheet_() {
   if (!sh) {
     sh = ss.insertSheet('dim_question');
     var rows = [Q_HEAD].concat(seedQuestions_());
+    rows = rows.map(function (r) { r = r.slice(); while (r.length < Q_HEAD.length) r.push(''); return r; });
     sh.getRange(1, 1, rows.length, Q_HEAD.length).setValues(rows); sh.setFrozenRows(1);
   }
+  var P = PropertiesService.getScriptProperties();
+  if (P.getProperty('Q_SCHEMA') !== Q_SCHEMA) { qMigrate_(sh); P.setProperty('Q_SCHEMA', Q_SCHEMA); }
   return sh;
+}
+/* 舊題目表升級：補 cond 欄、補種子裡有但表上沒有的題（只新增，不改經營者已改過的題） */
+function qMigrate_(sh) {
+  var v = sh.getDataRange().getValues(), head = v[0].map(function (h) { return String(h).trim(); });
+  if (head.indexOf('cond') < 0) {
+    var col = head.length + 1; for (var i = 0; i < head.length; i++) if (!head[i]) { col = i + 1; break; }
+    sh.getRange(1, col).setValue('cond'); head[col - 1] = 'cond';
+  }
+  var have = {}; for (var j = 1; j < v.length; j++) have[String(v[j][0] || '').trim()] = true;
+  seedQuestions_().forEach(function (r) {
+    if (have[r[0]]) return;
+    var row = head.map(function (h) { var k = Q_HEAD.indexOf(h); return k >= 0 && k < r.length ? r[k] : ''; });
+    sh.appendRow(row);
+  });
+  SpreadsheetApp.flush();
+}
+function parseCond_(s) {
+  s = String(s || '').trim(); var k = s.indexOf('='); if (k < 1) return null;
+  var vals = s.slice(k + 1).split('|').map(function (x) { return x.trim(); }).filter(Boolean);
+  return vals.length ? { qid: s.slice(0, k).trim(), vals: vals } : null;
 }
 function rSheet_() {
   var ss = db_(), sh = ss.getSheetByName('fact_response');
@@ -113,22 +140,23 @@ function rSheet_() {
 }
 /* 讀題目（all=true 連停用的也回；儀表板標舊資料要用） */
 function questions_(all) {
-  var v = qSheet_().getDataRange().getValues(), out = [];
+  var v = qSheet_().getDataRange().getValues(), out = [], ci = v[0].map(function (h) { return String(h).trim(); }).indexOf('cond');
   for (var i = 1; i < v.length; i++) {
     var r = v[i], qid = String(r[0] || '').trim(); if (!qid) continue;
     var q = { qid: qid, order: Number(r[1]) || 999, type: String(r[2] || 'single').trim(), title: String(r[3] || '').trim(),
       options: String(r[4] || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean),
-      required: String(r[5] || '').trim().toUpperCase() === 'Y', enabled: String(r[6] || 'Y').trim().toUpperCase() !== 'N' };
+      required: String(r[5] || '').trim().toUpperCase() === 'Y', enabled: String(r[6] || 'Y').trim().toUpperCase() !== 'N',
+      cond: ci >= 0 ? parseCond_(r[ci]) : null };
     if (all || q.enabled) out.push(q);
   }
   out.sort(function (a, b) { return a.order - b.order; });
   return out;
 }
 function form_() {
-  var c = CacheService.getScriptCache(), hit = c.get('form:v1');
+  var c = CacheService.getScriptCache(), hit = c.get('form:v2');
   if (hit) return JSON.parse(hit);
   var o = { ok: true, ver: VER, questions: questions_(false), stores: STORES, at: new Date().toISOString() };
-  c.put('form:v1', JSON.stringify(o), 300);
+  c.put('form:v2', JSON.stringify(o), 300);
   return o;
 }
 
@@ -150,7 +178,14 @@ function submit_(b) {
   var id = clean_(b.id, 64); if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw fail_('缺少識別碼', 'input');
   var a = (b.a && typeof b.a === 'object') ? b.a : {};
   var qs = questions_(false), ans = {}, missing = [];
+  /* 條件題：條件不成立 → 不收、不必填（照題目順序判斷，前一題的答案先清乾淨） */
+  function shown(q) {
+    if (!q.cond) return true;
+    var pv = ans[q.cond.qid]; if (pv == null) return false;
+    var arr = String(pv).split('|'); return q.cond.vals.some(function (x) { return arr.indexOf(x) >= 0; });
+  }
   qs.forEach(function (q) {
+    if (!shown(q)) { ans[q.qid] = ''; return; }
     var v = a[q.qid];
     if (q.type === 'multi') {
       v = Array.isArray(v) ? v : (v == null || v === '' ? [] : [v]);
