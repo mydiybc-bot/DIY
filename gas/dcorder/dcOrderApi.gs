@@ -1,6 +1,10 @@
 /**
- * diybc-dcorder-api  v1.3（2026-10-21 新竹物流托運單）
+ * diybc-dcorder-api  v1.5（2026-10-28 新竹物流托運單第二版：照新竹 v16.0.4 規格）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
+ *
+ * v1.5：照新竹 2026-10-27 寄來的 v16.0.4 規格改：SOAP 1.2；測試／正式網址分開（HCT_ENV）；多客代（HCT_CS，重量計費 W／總長計費 S，
+ *       總長一箱一筆）；託運單號只用數字（訂單號＋序號 2 碼）；確認出貨一批 20；新增 POST hctDispatch／hctDispatchCancel／hctQuery；
+ *       dc_hct 最後加 6 欄（客代、計費、商品種類、箱序、派遣、派遣時間，舊表第一次用時自動補標題）。
  *
  * v1.3：新竹物流（HCT）托運單。新分頁 dc_hct（一列＝一張托運單）＋ dc_hct_img（標籤圖 base64，留 60 天）
  *       POST hctCreate {id, boxes, weight, rcv:{name,tel,addr}}：向新竹取貨號＋標籤（同一天再送＝更正件數重量，貨號不變）
@@ -34,7 +38,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.4-id';
+var DCO_VER = 'v1.5-hct2';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -42,7 +46,7 @@ var H_STOCK = ['sku_id', '品名', '管理方式', '庫存', '更新時間', '�
 var H_LOG = ['時間', '動作', '訂單號', '店號', '內容'];
 var H_LOC = ['sku_id', '品名', '位置', '更新時間'];   /* v1.2：出貨中心品項位置（一個品項一列；位置清空＝刪列） */
 var SH_HCT = 'dc_hct';   /* v1.3：新竹托運單 */
-var H_HCT = ['訂單號', '店號', '託運單號', '新竹貨號', '到著站', '件數', '重量', '出貨日', '狀態', '收件人', '電話', '地址', '環境', '建立時間', '更新時間', '交寄時間'];
+var H_HCT = ['訂單號', '店號', '託運單號', '新竹貨號', '到著站', '件數', '重量', '出貨日', '狀態', '收件人', '電話', '地址', '環境', '建立時間', '更新時間', '交寄時間', '客代', '計費', '商品種類', '箱序', '派遣', '派遣時間'];   /* v1.5 加最後 6 欄 */
 var SH_HCTIMG = 'dc_hct_img';   /* v1.3：標籤圖另放一頁（一張約 15,000 字），平常讀托運單不用讀圖；只留 HCT_IMG_DAYS 天 */
 var H_HCTIMG = ['託運單號', '新竹貨號', '標籤', '建立時間'];
 var HCT_IMG_DAYS = 60;
@@ -211,7 +215,7 @@ function doGet(e) {
     if (p.action === 'orders') return dcoOut_({ ok: true, orders: dcoOrders_(p) }, cb);
     if (p.action === 'stock') return dcoOut_({ ok: true, stock: dcoStock_(), locs: dcoLocs_() }, cb);   /* v1.2：多回 locs，舊前端不讀這欄 */
     if (p.action === 'locs') return dcoOut_({ ok: true, locs: dcoLocs_() }, cb);
-    if (p.action === 'hct') return dcoOut_({ ok: true, env: hctCfg_().env, labels: hctList_(p) }, cb);   /* v1.3 */
+    if (p.action === 'hct') { var hp = hctPub_(); return dcoOut_({ ok: true, env: hp.env, cfg: hp, labels: hctList_(p) }, cb); }   /* v1.3；v1.5 多回 cfg（客代清單、派遣，不含帳密） */
     return dcoOut_({ ok: false, error: '未知的 action' }, cb);
   } catch (err) {
     return dcoOut_({ ok: false, error: String(err && err.message || err) }, cb);
@@ -270,6 +274,9 @@ function doPost(e) {
     else if (a === 'hctCreate') r = hctCreate_(body);   /* v1.3 */
     else if (a === 'hctVoid') r = hctVoid_(body);       /* v1.3 */
     else if (a === 'hctReport') r = hctReport_(body);   /* v1.3 */
+    else if (a === 'hctDispatch') r = hctDispatch_(body);             /* v1.5 */
+    else if (a === 'hctDispatchCancel') r = hctDispatchCancel_(body); /* v1.5 */
+    else if (a === 'hctQuery') r = hctQuery_(body);                   /* v1.5 */
     else r = { ok: false, error: '未知的 action' };
     return dcoOut_(r);
   } catch (err) {
@@ -575,43 +582,76 @@ function dcoMerge_(b) {
   return { ok: true, id: into, merged: others, n: out.length, total: total, status: status, updated: dcoFmt_(now) };
 }
 
-/* ── v1.3：新竹物流托運單 ──────────────────────────────────────
-   新竹 EDI Web Service（SOAP）：https://hctrt.hct.com.tw/EDI_WebService2/Service1.asmx
-   用 *_Json 版本；各方法參數名不同（打錯只會回「資料錯誤請確認」）：TransData_Json＝company／password／json，
-   TransReport_Json＝sCompany／sPassword／dsCusJson（2026-10-21 照新竹服務頁實測）。
-   一次只送一張訂單（回傳含標籤圖，新竹上限一批 5 張）；標籤圖＝PNG 的 16 進位字串，1000×1000（10×10 公分標籤）。
-   託運單號（epino）＝訂單號-序號：同一張訂單作廢重開會換序號，避免「訂單編號重複」。 */
-var HCT_URL = 'https://hctrt.hct.com.tw/EDI_WebService2/Service1.asmx';
+/* ── v1.3／v1.5：新竹物流托運單 ──────────────────────────────────
+   規格：《新竹物流配送出貨文件介接規格文件 v16.0.4》（2026/10/12，2026-10-27 新竹寄來）。SOAP 1.2、JSON 版方法：
+     TransData_Json（取號＋標籤；同 epino＋edelno 再送＝更正，整筆覆蓋）、TransReport_Json（確認出貨，參數 sCompany／sPassword／dsCusJson）、
+     QueryEDELNO_Json（用訂單編號查貨號）、TransDispatchOrder_Json（呼叫派遣收貨；回 {rtn_code, rtn_data}）、TransDataCancel_Json（取消派遣）。
+     一批：要標籤圖 ≤5、其他 ≤20。欄位不可有 & " > < '。訂單編號（epino）只能英文和數字、同一出貨日不可重複。
+   測試環境 https://hctrt.hct.com.tw/edi_webservice2_test/service1.asmx；正式 https://hctrt.hct.com.tw/edi_webservice2/service1.asmx
+   一個客代一種計費：重量（W：一筆＝N 箱＋總重量 kg）或總長（S：一筆只能 1 箱，eqamt＝60／90／120／150／151～999，兩箱要拆兩筆）。
+   託運單號（epino）＝訂單號（12 碼數字）＋序號 2 碼；同一張訂單作廢重開會換序號。
+   指令碼屬性（專案設定 → 指令碼屬性；都沒設＝新竹公開測試帳號 test／test1）：
+     HCT_COMPANY、HCT_PWD：公司帳號、密碼
+     HCT_ENV：test（測試環境）｜live（正式）；沒設＝有帳號就當 live
+     HCT_CS：客代清單，分號隔開，每組「客代|W或S|顯示名稱|商品種類」，第一組是預設。例：05974350011|W|一般件（按重量）|001;05974350002|S|一般件（按尺寸）|001
+     HCT_ESSTNO：出貨站 4 碼（選填）
+     HCT_SENDER／HCT_SENDER_TEL／HCT_SENDER_ADDR：出貨人名稱、電話、地址（選填；沒填用新竹帳號的預設值）
+     HCT_COMPANY_NAME：託運總表「客代」後面的公司名稱
+     HCT_DISPATCH：Y＝確認出貨後自動呼叫新竹來收件；HCT_DISPATCH_MARK：派遣備註（【平台或公司】-出貨人，30 字內） */
+var HCT_URL_LIVE = 'https://hctrt.hct.com.tw/edi_webservice2/service1.asmx';
+var HCT_URL_TEST = 'https://hctrt.hct.com.tw/edi_webservice2_test/service1.asmx';
 var HCT_OK = { '已建單': 1, '已交寄': 1 };
-var HCT_ARGS = { TransData_Json: ['company', 'password', 'json'], TransReport_Json: ['sCompany', 'sPassword', 'dsCusJson'] };
+var HCT_ARGS = { TransReport_Json: ['sCompany', 'sPassword', 'dsCusJson'] };   /* 其他方法都是 company／password／json */
+var HCT_SIZES = { 60: 1, 90: 1, 120: 1, 150: 1 };
+var HCT_MORE_COLS = ['客代', '計費', '商品種類', '箱序', '派遣', '派遣時間'];   /* v1.5 加在 dc_hct 最後 */
 
 function hctCfg_() {
   var p = PropertiesService.getScriptProperties();
   var c = p.getProperty('HCT_COMPANY'), w = p.getProperty('HCT_PWD');
-  var live = !!(c && w);
+  var has = !!(c && w), envP = String(p.getProperty('HCT_ENV') || '').toLowerCase();
+  var env = !has ? 'test' : (envP === 'test' ? 'test' : 'live');
+  var cs = String(p.getProperty('HCT_CS') || p.getProperty('HCT_ESCSNO') || '').split(';').map(function (s) {
+    var a = s.split('|').map(dcoStr_);
+    return a[0] || a.length > 1 ? { code: a[0] || '', mode: (a[1] || 'W').toUpperCase() === 'S' ? 'S' : 'W', name: a[2] || (a[1] && a[1].toUpperCase() === 'S' ? '按尺寸' : '按重量'), kind: a[3] || '001' } : null;
+  }).filter(Boolean);
+  if (!cs.length) cs = [{ code: '', mode: 'W', name: '一般件', kind: '001' }];
   return {
-    env: live ? 'live' : 'test', company: live ? c : 'test', pwd: live ? w : 'test1',
-    escsno: p.getProperty('HCT_ESCSNO') || '', esstno: p.getProperty('HCT_ESSTNO') || '',
-    sender: p.getProperty('HCT_SENDER') || '', senderTel: p.getProperty('HCT_SENDER_TEL') || '', senderAddr: p.getProperty('HCT_SENDER_ADDR') || ''
+    env: env, url: (has && envP === 'test') ? HCT_URL_TEST : HCT_URL_LIVE,   /* 公開測試帳號 test／test1 用正式網址 */
+    company: has ? c : 'test', pwd: has ? w : 'test1', cs: cs,
+    esstno: p.getProperty('HCT_ESSTNO') || '',
+    sender: p.getProperty('HCT_SENDER') || '', senderTel: p.getProperty('HCT_SENDER_TEL') || '', senderAddr: p.getProperty('HCT_SENDER_ADDR') || '',
+    companyName: p.getProperty('HCT_COMPANY_NAME') || '',
+    dispatch: String(p.getProperty('HCT_DISPATCH') || '').toUpperCase() === 'Y',
+    dispatchMark: (p.getProperty('HCT_DISPATCH_MARK') || '自己做烘焙聚樂部-出貨中心').slice(0, 30)
   };
 }
-/* 呼叫新竹 SOAP：method＝TransData_Json／TransReport_Json…，回傳解析後的 JSON 陣列 */
+function hctCsOf_(cfg, code) {
+  code = dcoStr_(code);
+  for (var i = 0; i < cfg.cs.length; i++) if (cfg.cs[i].code === code) return cfg.cs[i];
+  return null;
+}
+/* 前端看得到的設定（不含帳密） */
+function hctPub_() {
+  var c = hctCfg_();
+  return { env: c.env, cs: c.cs, dispatch: c.dispatch, companyName: c.companyName };
+}
+function hctClean_(v, n) { return dcoStr_(v).replace(/[&"<>']/g, '').slice(0, n || 100); }
+/* 呼叫新竹 SOAP 1.2：回傳 *Result 解析後的 JSON（陣列或物件） */
 function hctCall_(method, arr) {
-  var cfg = hctCfg_();
+  var cfg = hctCfg_(), a = HCT_ARGS[method] || ['company', 'password', 'json'];
   function esc(x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-  var a = HCT_ARGS[method];
   function tag(k, v) { return '<' + k + '>' + esc(v) + '</' + k + '>'; }
-  var env = '<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
-    + '<soap:Body><' + method + ' xmlns="http://tempuri.org/">' + tag(a[0], cfg.company) + tag(a[1], cfg.pwd) + tag(a[2], JSON.stringify(arr)) + '</' + method + '></soap:Body></soap:Envelope>';
-  var res = UrlFetchApp.fetch(HCT_URL, { method: 'post', contentType: 'text/xml; charset=utf-8', headers: { SOAPAction: '"http://tempuri.org/' + method + '"' }, payload: env, muteHttpExceptions: true });
+  var env = '<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">'
+    + '<soap12:Body><' + method + ' xmlns="http://tempuri.org/">' + tag(a[0], cfg.company) + tag(a[1], cfg.pwd) + tag(a[2], JSON.stringify(arr)) + '</' + method + '></soap12:Body></soap12:Envelope>';
+  var res = UrlFetchApp.fetch(cfg.url, { method: 'post', contentType: 'application/soap+xml; charset=utf-8', payload: env, muteHttpExceptions: true });
   var code = res.getResponseCode(), txt = res.getContentText('UTF-8');
   if (code !== 200) throw new Error('新竹系統回應 ' + code + '：' + txt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200));
   var m = txt.match(new RegExp('<' + method + 'Result>([\\s\\S]*?)</' + method + 'Result>'));
   if (!m) throw new Error('看不懂新竹系統的回應');
   var body = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#xD;/g, '\r').replace(/&#xA;/g, '\n').replace(/&amp;/g, '&');
-  var out = JSON.parse(body);
-  return Array.isArray(out) ? out : [out];
+  return JSON.parse(body);
 }
+function hctArr_(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
 function hctHexToB64_(hex) {
   hex = String(hex || '').replace(/\s+/g, '');
   if (!hex || hex.length % 2) return '';
@@ -620,6 +660,14 @@ function hctHexToB64_(hex) {
   return Utilities.base64Encode(bytes);
 }
 function hctToday_() { return Utilities.formatDate(new Date(), DCO_TZ, 'yyyyMMdd'); }
+/* dc_hct 讀表（v1.5 先補欄位標題：舊表沒有的欄加在最後） */
+function hctTable_() {
+  var sh = dcoSheet_(SH_HCT), lc = Math.max(1, sh.getLastColumn()), h = sh.getRange(1, 1, 1, lc).getValues()[0].map(dcoStr_);
+  var miss = H_HCT.filter(function (k) { return h.indexOf(k) < 0; });
+  if (miss.length) { sh.getRange(1, h.length + 1, 1, miss.length).setValues([miss]); sh.getRange(1, h.length + 1, sh.getMaxRows(), miss.length).setNumberFormat('@'); }
+  return dcoRead_(SH_HCT);
+}
+function hctRowVals_(t, o) { return t.h.map(function (k) { return o.hasOwnProperty(k) ? o[k] : ''; }); }
 /* 標籤圖：依託運單號找列（只讀找到的那幾列，不整頁讀） */
 function hctImgFind_(sh, epino) {
   var last = sh.getLastRow(); if (last < 2) return 0;
@@ -641,15 +689,17 @@ function hctImgPut_(epino, edelno, b64) {
   if (k) sh.deleteRows(2, k);
 }
 function hctRow_(r, img) {
+  var mode = dcoStr_(r['計費']) || 'W';
   var o = { id: dcoStr_(r['訂單號']), store: dcoStr_(r['店號']), epino: dcoStr_(r['託運單號']), edelno: dcoStr_(r['新竹貨號']), erstno: dcoStr_(r['到著站']),
     boxes: dcoNum_(r['件數']), weight: dcoNum_(r['重量']), date: dcoStr_(r['出貨日']), status: dcoStr_(r['狀態']), name: dcoStr_(r['收件人']),
-    tel: dcoStr_(r['電話']), addr: dcoStr_(r['地址']), env: dcoStr_(r['環境']), created: dcoFmt_(r['建立時間']), updated: dcoFmt_(r['更新時間']), reported: dcoFmt_(r['交寄時間']) };
+    tel: dcoStr_(r['電話']), addr: dcoStr_(r['地址']), env: dcoStr_(r['環境']), created: dcoFmt_(r['建立時間']), updated: dcoFmt_(r['更新時間']), reported: dcoFmt_(r['交寄時間']),
+    cs: dcoStr_(r['客代']), mode: mode, kind: dcoStr_(r['商品種類']) || '001', box: dcoNum_(r['箱序']) || 1, dispatch: dcoStr_(r['派遣']), dispTime: dcoFmt_(r['派遣時間']) };
   if (img) o.img = hctImgGet_(o.epino);
   return o;
 }
 /* 讀托運單：date＝出貨日 yyyyMMdd；ids＝訂單號（逗號分隔）；days＝近 N 天（預設 7）；img=1 才帶標籤圖 */
 function hctList_(p) {
-  var rows = dcoRead_(SH_HCT).rows.filter(function (r) { return dcoStr_(r['訂單號']); });
+  var rows = hctTable_().rows.filter(function (r) { return dcoStr_(r['訂單號']); });
   var ids = p.ids ? String(p.ids).split(',').map(dcoStr_) : null;
   var since = Utilities.formatDate(new Date(Date.now() - (dcoNum_(p.days) || 7) * 86400000), DCO_TZ, 'yyyyMMdd');
   return rows.filter(function (r) {
@@ -658,98 +708,189 @@ function hctList_(p) {
     return dcoStr_(r['出貨日']) >= since;
   }).map(function (r) { return hctRow_(r, p.img === '1'); });
 }
-/* 這張訂單目前有效的托運單（已建單／已交寄，取最後一張） */
-function hctActive_(t, id) {
-  var hit = null;
-  t.rows.forEach(function (r) { if (dcoStr_(r['訂單號']) === id && HCT_OK[dcoStr_(r['狀態'])]) hit = r; });
-  return hit;
+/* 這張訂單目前有效的托運單（已建單／已交寄、同環境），依箱序排 */
+function hctActiveAll_(t, id, env) {
+  return t.rows.filter(function (r) { return dcoStr_(r['訂單號']) === id && HCT_OK[dcoStr_(r['狀態'])] && (!env || (dcoStr_(r['環境']) || env) === env); })
+    .sort(function (a, b) { return (dcoNum_(a['箱序']) || 1) - (dcoNum_(b['箱序']) || 1); });
 }
 function hctSetOrderNo_(id, no) {
   var t = dcoRead_(SH_LINE), rs = dcoRowsOf_(t, id);
   if (rs.length) dcoWriteRows_(t, rs, function () { return { '新竹貨號': no }; });   /* 不動「更新時間」：前端編輯的 base 不受影響 */
 }
+function hctPad2_(n) { n = String(n); return n.length < 2 ? '0' + n : n; }
+function hctEpino_(id, seq) { return String(id).replace(/[^A-Za-z0-9]/g, '') + hctPad2_(seq); }   /* 只能英文和數字 */
 
-/* 產生托運單：{id, boxes, weight, rcv:{name, tel, addr}} */
+/* 產生（或同日更正）托運單：{id, cs, boxes, weight, sizes:[60,90…], rcv:{name, tel, addr}}
+   W（重量）：一筆＝boxes 箱＋總重量；S（總長）：一箱一筆，sizes 每箱尺寸。
+   同一天、同客代、還沒交寄 → 第 i 箱沿用原託運單號＋貨號（新竹當更正）；多的新開、少的作廢。換客代或隔天 → 舊的全部作廢重開。 */
 function hctCreate_(b) {
-  var id = dcoStr_(b.id), boxes = Math.floor(dcoNum_(b.boxes)), weight = Math.ceil(dcoNum_(b.weight));
-  var rcv = b.rcv || {}, name = dcoStr_(rcv.name).slice(0, 40), tel = dcoStr_(rcv.tel).replace(/[^\d#-]/g, '').slice(0, 15), addr = dcoStr_(rcv.addr).slice(0, 100);
-  if (!(boxes >= 1 && boxes <= 999)) return { ok: false, error: '件數要填 1～999' };
-  if (!(weight >= 1 && weight <= 99999)) return { ok: false, error: '重量要填 1 公斤以上（小數會進位）' };
+  var id = dcoStr_(b.id), cfg = hctCfg_(), cs = hctCsOf_(cfg, b.cs) || cfg.cs[0];
+  var rcv = b.rcv || {}, name = hctClean_(rcv.name, 40), tel = dcoStr_(rcv.tel).replace(/[^\d#]/g, '').slice(0, 20), addr = hctClean_(rcv.addr, 100);
   if (!name || !tel || !addr) return { ok: false, error: '收件人、電話、地址都要有' };
+  var items = [];
+  if (cs.mode === 'S') {
+    var sizes = (b.sizes || []).map(function (x) { return Math.ceil(dcoNum_(x)); });
+    if (!sizes.length || sizes.length > 20) return { ok: false, error: '按尺寸計費：每箱都要選尺寸（1～20 箱）' };
+    for (var i = 0; i < sizes.length; i++) if (!(HCT_SIZES[sizes[i]] || (sizes[i] >= 151 && sizes[i] <= 999))) return { ok: false, error: '第 ' + (i + 1) + ' 箱尺寸要是 60、90、120、150 或 151～999 公分' };
+    items = sizes.map(function (s) { return { ejamt: 1, eqamt: s }; });
+  } else {
+    var boxes = Math.floor(dcoNum_(b.boxes)), weight = Math.ceil(dcoNum_(b.weight));
+    if (!(boxes >= 1 && boxes <= 999)) return { ok: false, error: '件數要填 1～999' };
+    if (!(weight >= 1 && weight <= 99999)) return { ok: false, error: '重量要填 1 公斤以上（小數會進位）' };
+    items = [{ ejamt: boxes, eqamt: weight }];
+  }
   var tl = dcoRead_(SH_LINE), rs = dcoRowsOf_(tl, id);
   if (!rs.length) return { ok: false, error: '找不到訂單' };
-  var st = dcoStr_(rs[0]['狀態']);
-  if (st === '已取消') return { ok: false, error: '已取消的訂單不能開托運單' };
-  var t = dcoRead_(SH_HCT), cfg = hctCfg_(), today = hctToday_(), act = hctActive_(t, id), now = new Date();
-  var fix = act && dcoStr_(act['出貨日']) === today && dcoStr_(act['狀態']) === '已建單' && dcoStr_(act['環境']) === cfg.env;   /* 同一天、還沒交寄＝更正 */
-  if (act && !fix) {
-    if (dcoStr_(act['狀態']) === '已交寄') return { ok: false, error: '這張訂單 ' + dcoStr_(act['出貨日']) + ' 已交寄（貨號 ' + dcoStr_(act['新竹貨號']) + '），不能再開；要重寄請先聯絡新竹站所' };
-    dcoSet_(t, act._row, '狀態', '作廢'); dcoSet_(t, act._row, '更新時間', now);   /* 前一天開了沒交寄（或換了環境）→ 作廢舊的、開新的 */
-  }
-  var seq = 1;
+  if (dcoStr_(rs[0]['狀態']) === '已取消') return { ok: false, error: '已取消的訂單不能開托運單' };
+  var store = dcoStr_(rs[0]['店號']);
+  var t = hctTable_(), today = hctToday_(), act = hctActiveAll_(t, id, cfg.env), now = new Date();
+  for (var j = 0; j < act.length; j++) if (dcoStr_(act[j]['狀態']) === '已交寄') return { ok: false, error: '這張訂單 ' + dcoStr_(act[j]['出貨日']) + ' 已交寄（貨號 ' + dcoStr_(act[j]['新竹貨號']) + '），不能再開；要重寄請先聯絡新竹站所' };
+  var fix = act.length > 0 && act.every(function (r) { return dcoStr_(r['出貨日']) === today && (dcoStr_(r['客代']) || cs.code) === cs.code; });
+  var voids = fix ? act.slice(items.length) : act;
+  var seq = 0;
   t.rows.forEach(function (r) { if (dcoStr_(r['訂單號']) === id) seq++; });
-  var epino = fix ? dcoStr_(act['託運單號']) : id + '-' + seq;
-  var rec = { epino: epino, ercsig: name, ertel1: tel, eraddr: addr, ejamt: String(boxes), eqamt: String(weight), esdate: today, emark: ('訂單 ' + id).slice(0, 100) };
-  if (fix) rec.edelno = dcoStr_(act['新竹貨號']);
-  if (cfg.escsno) rec.escsno = cfg.escsno;
-  if (cfg.esstno) rec.esstno = cfg.esstno;
-  if (cfg.sender) rec.etcsig = cfg.sender;
-  if (cfg.senderTel) rec.ettel1 = cfg.senderTel;
-  if (cfg.senderAddr) rec.etaddr = cfg.senderAddr;
-  var r = hctCall_('TransData_Json', [rec])[0] || {};
-  for (var tries = 0; !fix && tries < 9 && r.success !== 'Y' && /訂單編號重複/.test(String(r.ErrMsg || '')); tries++) {   /* 新竹那邊今天已有這個託運單號（例：試算表被手動刪列）→ 換下一個序號再送 */
-    seq++; epino = rec.epino = id + '-' + seq;
-    r = hctCall_('TransData_Json', [rec])[0] || {};
+  var base = { esdate: today, eprdcl2: cs.kind || '001', emark: hctClean_('訂單 ' + id, 100) };
+  if (cs.code) base.escsno = cs.code;
+  if (cfg.esstno) base.esstno = cfg.esstno;
+  if (cfg.sender) base.etcsig = hctClean_(cfg.sender, 40);
+  if (cfg.senderTel) base.ettel1 = String(cfg.senderTel).replace(/[^\d#]/g, '').slice(0, 15);
+  if (cfg.senderAddr) base.etaddr = hctClean_(cfg.senderAddr, 100);
+  var recs = items.map(function (it, k) {
+    var o = { ercsig: name, ertel1: tel, eraddr: addr, ejamt: String(it.ejamt), eqamt: String(it.eqamt) };
+    Object.keys(base).forEach(function (x) { o[x] = base[x]; });
+    var old = fix ? act[k] : null;
+    if (old) { o.epino = dcoStr_(old['託運單號']); o.edelno = dcoStr_(old['新竹貨號']); }
+    else o.epino = hctEpino_(id, ++seq);
+    return { rec: o, old: old, box: k + 1 };
+  });
+  /* 送新竹：要標籤圖一批最多 5 筆 */
+  var res = [];
+  for (var s = 0; s < recs.length; s += 5) {
+    var part = recs.slice(s, s + 5), out = hctArr_(hctCall_('TransData_Json', part.map(function (x) { return x.rec; })));
+    part.forEach(function (x, i) { res.push(out[i] || {}); });
   }
-  if (r.success !== 'Y' && r.success !== 'R') {
-    dcoLog_('hctFail', id, rs[0]['店號'], { rec: rec, err: r.ErrMsg || '' });
-    return { ok: false, error: '新竹系統沒有接受：' + (r.ErrMsg || '原因不明') };
-  }
-  var img = hctHexToB64_(r.image), no = dcoStr_(r.edelno), stn = dcoStr_(r.erstno);
-  var row = [id, dcoStr_(rs[0]['店號']), epino, no, stn, boxes, weight, today, '已建單', name, tel, addr, cfg.env, fix ? act['建立時間'] : now, now, ''];
-  if (fix) t.sh.getRange(act._row, 1, 1, H_HCT.length).setValues([row]);
-  else t.sh.getRange(t.sh.getLastRow() + 1, 1, 1, H_HCT.length).setValues([row]);
-  if (img) hctImgPut_(epino, no, img);
-  hctSetOrderNo_(id, no);
-  dcoLog_('hctCreate', id, rs[0]['店號'], { epino: epino, edelno: no, erstno: stn, boxes: boxes, weight: weight, env: cfg.env, fix: !!fix, img: img.length });
-  return { ok: true, id: id, edelno: no, erstno: stn, epino: epino, fix: !!fix, env: cfg.env, label: { id: id, store: dcoStr_(rs[0]['店號']), epino: epino, edelno: no, erstno: stn, boxes: boxes, weight: weight, date: today, status: '已建單', env: cfg.env, img: img } };
+  /* 「訂單編號重複」（新竹那邊今天已有這個號碼，例：試算表被手動刪列）→ 換下一個序號單筆再送，最多 9 次 */
+  recs.forEach(function (x, i) {
+    for (var tries = 0; !x.old && tries < 9 && res[i].success !== 'Y' && /訂單編號重複/.test(String(res[i].ErrMsg || '')); tries++) {
+      x.rec.epino = hctEpino_(id, ++seq);
+      res[i] = hctArr_(hctCall_('TransData_Json', [x.rec]))[0] || {};
+    }
+  });
+  var labels = [], fails = [];
+  recs.forEach(function (x, i) {
+    var r = res[i];
+    if (r.success !== 'Y' && r.success !== 'R') { fails.push('第 ' + x.box + ' 箱：' + (r.ErrMsg || '原因不明')); return; }
+    var img = hctHexToB64_(r.image), no = dcoStr_(r.edelno), stn = dcoStr_(r.erstno);
+    var vals = { '訂單號': id, '店號': store, '託運單號': x.rec.epino, '新竹貨號': no, '到著站': stn, '件數': Number(x.rec.ejamt), '重量': Number(x.rec.eqamt),
+      '出貨日': today, '狀態': '已建單', '收件人': name, '電話': tel, '地址': addr, '環境': cfg.env, '建立時間': x.old ? x.old['建立時間'] : now, '更新時間': now, '交寄時間': '',
+      '客代': cs.code, '計費': cs.mode, '商品種類': cs.kind || '001', '箱序': x.box, '派遣': '', '派遣時間': '' };
+    if (x.old) t.sh.getRange(x.old._row, 1, 1, t.h.length).setValues([hctRowVals_(t, vals)]);
+    else t.sh.getRange(t.sh.getLastRow() + 1, 1, 1, t.h.length).setValues([hctRowVals_(t, vals)]);
+    if (img) hctImgPut_(x.rec.epino, no, img);
+    labels.push({ id: id, store: store, epino: x.rec.epino, edelno: no, erstno: stn, boxes: Number(x.rec.ejamt), weight: Number(x.rec.eqamt), date: today, status: '已建單',
+      env: cfg.env, cs: cs.code, mode: cs.mode, kind: cs.kind || '001', box: x.box, img: img, fix: !!x.old });
+  });
+  voids.forEach(function (r) { dcoSet_(t, r._row, '狀態', '作廢'); dcoSet_(t, r._row, '更新時間', now); });
+  var nos = hctActiveAll_(hctTable_(), id, cfg.env).map(function (r) { return dcoStr_(r['新竹貨號']); }).filter(Boolean);
+  hctSetOrderNo_(id, nos.join(','));
+  dcoLog_('hctCreate', id, store, { cs: cs.code, mode: cs.mode, items: items, env: cfg.env, fix: fix, ok: labels.map(function (l) { return l.epino + '/' + l.edelno; }), fails: fails, voids: voids.length });
+  if (!labels.length) return { ok: false, error: '新竹系統沒有接受：' + fails.join('；') };
+  return { ok: !fails.length, error: fails.length ? '有 ' + fails.length + ' 箱沒成功：' + fails.join('；') : '', id: id, env: cfg.env, fix: fix, labels: labels,
+    edelno: labels[0].edelno, label: labels[0] };
 }
 
-/* 作廢：{id}。只能作廢還沒交寄的（新竹沒有取消 API；不放進總表、不交給司機就不會寄出） */
+/* 作廢：{id}。這張訂單還沒交寄的托運單全部作廢（新竹沒有取消託運的 API；不確認出貨、不交給司機就不會寄出） */
 function hctVoid_(b) {
-  var id = dcoStr_(b.id), t = dcoRead_(SH_HCT), act = hctActive_(t, id);
-  if (!act) return { ok: true, id: id, already: true };
-  if (dcoStr_(act['狀態']) === '已交寄') return { ok: false, error: '已交寄的托運單不能作廢，請聯絡新竹站所' };
-  dcoSet_(t, act._row, '狀態', '作廢'); dcoSet_(t, act._row, '更新時間', new Date());
+  var id = dcoStr_(b.id), t = hctTable_(), act = hctActiveAll_(t, id, ''), now = new Date();
+  if (!act.length) return { ok: true, id: id, already: true };
+  if (act.some(function (r) { return dcoStr_(r['狀態']) === '已交寄'; })) return { ok: false, error: '已交寄的托運單不能作廢，請聯絡新竹站所' };
+  act.forEach(function (r) { dcoSet_(t, r._row, '狀態', '作廢'); dcoSet_(t, r._row, '更新時間', now); });
   hctSetOrderNo_(id, '');
-  dcoLog_('hctVoid', id, act['店號'], { edelno: dcoStr_(act['新竹貨號']) });
-  return { ok: true, id: id };
+  dcoLog_('hctVoid', id, act[0]['店號'], { edelno: act.map(function (r) { return dcoStr_(r['新竹貨號']); }) });
+  return { ok: true, id: id, n: act.length };
 }
 
-/* 確認出貨（印託運總表）：{date?=今天}。把當天「已建單」的送新竹 TransReport，成功改「已交寄」。
-   新竹回「已經上傳過此筆」也算成功。回傳當天全部有效托運單（不含圖）給前端印總表 */
+/* 派遣（叫新竹來收件）：rows＝dc_hct 列。回 {done, fail:[…], msg} */
+function hctDispatchRows_(t, rows, cfg) {
+  var done = 0, fail = [], msg = '', now = new Date();
+  for (var i = 0; i < rows.length; i += 20) {
+    var part = rows.slice(i, i + 20);
+    var r = hctCall_('TransDispatchOrder_Json', part.map(function (x) { return { epino: dcoStr_(x['託運單號']), edelno: dcoStr_(x['新竹貨號']), emark: cfg.dispatchMark }; })) || {};
+    var data = hctArr_(r.rtn_data || r), by = {};
+    data.forEach(function (d) { by[dcoStr_(d.edelno)] = d; });
+    if (r.rtn_msg) msg = String(r.rtn_msg);
+    part.forEach(function (x) {
+      var d = by[dcoStr_(x['新竹貨號'])] || {}, ok = String(d.success || '').toUpperCase() === 'Y';
+      if (ok) { dcoSet_(t, x._row, '派遣', 'Y'); dcoSet_(t, x._row, '派遣時間', now); done++; }
+      else { var e = d.errMsg || d.ErrMsg || r.rtn_msg || '新竹沒有回這一筆'; dcoSet_(t, x._row, '派遣', ('N ' + e).slice(0, 100)); fail.push({ id: dcoStr_(x['訂單號']), edelno: dcoStr_(x['新竹貨號']), err: e }); }
+    });
+  }
+  return { done: done, fail: fail, msg: msg, code: '' };
+}
+
+/* 確認出貨（印託運總表）：{date?=今天}。當天「已建單」送新竹 TransReport（一批 20），成功改「已交寄」；新竹回「已經上傳過此筆」也算成功。
+   有開 HCT_DISPATCH＝Y 就接著呼叫派遣。回傳當天全部有效托運單（不含圖）給前端印總表 */
 function hctReport_(b) {
-  var date = dcoStr_(b.date) || hctToday_(), t = dcoRead_(SH_HCT), cfg = hctCfg_(), now = new Date();
+  var date = dcoStr_(b.date) || hctToday_(), t = hctTable_(), cfg = hctCfg_(), now = new Date();
   var todo = t.rows.filter(function (r) { return dcoStr_(r['出貨日']) === date && dcoStr_(r['狀態']) === '已建單' && dcoStr_(r['環境']) === cfg.env; });
-  var fail = [], done = 0;
-  for (var i = 0; i < todo.length; i += 30) {
-    var part = todo.slice(i, i + 30);
-    var res = hctCall_('TransReport_Json', part.map(function (r) { return { epino: dcoStr_(r['託運單號']), edelno: dcoStr_(r['新竹貨號']) }; }));
+  var fail = [], done = 0, okRows = [];
+  for (var i = 0; i < todo.length; i += 20) {
+    var part = todo.slice(i, i + 20);
+    var res = hctArr_(hctCall_('TransReport_Json', part.map(function (r) { return { epino: dcoStr_(r['託運單號']), edelno: dcoStr_(r['新竹貨號']) }; })));
     var by = {};
     res.forEach(function (x) { by[dcoStr_(x.edelno)] = x; });
     part.forEach(function (r) {
       var x = by[dcoStr_(r['新竹貨號'])] || {};
-      if (x.success === 'Y' || /上傳過/.test(String(x.ErrMsg || ''))) { dcoSet_(t, r._row, '狀態', '已交寄'); dcoSet_(t, r._row, '交寄時間', now); dcoSet_(t, r._row, '更新時間', now); done++; }
+      if (x.success === 'Y' || /上傳過/.test(String(x.ErrMsg || ''))) { dcoSet_(t, r._row, '狀態', '已交寄'); dcoSet_(t, r._row, '交寄時間', now); dcoSet_(t, r._row, '更新時間', now); done++; okRows.push(r); }
       else fail.push({ id: dcoStr_(r['訂單號']), edelno: dcoStr_(r['新竹貨號']), err: x.ErrMsg || '新竹沒有回這一筆' });
     });
   }
-  dcoLog_('hctReport', '', '', { date: date, done: done, fail: fail, env: cfg.env });
-  var list = dcoRead_(SH_HCT).rows.filter(function (r) { return dcoStr_(r['出貨日']) === date && HCT_OK[dcoStr_(r['狀態'])] && dcoStr_(r['環境']) === cfg.env; }).map(function (r) { return hctRow_(r, false); });
-  return { ok: true, date: date, done: done, fail: fail, env: cfg.env, escsno: cfg.escsno, labels: list };
+  var disp = null;
+  if (cfg.dispatch && okRows.length) { try { disp = hctDispatchRows_(t, okRows, cfg); } catch (e) { disp = { done: 0, fail: [], msg: String(e && e.message || e) }; } }
+  dcoLog_('hctReport', '', '', { date: date, done: done, fail: fail, env: cfg.env, dispatch: disp });
+  var list = hctTable_().rows.filter(function (r) { return dcoStr_(r['出貨日']) === date && HCT_OK[dcoStr_(r['狀態'])] && dcoStr_(r['環境']) === cfg.env; }).map(function (r) { return hctRow_(r, false); });
+  return { ok: true, date: date, done: done, fail: fail, env: cfg.env, cs: cfg.cs, companyName: cfg.companyName, dispatch: disp, labels: list };
+}
+
+/* 呼叫派遣（手動補叫）：{date?=今天}。當天已交寄、還沒派遣成功的 */
+function hctDispatch_(b) {
+  var date = dcoStr_(b.date) || hctToday_(), t = hctTable_(), cfg = hctCfg_();
+  var rows = t.rows.filter(function (r) { return dcoStr_(r['出貨日']) === date && dcoStr_(r['狀態']) === '已交寄' && dcoStr_(r['環境']) === cfg.env && dcoStr_(r['派遣']) !== 'Y'; });
+  if (!rows.length) return { ok: true, done: 0, fail: [], msg: '沒有要派遣的托運單' };
+  var d = hctDispatchRows_(t, rows, cfg);
+  dcoLog_('hctDispatch', '', '', { date: date, dispatch: d, env: cfg.env });
+  return { ok: true, done: d.done, fail: d.fail, msg: d.msg };
+}
+
+/* 取消派遣：{id}。這張訂單已派遣的托運單（司機還沒收件才有效；取消後同一個貨號不能再派遣） */
+function hctDispatchCancel_(b) {
+  var id = dcoStr_(b.id), t = hctTable_(), cfg = hctCfg_();
+  var rows = hctActiveAll_(t, id, cfg.env).filter(function (r) { return dcoStr_(r['派遣']) === 'Y'; });
+  if (!rows.length) return { ok: false, error: '這張訂單沒有已派遣的托運單' };
+  var res = hctArr_(hctCall_('TransDataCancel_Json', rows.map(function (r) { return { epino: dcoStr_(r['託運單號']), edelno: dcoStr_(r['新竹貨號']) }; }))), by = {}, fail = [];
+  res.forEach(function (x) { by[dcoStr_(x.edelno)] = x; });
+  rows.forEach(function (r) {
+    var x = by[dcoStr_(r['新竹貨號'])] || {};
+    if (String(x.success || '').toUpperCase() === 'Y') dcoSet_(t, r._row, '派遣', '取消');
+    else fail.push(dcoStr_(r['新竹貨號']) + '：' + (x.ErrMsg || '新竹沒有回這一筆'));
+  });
+  dcoLog_('hctDispatchCancel', id, rows[0]['店號'], { fail: fail });
+  return fail.length ? { ok: false, error: '取消派遣沒成功：' + fail.join('；') } : { ok: true, id: id, n: rows.length };
+}
+
+/* 向新竹查這張訂單的託運單號有沒有貨號（QueryEDELNO）：{id}。只讀新竹、不寫表 */
+function hctQuery_(b) {
+  var id = dcoStr_(b.id), cfg = hctCfg_(), t = hctTable_();
+  var act = hctActiveAll_(t, id, cfg.env);
+  var eps = (act.length ? act : t.rows.filter(function (r) { return dcoStr_(r['訂單號']) === id && (dcoStr_(r['環境']) || cfg.env) === cfg.env; })).map(function (r) { return dcoStr_(r['託運單號']); }).filter(Boolean);
+  if (!eps.length) return { ok: false, error: '這張訂單沒有託運單號' };
+  /* 2026-10-28 實測：一次送多筆，新竹只回第一筆 → 一筆一筆查 */
+  var res = eps.slice(0, 20).map(function (e) { return hctArr_(hctCall_('QueryEDELNO_Json', [{ epino: e }]))[0] || { epino: e, success: 'N', ErrMsg: '新竹沒有回覆' }; });
+  return { ok: true, id: id, result: res.map(function (x, i) { return { epino: dcoStr_(x.epino) || eps[i], edelno: dcoStr_(x.edelno), success: dcoStr_(x.success), err: dcoStr_(x.ErrMsg) }; }) };
 }
 
 /* 授權用（加了 UrlFetchApp 要經營者按一次「執行」授權）：只連新竹看服務在不在，不寫任何資料 */
 function aaaHctAuthCheck() {
-  var res = UrlFetchApp.fetch(HCT_URL + '?op=TransData_Json', { muteHttpExceptions: true });
+  var res = UrlFetchApp.fetch(hctCfg_().url + '?op=TransData_Json', { muteHttpExceptions: true });
   Logger.log('新竹服務回應 ' + res.getResponseCode() + '；目前環境：' + hctCfg_().env);
 }

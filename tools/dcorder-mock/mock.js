@@ -45,6 +45,8 @@ var SS = {
   getSheets: function () { return this.sheets; }, getId: function () { return 'MOCK'; }, getUrl: function () { return 'mock'; }, setSpreadsheetTimeZone: function () { }
 };
 var props = {};
+/* 2026-10-28：環境變數 HCT_*（帳號、HCT_ENV、HCT_CS…）直接當指令碼屬性，用來在本機連新竹測試環境；帳密不寫進檔案 */
+Object.keys(process.env).forEach(function (k) { if (/^HCT_/.test(k)) props[k] = process.env[k]; });
 function fmtDate(d, tz, f) {
   var t = new Date(d.getTime() + 8 * 3600e3), p = function (n) { return String(n).padStart(2, '0'); };
   return f.replace('yyyy', t.getUTCFullYear()).replace('yy', String(t.getUTCFullYear()).slice(2)).replace('MM', p(t.getUTCMonth() + 1)).replace('dd', p(t.getUTCDate()))
