@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<!-- 2026-10-28 新建「📝 顧客體驗問卷」（經營者：每支食譜最後一頁原本嵌 SurveyCake 問卷（顧客體驗滿意度調查 6.0），改成自己的問卷系統）
+     客人在店內平板填：門市食譜後台每支食譜最後一頁的 iframe 改嵌這一頁（原 https://www.surveycake.com/s/wrg1P → 這頁網址）。
+     題目從「顧客問卷 API」（GAS 專案「顧客問卷_資料庫」dim_question 分頁）讀，改試算表就改問卷；頁內另有一份相同的備用題目（FALLBACK_Q），
+     GAS 慢或連不到也能先填、送出失敗會暫存在平板上自動補送。結果看 dashboard-survey.html（總部）。
+     網址參數：?store=店號（預先選好分店；平板也會記住上一次選的店）、?recipe=甜點名（記在回答裡）、?lang=、?src=、?api=（本機模擬用）。
+     設計原則：一頁到底、大按鈕、點一下就選；打字只有最後一題留言（已加 IME-GUARD，中文選字不會被打斷）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>顧客體驗問卷｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{font-size:clamp(15px,1.45vw,19px)}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FFF8EC;color:#40210F;line-height:1.5}
+  button{font-family:inherit}
+  .top{position:sticky;top:0;z-index:5;background:#FDD35D;color:#40210F;padding:.7rem 1.2rem .55rem;box-shadow:0 2px 8px rgba(64,33,15,.15)}
+  .top h1{margin:0;font-size:1.25rem;font-weight:900;display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .top h1 small{font-weight:700;font-size:.85rem;opacity:.85}
+  .top .tag{font-size:.85rem;font-weight:700;background:rgba(255,255,255,.55);border-radius:999px;padding:.1rem .7rem}
+  .prog{height:.45rem;background:rgba(64,33,15,.15);border-radius:999px;margin-top:.5rem;overflow:hidden}
+  .prog i{display:block;height:100%;width:0;background:#E8822B;border-radius:999px;transition:width .25s}
+  .top .pt{font-size:.8rem;margin-top:.25rem;opacity:.85}
+  main{max-width:60rem;margin:0 auto;padding:1rem 1.2rem 7rem}
+  .q{background:#fff;border:1px solid #F1E3C8;border-radius:1rem;padding:1rem 1.1rem;margin:0 0 .9rem;box-shadow:0 1px 3px rgba(64,33,15,.05);scroll-margin-top:6rem}
+  .q.miss{border-color:#D9534F;box-shadow:0 0 0 3px rgba(217,83,79,.18)}
+  .q h2{margin:0 0 .7rem;font-size:1.1rem;display:flex;gap:.6rem;align-items:flex-start}
+  .q h2 .n{flex:none;background:#40210F;color:#FDD35D;border-radius:50%;width:1.7rem;height:1.7rem;line-height:1.7rem;text-align:center;font-size:.9rem;font-weight:800}
+  .q.ok h2 .n{background:#2F8F5B;color:#fff}
+  .q h2 .req{color:#D9534F;font-size:.85rem;margin-left:.2rem}
+  .q h2 .sub{font-weight:600;font-size:.85rem;color:#8A6F5E;margin-left:.3rem}
+  .opts{display:flex;flex-wrap:wrap;gap:.55rem}
+  .opt{border:2px solid #E6D2A8;background:#FFFDF7;color:#40210F;border-radius:999px;padding:.6rem 1.1rem;font-size:1rem;font-weight:700;min-height:2.9rem;cursor:pointer;transition:background .12s,border-color .12s,transform .08s;text-align:left}
+  .opt:active{transform:scale(.97)}
+  .opt.on{background:#FDD35D;border-color:#E8A200;box-shadow:inset 0 0 0 1px #E8A200}
+  .opt.on::before{content:'✓ ';font-weight:900}
+  .q.multi .opt.on::before{content:'☑ '}
+  .q.multi .opt::before{content:'☐ ';color:#B9A58A}
+  textarea{width:100%;font-family:inherit;font-size:1rem;padding:.7rem .8rem;border:2px solid #E6D2A8;border-radius:.8rem;background:#FFFDF7;min-height:5.5rem;resize:vertical;color:#40210F}
+  textarea:focus{outline:none;border-color:#E8A200}
+  .cnt{font-size:.8rem;color:#8A6F5E;text-align:right;margin-top:.25rem}
+  .foot{position:fixed;left:0;right:0;bottom:0;z-index:6;background:rgba(255,248,236,.96);border-top:1px solid #F1E3C8;padding:.7rem 1.2rem;display:flex;align-items:center;gap:1rem;backdrop-filter:blur(4px)}
+  .foot .hint{flex:1;font-size:.9rem;color:#8A6F5E}
+  .foot .hint.bad{color:#D9534F;font-weight:700}
+  .btn{border:none;border-radius:999px;background:#E8822B;color:#fff;font-size:1.15rem;font-weight:900;padding:.8rem 2rem;min-height:3.2rem;cursor:pointer;box-shadow:0 3px 10px rgba(232,130,43,.35)}
+  .btn:disabled{opacity:.55;cursor:wait;box-shadow:none}
+  .btn.ghost{background:#fff;color:#40210F;border:2px solid #E6D2A8;box-shadow:none}
+  #done{position:fixed;inset:0;z-index:20;background:#FFF8EC;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem;gap:1rem}
+  #done[hidden]{display:none}
+  #done .big{font-size:3.5rem;line-height:1}
+  #done h2{margin:0;font-size:1.8rem}
+  #done p{margin:0;font-size:1.05rem;color:#6B4E3D;max-width:34rem}
+  #done .cd{font-size:.9rem;color:#8A6F5E}
+  .netbar{display:none;background:#FFF1CC;color:#7A5A00;font-size:.85rem;padding:.4rem 1.2rem;text-align:center}
+  .netbar.on{display:block}
+  @media(max-width:600px){main{padding:.8rem .8rem 7.5rem}.opt{padding:.55rem .9rem}.foot{padding:.6rem .8rem}.btn{padding:.7rem 1.4rem;font-size:1.05rem}}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>📝 顧客體驗問卷 <small>自己做烘焙聚樂部</small> <span class="tag" id="recipeTag" hidden></span></h1>
+  <div class="prog"><i id="progBar"></i></div>
+  <div class="pt" id="progTxt">請點選每一題的答案，最後按「送出問卷」</div>
+</div>
+<div class="netbar" id="netbar">網路不太穩，已填的答案會暫存在這台平板，恢復連線後自動送出</div>
+<main id="qs"></main>
+<div class="foot">
+  <div class="hint" id="hint">感謝您今天來做甜點，請花 1 分鐘告訴我們您的感受 🙏</div>
+  <button class="btn" id="btnSubmit" type="button">送出問卷</button>
+</div>
+<div id="done" hidden>
+  <div class="big">🎉</div>
+  <h2>感謝您的填寫！</h2>
+  <p id="doneMsg">您的意見會直接送到總部，幫助我們把每一次的體驗做得更好。期待下次再見！</p>
+  <button class="btn ghost" type="button" id="btnAgain">再填一份</button>
+  <div class="cd" id="doneCd"></div>
+</div>
+
+<script>
+/* ===== 📝 顧客體驗問卷（2026-10-28 建）=====
+   題目：先用頁內 FALLBACK_Q（＝GAS dim_question 的種子）立刻畫出來，背景再向 GAS 讀最新題目；客人還沒作答才換成新題目。
+   作答：只改按鈕的 class 與進度條，不重畫題目；留言框只建一次（中文輸入規則）。
+   送出：先走自家伺服器代轉（/api/gas/<部署ID>，手機／平板登什麼 Google 帳號都不會被擋），失敗再直連 GAS；都失敗就暫存 localStorage sv:queue，之後自動補送。 */
+var SV_API = 'https://script.google.com/macros/s/AKfycbxrsYaYLdXqjUeGvG8_CZ--5znw5izXr6tcgmfC0MbJ32T1KY_TS8UkVqimxS2Jajx0/exec';
+var QS = (function () { var o = {}; location.search.replace(/^\?/, '').split('&').forEach(function (kv) { if (!kv) return; var i = kv.indexOf('='); var k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i)), v = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); o[k] = v; }); return o; })();
+if (QS.api) SV_API = QS.api;   /* 本機模擬：?api=/api */
+var PROXY = /^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/.test(SV_API) ? SV_API.replace(/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/, '/api/gas/$1') : (SV_API.charAt(0) === '/' ? SV_API : '');
+var STORES = [[3, '台北南京'], [4, '台北士林'], [11, '吳寶春自己做（台北信義A13）'], [7, '新北板橋'], [8, '新北新店'], [9, '桃園中壢'], [10, '桃園藝文'], [6, '新竹文化'], [1, '台中精明'], [2, '台中草悟道'], [5, '台南Focus'], [12, '吳寶春自己做（高雄SKM Park）']];
+/* 備用題目＝gas/survey/Code.gs seedQuestions_ 一模一樣（GAS 讀不到時用這份；GAS 讀到就以 GAS 為準） */
+var FALLBACK_Q = [
+  { qid: 'q1', type: 'single', title: '您今日體驗的分店是？', options: STORES.map(function (s) { return s[1]; }), required: true },
+  { qid: 'q2', type: 'single', title: '請問這是您「一年內」第幾次來做甜點呢？（不限店別）', options: ['第1次', '第2次', '第3次', '第4次', '第5次以上'], required: true },
+  { qid: 'q4', type: 'single', title: '您今天選這款甜點時，第一個考慮的是？', options: ['外型', '價格', '口味', '不容易失敗', '易分享', '可否當生日蛋糕', '看過別人分享', '現在流行', '當季限定', '店內熱銷品', '其他'], required: true },
+  { qid: 'q5', type: 'single', title: '您這次來的原因是？', options: ['重要的人生日', '自己生日', '情侶約會', '朋友聚會', '家人同樂', '喜歡烘焙', '送禮', '其他'], required: true },
+  { qid: 'q6', type: 'single', title: '您是否滿意今天使用的平板教學影片？', options: ['是', '否'], required: true },
+  { qid: 'q7', type: 'single', title: '您是否滿意今天店內的環境？', options: ['是', '否'], required: true },
+  { qid: 'q8', type: 'single', title: '您是否滿意今天服務人員的服務？', options: ['是', '否'], required: true },
+  { qid: 'q9', type: 'single', title: '在整體消費過程中，服務人員是否有提供您任何的協助？', options: ['是', '否'], required: true },
+  { qid: 'q11', type: 'multi', title: '您今天做的甜點是？（可複選）', options: ['乳酪類（名字有乳酪，包含巴斯克、提拉米蘇）', '慕斯類', '蛋糕類', '塔派類', '點心類', '餅乾類', '麵包類'], required: true },
+  { qid: 'q12', type: 'single', title: '您今天的甜點有製作成功嗎？', options: ['是', '否'], required: true },
+  { qid: 'q13', type: 'single', title: '您今天製作甜點的時間？', options: ['2 小時（含）以內', '2～2.5 小時（含）', '2.5～3 小時（含）', '3 小時以上'], required: true },
+  { qid: 'q14', type: 'single', title: '您會推薦其他人來嗎？', options: ['會', '不會'], required: true },
+  { qid: 'q15', type: 'single', title: '請問您的年齡？', options: ['14 歲以下', '15～19 歲', '20～24 歲', '25～29 歲', '30～34 歲', '35～39 歲', '40～44 歲', '45～49 歲', '50 歲以上'], required: true },
+  { qid: 'q16', type: 'single', title: '請問您是透過哪個途徑得知自己做呢？', options: ['自己做官方FB', '自己做官方IG', '自己做官方Line', '朋友IG/FB分享', '親朋好友介紹', 'Line社群', '廣告', 'Google搜尋', '部落客介紹', '我是老朋友'], required: true },
+  { qid: 'q17', type: 'text', title: '還有什麼想跟我們說的嗎？（選填）', options: [], required: false }
+];
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { } }
+function uuid() { try { if (crypto.randomUUID) return crypto.randomUUID(); } catch (e) { } return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }); }
+
+/* ---------- 狀態 ---------- */
+var S = { q: FALLBACK_Q, a: {}, touched: false, t0: 0, id: uuid(), busy: false, cdTimer: null };
+var recipe = QS.recipe || QS.r || '', src = QS.src || 'tablet', lang = QS.lang || 'zh';
+var preStore = (function () {
+  var v = QS.store || lsGet('sv:store'); if (!v) return '';
+  for (var i = 0; i < STORES.length; i++) if (String(STORES[i][0]) === String(v) || STORES[i][1] === v) return STORES[i][1];
+  return '';
+})();
+if (recipe) { $('recipeTag').textContent = '今天做的：' + recipe; $('recipeTag').hidden = false; }
+
+/* ---------- 畫題目（只在開頁、或 GAS 回新題目且客人還沒作答時） ---------- */
+function render() {
+  var h = '';
+  S.q.forEach(function (q, i) {
+    h += '<section class="q ' + (q.type === 'multi' ? 'multi' : '') + '" id="q_' + esc(q.qid) + '" data-qid="' + esc(q.qid) + '" data-type="' + esc(q.type) + '">';
+    h += '<h2><span class="n">' + (i + 1) + '</span><span>' + esc(q.title) + (q.required ? '<span class="req">＊</span>' : '') + (q.type === 'multi' ? '<span class="sub">可以選好幾個</span>' : '') + '</span></h2>';
+    if (q.type === 'text') h += '<textarea data-qid="' + esc(q.qid) + '" maxlength="500" placeholder="想說什麼都可以：好吃、好玩、哪裡可以更好…"></textarea><div class="cnt"><span id="cnt_' + esc(q.qid) + '">0</span> / 500</div>';
+    else { h += '<div class="opts">'; q.options.forEach(function (o) { h += '<button type="button" class="opt" data-qid="' + esc(q.qid) + '" data-v="' + esc(o) + '">' + esc(o) + '</button>'; }); h += '</div>'; }
+    h += '</section>';
+  });
+  $('qs').innerHTML = h;
+  S.a = {};
+  if (preStore && S.q.some(function (q) { return q.qid === 'q1'; })) { pick('q1', preStore, true); }
+  progress();
+}
+/* 作答：只改按鈕 class，不重畫 */
+function pick(qid, v, silent) {
+  var sec = $('q_' + qid); if (!sec) return;
+  var q = S.q.filter(function (x) { return x.qid === qid; })[0]; if (!q) return;
+  if (!silent && !S.t0) S.t0 = Date.now();
+  if (!silent) S.touched = true;
+  var btns = sec.querySelectorAll('.opt');
+  if (q.type === 'multi') {
+    var arr = S.a[qid] || []; var k = arr.indexOf(v);
+    if (k >= 0) arr.splice(k, 1); else arr.push(v);
+    S.a[qid] = arr;
+    for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('on', arr.indexOf(btns[i].getAttribute('data-v')) >= 0);
+    sec.classList.toggle('ok', arr.length > 0);
+  } else {
+    S.a[qid] = v;
+    for (var j = 0; j < btns.length; j++) btns[j].classList.toggle('on', btns[j].getAttribute('data-v') === v);
+    sec.classList.add('ok');
+  }
+  sec.classList.remove('miss');
+  progress();
+  /* 選完單選題自動帶到下一題（留言題不帶） */
+  if (!silent && q.type === 'single') { var nx = sec.nextElementSibling; if (nx && nx.classList.contains('q') && !nx.classList.contains('ok')) setTimeout(function () { nx.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120); }
+}
+function progress() {
+  var need = S.q.filter(function (q) { return q.required; }), done = 0;
+  need.forEach(function (q) { var v = S.a[q.qid]; if (q.type === 'multi' ? (v && v.length) : (v && String(v).trim())) done++; });
+  $('progBar').style.width = (need.length ? Math.round(done / need.length * 100) : 100) + '%';
+  $('progTxt').textContent = done >= need.length ? '全部填好了，請按右下角「送出問卷」' : '已完成 ' + done + ' / ' + need.length + ' 題';
+  if (done >= need.length && $('hint').className === 'hint bad') { $('hint').className = 'hint'; $('hint').textContent = '都填好了，請按「送出問卷」'; }
+}
+$('qs').addEventListener('click', function (e) {
+  var b = e.target.closest && e.target.closest('.opt'); if (!b) return;
+  pick(b.getAttribute('data-qid'), b.getAttribute('data-v'));
+});
+$('qs').addEventListener('input', function (e) {
+  var t = e.target; if (!t || t.tagName !== 'TEXTAREA') return;
+  if (window.__ime && __ime.on) return;   /* 選字中不動 */
+  var qid = t.getAttribute('data-qid'); S.a[qid] = t.value; S.touched = true; if (!S.t0) S.t0 = Date.now();
+  var c = $('cnt_' + qid); if (c) c.textContent = t.value.length;
+  var sec = $('q_' + qid); if (sec) { sec.classList.toggle('ok', !!t.value.trim()); sec.classList.remove('miss'); }
+  progress();
+});
+
+/* ---------- 題目：GAS 最新版（背景）---------- */
+function applyForm(d) {
+  if (!d || !d.ok || !Array.isArray(d.questions) || !d.questions.length) return;
+  var qs = d.questions.map(function (q) { return { qid: q.qid, type: q.type, title: q.title, options: q.options || [], required: !!q.required }; });
+  if (JSON.stringify(qs) === JSON.stringify(S.q)) return;
+  if (S.touched) { S.pendingQ = qs; return; }   /* 客人作答中不換題；送出後下一位才用新題目 */
+  S.q = qs; render();
+}
+function loadForm() {
+  try { var c = JSON.parse(lsGet('sv:form') || 'null'); if (c && c.at && Date.now() - c.at < 864e5 && c.d) applyForm(c.d); } catch (e) { }
+  apiGet('form').then(function (d) { if (d && d.ok) { lsSet('sv:form', JSON.stringify({ at: Date.now(), d: { ok: true, questions: d.questions } })); applyForm(d); } }).catch(function () { });
+}
+/* 讀：代轉 → 直連 JSONP */
+function apiGet(action) {
+  function direct() {
+    return new Promise(function (ok, no) {
+      var name = '__sv' + Math.random().toString(36).slice(2), s = document.createElement('script'), tm = setTimeout(function () { done(); no(new Error('timeout')); }, 25000);
+      function done() { clearTimeout(tm); try { delete window[name]; } catch (e) { window[name] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); }
+      window[name] = function (d) { done(); ok(d); };
+      s.src = SV_API + (SV_API.indexOf('?') < 0 ? '?' : '&') + 'action=' + action + '&callback=' + name + '&_=' + Date.now(); s.onerror = function () { done(); no(new Error('net')); };
+      document.head.appendChild(s);
+    });
+  }
+  if (!PROXY) return direct();
+  var ac = ('AbortController' in window) ? new AbortController() : null, tm = setTimeout(function () { if (ac) ac.abort(); }, 12000);
+  return fetch(PROXY + (PROXY.indexOf('?') < 0 ? '?' : '&') + 'action=' + action, ac ? { signal: ac.signal, cache: 'no-store' } : { cache: 'no-store' })
+    .then(function (r) { clearTimeout(tm); if (!r.ok) throw new Error('proxy ' + r.status); return r.json(); })
+    .catch(function () { clearTimeout(tm); return direct(); });
+}
+/* 寫：代轉 → 直連 */
+function apiPost(body) {
+  function direct() {
+    var ac = ('AbortController' in window) ? new AbortController() : null, tm = setTimeout(function () { if (ac) ac.abort(); }, 30000);
+    return fetch(SV_API, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ac ? ac.signal : undefined, credentials: 'omit' })
+      .then(function (r) { clearTimeout(tm); return r.json(); });
+  }
+  if (!PROXY) return direct();
+  var ac = ('AbortController' in window) ? new AbortController() : null, tm = setTimeout(function () { if (ac) ac.abort(); }, 20000);
+  return fetch(PROXY, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' }, signal: ac ? ac.signal : undefined, cache: 'no-store' })
+    .then(function (r) { clearTimeout(tm); if (r.status === 404) throw new Error('proxy-404'); return r.json(); })
+    .catch(function () { clearTimeout(tm); return direct(); });
+}
+
+/* ---------- 送出 ---------- */
+function validate() {
+  var miss = [];
+  S.q.forEach(function (q) { if (!q.required) return; var v = S.a[q.qid]; var ok = q.type === 'multi' ? (v && v.length) : (v && String(v).trim()); if (!ok) miss.push(q.qid); });
+  document.querySelectorAll('.q.miss').forEach(function (el) { el.classList.remove('miss'); });
+  miss.forEach(function (qid) { var el = $('q_' + qid); if (el) el.classList.add('miss'); });
+  return miss;
+}
+function payload() {
+  var a = {}; S.q.forEach(function (q) { var v = S.a[q.qid]; if (q.type === 'multi') a[q.qid] = v || []; else a[q.qid] = v == null ? '' : String(v); });
+  return { action: 'submit', id: S.id, a: a, recipe: recipe, src: src, lang: lang, sec: S.t0 ? Math.round((Date.now() - S.t0) / 1000) : 0, ua: (navigator.userAgent || '').slice(0, 160) };
+}
+function sendWithRetry(body, tries) {
+  return apiPost(body).then(function (r) {
+    if (r && r.ok) return r;
+    var msg = (r && r.msg) || '';
+    if (r && (r.code === 'missing' || r.code === 'input' || r.code === 'cap')) { var e = new Error(msg); e.final = true; throw e; }
+    throw new Error(msg || 'bad');
+  }).catch(function (e) {
+    if (e.final || tries <= 1) throw e;
+    return new Promise(function (ok) { setTimeout(ok, 1200); }).then(function () { return sendWithRetry(body, tries - 1); });
+  });
+}
+function queuePush(body) { var q = []; try { q = JSON.parse(lsGet('sv:queue') || '[]'); } catch (e) { q = []; } q.push(body); if (q.length > 200) q = q.slice(-200); lsSet('sv:queue', JSON.stringify(q)); $('netbar').classList.add('on'); }
+function queueFlush() {
+  var q = []; try { q = JSON.parse(lsGet('sv:queue') || '[]'); } catch (e) { q = []; }
+  if (!q.length) { $('netbar').classList.remove('on'); return; }
+  var b = q[0];
+  apiPost(b).then(function (r) {
+    if (r && (r.ok || r.code === 'missing' || r.code === 'input')) { q.shift(); lsSet('sv:queue', JSON.stringify(q)); if (q.length) setTimeout(queueFlush, 400); else $('netbar').classList.remove('on'); }
+  }).catch(function () { });
+}
+$('btnSubmit').onclick = function () {
+  if (S.busy) return;
+  var miss = validate();
+  if (miss.length) {
+    $('hint').className = 'hint bad'; $('hint').textContent = '還有 ' + miss.length + ' 題沒回答，請往上看紅框的題目';
+    var el = $('q_' + miss[0]); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  S.busy = true; var btn = $('btnSubmit'); btn.disabled = true; btn.textContent = '送出中…'; $('hint').className = 'hint'; $('hint').textContent = '';
+  var body = payload();
+  sendWithRetry(body, 3).then(function () { finish(true); }).catch(function (e) {
+    if (e.final) { S.busy = false; btn.disabled = false; btn.textContent = '送出問卷'; $('hint').className = 'hint bad'; $('hint').textContent = e.message || '送出失敗，請再按一次'; return; }
+    queuePush(body); finish(false);
+  });
+};
+function finish(sent) {
+  if (S.a.q1) lsSet('sv:store', S.a.q1);
+  $('doneMsg').textContent = sent ? '您的意見會直接送到總部，幫助我們把每一次的體驗做得更好。期待下次再見！' : '您的意見已經記在這台平板上，網路恢復後會自動送到總部。期待下次再見！';
+  $('done').hidden = false;
+  var left = 60; $('doneCd').textContent = left + ' 秒後自動回到問卷（給下一位客人）';
+  clearInterval(S.cdTimer);
+  S.cdTimer = setInterval(function () { left--; $('doneCd').textContent = left + ' 秒後自動回到問卷（給下一位客人）'; if (left <= 0) reset(); }, 1000);
+}
+function reset() {
+  clearInterval(S.cdTimer); S.cdTimer = null;
+  S.a = {}; S.touched = false; S.t0 = 0; S.id = uuid(); S.busy = false;
+  if (S.pendingQ) { S.q = S.pendingQ; S.pendingQ = null; }
+  preStore = lsGet('sv:store') || preStore;
+  var btn = $('btnSubmit'); btn.disabled = false; btn.textContent = '送出問卷';
+  $('hint').className = 'hint'; $('hint').textContent = '感謝您今天來做甜點，請花 1 分鐘告訴我們您的感受 🙏';
+  $('done').hidden = true; render(); window.scrollTo(0, 0);
+}
+$('btnAgain').onclick = reset;
+
+render(); loadForm(); queueFlush();
+setInterval(queueFlush, 60000);
+window.addEventListener('online', queueFlush);
+</script>
+</body>
+</html>

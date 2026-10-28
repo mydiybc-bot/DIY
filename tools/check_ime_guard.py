@@ -35,6 +35,7 @@ REQUIRED = [
     'tablet-recipe.html', 'tablet-recipe-review.html',   # 平板外語食譜＋對照核准（2026-10-24 新建）
     'petty-cash.html',   # 零用金報銷（2026-10-24 新建）
     'schedule-workbench.html',   # 門市排班工作台（2026-10-26 新建；對話框要能打中文）
+    'survey.html', 'dashboard-survey.html',   # 顧客問卷（2026-10-28 新建；留言題／留言搜尋要能打中文）
 ]
 
 # 不加的頁面與原因

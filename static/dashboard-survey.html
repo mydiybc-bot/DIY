@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<!-- 2026-10-28 新建「📝 顧客問卷」結果儀表板（經營者：每支食譜最後一頁的 SurveyCake 問卷改成自己的問卷系統）
+     客人填的頁面是 survey.html（門市食譜後台每支食譜最後一頁 iframe 嵌）；這頁給總部看結果：回覆數、推薦率、各店滿意度、每題分佈、月趨勢、客人留言。
+     資料：顧客問卷 API（GAS 專案「顧客問卷_資料庫」；原始碼 gas/survey/）?action=stats；題目在該試算表 dim_question 分頁改。
+     閘門 DASH_ID=survey（權限中心 dim_auth 由 GAS authorize() 補列；密碼先同總部 hub）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>顧客問卷｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FBF8F5;color:#2A2320;font-size:14px;line-height:1.55}
+  a{color:#8B3A2A}
+  /* 頁首（橘系：顧客問卷） */
+  .mt-header{background:linear-gradient(100deg,#B4532A,#E8822B);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:13px;opacity:.92}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-home:hover{background:rgba(255,255,255,.32)}
+  .mt-main{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#FDF3EA;border-color:#F0CDB3;color:#8B3A2A}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A3A40;font-size:13px}
+  .dsb-sop.open{display:block}
+  .dsb-sop ol,.dsb-sop ul{margin:0;padding-left:20px}
+  @media(max-width:600px){.dsb-info{margin-left:0}}
+  .card{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .card h2{margin:0 0 10px;font-size:17px;color:#8B3A2A;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .card h2 .note{font-size:12px;color:#9A8A80;font-weight:600}
+  .muted{color:#77706A;font-size:12px}
+  /* 篩選列 */
+  .filters{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end}
+  .fld label{display:block;font-size:12px;color:#6F4E45;font-weight:700;margin-bottom:3px}
+  .fld select,.fld input{font-family:inherit;font-size:14px;padding:7px 9px;border:1px solid #CFC6BF;border-radius:8px;background:#fff;min-width:120px}
+  .btn{font-family:inherit;font-size:14px;font-weight:700;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;background:#B4532A;color:#fff}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:#fff;color:#8B3A2A;border:1px solid #E0B8A5}
+  .btn.sm{font-size:12px;padding:4px 9px}
+  /* KPI */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .kpi{background:#FFFBF7;border:1px solid #F0E3D9;border-radius:10px;padding:12px 14px}
+  .kpi .l{font-size:12px;color:#6F4E45;font-weight:700}
+  .kpi .v{font-size:26px;font-weight:900;line-height:1.2;margin-top:2px}
+  .kpi .s{font-size:12px;color:#9A8A80}
+  .g{color:#2F8F5B}.y{color:#C98A00}.r{color:#C8371F}.n{color:#9A8A80}
+  /* 表格 */
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{padding:7px 8px;border-bottom:1px solid #F0E6DE;text-align:right;white-space:nowrap}
+  th{background:#FBF3EC;color:#6F4E45;font-weight:800;position:sticky;top:0}
+  th:first-child,td:first-child{text-align:left}
+  tr:hover td{background:#FFF8F2}
+  .tw{overflow:auto;max-height:520px}
+  .pill{display:inline-block;min-width:52px;padding:2px 8px;border-radius:999px;font-weight:800;text-align:center}
+  .pill.g{background:#E3F3E9}.pill.y{background:#FFF2CC}.pill.r{background:#FBE1DB}.pill.n{background:#F1EEEB}
+  /* 每題分佈 */
+  .qgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+  .qbox{border:1px solid #F0E3D9;border-radius:10px;padding:12px 14px;background:#FFFDFB}
+  .qbox h3{margin:0 0 8px;font-size:14px;color:#2A2320}
+  .qbox h3 .qid{font-size:11px;color:#9A8A80;font-weight:600;margin-right:4px}
+  .bar{display:grid;grid-template-columns:minmax(90px,1.3fr) 3fr 70px;gap:8px;align-items:center;font-size:12px;margin:3px 0}
+  .bar .lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar .tr{background:#F3EBE4;border-radius:999px;height:12px;overflow:hidden}
+  .bar .tr i{display:block;height:100%;background:linear-gradient(90deg,#E8822B,#F6B26B);border-radius:999px}
+  .bar .tr i.bad{background:linear-gradient(90deg,#C8371F,#E8826B)}
+  .bar .nm{text-align:right;color:#6F4E45;font-weight:700}
+  /* 留言 */
+  .srch{width:100%;max-width:420px;font-family:inherit;font-size:14px;padding:8px 10px;border:1px solid #CFC6BF;border-radius:8px}
+  .cm{border-bottom:1px solid #F0E6DE;padding:8px 2px}
+  .cm .m{font-size:12px;color:#9A8A80}
+  .cm .t{margin-top:2px;white-space:pre-wrap}
+  .urls code{background:#F6F1EC;padding:2px 6px;border-radius:6px;font-size:12px;word-break:break-all}
+  .urls td{white-space:normal}
+  .empty{padding:18px;text-align:center;color:#77706A}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#8B3A2A;color:#fff;padding:9px 16px;border-radius:10px;font-size:14px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+  .toast[hidden]{display:none}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'survey';
+  var DASH_NAME = '顧客問卷';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>📝 顧客問卷</h1>
+  <span class="mt-sub">客人做完甜點在平板填的體驗問卷 → 推薦率、各店滿意度、每題分佈、留言</span>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 即時</b>
+    <span>客人在平板按「送出問卷」就立刻進資料庫；這頁每次打開讀最新（資料最多慢 3 分鐘）</span>
+    <span id="dsbFresh">🕒 讀取中…</span>
+    <button class="dsb-info" type="button" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <ol>
+        <li><b>問卷在哪裡</b>：門市食譜後台每支食譜的最後一頁嵌的是 <code>survey.html</code>（原本是 SurveyCake）。客人點答案、按送出，就是一筆。</li>
+        <li><b>期間、店別</b>：上方選；「本月」是預設。各店比較表每個百分比＝回答「是／會」的人 ÷ 這一題有回答的人。</li>
+        <li><b>燈號</b>：🟢 90% 以上、🟡 80～89%、🔴 80% 以下；樣本不到 10 筆顯示灰色「樣本少」，不要拿來比。</li>
+        <li><b>改題目</b>：到資料庫試算表的 <code>dim_question</code> 分頁改標題、選項（用 | 分開）、必填、enabled；存檔後最多 5 分鐘問卷就換新。<b>不要改 qid</b>（舊資料靠它對應）。KPI 固定看 q6 平板、q7 環境、q8 服務、q12 成功、q14 推薦。</li>
+        <li><b>各店網址</b>：最下面「問卷網址」有每一店的連結（店別會預先選好）；平板也會記住上一次選的店。</li>
+        <li>月趨勢是全公司、不受上方篩選影響；留言只列有寫字的。</li>
+      </ol>
+    </div>
+  </div>
+  </div></details>
+
+  <div class="card">
+    <div class="filters">
+      <div class="fld"><label>期間</label><select id="fPeriod">
+        <option value="thism">本月</option><option value="lastm">上月</option><option value="d30">近 30 天</option><option value="d90">近 90 天</option><option value="year">今年</option><option value="all">全部</option><option value="custom">自訂</option>
+      </select></div>
+      <div class="fld" id="fCustom" style="display:none"><label>從 ～ 到</label><input type="date" id="fFrom"> <input type="date" id="fTo"></div>
+      <div class="fld"><label>店別</label><select id="fStore"><option value="">全部門市</option></select></div>
+      <button class="btn" id="btnLoad" type="button">🔄 重新讀取</button>
+      <span class="muted" id="fMsg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>總覽 <span class="note" id="kpiNote"></span></h2>
+    <div class="kpis" id="kpis"><div class="empty">讀取中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>各店比較 <span class="note">百分比＝回答「是／會」÷ 有回答的人；樣本不到 10 筆顯示灰色</span></h2>
+    <div class="tw"><table id="tbStore"><thead><tr><th>門市</th><th>回覆數</th><th>推薦率</th><th>製作成功</th><th>平板教學</th><th>環境</th><th>服務</th><th>有協助</th><th>平均填答秒數</th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>每題分佈 <span class="note">依上方期間與店別；複選題一人可算多個</span></h2>
+    <div class="qgrid" id="qgrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>月趨勢 <span class="note">全公司、不受篩選影響</span></h2>
+    <div class="tw"><table id="tbMonth"><thead><tr><th>月份</th><th>回覆數</th><th>推薦率</th><th>製作成功</th><th>平板教學</th><th>環境</th><th>服務</th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>客人留言 <span class="note" id="cmNote"></span></h2>
+    <input class="srch" id="cmSearch" type="text" placeholder="搜尋留言內容、店名、甜點名…">
+    <div id="cmList" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card urls">
+    <h2>問卷網址 <span class="note">給門市食譜後台（系統廠商）嵌在每支食譜最後一頁；或印成 QR Code</span></h2>
+    <div class="muted" style="margin-bottom:6px">通用網址（客人自己選店）：<code id="urlBase"></code> <button class="btn ghost sm" type="button" data-copy="base">複製</button></div>
+    <div class="tw"><table id="tbUrl"><thead><tr><th>門市</th><th>網址（店別預先選好）</th><th></th></tr></thead><tbody></tbody></table></div>
+    <div class="muted" style="margin-top:8px">資料庫試算表：<a id="dbLink" href="#" target="_blank" rel="noopener">讀取後顯示</a>（dim_question 改題目；fact_response 是每一筆原始回答）</div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/* ===== 📝 顧客問卷結果（2026-10-28 建）=====
+   讀 GAS ?action=stats&from=&to=（期間內每一筆＋全公司每月摘要＋題目）→ 店別篩選、各種彙總都在瀏覽器算。
+   先走自家伺服器代轉（/api/gas/<部署ID>），失敗再直連 GAS（JSONP）。
+   留言搜尋框只建一次，打字只重畫留言清單；選字中（__ime.on）不動（中文輸入規則）。 */
+var SV_API = 'https://script.google.com/macros/s/AKfycbxrsYaYLdXqjUeGvG8_CZ--5znw5izXr6tcgmfC0MbJ32T1KY_TS8UkVqimxS2Jajx0/exec';
+var QS = (function () { var o = {}; location.search.replace(/^\?/, '').split('&').forEach(function (kv) { if (!kv) return; var i = kv.indexOf('='); o[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1)); }); return o; })();
+if (QS.api) SV_API = QS.api;
+var PROXY = /^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/.test(SV_API) ? SV_API.replace(/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/, '/api/gas/$1') : (SV_API.charAt(0) === '/' ? SV_API : '');
+var STORES = [[1, '台中精明'], [2, '台中草悟道'], [3, '台北南京'], [4, '台北士林'], [5, '台南Focus'], [6, '新竹文化'], [7, '新北板橋'], [8, '新北新店'], [9, '桃園中壢'], [10, '桃園藝文'], [11, '吳寶春信義A13'], [12, '吳寶春高雄SKM']];
+var KPI_Q = [['q14', '會', '推薦率'], ['q12', '是', '製作成功'], ['q6', '是', '平板教學滿意'], ['q7', '是', '環境滿意'], ['q8', '是', '服務滿意'], ['q9', '是', '有提供協助']];
+var D = null, S = { period: 'thism', store: '' };
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function toast(t) { var el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(function () { el.hidden = true; }, 2600); }
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function pct(a, b) { return b ? Math.round(a / b * 100) : null; }
+function cls(p, n) { if (n < 10 || p == null) return 'n'; return p >= 90 ? 'g' : p >= 80 ? 'y' : 'r'; }
+function pill(p, n) { if (n < 10) return '<span class="pill n" title="樣本不到 10 筆">樣本少</span>'; if (p == null) return '<span class="pill n">－</span>'; return '<span class="pill ' + cls(p, n) + '">' + p + '%</span>'; }
+function storeShort(no, name) { var s = STORES.filter(function (x) { return String(x[0]) === String(no); })[0]; return s ? s[0] + ' ' + s[1] : (name || '未填店別'); }
+
+/* ---------- 期間 ---------- */
+function range() {
+  var t = new Date(), y = t.getFullYear(), m = t.getMonth(), p = S.period;
+  if (p === 'thism') return [ymd(new Date(y, m, 1)), ymd(t)];
+  if (p === 'lastm') return [ymd(new Date(y, m - 1, 1)), ymd(new Date(y, m, 0))];
+  if (p === 'd30') return [ymd(new Date(t.getTime() - 29 * 864e5)), ymd(t)];
+  if (p === 'd90') return [ymd(new Date(t.getTime() - 89 * 864e5)), ymd(t)];
+  if (p === 'year') return [y + '-01-01', ymd(t)];
+  if (p === 'all') return ['2026-01-01', ymd(t)];
+  return [$('fFrom').value || ymd(new Date(y, m, 1)), $('fTo').value || ymd(t)];
+}
+
+/* ---------- 讀取 ---------- */
+function apiGet(qs) {
+  function direct() {
+    return new Promise(function (ok, no) {
+      var name = '__svd' + Math.random().toString(36).slice(2), s = document.createElement('script'), tm = setTimeout(function () { done(); no(new Error('逾時')); }, 40000);
+      function done() { clearTimeout(tm); try { delete window[name]; } catch (e) { window[name] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); }
+      window[name] = function (d) { done(); ok(d); };
+      s.src = SV_API + (SV_API.indexOf('?') < 0 ? '?' : '&') + qs + '&callback=' + name + '&_=' + Date.now(); s.onerror = function () { done(); no(new Error('連不到資料庫')); };
+      document.head.appendChild(s);
+    });
+  }
+  if (!PROXY) return direct();
+  var ac = ('AbortController' in window) ? new AbortController() : null, tm = setTimeout(function () { if (ac) ac.abort(); }, 45000);
+  return fetch(PROXY + (PROXY.indexOf('?') < 0 ? '?' : '&') + qs, ac ? { signal: ac.signal, cache: 'no-store' } : { cache: 'no-store' })
+    .then(function (r) { clearTimeout(tm); if (!r.ok) throw new Error('proxy ' + r.status); return r.json(); })
+    .catch(function () { clearTimeout(tm); return direct(); });
+}
+function load() {
+  var r = range(); $('btnLoad').disabled = true; $('fMsg').textContent = '讀取中…'; $('dsbFresh').textContent = '🕒 讀取中…';
+  apiGet('action=stats&from=' + r[0] + '&to=' + r[1]).then(function (d) {
+    if (!d || !d.ok) throw new Error((d && d.msg) || '讀取失敗');
+    D = d; renderAll();
+    $('fMsg').textContent = r[0] + ' ～ ' + r[1] + '，' + d.rows.length + ' 筆' + (d.cut ? '（只顯示最新 20,000 筆）' : '');
+    $('dsbFresh').textContent = '🕒 讀取時間 ' + new Date().toLocaleString('zh-TW', { hour12: false }) + '｜累計 ' + d.n_all + ' 筆';
+    if (d.db_url) { $('dbLink').href = d.db_url; $('dbLink').textContent = '顧客問卷_資料庫'; }
+  }).catch(function (e) { $('fMsg').textContent = '❌ ' + (e.message || e); $('dsbFresh').textContent = '🔴 讀取失敗'; $('kpis').innerHTML = '<div class="empty">讀不到資料：' + esc(e.message || e) + '。請按「重新讀取」再試一次。</div>'; })
+    .then(function () { $('btnLoad').disabled = false; });
+}
+
+/* ---------- 彙總 ---------- */
+function rowsNow() { return (D.rows || []).filter(function (r) { return !S.store || String(r.sn) === S.store; }); }
+function rate(rows, qid, yesv) { var n = 0, y = 0; rows.forEach(function (r) { var v = r.a[qid]; if (v == null || v === '') return; n++; if (v === yesv) y++; }); return { n: n, y: y, p: pct(y, n) }; }
+function renderAll() { renderKpi(); renderStores(); renderQ(); renderMonths(); renderComments(); renderUrls(); }
+function renderKpi() {
+  var rows = rowsNow(), h = '<div class="kpi"><div class="l">回覆數</div><div class="v">' + rows.length.toLocaleString() + '</div><div class="s">' + (S.store ? storeShort(S.store) : '全部門市') + '</div></div>';
+  KPI_Q.forEach(function (k) { var x = rate(rows, k[0], k[1]); h += '<div class="kpi"><div class="l">' + k[2] + '</div><div class="v ' + cls(x.p, x.n) + '">' + (x.p == null ? '－' : x.p + '%') + '</div><div class="s">' + x.y + ' / ' + x.n + ' 人</div></div>'; });
+  var secs = rows.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; }), avg = secs.length ? Math.round(secs.reduce(function (a, b) { return a + b; }, 0) / secs.length) : null;
+  h += '<div class="kpi"><div class="l">平均填答時間</div><div class="v">' + (avg == null ? '－' : avg + ' 秒') + '</div><div class="s">從第一題點下去到送出</div></div>';
+  $('kpis').innerHTML = h; $('kpiNote').textContent = rows.length ? '' : '這段期間還沒有回覆';
+}
+function renderStores() {
+  var rows = rowsNow(), by = {}; rows.forEach(function (r) { var k = String(r.sn || '0'); (by[k] = by[k] || []).push(r); });
+  var keys = Object.keys(by).sort(function (a, b) { return Number(a) - Number(b); }), h = '';
+  keys.forEach(function (k) {
+    var rs = by[k], secs = rs.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; });
+    h += '<tr><td>' + esc(k === '0' ? (rs[0].s || '未填店別') : storeShort(k, rs[0].s)) + '</td><td>' + rs.length + '</td>';
+    KPI_Q.forEach(function (q) { var x = rate(rs, q[0], q[1]); h += '<td>' + pill(x.p, x.n) + '</td>'; });
+    h += '<td>' + (secs.length ? Math.round(secs.reduce(function (a, b) { return a + b; }, 0) / secs.length) : '－') + '</td></tr>';
+  });
+  if (rows.length > 1 && keys.length > 1) { var secsA = rows.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; }); h += '<tr style="font-weight:800;background:#FBF3EC"><td>合計</td><td>' + rows.length + '</td>'; KPI_Q.forEach(function (q) { var x = rate(rows, q[0], q[1]); h += '<td>' + pill(x.p, x.n) + '</td>'; }); h += '<td>' + (secsA.length ? Math.round(secsA.reduce(function (a, b) { return a + b; }, 0) / secsA.length) : '－') + '</td></tr>'; }
+  $('tbStore').querySelector('tbody').innerHTML = h || '<tr><td colspan="9" class="empty">沒有資料</td></tr>';
+}
+function renderQ() {
+  var rows = rowsNow(), h = '';
+  (D.questions || []).forEach(function (q) {
+    if (q.type === 'text') return;
+    var cnt = {}, answered = 0, bad = /^(否|不會)$/;
+    q.options.forEach(function (o) { cnt[o] = 0; });
+    rows.forEach(function (r) { var v = r.a[q.qid]; if (v == null || v === '') return; answered++; (q.type === 'multi' ? String(v).split('|') : [String(v)]).forEach(function (o) { cnt[o] = (cnt[o] || 0) + 1; }); });
+    if (!q.enabled && !answered) return;
+    var keys = Object.keys(cnt).sort(function (a, b) { var ia = q.options.indexOf(a), ib = q.options.indexOf(b); if (ia < 0) ia = 999; if (ib < 0) ib = 999; return ia - ib; });
+    h += '<div class="qbox"><h3><span class="qid">' + esc(q.qid) + (q.enabled ? '' : '（已停用）') + '</span>' + esc(q.title) + '</h3>';
+    keys.forEach(function (o) { var p = pct(cnt[o], answered); h += '<div class="bar"><div class="lb" title="' + esc(o) + '">' + esc(o) + '</div><div class="tr"><i class="' + (bad.test(o) ? 'bad' : '') + '" style="width:' + (p || 0) + '%"></i></div><div class="nm">' + cnt[o] + '（' + (p == null ? 0 : p) + '%）</div></div>'; });
+    h += '<div class="muted">有回答 ' + answered + ' 人' + (rows.length - answered > 0 ? '，未填 ' + (rows.length - answered) : '') + '</div></div>';
+  });
+  $('qgrid').innerHTML = h || '<div class="empty">沒有資料</div>';
+}
+function renderMonths() {
+  var h = ''; (D.months || []).slice().reverse().forEach(function (m) {
+    h += '<tr><td>' + esc(m.ym) + '</td><td>' + m.n + '</td>';
+    ['q14', 'q12', 'q6', 'q7', 'q8'].forEach(function (q) { var p = pct(m[q], m.n); h += '<td>' + pill(p, m.n) + '</td>'; });
+    h += '</tr>';
+  });
+  $('tbMonth').querySelector('tbody').innerHTML = h || '<tr><td colspan="7" class="empty">還沒有資料</td></tr>';
+}
+var CM = [];
+function renderComments() {
+  CM = rowsNow().filter(function (r) { return r.a.q17 && String(r.a.q17).trim(); });
+  $('cmNote').textContent = CM.length + ' 則';
+  drawComments();
+}
+function drawComments() {
+  var kw = ($('cmSearch').value || '').trim().toLowerCase(), h = '', n = 0;
+  CM.forEach(function (r) {
+    var line = (r.a.q17 + ' ' + r.s + ' ' + r.r).toLowerCase(); if (kw && line.indexOf(kw) < 0) return; n++;
+    h += '<div class="cm"><div class="m">' + esc(r.d) + '｜' + esc(storeShort(r.sn, r.s)) + (r.r ? '｜' + esc(r.r) : '') + (r.a.q14 ? '｜推薦：' + esc(r.a.q14) : '') + (r.a.q12 ? '｜成功：' + esc(r.a.q12) : '') + '</div><div class="t">' + esc(r.a.q17) + '</div></div>';
+  });
+  $('cmList').innerHTML = h || '<div class="empty">' + (CM.length ? '沒有符合的留言' : '這段期間沒有留言') + '</div>';
+}
+$('cmSearch').addEventListener('input', function () { if (window.__ime && __ime.on) return; drawComments(); });
+function renderUrls() {
+  var base = location.origin + location.pathname.replace(/dashboard-survey\.html$/, 'survey.html');
+  $('urlBase').textContent = base;
+  var h = ''; STORES.forEach(function (s) { h += '<tr><td>' + s[0] + ' ' + esc(s[1]) + '</td><td><code>' + esc(base + '?store=' + s[0]) + '</code></td><td><button class="btn ghost sm" type="button" data-copy="' + esc(base + '?store=' + s[0]) + '">複製</button></td></tr>'; });
+  $('tbUrl').querySelector('tbody').innerHTML = h;
+}
+document.addEventListener('click', function (e) {
+  var b = e.target.closest && e.target.closest('[data-copy]'); if (!b) return;
+  var v = b.getAttribute('data-copy'); if (v === 'base') v = $('urlBase').textContent;
+  (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(function () { toast('已複製'); }, function () { prompt('請手動複製', v); });
+});
+
+/* ---------- 篩選 ---------- */
+(function () {
+  var sel = $('fStore'); STORES.forEach(function (s) { var o = document.createElement('option'); o.value = String(s[0]); o.textContent = s[0] + ' ' + s[1]; sel.appendChild(o); });
+  $('fPeriod').onchange = function () { S.period = this.value; $('fCustom').style.display = S.period === 'custom' ? '' : 'none'; if (S.period !== 'custom') load(); };
+  $('fFrom').onchange = $('fTo').onchange = function () { if (S.period === 'custom' && $('fFrom').value && $('fTo').value) load(); };
+  sel.onchange = function () { S.store = this.value; if (D) renderAll(); };
+  $('btnLoad').onclick = load;
+})();
+/* 閘門通過才開始讀（權限中心共用閘門會呼叫 __surveyStartApp） */
+if (window.__surveyAuthed) load(); else window.__surveyStartApp = load;
+</script>
+</body>
+</html>
