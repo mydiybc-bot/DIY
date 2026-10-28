@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.5';
+var VER = 'survey-2026-10-28.7';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -262,6 +262,8 @@ function sheet_(name, head, textCols) {
 function aggSheet_() { return sheet_('agg_daily', AGG_HEAD, [1, 2]); }
 function aggMonthSheet_() { return sheet_('agg_month', AGGM_HEAD, [1]); }
 function cmSheet_() { return sheet_('fact_comment', CM_HEAD, [2]); }
+/* 儀表板快取版本號，每次彙總有變就加 1 */
+function bumpStats_() { var P = PropertiesService.getScriptProperties(); P.setProperty('stats_ver', String((Number(P.getProperty('stats_ver')) || 0) + 1)); }
 /* 表格列數不夠就先加（setValues 不會自動加列） */
 function growTo_(sh, rows) { var mx = sh.getMaxRows(); if (rows > mx) sh.insertRowsAfter(mx, rows - mx); }
 function dayOf_(v) { if (v instanceof Date) return tz_(v, 'yyyy-MM-dd'); return String(v == null ? '' : v).slice(0, 10); }
@@ -282,7 +284,7 @@ function countAns_(c, qs, a) {
 /* 併進彙總表。full=true 讀全表找舊列（匯入用）；false 只看最後 150 列（新回答一定落在最近幾列） */
 function aggMerge_(items, full) {
   if (!items.length) return;
-  PropertiesService.getScriptProperties().setProperty('stats_ver', String(Date.now()));   /* 彙總有變 → 儀表板快取立刻作廢 */
+  bumpStats_();   /* 彙總有變 → 儀表板快取立刻作廢 */
   var qs = questions_(true), groups = {}, mgroups = {};
   items.forEach(function (it) {
     var old = it.day < AGG_DAY_FROM, gday = old ? it.day.slice(0, 7) + '-01' : it.day, grain = old ? 'm' : 'd';
@@ -334,18 +336,21 @@ function stats2_(p) {
   var to = /^\d{4}-\d{2}-\d{2}$/.test(p.to || '') ? p.to : tz_(new Date(), 'yyyy-MM-dd');
   var c = CacheService.getScriptCache(), key = 'stats2:' + (PropertiesService.getScriptProperties().getProperty('stats_ver') || '0') + ':' + from + ':' + to, hit = c.get(key);
   if (hit) return JSON.parse(hit);
-  var sh = aggSheet_(), last = sh.getLastRow(), v = last >= 2 ? sh.getRange(2, 1, last - 1, AGG_HEAD.length).getValues() : [], by = {}, hist = false;
+  var sh = aggSheet_(), last = sh.getLastRow(), v = last >= 2 ? sh.getRange(2, 1, last - 1, AGG_HEAD.length).getValues() : [], by = {}, hist = false, mo = {}, nAll = 0;
   v.forEach(function (r) {
-    var day = dayOf_(r[0]); if (day < from || day > to) return;
-    var sn = Number(r[2]) || 0, g = by[sn] || (by[sn] = { sn: sn, s: String(r[3] || ''), n: 0, secSum: 0, secN: 0, c: {} });
-    g.n += Number(r[4]) || 0; g.secSum += Number(r[5]) || 0; g.secN += Number(r[6]) || 0;
+    var day = dayOf_(r[0]), n = Number(r[4]) || 0;
     var cc = {}; try { cc = JSON.parse(r[7] || '{}'); } catch (e) { cc = {}; }
+    /* 月趨勢（全公司、全期間）：分母用「這題有回答的人」（a_qX），舊問卷只有部分題目也不會拉低 */
+    var ym = day.slice(0, 7), m = mo[ym] || (mo[ym] = { ym: ym, n: 0 });
+    m.n += n; nAll += n;
+    for (var q in YES) { m[q] = (m[q] || 0) + (cc[q + '|' + YES[q]] || 0); m['a_' + q] = (m['a_' + q] || 0) + (cc['#' + q] || 0); }
+    if (day < from || day > to) return;
+    var sn = Number(r[2]) || 0, g = by[sn] || (by[sn] = { sn: sn, s: String(r[3] || ''), n: 0, secSum: 0, secN: 0, c: {} });
+    g.n += n; g.secSum += Number(r[5]) || 0; g.secN += Number(r[6]) || 0;
     for (var k in cc) g.c[k] = (g.c[k] || 0) + cc[k];
     if (String(r[1]) === 'm') hist = true;
   });
-  var ms = aggMonthSheet_(), ml = ms.getLastRow(), mv = ml >= 2 ? ms.getRange(2, 1, ml - 1, AGGM_HEAD.length).getValues() : [], nAll = 0;
-  var months = mv.map(function (r) { nAll += Number(r[1]) || 0; return { ym: String(r[0]).slice(0, 7), n: Number(r[1]) || 0, q6: Number(r[2]) || 0, q7: Number(r[3]) || 0, q8: Number(r[4]) || 0, q9: Number(r[5]) || 0, q12: Number(r[6]) || 0, q14: Number(r[7]) || 0 }; });
-  months.sort(function (a, b) { return a.ym < b.ym ? -1 : 1; });
+  var months = Object.keys(mo).sort().map(function (k) { return mo[k]; });
   var cs = cmSheet_(), cl = cs.getLastRow(), cv = cl >= 2 ? cs.getRange(2, 1, cl - 1, CM_HEAD.length).getValues() : [], cms = [], cmN = 0;
   for (var i = cv.length - 1; i >= 0; i--) {
     var r = cv[i], day = dayOf_(r[1]); if (day < from || day > to) continue;
@@ -372,7 +377,7 @@ function rebuildAgg() {
       v.forEach(function (r) {
         if (String(r[iS]) === 'test') return;
         var a = {}; qc.forEach(function (x) { var val = r[x[1]]; if (val !== '' && val != null) a[x[0]] = String(val); });
-        items.push(itemOf_(r[iT], r[iN], r[iSt], r[iSec], a));
+        items.push(itemOf_(r[iT], r[iN], r[iSt], String(r[iS]) === 'surveycake' ? 0 : r[iSec], a));
       });
       aggMerge_(items, true); done += items.length;
     }
@@ -416,7 +421,7 @@ function import_(b) {
       if (isNaN(t)) { skip++; return; }
       var row = { time: t, id: id, store_no: Number(r.sn) || 0, store: clean_(r.s, 60), recipe: '', src: 'surveycake', lang: 'zh', sec: sec };
       vals.push(head.map(function (h) { return h === 'ua' ? clean_(r.ua, 160) : (h in row ? row[h] : (h in a ? a[h] : '')); }));
-      items.push(itemOf_(t, row.store_no, row.store, sec, a));
+      items.push(itemOf_(t, row.store_no, row.store, 0, a));   /* 彙總的「平均填答時間」不算舊問卷：舊的填答秒數是食譜頁開著到送出（約 2～3 小時），原值仍存在 fact_response.sec */
     });
     if (vals.length) { growTo_(sh, last + vals.length); sh.getRange(last + 1, 1, vals.length, head.length).setValues(vals); }
     aggMerge_(items, true);
@@ -461,6 +466,15 @@ function importRaw_(b) {
     SpreadsheetApp.flush();
     return { sheet: name, added: vals.length, skipped: skip, total: sh.getLastRow() - 1 };
   } finally { lock.releaseLock(); }
+}
+/* 一次性（2026-10-28）：把已匯入歷史的彙總列秒數歸零（只動 2026-10-28 以前的列；之後現場回答的秒數是真的，不碰） */
+function aggZeroSec() {
+  var sh = aggSheet_(), last = sh.getLastRow(); if (last < 2) return '彙總表是空的';
+  var days = sh.getRange(2, 1, last - 1, 1).getValues(), fg = sh.getRange(2, 6, last - 1, 2).getValues(), n = 0;
+  for (var i = 0; i < days.length; i++) if (dayOf_(days[i][0]) < '2026-10-28' && (Number(fg[i][0]) || Number(fg[i][1]))) { fg[i] = [0, 0]; n++; }
+  sh.getRange(2, 6, last - 1, 2).setValues(fg);
+  bumpStats_();
+  return '已把 ' + n + ' 列的秒數歸零';
 }
 /* 還原匯入（編輯器選 rollbackImport → 執行）：把 src=surveycake 的列從 fact_response 拿掉，彙總表重建；raw_ 封存表另外手動刪 */
 function rollbackImport() {

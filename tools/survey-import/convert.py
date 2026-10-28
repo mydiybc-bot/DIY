@@ -104,6 +104,8 @@ def convert_version(label, folder, canon, outdir):
     it = ws.iter_rows(values_only=True)
     head = list(next(it))
     hm = header_map(head)
+    only = [q for q in os.environ.get('ONLY_Q', '').split(',') if q]   # 例：ONLY_Q=q1,q12,q14（舊問卷只補這幾題）
+    if only: hm = {i: q for i, q in hm.items() if q in only}
     iT, iSec, iHash = head.index('填答時間'), head.index('填答秒數'), head.index('Hash')
     canon_nz = {q: {nz(o): o for o in opts} for q, opts in canon.items() if opts}
     unmapped = collections.defaultdict(collections.Counter)      # qid -> 原值 -> 次數
@@ -111,7 +113,7 @@ def convert_version(label, folder, canon, outdir):
     legacy = collections.defaultdict(collections.Counter)        # qid -> 保留原文的舊選項 -> 次數
     answered = collections.Counter()
     stores = collections.Counter(); months = collections.Counter()
-    n = bad_time = no_store = 0; tmin = tmax = None; seen = set(); dup = 0
+    n = bad_time = no_store = no_answer = 0; tmin = tmax = None; seen = set(); dup = 0
     out = open(os.path.join(outdir, 'rows_%s.jsonl' % label), 'w', encoding='utf-8')
     sample = []
     for r in it:
@@ -153,6 +155,7 @@ def convert_version(label, folder, canon, outdir):
             if outv:
                 a[q] = '|'.join(outv); answered[q] += 1
         if sn == '' : no_store += 1; continue
+        if only and not [q for q in a if q != 'q1']: no_answer += 1; continue
         sec = 0
         try: sec = int(float(str(r[iSec]).strip()))
         except Exception: sec = 0
@@ -165,7 +168,7 @@ def convert_version(label, folder, canon, outdir):
     out.close()
     written = sum(stores.values())
     return {
-        'label': label, 'file': os.path.basename(files[0]), 'excel_rows': n, 'written': written, 'bad_time': bad_time, 'no_store': no_store, 'dup_hash': dup,
+        'label': label, 'file': os.path.basename(files[0]), 'excel_rows': n, 'written': written, 'bad_time': bad_time, 'no_store': no_store, 'no_answer': no_answer, 'only_q': only, 'dup_hash': dup,
         'time_from': tmin.strftime('%Y-%m-%d %H:%M:%S') if tmin else '', 'time_to': tmax.strftime('%Y-%m-%d %H:%M:%S') if tmax else '',
         'stores': dict(stores), 'months': dict(sorted(months.items())),
         'headers_mapped': {str(head[i]): q for i, q in hm.items()},

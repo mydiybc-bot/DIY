@@ -9,7 +9,7 @@ for lab in labs:
     for l in open(os.path.join(out, 'rows_%s.jsonl' % lab), encoding='utf-8'):
         r = json.loads(l); g = exp.setdefault(r['sn'], {'n': 0, 'secSum': 0, 'secN': 0, 'c': collections.Counter()})
         g['n'] += 1
-        if 0 < r['sec'] < 3600: g['secSum'] += r['sec']; g['secN'] += 1
+        # 匯入的舊資料秒數不進彙總（彙總 secSum／secN 應為 0）
         for q, v in r['a'].items():
             g['c']['#' + q] += 1
             if q == 'q17': continue
