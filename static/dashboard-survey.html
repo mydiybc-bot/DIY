@@ -426,7 +426,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
 <script>
 /* ===== 📝 顧客問卷結果（2026-10-28 建）=====
-   讀 GAS ?action=stats&from=&to=（期間內每一筆＋全公司每月摘要＋題目）→ 店別篩選、各種彙總都在瀏覽器算。
+   讀 GAS ?action=stats2&from=&to=（資料庫先算好：期間內每家店的各題次數＋全公司月趨勢＋留言）→ 店別篩選在瀏覽器切。
    先走自家伺服器代轉（/api/gas/<部署ID>），失敗再直連 GAS（JSONP）。
    留言搜尋框只建一次，打字只重畫留言清單；選字中（__ime.on）不動（中文輸入規則）。 */
 var SV_API = 'https://script.google.com/macros/s/AKfycbxrsYaYLdXqjUeGvG8_CZ--5znw5izXr6tcgmfC0MbJ32T1KY_TS8UkVqimxS2Jajx0/exec';
@@ -477,57 +477,59 @@ function apiGet(qs) {
 }
 function load() {
   var r = range(); $('btnLoad').disabled = true; $('fMsg').textContent = '讀取中…'; $('dsbFresh').textContent = '🕒 讀取中…';
-  apiGet('action=stats&from=' + r[0] + '&to=' + r[1]).then(function (d) {
+  apiGet('action=stats2&from=' + r[0] + '&to=' + r[1]).then(function (d) {
     if (!d || !d.ok) throw new Error((d && d.msg) || '讀取失敗');
     D = d; renderAll();
-    $('fMsg').textContent = r[0] + ' ～ ' + r[1] + '，全公司 ' + d.rows.length + ' 筆（店別篩選看下方數字）' + (d.cut ? '（只顯示最新 20,000 筆）' : '');
-    $('dsbFresh').textContent = '🕒 讀取時間 ' + new Date().toLocaleString('zh-TW', { hour12: false }) + '｜累計 ' + d.n_all + ' 筆';
+    var tot = (d.stores || []).reduce(function (a, g) { return a + g.n; }, 0);
+    $('fMsg').textContent = r[0] + ' ～ ' + r[1] + '，全公司 ' + tot.toLocaleString() + ' 筆（店別篩選看下方數字）' + (d.hist ? '｜2026 年以前的歷史資料以「月」彙總，期間包含該月 1 號就整月計入' : '');
+    $('dsbFresh').textContent = '🕒 讀取時間 ' + new Date().toLocaleString('zh-TW', { hour12: false }) + '｜累計 ' + d.n_all.toLocaleString() + ' 筆';
     if (d.db_url) { $('dbLink').href = d.db_url; $('dbLink').textContent = '顧客問卷_資料庫'; }
   }).catch(function (e) { $('fMsg').textContent = '❌ ' + (e.message || e); $('dsbFresh').textContent = '🔴 讀取失敗'; $('kpis').innerHTML = '<div class="empty">讀不到資料：' + esc(e.message || e) + '。請按「重新讀取」再試一次。</div>'; })
     .then(function () { $('btnLoad').disabled = false; });
 }
 
-/* ---------- 彙總 ---------- */
-function rowsNow() { return (D.rows || []).filter(function (r) { return !S.store || String(r.sn) === S.store; }); }
-function rate(rows, qid, yesv) { var n = 0, y = 0; rows.forEach(function (r) { var v = r.a[qid]; if (v == null || v === '') return; n++; if (v === yesv) y++; }); return { n: n, y: y, p: pct(y, n) }; }
+/* ---------- 彙總（資料庫已先算好：每家店一包 {n, secSum, secN, c:{"q4|口味":次數, "#q4":這題有幾人答}}） ---------- */
+function picked() { return (D.stores || []).filter(function (g) { return !S.store || String(g.sn) === S.store; }); }
+function merge(list) { var m = { n: 0, secSum: 0, secN: 0, c: {} }; list.forEach(function (g) { m.n += g.n; m.secSum += g.secSum; m.secN += g.secN; for (var k in g.c) m.c[k] = (m.c[k] || 0) + g.c[k]; }); return m; }
+function rate(g, qid, yesv) { var n = g.c['#' + qid] || 0, y = g.c[qid + '|' + yesv] || 0; return { n: n, y: y, p: pct(y, n) }; }
+function avgSec(g) { return g.secN ? Math.round(g.secSum / g.secN) : null; }
 function renderAll() { renderKpi(); renderStores(); renderQ(); renderMonths(); renderComments(); renderUrls(); }
 function renderKpi() {
-  var rows = rowsNow(), h = '<div class="kpi"><div class="l">回覆數</div><div class="v">' + rows.length.toLocaleString() + '</div><div class="s">' + (S.store ? storeShort(S.store) : '全部門市') + '</div></div>';
-  KPI_Q.forEach(function (k) { var x = rate(rows, k[0], k[1]); h += '<div class="kpi"><div class="l">' + k[2] + '</div><div class="v ' + cls(x.p, x.n) + '">' + (x.p == null ? '－' : x.p + '%') + '</div><div class="s">' + x.y + ' / ' + x.n + ' 人</div></div>'; });
-  var secs = rows.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; }), avg = secs.length ? Math.round(secs.reduce(function (a, b) { return a + b; }, 0) / secs.length) : null;
-  h += '<div class="kpi"><div class="l">平均填答時間</div><div class="v">' + (avg == null ? '－' : avg + ' 秒') + '</div><div class="s">從第一題點下去到送出</div></div>';
-  $('kpis').innerHTML = h; $('kpiNote').textContent = rows.length ? '' : '這段期間還沒有回覆';
+  var g = merge(picked()), h = '<div class="kpi"><div class="l">回覆數</div><div class="v">' + g.n.toLocaleString() + '</div><div class="s">' + (S.store ? storeShort(S.store) : '全部門市') + '</div></div>';
+  KPI_Q.forEach(function (k) { var x = rate(g, k[0], k[1]); h += '<div class="kpi"><div class="l">' + k[2] + '</div><div class="v ' + cls(x.p, x.n) + '">' + (x.p == null ? '－' : x.p + '%') + '</div><div class="s">' + x.y.toLocaleString() + ' / ' + x.n.toLocaleString() + ' 人</div></div>'; });
+  var avg = avgSec(g);
+  h += '<div class="kpi"><div class="l">平均填答時間</div><div class="v">' + (avg == null ? '－' : avg + ' 秒') + '</div><div class="s">從第一題點下去到送出（舊問卷資料不算）</div></div>';
+  $('kpis').innerHTML = h; $('kpiNote').textContent = g.n ? '' : '這段期間還沒有回覆';
+}
+function storeRow(name, g) {
+  var h = '<tr><td>' + esc(name) + '</td><td>' + g.n.toLocaleString() + '</td>';
+  KPI_Q.forEach(function (q) { var x = rate(g, q[0], q[1]); h += '<td>' + pill(x.p, x.n) + '</td>'; });
+  var a = avgSec(g); return h + '<td>' + (a == null ? '－' : a) + '</td></tr>';
 }
 function renderStores() {
-  var rows = rowsNow(), by = {}; rows.forEach(function (r) { var k = String(r.sn || '0'); (by[k] = by[k] || []).push(r); });
-  var keys = Object.keys(by).sort(function (a, b) { return Number(a) - Number(b); }), h = '';
-  keys.forEach(function (k) {
-    var rs = by[k], secs = rs.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; });
-    h += '<tr><td>' + esc(k === '0' ? (rs[0].s || '未填店別') : storeShort(k, rs[0].s)) + '</td><td>' + rs.length + '</td>';
-    KPI_Q.forEach(function (q) { var x = rate(rs, q[0], q[1]); h += '<td>' + pill(x.p, x.n) + '</td>'; });
-    h += '<td>' + (secs.length ? Math.round(secs.reduce(function (a, b) { return a + b; }, 0) / secs.length) : '－') + '</td></tr>';
-  });
-  if (rows.length > 1 && keys.length > 1) { var secsA = rows.map(function (r) { return r.sec; }).filter(function (s) { return s > 0; }); h += '<tr style="font-weight:800;background:#FBF3EC"><td>合計</td><td>' + rows.length + '</td>'; KPI_Q.forEach(function (q) { var x = rate(rows, q[0], q[1]); h += '<td>' + pill(x.p, x.n) + '</td>'; }); h += '<td>' + (secsA.length ? Math.round(secsA.reduce(function (a, b) { return a + b; }, 0) / secsA.length) : '－') + '</td></tr>'; }
+  var list = picked().slice().sort(function (a, b) { return (a.sn || 99) - (b.sn || 99); }), h = '';
+  list.forEach(function (g) { h += storeRow(g.sn ? storeShort(g.sn, g.s) : (g.s || '未填店別'), g); });
+  if (list.length > 1) { h += storeRow('合計', merge(list)).replace('<tr>', '<tr style="font-weight:800;background:#FBF3EC">'); }
   $('tbStore').querySelector('tbody').innerHTML = h || '<tr><td colspan="9" class="empty">沒有資料</td></tr>';
 }
 function renderQ() {
-  var rows = rowsNow(), h = '';
+  var g = merge(picked()), h = '';
   (D.questions || []).forEach(function (q) {
     if (q.type === 'text') return;
-    var cnt = {}, answered = 0, bad = /^(否|不會)$/;
+    var cnt = {}, answered = g.c['#' + q.qid] || 0, bad = /^(否|不會)$/;
     q.options.forEach(function (o) { cnt[o] = 0; });
-    rows.forEach(function (r) { var v = r.a[q.qid]; if (v == null || v === '') return; answered++; (q.type === 'multi' ? String(v).split('|') : [String(v)]).forEach(function (o) { cnt[o] = (cnt[o] || 0) + 1; }); });
+    var pre = q.qid + '|'; Object.keys(g.c).forEach(function (k) { if (k.indexOf(pre) === 0) cnt[k.slice(pre.length)] = g.c[k]; });
     if (!q.enabled && !answered) return;
     var keys = Object.keys(cnt).sort(function (a, b) { var ia = q.options.indexOf(a), ib = q.options.indexOf(b); if (ia < 0) ia = 999; if (ib < 0) ib = 999; return ia - ib; });
     h += '<div class="qbox"><h3><span class="qid">' + esc(q.qid) + (q.enabled ? '' : '（已停用）') + '</span>' + esc(q.title) + '</h3>';
-    keys.forEach(function (o) { var p = pct(cnt[o], answered); h += '<div class="bar"><div class="lb" title="' + esc(o) + '">' + esc(o) + '</div><div class="tr"><i class="' + (bad.test(o) ? 'bad' : '') + '" style="width:' + (p || 0) + '%"></i></div><div class="nm">' + cnt[o] + '（' + (p == null ? 0 : p) + '%）</div></div>'; });
-    h += '<div class="muted">有回答 ' + answered + ' 人' + (q.cond && q.cond.qid ? '（條件題：只問 ' + esc(q.cond.qid) + ' 選「' + esc((q.cond.vals || []).join('／')) + '」的人）' : (rows.length - answered > 0 ? '，未填 ' + (rows.length - answered) : '')) + '</div></div>';
+    keys.forEach(function (o) { var p = pct(cnt[o], answered); h += '<div class="bar"><div class="lb" title="' + esc(o) + '">' + esc(o) + '</div><div class="tr"><i class="' + (bad.test(o) ? 'bad' : '') + '" style="width:' + (p || 0) + '%"></i></div><div class="nm">' + cnt[o].toLocaleString() + '（' + (p == null ? 0 : p) + '%）</div></div>'; });
+    h += '<div class="muted">有回答 ' + answered.toLocaleString() + ' 人' + (q.cond && q.cond.qid ? '（條件題：只問 ' + esc(q.cond.qid) + ' 選「' + esc((q.cond.vals || []).join('／')) + '」的人）' : (g.n - answered > 0 ? '，未填或當時問卷沒有這題 ' + (g.n - answered).toLocaleString() : '')) + '</div></div>';
   });
   $('qgrid').innerHTML = h || '<div class="empty">沒有資料</div>';
 }
 function renderMonths() {
   var h = ''; (D.months || []).slice().reverse().forEach(function (m) {
-    h += '<tr><td>' + esc(m.ym) + '</td><td>' + m.n + '</td>';
+    h += '<tr><td>' + esc(m.ym) + '</td><td>' + m.n.toLocaleString() + '</td>';
     ['q14', 'q12', 'q6', 'q7', 'q8'].forEach(function (q) { var p = pct(m[q], m.n); h += '<td>' + pill(p, m.n) + '</td>'; });
     h += '</tr>';
   });
@@ -535,15 +537,15 @@ function renderMonths() {
 }
 var CM = [];
 function renderComments() {
-  CM = rowsNow().filter(function (r) { return r.a.q17 && String(r.a.q17).trim(); });
-  $('cmNote').textContent = CM.length + ' 則';
+  CM = (D.comments || []).filter(function (r) { return !S.store || String(r.sn) === S.store; });
+  $('cmNote').textContent = (S.store ? CM.length : (D.cm_n || CM.length)) + ' 則' + (!S.store && D.cm_n > CM.length ? '（只顯示最新 ' + CM.length + ' 則）' : '');
   drawComments();
 }
 function drawComments() {
-  var kw = ($('cmSearch').value || '').trim().toLowerCase(), h = '', n = 0;
+  var kw = ($('cmSearch').value || '').trim().toLowerCase(), h = '';
   CM.forEach(function (r) {
-    var line = (r.a.q17 + ' ' + r.s + ' ' + r.r).toLowerCase(); if (kw && line.indexOf(kw) < 0) return; n++;
-    h += '<div class="cm"><div class="m">' + esc(r.d) + '｜' + esc(storeShort(r.sn, r.s)) + (r.r ? '｜' + esc(r.r) : '') + (r.a.q14 ? '｜推薦：' + esc(r.a.q14) : '') + (r.a.q12 ? '｜成功：' + esc(r.a.q12) : '') + '</div><div class="t">' + esc(r.a.q17) + '</div></div>';
+    var line = (r.t + ' ' + r.s + ' ' + r.r).toLowerCase(); if (kw && line.indexOf(kw) < 0) return;
+    h += '<div class="cm"><div class="m">' + esc(r.d) + '｜' + esc(storeShort(r.sn, r.s)) + (r.r ? '｜' + esc(r.r) : '') + (r.q14 ? '｜推薦：' + esc(r.q14) : '') + (r.q12 ? '｜成功：' + esc(r.q12) : '') + '</div><div class="t">' + esc(r.t) + '</div></div>';
   });
   $('cmList').innerHTML = h || '<div class="empty">' + (CM.length ? '沒有符合的留言' : '這段期間沒有留言') + '</div>';
 }

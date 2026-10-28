@@ -21,6 +21,8 @@ Sheet.prototype.setName = function (n) { this.name = n; return this; };
 Sheet.prototype.getLastRow = function () { var n = this.rows.length; while (n > 0 && this.rows[n - 1].every(function (v) { return v === '' || v == null; })) n--; return n; };
 Sheet.prototype.getLastColumn = function () { var m = 0; this.rows.forEach(function (r) { var n = r.length; while (n > 0 && (r[n - 1] === '' || r[n - 1] == null)) n--; if (n > m) m = n; }); return m; };
 Sheet.prototype.setFrozenRows = function (n) { this.frozen = n; return this; };
+Sheet.prototype.getMaxRows = function () { return Math.max(this.maxRows || 1000, this.rows.length); };
+Sheet.prototype.insertRowsAfter = function (after, n) { this.maxRows = Math.max(this.maxRows || 1000, after + n); return this; };
 Sheet.prototype.copyTo = function (ss) { var s = new Sheet(this.name + ' 的副本', ss); s.rows = this.rows.map(function (r) { return r.slice(); }); ss.sheets.push(s); return s; };
 Sheet.prototype.appendRow = function (vals) { var row = vals.map(function (v) { return v == null ? '' : v; }); this.rows.push(row); return this; };
 Sheet.prototype.cell_ = function (r, c) { while (this.rows.length < r) this.rows.push([]); var row = this.rows[r - 1]; while (row.length < c) row.push(''); return row; };
@@ -75,17 +77,30 @@ vm.runInContext('function __call(fn, arg){ return this[fn](arg); }', ctx);
 
 /* 灌假資料：n 筆，隨機店、隨機答案，時間散在最近 120 天（src=mock，儀表板算進去） */
 function seed(n) {
-  var form = JSON.parse(ctx.doGet({ parameter: { action: 'form' } }).text), qs = form.questions, made = 0;
-  for (var i = 0; i < n; i++) {
+  /* 歷史資料走 import_（跟真正匯入同一條路，彙總表才會有 2026 年前的月彙總）；最近 30 筆走 submit（會產生留言、當日彙總） */
+  var form = JSON.parse(ctx.doGet({ parameter: { action: 'form' } }).text), qs = form.questions, made = 0, rows = [];
+  var texts = ['老師很親切', '影片有點快', '環境很舒服，下次再來', '希望多一點巧克力口味', '桌子有點擠'];
+  function answers(i) {
     var a = {}; qs.forEach(function (q) {
-      if (q.type === 'text') { if (Math.random() < 0.3) a[q.qid] = ['老師很親切', '影片有點快', '環境很舒服，下次再來', '希望多一點巧克力口味', '桌子有點擠'][i % 5]; return; }
-      if (q.type === 'multi') { a[q.qid] = [q.options[i % q.options.length]]; if (Math.random() < 0.2) a[q.qid].push(q.options[(i + 2) % q.options.length]); return; }
+      if (q.type === 'text') return;
+      if (q.cond && Math.random() < 0.5) return;
+      if (q.type === 'multi') { a[q.qid] = [q.options[i % q.options.length]].join('|'); return; }
       var k = q.options.length; var pick = q.options[Math.floor(Math.random() * k)];
       if (/^(是|否)$/.test(q.options[0] || '') || /^(會|不會)$/.test(q.options[0] || '')) pick = Math.random() < 0.88 ? q.options[0] : q.options[1];
       a[q.qid] = pick;
-    });
-    var r = JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'submit', id: 'mock-' + crypto.randomBytes(6).toString('hex'), a: a, src: 'mock', sec: 60 + Math.floor(Math.random() * 200), ua: 'mock' }) } }).text);
-    if (r.ok) { made++; var sh = FILES[PROPS.DB_SS].getSheetByName('fact_response'); var row = sh.rows[sh.rows.length - 1]; row[0] = new Date(Date.now() - Math.floor(Math.random() * 120) * 864e5 - Math.floor(Math.random() * 864e5)); }
+    }); return a;
+  }
+  var stores = form.stores;
+  for (var i = 0; i < n; i++) {
+    var st = stores[Math.floor(Math.random() * stores.length)], t = new Date(Date.now() - Math.floor(Math.random() * 700) * 864e5 - 864e5);
+    rows.push({ t: t.toISOString(), id: 'mock-' + crypto.randomBytes(6).toString('hex'), sn: st[0], s: st[1], sec: Math.random() < 0.3 ? 60 + Math.floor(Math.random() * 200) : 7000, a: answers(i), ua: 'mock' });
+  }
+  for (var b = 0; b < rows.length; b += 3000) made += JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'import', pwd: 'hqpw', rows: rows.slice(b, b + 3000) }) } }).text).added || 0;
+  for (var j = 0; j < 12; j++) {
+    var a = answers(j), st2 = stores[j % stores.length]; a.q1 = st2[1]; a.q17 = texts[j % 5] + '（' + (j + 1) + '）';
+    Object.keys(a).forEach(function (k) { var q = qs.filter(function (x) { return x.qid === k; })[0]; if (q && q.type === 'multi') a[k] = a[k].split('|'); });
+    var r = JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'submit', id: 'mock-live-' + crypto.randomBytes(6).toString('hex'), a: a, src: 'tablet', sec: 70 + j, ua: 'mock' }) } }).text);
+    if (r.ok && !r.dup) made++;
   }
   CACHE = {};
   return made;

@@ -15,9 +15,14 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.2';
+var VER = 'survey-2026-10-28.3';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
+var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
+var AGG_HEAD = ['day', 'grain', 'store_no', 'store', 'n', 'secSum', 'secN', 'counts'];
+var AGGM_HEAD = ['ym', 'n', 'q6', 'q7', 'q8', 'q9', 'q12', 'q14'];
+var CM_HEAD = ['time', 'day', 'id', 'store_no', 'store', 'recipe', 'q14', 'q12', 'text'];
+var YES = { q6: '是', q7: '是', q8: '是', q9: '是', q12: '是', q14: '會' };   /* 儀表板 KPI 的「好」答案 */
 var AUTH_SS = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4';   /* 儀表板權限中心（dim_auth） */
 var DASH_ID = 'survey', DASH_NAME = '顧客問卷';
 
@@ -66,6 +71,7 @@ function doGet(e) {
     if (p.action === 'ping' || !p.action) o = { ok: true, ver: VER, today: countToday_() };
     else if (p.action === 'form') o = form_();
     else if (p.action === 'stats') o = stats_(p);
+    else if (p.action === 'stats2') o = stats2_(p);
     else throw fail_('不認得的動作', 'act');
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }
   if (p.callback && /^[A-Za-z_$][\w$]*$/.test(p.callback)) {
@@ -80,6 +86,7 @@ function doPost(e) {
     var b = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (b.action === 'submit') o = submit_(b);
     else if (b.action === 'ping') o = { ver: VER, today: countToday_() };
+    else if (b.action === 'import') o = import_(b);   /* 歷史匯入用，匯完會拿掉 */
     else throw fail_('不認得的動作', 'act');
     o.ok = true; o.act = b.action;
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }
@@ -229,10 +236,178 @@ function submit_(b) {
     }
     var vals = head.map(function (h) { return h === 'ua' ? ua : (h in row ? row[h] : (h in ans ? ans[h] : '')); });
     sh.appendRow(vals);
+    if (row.src !== 'test') {
+      try { aggMerge_([itemOf_(row.time, row.store_no, row.store, row.sec, ans)], false); if (ans.q17) cmAppend_(row, ans); }
+      catch (ae) { PropertiesService.getScriptProperties().setProperty('agg_dirty', tz_(new Date(), 'yyyy-MM-dd HH:mm') + ' ' + errMsg_(ae)); }
+    }
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
   c.put('id:' + id, '1', 21600);
   return { id: id, dup: false };
+}
+
+/* ---------------- 彙總表（儀表板讀這個，不讀十幾萬筆原始回答） ----------------
+   agg_daily：一列＝一天（或歷史的一個月）×一家店；counts 是 JSON：{"q4|口味":3, "#q4":10}（"#qid"＝這題有幾人回答）
+   agg_month：一列＝一個月，全公司，月趨勢用
+   fact_comment：只放有留言的回答（src=test 不放） */
+function sheet_(name, head, textCols) {
+  var ss = db_(), sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name); sh.getRange(1, 1, 1, head.length).setValues([head]); sh.setFrozenRows(1);
+    (textCols || []).forEach(function (c) { sh.getRange(1, c, sh.getMaxRows(), 1).setNumberFormat('@'); });   /* 日期欄當純文字，Sheets 才不會自動轉成日期 */
+    sh.getRange(1, 1, 1, head.length).setValues([head]);
+  }
+  return sh;
+}
+function aggSheet_() { return sheet_('agg_daily', AGG_HEAD, [1, 2]); }
+function aggMonthSheet_() { return sheet_('agg_month', AGGM_HEAD, [1]); }
+function cmSheet_() { return sheet_('fact_comment', CM_HEAD, [2]); }
+/* 表格列數不夠就先加（setValues 不會自動加列） */
+function growTo_(sh, rows) { var mx = sh.getMaxRows(); if (rows > mx) sh.insertRowsAfter(mx, rows - mx); }
+function dayOf_(v) { if (v instanceof Date) return tz_(v, 'yyyy-MM-dd'); return String(v == null ? '' : v).slice(0, 10); }
+
+/* 一筆回答 → 彙總用的小物件 */
+function itemOf_(time, sn, store, sec, ans) {
+  var t = time instanceof Date ? time : new Date(time), day = tz_(t, 'yyyy-MM-dd');
+  return { day: day, sn: sn === '' || sn == null ? 0 : Number(sn) || 0, s: String(store || ''), sec: Number(sec) || 0, a: ans };
+}
+function countAns_(c, qs, a) {
+  qs.forEach(function (q) {
+    var v = a[q.qid]; if (v == null || String(v) === '') return;
+    c['#' + q.qid] = (c['#' + q.qid] || 0) + 1;
+    if (q.type === 'text') return;
+    String(v).split('|').forEach(function (o) { if (!o) return; var k = q.qid + '|' + o; c[k] = (c[k] || 0) + 1; });
+  });
+}
+/* 併進彙總表。full=true 讀全表找舊列（匯入用）；false 只看最後 150 列（新回答一定落在最近幾列） */
+function aggMerge_(items, full) {
+  if (!items.length) return;
+  PropertiesService.getScriptProperties().setProperty('stats_ver', String(Date.now()));   /* 彙總有變 → 儀表板快取立刻作廢 */
+  var qs = questions_(true), groups = {}, mgroups = {};
+  items.forEach(function (it) {
+    var old = it.day < AGG_DAY_FROM, gday = old ? it.day.slice(0, 7) + '-01' : it.day, grain = old ? 'm' : 'd';
+    var key = gday + '|' + grain + '|' + it.sn;
+    var g = groups[key] || (groups[key] = { day: gday, grain: grain, sn: it.sn, s: it.s, n: 0, secSum: 0, secN: 0, c: {} });
+    if (it.s && !g.s) g.s = it.s;
+    g.n++; if (it.sec > 0 && it.sec < 3600) { g.secSum += it.sec; g.secN++; }
+    countAns_(g.c, qs, it.a);
+    var ym = it.day.slice(0, 7), m = mgroups[ym] || (mgroups[ym] = { ym: ym, n: 0, q6: 0, q7: 0, q8: 0, q9: 0, q12: 0, q14: 0 });
+    m.n++; for (var q in YES) if (String(it.a[q] || '') === YES[q]) m[q]++;
+  });
+  /* 日／月彙總 */
+  var sh = aggSheet_(), last = sh.getLastRow(), from = full ? 2 : Math.max(2, last - 149), idx = {};
+  if (last >= from) sh.getRange(from, 1, last - from + 1, 3).getValues().forEach(function (r, i) { idx[dayOf_(r[0]) + '|' + String(r[1]) + '|' + (Number(r[2]) || 0)] = from + i; });
+  var add = [];
+  Object.keys(groups).forEach(function (k) {
+    var g = groups[k], at = idx[k];
+    if (at) {
+      var cur = sh.getRange(at, 4, 1, 5).getValues()[0], c = {};
+      try { c = JSON.parse(cur[4] || '{}'); } catch (e) { c = {}; }
+      for (var ck in g.c) c[ck] = (c[ck] || 0) + g.c[ck];
+      sh.getRange(at, 4, 1, 5).setValues([[cur[0] || g.s, (Number(cur[1]) || 0) + g.n, (Number(cur[2]) || 0) + g.secSum, (Number(cur[3]) || 0) + g.secN, JSON.stringify(c)]]);
+    } else add.push([g.day, g.grain, g.sn, g.s, g.n, g.secSum, g.secN, JSON.stringify(g.c)]);
+  });
+  if (add.length) {
+    add.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (a[2] - b[2]); });
+    growTo_(sh, sh.getLastRow() + add.length);
+    sh.getRange(sh.getLastRow() + 1, 1, add.length, AGG_HEAD.length).setValues(add);
+  }
+  /* 月趨勢 */
+  var ms = aggMonthSheet_(), ml = ms.getLastRow(), mv = ml >= 2 ? ms.getRange(2, 1, ml - 1, AGGM_HEAD.length).getValues() : [], mi = {};
+  mv.forEach(function (r, i) { mi[String(r[0]).slice(0, 7)] = i; });
+  var madd = [];
+  Object.keys(mgroups).forEach(function (ym) {
+    var g = mgroups[ym];
+    if (ym in mi) { var r = mv[mi[ym]]; ms.getRange(2 + mi[ym], 2, 1, 7).setValues([[(Number(r[1]) || 0) + g.n, (Number(r[2]) || 0) + g.q6, (Number(r[3]) || 0) + g.q7, (Number(r[4]) || 0) + g.q8, (Number(r[5]) || 0) + g.q9, (Number(r[6]) || 0) + g.q12, (Number(r[7]) || 0) + g.q14]]); }
+    else madd.push([ym, g.n, g.q6, g.q7, g.q8, g.q9, g.q12, g.q14]);
+  });
+  if (madd.length) { madd.sort(function (a, b) { return a[0] < b[0] ? -1 : 1; }); growTo_(ms, ms.getLastRow() + madd.length); ms.getRange(ms.getLastRow() + 1, 1, madd.length, AGGM_HEAD.length).setValues(madd); }
+}
+function cmAppend_(row, ans) {
+  var t = row.time instanceof Date ? row.time : new Date(row.time);
+  cmSheet_().appendRow([t, tz_(t, 'yyyy-MM-dd'), row.id, row.store_no, row.store, row.recipe, ans.q14 || '', ans.q12 || '', ans.q17]);
+}
+
+/* 儀表板讀取（新）：期間內各店彙總＋全公司月趨勢＋留言。回應很小，不管歷史有多少筆都一樣快 */
+function stats2_(p) {
+  var from = /^\d{4}-\d{2}-\d{2}$/.test(p.from || '') ? p.from : tz_(new Date(), 'yyyy-MM') + '-01';
+  var to = /^\d{4}-\d{2}-\d{2}$/.test(p.to || '') ? p.to : tz_(new Date(), 'yyyy-MM-dd');
+  var c = CacheService.getScriptCache(), key = 'stats2:' + (PropertiesService.getScriptProperties().getProperty('stats_ver') || '0') + ':' + from + ':' + to, hit = c.get(key);
+  if (hit) return JSON.parse(hit);
+  var sh = aggSheet_(), last = sh.getLastRow(), v = last >= 2 ? sh.getRange(2, 1, last - 1, AGG_HEAD.length).getValues() : [], by = {}, hist = false;
+  v.forEach(function (r) {
+    var day = dayOf_(r[0]); if (day < from || day > to) return;
+    var sn = Number(r[2]) || 0, g = by[sn] || (by[sn] = { sn: sn, s: String(r[3] || ''), n: 0, secSum: 0, secN: 0, c: {} });
+    g.n += Number(r[4]) || 0; g.secSum += Number(r[5]) || 0; g.secN += Number(r[6]) || 0;
+    var cc = {}; try { cc = JSON.parse(r[7] || '{}'); } catch (e) { cc = {}; }
+    for (var k in cc) g.c[k] = (g.c[k] || 0) + cc[k];
+    if (String(r[1]) === 'm') hist = true;
+  });
+  var ms = aggMonthSheet_(), ml = ms.getLastRow(), mv = ml >= 2 ? ms.getRange(2, 1, ml - 1, AGGM_HEAD.length).getValues() : [], nAll = 0;
+  var months = mv.map(function (r) { nAll += Number(r[1]) || 0; return { ym: String(r[0]).slice(0, 7), n: Number(r[1]) || 0, q6: Number(r[2]) || 0, q7: Number(r[3]) || 0, q8: Number(r[4]) || 0, q9: Number(r[5]) || 0, q12: Number(r[6]) || 0, q14: Number(r[7]) || 0 }; });
+  months.sort(function (a, b) { return a.ym < b.ym ? -1 : 1; });
+  var cs = cmSheet_(), cl = cs.getLastRow(), cv = cl >= 2 ? cs.getRange(2, 1, cl - 1, CM_HEAD.length).getValues() : [], cms = [], cmN = 0;
+  for (var i = cv.length - 1; i >= 0; i--) {
+    var r = cv[i], day = dayOf_(r[1]); if (day < from || day > to) continue;
+    cmN++; if (cms.length < 500) cms.push({ d: day, sn: Number(r[3]) || 0, s: String(r[4] || ''), r: String(r[5] || ''), q14: String(r[6] || ''), q12: String(r[7] || ''), t: String(r[8] || '') });
+  }
+  var o = { ok: true, ver: VER, from: from, to: to, stores: Object.keys(by).map(function (k) { return by[k]; }), hist: hist, months: months, n_all: nAll,
+    comments: cms, cm_n: cmN, questions: questions_(true), db_url: db_().getUrl(), at: new Date().toISOString() };
+  var s = JSON.stringify(o); if (s.length < 90000) c.put(key, s, 300);
+  return o;
+}
+
+/* 整個彙總表重建（修復用：在編輯器選 rebuildAgg → 執行）。從 fact_response 全部重算，src=test 不算 */
+function rebuildAgg() {
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var ss = db_();
+    ['agg_daily', 'agg_month'].forEach(function (n) { var x = ss.getSheetByName(n); if (x) ss.deleteSheet(x); });
+    aggSheet_(); aggMonthSheet_();
+    var sh = rSheet_(), last = sh.getLastRow(), head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), done = 0;
+    var iT = head.indexOf('time'), iS = head.indexOf('src'), iN = head.indexOf('store_no'), iSt = head.indexOf('store'), iSec = head.indexOf('sec'), qc = [];
+    head.forEach(function (h, i) { if (/^q\d+$/.test(h)) qc.push([h, i]); });
+    for (var from = 2; from <= last; from += 4000) {
+      var n = Math.min(4000, last - from + 1), v = sh.getRange(from, 1, n, head.length).getValues(), items = [];
+      v.forEach(function (r) {
+        if (String(r[iS]) === 'test') return;
+        var a = {}; qc.forEach(function (x) { var val = r[x[1]]; if (val !== '' && val != null) a[x[0]] = String(val); });
+        items.push(itemOf_(r[iT], r[iN], r[iSt], r[iSec], a));
+      });
+      aggMerge_(items, true); done += items.length;
+    }
+    PropertiesService.getScriptProperties().deleteProperty('agg_dirty');
+    return '彙總表重建完成：' + done + ' 筆';
+  } finally { lock.releaseLock(); }
+}
+
+/* 歷史回覆匯入（臨時，2026-10-28）：由本機 Claude 分批送來，要帶總部密碼；匯完會拿掉這個動作
+   b.rows＝[{t:ISO時間, id:'sc-…', sn:店號, s:店名, sec:秒, a:{qid:答案}, ua:來源說明}]；同 id 已有就跳過（可重跑） */
+function import_(b) {
+  var rows = Array.isArray(b.rows) ? b.rows : [];
+  if (!rows.length || rows.length > 4000) throw fail_('rows 要 1～4000 筆', 'input');
+  var au = SpreadsheetApp.openById(AUTH_SS).getSheetByName('dim_auth').getDataRange().getValues(), hq = '';
+  for (var i = 1; i < au.length; i++) if (String(au[i][0]) === 'hub_hq') hq = String(au[i][2] || '');
+  if (!hq || String(b.pwd || '') !== hq) throw fail_('密碼不對', 'auth');
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var sh = rSheet_(), last = sh.getLastRow(), head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), have = {};
+    var iId = head.indexOf('id'); if (last >= 2) sh.getRange(2, iId + 1, last - 1, 1).getValues().forEach(function (r) { have[String(r[0])] = 1; });
+    var qs = questions_(true), vals = [], items = [], skip = 0;
+    rows.forEach(function (r) {
+      var id = clean_(r.id, 64); if (!id || have[id]) { skip++; return; } have[id] = 1;
+      var a = {}; qs.forEach(function (q) { var v = r.a && r.a[q.qid]; if (v != null && String(v) !== '') a[q.qid] = String(v); });
+      var t = new Date(r.t), sec = Math.min(Math.max(Number(r.sec) || 0, 0), 86400);
+      if (isNaN(t)) { skip++; return; }
+      var row = { time: t, id: id, store_no: Number(r.sn) || 0, store: clean_(r.s, 60), recipe: '', src: 'surveycake', lang: 'zh', sec: sec };
+      vals.push(head.map(function (h) { return h === 'ua' ? clean_(r.ua, 160) : (h in row ? row[h] : (h in a ? a[h] : '')); }));
+      items.push(itemOf_(t, row.store_no, row.store, sec, a));
+    });
+    if (vals.length) { growTo_(sh, last + vals.length); sh.getRange(last + 1, 1, vals.length, head.length).setValues(vals); }
+    aggMerge_(items, true);
+    SpreadsheetApp.flush();
+    return { added: vals.length, skipped: skip, total: sh.getLastRow() - 1 };
+  } finally { lock.releaseLock(); }
 }
 
 /* ---------------- 儀表板讀取 ---------------- */
