@@ -1167,6 +1167,7 @@ function pgSpec(i){
   var ml = f && f.ml !== '' && f.ml != null ? f.ml : st && st.spoon_ml !== '' && st.spoon_ml != null ? st.spoon_ml : '';
   return { v1: v1 ? { ml: v1.spoon_ml, g: v1.recipe_g } : null, ml: ml, g: f ? f.g : st ? st.g_per_spoon : '' };
 }
+function pgTol(t){ return t === '' || t == null ? '—' : Number(t) > 0 ? '±' + esc(t) + '%' : '0%（要剛好）'; }
 function pgMl(ml){ return ml !== '' && ml != null ? esc(mlTxt(ml)) : '<span style="color:#8A5A00">量匙未填</span>'; }
 function pgChip(x){
   var g = num(x.grams, 2) + ' g';
@@ -1209,15 +1210,16 @@ function pgIng(p){
   var D = pgData(), by = {};
   D.rows.forEach(function(x){ var o = by[x.ing] || (by[x.ing] = { ok: 0, keep: 0, g: 0, gone: 0, todo: 0, nw: 0 }); if (x.r) { if (x.r.ok) o.ok++; else o.keep++; if (x.st === 'g') o.g++; else o.gone++; } else if (x.st === 'new') o.nw++; else o.todo++; });
   var ings = D.ings.slice().sort(function(a, b){ var fa = D.done[a], fb = D.done[b]; if (!!fa !== !!fb) return fa ? -1 : 1; if (fa) return fa.date < fb.date ? 1 : fa.date > fb.date ? -1 : 0; return (D.cnt[b] || 0) - (D.cnt[a] || 0); });
-  $('pgBody').innerHTML = '<div class="card"><div class="tw"><table class="t pg"><thead><tr><th>食材</th><th>狀態</th><th>第一版量匙<span class="sm">9 月台灣匙版</span></th><th>定案的量匙與規格</th><th style="text-align:right">換平匙</th><th style="text-align:right">維持秤重</th><th>後台現況</th><th style="text-align:right">還沒處理</th></tr></thead><tbody>'
+  $('pgBody').innerHTML = '<div class="card"><div class="tw"><table class="t pg"><thead><tr><th>食材</th><th>狀態</th><th>第一版量匙<span class="sm">9 月台灣匙版</span></th><th>定案的量匙與規格</th><th style="text-align:right">最多</th><th style="text-align:right">容許誤差</th><th style="text-align:right">換平匙</th><th style="text-align:right">維持秤重</th><th>後台現況</th><th style="text-align:right">還沒處理</th></tr></thead><tbody>'
     + ings.map(function(i){
       var f = D.done[i], o = by[i] || {}, s = spoonSetOf(i), diff = f && s && Number(s.g_per_spoon) !== Number(f.g);
       var sp = pgSpec(i), mlChg = f && sp.v1 && sp.ml !== '' && sp.v1.ml !== '' && Number(sp.v1.ml) !== Number(sp.ml);
       return '<tr' + (f ? ' class="click" data-pgi="' + esc(i) + '"' : '') + '><td><b>' + esc(i) + '</b>' + (f ? '<span class="sm">▸ 看明細</span>' : '') + '</td>'
         + '<td>' + (f ? '<span class="pg-c pg-ok">✅ 已處理</span><span class="sm">' + esc(f.date) + '</span>' : '<span class="pg-c pg-todo">⬜ 未處理</span>') + '</td>'
         + '<td>' + (sp.v1 ? esc(mlTxt(sp.v1.ml)) + '<span class="sm">1 平匙 ' + num(Number(sp.v1.g), 2) + ' g</span>' : '<span class="muted">沒有用</span>') + '</td>'
-        + '<td>' + (f ? pgMl(sp.ml) + (mlChg ? ' <span class="chg">量匙換了</span>' : '') + '<span class="sm">1 平匙 <b>' + num(Number(f.g), 2) + ' g</b>・最多 ' + esc(f.max) + ' 平匙・誤差 ±' + esc(f.tol) + '%</span>'
+        + '<td>' + (f ? pgMl(sp.ml) + (mlChg ? ' <span class="chg">量匙換了</span>' : '') + '<span class="sm">1 平匙 <b>' + num(Number(f.g), 2) + ' g</b></span>'
           + (diff ? '<span class="sm" style="color:#8A5A00;white-space:normal">規格表存的是 ' + num(Number(s.g_per_spoon), 2) + ' g（還沒存成這次的值）</span>' : '') : '<span class="muted">—</span>') + '</td>'
+        + '<td class="n">' + (f ? esc(f.max) + (Number(f.max) > 0 ? ' 平匙' : '') : '') + '</td><td class="n">' + (f ? pgTol(f.tol) : '') + '</td>'
         + '<td class="n">' + (f ? o.ok : '') + '</td><td class="n">' + (f ? o.keep : '') + '</td>'
         + '<td>' + (f ? (o.gone ? '<span style="color:#2E6B43;font-weight:700">已不是 g ' + o.gone + ' 處</span>' : '') + (o.gone && o.g ? '<br>' : '') + (o.g ? '還寫 g ' + o.g + ' 處' : '') : '<span class="muted">—</span>') + '</td>'
         + '<td class="n">' + (f ? (o.nw ? '<span class="pg-c pg-new">⚠ ' + o.nw + ' 處新出現</span>' : '0') : '<b>' + (o.todo || 0) + '</b> 處') + '</td></tr>';
@@ -1272,15 +1274,15 @@ function pgAll(p){
       if (S.pgf.ok === 'new' && x.st !== 'new') return false;
       return pgHit(x);
     });
-    $('pgRes').innerHTML = '<div class="card"><div class="muted" style="margin-bottom:6px">' + rows.length + ' 處</div><div class="tw"><table class="t pg"><thead><tr><th>甜點</th><th>食材</th><th style="text-align:right">食材重量</th><th>量匙</th><th style="text-align:right">一平匙</th><th style="text-align:right">平匙數</th><th>可否更換</th><th>說明</th><th>使用目的・步驟</th><th style="text-align:right">9 月使用次數</th><th>後台現況</th></tr></thead><tbody>'
+    $('pgRes').innerHTML = '<div class="card"><div class="muted" style="margin-bottom:6px">' + rows.length + ' 處</div><div class="tw"><table class="t pg"><thead><tr><th>甜點</th><th>食材</th><th style="text-align:right">食材重量</th><th>量匙</th><th style="text-align:right">一平匙</th><th style="text-align:right">平匙數</th><th style="text-align:right">容許誤差</th><th>可否更換</th><th>說明</th><th>使用目的・步驟</th><th style="text-align:right">9 月使用次數</th><th>後台現況</th></tr></thead><tbody>'
       + (rows.length ? rows.map(function(x){
         var r = x.r;
-        if (!r) return '<tr><td>' + esc(x.recipe) + '</td><td>' + esc(x.ing) + '</td><td class="n">' + num(x.grams, 2) + ' g</td><td class="muted">—</td><td class="n muted">—</td><td class="n muted">—</td><td class="muted">—</td><td class="muted">—</td><td>' + esc(x.l.purpose || '') + '<span class="sm">' + esc(x.l.use_step || '') + '</span></td><td class="n muted">—</td><td>' + pgStTxt(x) + '</td></tr>';
-        return '<tr><td>' + esc(x.recipe) + '</td><td>' + esc(x.ing) + '</td><td class="n">' + num(x.grams, 2) + ' g</td><td style="white-space:nowrap">' + pgMl(pgSpec(x.ing).ml) + '</td><td class="n">' + num(Number(r.g), 2) + ' g</td><td class="n"><b>' + (r.spoons === '' ? '—' : num(Number(r.spoons), 2)) + '</b></td>'
+        if (!r) return '<tr><td>' + esc(x.recipe) + '</td><td>' + esc(x.ing) + '</td><td class="n">' + num(x.grams, 2) + ' g</td><td class="muted">—</td><td class="n muted">—</td><td class="n muted">—</td><td class="n muted">—</td><td class="muted">—</td><td class="muted">—</td><td>' + esc(x.l.purpose || '') + '<span class="sm">' + esc(x.l.use_step || '') + '</span></td><td class="n muted">—</td><td>' + pgStTxt(x) + '</td></tr>';
+        return '<tr><td>' + esc(x.recipe) + '</td><td>' + esc(x.ing) + '</td><td class="n">' + num(x.grams, 2) + ' g</td><td style="white-space:nowrap">' + pgMl(pgSpec(x.ing).ml) + '</td><td class="n">' + num(Number(r.g), 2) + ' g</td><td class="n"><b>' + (r.spoons === '' ? '—' : num(Number(r.spoons), 2)) + '</b></td><td class="n">' + pgTol(x.f.tol) + '</td>'
           + '<td>' + (r.ok ? '<span class="pg-c pg-ok">✅ 可更換</span>' : '<span class="pg-c pg-keep">✖ ' + esc(r.why || '維持秤重') + '</span>') + '</td>'
           + '<td class="muted" style="min-width:170px">' + esc(r.note) + '</td><td>' + esc(r.purpose || '—') + '<span class="sm">' + esc(r.step) + '</span></td>'
           + '<td class="n">' + (r.uses === '' ? '—' : esc(r.uses)) + '</td><td>' + pgStTxt(x) + '</td></tr>';
-      }).join('') : '<tr><td colspan="11" class="muted">沒有符合的資料</td></tr>') + '</tbody></table></div></div>';
+      }).join('') : '<tr><td colspan="12" class="muted">沒有符合的資料</td></tr>') + '</tbody></table></div></div>';
   };
   pgSearch('pgQ', res);
   $('pgI').onchange = function(){ S.pgf.ing = this.value; res(); };
