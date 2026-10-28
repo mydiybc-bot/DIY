@@ -21,6 +21,7 @@ Sheet.prototype.setName = function (n) { this.name = n; return this; };
 Sheet.prototype.getLastRow = function () { var n = this.rows.length; while (n > 0 && this.rows[n - 1].every(function (v) { return v === '' || v == null; })) n--; return n; };
 Sheet.prototype.getLastColumn = function () { var m = 0; this.rows.forEach(function (r) { var n = r.length; while (n > 0 && (r[n - 1] === '' || r[n - 1] == null)) n--; if (n > m) m = n; }); return m; };
 Sheet.prototype.setFrozenRows = function (n) { this.frozen = n; return this; };
+Sheet.prototype.deleteRows = function (start, n) { this.rows.splice(start - 1, n); return this; };
 Sheet.prototype.getMaxRows = function () { return Math.max(this.maxRows || 1000, this.rows.length); };
 Sheet.prototype.insertRowsAfter = function (after, n) { this.maxRows = Math.max(this.maxRows || 1000, after + n); return this; };
 Sheet.prototype.copyTo = function (ss) { var s = new Sheet(this.name + ' 的副本', ss); s.rows = this.rows.map(function (r) { return r.slice(); }); ss.sheets.push(s); return s; };

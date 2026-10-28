@@ -285,26 +285,26 @@ function payload() {
   var a = {}; S.q.forEach(function (q) { if (!shown(q)) return; var v = S.a[q.qid]; if (q.type === 'multi') a[q.qid] = v || []; else a[q.qid] = v == null ? '' : String(v); });
   return { action: 'submit', id: S.id, a: a, recipe: recipe, src: src, lang: lang, sec: S.t0 ? Math.round((Date.now() - S.t0) / 1000) : 0, ua: (navigator.userAgent || '').slice(0, 160) };
 }
-function sendWithRetry(body, tries) {
-  return apiPost(body).then(function (r) {
-    if (r && r.ok) return r;
-    var msg = (r && r.msg) || '';
-    if (r && (r.code === 'missing' || r.code === 'input' || r.code === 'cap')) { var e = new Error(msg); e.final = true; throw e; }
-    throw new Error(msg || 'bad');
-  }).catch(function (e) {
-    if (e.final || tries <= 1) throw e;
-    return new Promise(function (ok) { setTimeout(ok, 1200); }).then(function () { return sendWithRetry(body, tries - 1); });
-  });
-}
-function queuePush(body) { var q = []; try { q = JSON.parse(lsGet('sv:queue') || '[]'); } catch (e) { q = []; } q.push(body); if (q.length > 200) q = q.slice(-200); lsSet('sv:queue', JSON.stringify(q)); $('netbar').classList.add('on'); }
+/* 送出（2026-10-28 改）：按下送出 → 先存進這台平板的待送清單（sv:queue）→ 立刻顯示感謝畫面 → 背景一筆一筆送。
+   客人不用等伺服器；送失敗自動重試，網路斷了等恢復再送；同一份有固定編號，重送也不會重複算。 */
+function qLoad() { var q = []; try { q = JSON.parse(lsGet('sv:queue') || '[]'); } catch (e) { q = []; } return q.map(function (x) { return x && x.b ? x : { b: x, at: Date.now() }; }); }
+function qSave(q) { if (q.length > 300) q = q.slice(-300); if (q.length) lsSet('sv:queue', JSON.stringify(q)); else lsDel('sv:queue'); }
+function queuePush(body) { var q = qLoad(); q.push({ b: body, at: Date.now() }); qSave(q); }
+function netbar() { var q = qLoad(); $('netbar').classList.toggle('on', q.length > 0 && Date.now() - q[0].at > 120000); }   /* 卡超過 2 分鐘才提示，平常背景送不打擾 */
+var flushing = false, flushTimer = null;
 function queueFlush() {
-  var q = []; try { q = JSON.parse(lsGet('sv:queue') || '[]'); } catch (e) { q = []; }
-  if (!q.length) { $('netbar').classList.remove('on'); return; }
-  var b = q[0];
-  apiPost(b).then(function (r) {
-    if (r && (r.ok || r.code === 'missing' || r.code === 'input')) { q.shift(); lsSet('sv:queue', JSON.stringify(q)); if (q.length) setTimeout(queueFlush, 400); else $('netbar').classList.remove('on'); }
-  }).catch(function () { });
+  if (flushing) return;
+  var q = qLoad(); netbar();
+  if (!q.length) return;
+  flushing = true;
+  apiPost(q[0].b).then(function (r) {
+    flushing = false;
+    var done = r && (r.ok || r.code === 'missing' || r.code === 'input');   /* 成功／重複，或資料本身有問題（重送也不會過）→ 拿掉 */
+    if (done) { var q2 = qLoad(); if (q2.length && q2[0].b && q2[0].b.id === q[0].b.id) q2.shift(); qSave(q2); netbar(); if (q2.length) setTimeout(queueFlush, 300); return; }
+    retryLater();
+  }).catch(function () { flushing = false; retryLater(); });
 }
+function retryLater() { clearTimeout(flushTimer); var q = qLoad(); netbar(); if (!q.length) return; var age = Date.now() - q[0].at; flushTimer = setTimeout(queueFlush, age < 120000 ? 5000 : 30000); }
 $('btnSubmit').onclick = function () {
   if (S.busy) return;
   var miss = validate();
@@ -313,12 +313,10 @@ $('btnSubmit').onclick = function () {
     var el = $('q_' + miss[0]); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
-  S.busy = true; var btn = $('btnSubmit'); btn.disabled = true; btn.textContent = '送出中…'; $('hint').className = 'hint'; $('hint').textContent = '';
-  var body = payload();
-  sendWithRetry(body, 3).then(function () { finish(true); }).catch(function (e) {
-    if (e.final) { S.busy = false; btn.disabled = false; btn.textContent = '送出問卷'; $('hint').className = 'hint bad'; $('hint').textContent = e.message || '送出失敗，請再按一次'; return; }
-    queuePush(body); finish(false);
-  });
+  S.busy = true; var btn = $('btnSubmit'); btn.disabled = true;
+  queuePush(payload());
+  finish(true);
+  queueFlush();
 };
 function finish(sent) {
   if (S.a.q1) lsSet('sv:store', S.a.q1);
@@ -341,6 +339,7 @@ $('btnAgain').onclick = reset;
 
 render(); loadForm(); queueFlush();
 setInterval(queueFlush, 60000);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) queueFlush(); });
 window.addEventListener('online', queueFlush);
 </script>
 </body>

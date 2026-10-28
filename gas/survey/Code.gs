@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.7';
+var VER = 'survey-2026-10-28.8';
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -147,6 +147,11 @@ function rSheet_() {
 }
 /* 讀題目（all=true 連停用的也回；儀表板標舊資料要用） */
 function questions_(all) {
+  var c = CacheService.getScriptCache(), ck = 'qs:' + (all ? 1 : 0), hit = c.get(ck);   /* 快取 2 分鐘：送出時不必每筆讀題目表（改題目最慢 2～5 分鐘生效） */
+  if (hit) return JSON.parse(hit);
+  var out = questionsRead_(all); c.put(ck, JSON.stringify(out), 120); return out;
+}
+function questionsRead_(all) {
   var v = qSheet_().getDataRange().getValues(), out = [], ci = v[0].map(function (h) { return String(h).trim(); }).indexOf('cond');
   for (var i = 1; i < v.length; i++) {
     var r = v[i], qid = String(r[0] || '').trim(); if (!qid) continue;
@@ -174,7 +179,7 @@ function capTake_() {
   var P = PropertiesService.getScriptProperties(), k = cntKey_(), n = Number(P.getProperty(k) || 0);
   if (n >= SUBMIT_CAP) throw fail_('今天收到的問卷已達上限（' + SUBMIT_CAP + ' 筆），請明天再試', 'cap');
   P.setProperty(k, String(n + 1));
-  P.getKeys().forEach(function (x) { if (/^cnt_\d{8}$/.test(x) && x < 'cnt_' + tz_(new Date(Date.now() - 3 * 864e5), 'yyyyMMdd')) P.deleteProperty(x); });
+  if (n === 0) P.getKeys().forEach(function (x) { if (/^cnt_\d{8}$/.test(x) && x < 'cnt_' + tz_(new Date(Date.now() - 3 * 864e5), 'yyyyMMdd')) P.deleteProperty(x); });   /* 每天第一筆才清舊計數 */
 }
 
 /* ---------------- 收一筆 ---------------- */
@@ -223,10 +228,10 @@ function submit_(b) {
     lang: clean_(b.lang, 10) || 'zh', sec: Math.min(Math.max(Number(b.sec) || 0, 0), 86400) };
   var ua = clean_(b.ua, 160);
 
-  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
     capTake_();
-    var sh = rSheet_(), head = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(String);
+    var sh = rSheet_(), hc = CacheService.getScriptCache(), hh = hc.get('rhead'), head = hh ? JSON.parse(hh) : sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(String);
     /* 題目表新增了題號 → fact_response 自動補欄（加在 ua 前面） */
     var need = Object.keys(ans).filter(function (q) { return head.indexOf(q) < 0; });
     if (need.length) {
@@ -234,6 +239,7 @@ function submit_(b) {
       head = head.slice(0, uaAt).concat(need, head.slice(uaAt));
       sh.getRange(1, 1, 1, head.length).setValues([head]);
     }
+    hc.put('rhead', JSON.stringify(head), 600);
     var vals = head.map(function (h) { return h === 'ua' ? ua : (h in row ? row[h] : (h in ans ? ans[h] : '')); });
     sh.appendRow(vals);
     if (row.src !== 'test') {
@@ -285,7 +291,7 @@ function countAns_(c, qs, a) {
 function aggMerge_(items, full) {
   if (!items.length) return;
   bumpStats_();   /* 彙總有變 → 儀表板快取立刻作廢 */
-  var qs = questions_(true), groups = {}, mgroups = {};
+  var qs = questions_(true), groups = {};
   items.forEach(function (it) {
     var old = it.day < AGG_DAY_FROM, gday = old ? it.day.slice(0, 7) + '-01' : it.day, grain = old ? 'm' : 'd';
     var key = gday + '|' + grain + '|' + it.sn;
@@ -293,8 +299,6 @@ function aggMerge_(items, full) {
     if (it.s && !g.s) g.s = it.s;
     g.n++; if (it.sec > 0 && it.sec < 3600) { g.secSum += it.sec; g.secN++; }
     countAns_(g.c, qs, it.a);
-    var ym = it.day.slice(0, 7), m = mgroups[ym] || (mgroups[ym] = { ym: ym, n: 0, q6: 0, q7: 0, q8: 0, q9: 0, q12: 0, q14: 0 });
-    m.n++; for (var q in YES) if (String(it.a[q] || '') === YES[q]) m[q]++;
   });
   /* 日／月彙總 */
   var sh = aggSheet_(), last = sh.getLastRow(), from = full ? 2 : Math.max(2, last - 149), idx = {};
@@ -314,16 +318,7 @@ function aggMerge_(items, full) {
     growTo_(sh, sh.getLastRow() + add.length);
     sh.getRange(sh.getLastRow() + 1, 1, add.length, AGG_HEAD.length).setValues(add);
   }
-  /* 月趨勢 */
-  var ms = aggMonthSheet_(), ml = ms.getLastRow(), mv = ml >= 2 ? ms.getRange(2, 1, ml - 1, AGGM_HEAD.length).getValues() : [], mi = {};
-  mv.forEach(function (r, i) { mi[String(r[0]).slice(0, 7)] = i; });
-  var madd = [];
-  Object.keys(mgroups).forEach(function (ym) {
-    var g = mgroups[ym];
-    if (ym in mi) { var r = mv[mi[ym]]; ms.getRange(2 + mi[ym], 2, 1, 7).setValues([[(Number(r[1]) || 0) + g.n, (Number(r[2]) || 0) + g.q6, (Number(r[3]) || 0) + g.q7, (Number(r[4]) || 0) + g.q8, (Number(r[5]) || 0) + g.q9, (Number(r[6]) || 0) + g.q12, (Number(r[7]) || 0) + g.q14]]); }
-    else madd.push([ym, g.n, g.q6, g.q7, g.q8, g.q9, g.q12, g.q14]);
-  });
-  if (madd.length) { madd.sort(function (a, b) { return a[0] < b[0] ? -1 : 1; }); growTo_(ms, ms.getLastRow() + madd.length); ms.getRange(ms.getLastRow() + 1, 1, madd.length, AGGM_HEAD.length).setValues(madd); }
+  /* agg_month 不再寫：月趨勢由 stats2_ 從 agg_daily 現算（2026-10-28.8 起） */
 }
 function cmAppend_(row, ans) {
   var t = row.time instanceof Date ? row.time : new Date(row.time);
@@ -366,9 +361,12 @@ function stats2_(p) {
 function rebuildAgg() {
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
-    var ss = db_();
+    var ss = db_(), cut = PropertiesService.getScriptProperties().getProperty('ARCH_CUT') || '';   /* 舊回答已搬到封存庫時，只重建切點以後；更早的彙總列保留 */
+    var keep = [];
+    if (cut) { var ag = ss.getSheetByName('agg_daily'); if (ag && ag.getLastRow() >= 2) keep = ag.getRange(2, 1, ag.getLastRow() - 1, AGG_HEAD.length).getValues().filter(function (r) { return dayOf_(r[0]) < cut; }); }
     ['agg_daily', 'agg_month'].forEach(function (n) { var x = ss.getSheetByName(n); if (x) ss.deleteSheet(x); });
-    aggSheet_(); aggMonthSheet_();
+    var agS = aggSheet_(); aggMonthSheet_();
+    if (keep.length) { growTo_(agS, keep.length + 1); agS.getRange(2, 1, keep.length, AGG_HEAD.length).setValues(keep); }
     var sh = rSheet_(), last = sh.getLastRow(), head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), done = 0;
     var iT = head.indexOf('time'), iS = head.indexOf('src'), iN = head.indexOf('store_no'), iSt = head.indexOf('store'), iSec = head.indexOf('sec'), qc = [];
     head.forEach(function (h, i) { if (/^q\d+$/.test(h)) qc.push([h, i]); });
@@ -376,13 +374,16 @@ function rebuildAgg() {
       var n = Math.min(4000, last - from + 1), v = sh.getRange(from, 1, n, head.length).getValues(), items = [];
       v.forEach(function (r) {
         if (String(r[iS]) === 'test') return;
+        var it0 = itemOf_(r[iT], r[iN], r[iSt], String(r[iS]) === 'surveycake' ? 0 : r[iSec], {});
+        if (cut && it0.day < cut) return;
         var a = {}; qc.forEach(function (x) { var val = r[x[1]]; if (val !== '' && val != null) a[x[0]] = String(val); });
-        items.push(itemOf_(r[iT], r[iN], r[iSt], String(r[iS]) === 'surveycake' ? 0 : r[iSec], a));
+        it0.a = a; items.push(it0);
       });
       aggMerge_(items, true); done += items.length;
     }
     PropertiesService.getScriptProperties().deleteProperty('agg_dirty');
-    return '彙總表重建完成：' + done + ' 筆';
+    bumpStats_();
+    return '彙總表重建完成：' + done + ' 筆' + (cut ? '（' + cut + ' 以後；更早的彙總保留 ' + keep.length + ' 列）' : '');
   } finally { lock.releaseLock(); }
 }
 
@@ -432,6 +433,8 @@ function import_(b) {
 function counts_() {
   var ss = db_(), o = {};
   ss.getSheets().forEach(function (sh) { var n = sh.getName(); if (/^(fact_|agg_|raw_|dim_|backup_)/.test(n)) o[n] = Math.max(sh.getLastRow() - 1, 0); });
+  var aid = PropertiesService.getScriptProperties().getProperty('ARCHIVE_SS');
+  if (aid) { try { SpreadsheetApp.openById(aid).getSheets().forEach(function (sh) { o['封存庫/' + sh.getName()] = Math.max(sh.getLastRow() - 1, 0); }); } catch (e) { o['封存庫'] = '打不開'; } }
   return { counts: o };
 }
 function backup_() {
@@ -476,6 +479,68 @@ function aggZeroSec() {
   bumpStats_();
   return '已把 ' + n + ' 列的秒數歸零';
 }
+/* ---------------- 分檔（2026-10-28）：讓主資料庫不會撐到 1,000 萬格上限 ----------------
+   封存庫＝另一個試算表「顧客問卷_封存庫」（指令碼屬性 ARCHIVE_SS）。都在編輯器執行；時間不夠會說「再執行一次」，重跑安全。 */
+function archiveSS_() {
+  var P = PropertiesService.getScriptProperties(), id = P.getProperty('ARCHIVE_SS'), ar = null;
+  if (id) { try { ar = SpreadsheetApp.openById(id); } catch (_) { ar = null; } }
+  if (!ar) { ar = SpreadsheetApp.create('顧客問卷_封存庫'); ar.setSpreadsheetTimeZone('Asia/Taipei'); P.setProperty('ARCHIVE_SS', ar.getId()); }
+  return ar;
+}
+function dropDefault_(ar) { var d = ar.getSheetByName('工作表1') || ar.getSheetByName('Sheet1'); if (d && ar.getSheets().length > 1) ar.deleteSheet(d); }
+/* 第 1 步：raw_*（舊問卷原樣）與 backup_*（匯入前備份）整張搬到封存庫；先複製、列數欄數一致才刪主檔那張 */
+function archiveMoveSheets() {
+  var ss = db_(), ar = archiveSS_(), t0 = Date.now(), out = [];
+  var list = ss.getSheets().filter(function (sh) { return /^(raw_|backup_)/.test(sh.getName()); });
+  for (var i = 0; i < list.length; i++) {
+    if (Date.now() - t0 > 270000) { out.push('時間快到了，還有 ' + (list.length - i) + ' 張沒搬，請再執行一次'); break; }
+    var sh = list[i], n = sh.getName(), rows = sh.getLastRow(), cols = sh.getLastColumn(), ex = ar.getSheetByName(n);
+    if (!ex) { ex = sh.copyTo(ar); ex.setName(n); dropDefault_(ar); }
+    if (ex.getLastRow() !== rows || ex.getLastColumn() !== cols) { out.push(n + '：封存庫那張列數不符（' + ex.getLastRow() + ' vs ' + rows + '），主檔沒刪'); continue; }
+    ss.deleteSheet(sh); out.push(n + '：已搬 ' + (rows - 1) + ' 列');
+  }
+  var msg = out.join('\n') + '\n封存庫：' + ar.getUrl(); Logger.log(msg); return msg;
+}
+/* 第 2 步：fact_response 裡 cut（預設 2025-01-01）以前的原始回答搬到封存庫 fact_response_2025前；彙總表不動（儀表板照常） */
+function archiveOldResponses() {
+  var cut = '2025-01-01', P = PropertiesService.getScriptProperties(), stage = P.getProperty('ARCH_STAGE') || '';
+  var ss = db_(), ar = archiveSS_(), sh = rSheet_(), name = 'fact_response_2025前', msg = [];
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var before = Number(P.getProperty('ARCH_BEFORE') || 0) || (sh.getLastRow() - 1);
+    function oldRuns(target, wantOld) {   /* 回傳要刪的連續列段 [起列, 列數]；wantOld=true 找舊的、false 找新的 */
+      var last = target.getLastRow(); if (last < 2) return [];
+      var t = target.getRange(2, 1, last - 1, 1).getValues(), runs = [], st = -1;
+      for (var i = 0; i <= t.length; i++) {
+        var hit = i < t.length && ((dayOf_(t[i][0]) < cut) === wantOld);
+        if (hit && st < 0) st = i; if (!hit && st >= 0) { runs.push([st + 2, i - st]); st = -1; }
+      }
+      return runs;
+    }
+    if (!stage) {
+      P.setProperty('ARCH_BEFORE', String(before));
+      var cp = ar.getSheetByName(name); if (cp) ar.deleteSheet(cp);
+      cp = sh.copyTo(ar); cp.setName(name); dropDefault_(ar);
+      if (cp.getLastRow() !== sh.getLastRow()) throw fail_('複製到封存庫的列數不符，停止');
+      P.setProperty('ARCH_STAGE', 'copied'); stage = 'copied'; msg.push('已複製整張到封存庫（' + (cp.getLastRow() - 1) + ' 列）');
+    }
+    if (stage === 'copied') {
+      var cp2 = ar.getSheetByName(name), r1 = oldRuns(cp2, false);
+      for (var k = r1.length - 1; k >= 0; k--) cp2.deleteRows(r1[k][0], r1[k][1]);
+      P.setProperty('ARCH_STAGE', 'trimmed'); stage = 'trimmed'; msg.push('封存庫只留 ' + cut + ' 以前：' + (cp2.getLastRow() - 1) + ' 列');
+    }
+    if (stage === 'trimmed') {
+      var nOld = ar.getSheetByName(name).getLastRow() - 1, r2 = oldRuns(sh, true);
+      for (var j = r2.length - 1; j >= 0; j--) sh.deleteRows(r2[j][0], r2[j][1]);
+      var nNew = sh.getLastRow() - 1;
+      if (nOld + nNew !== before) throw fail_('核對不符：封存 ' + nOld + '＋主檔 ' + nNew + ' ≠ 原本 ' + before + '（主檔可從封存庫補回）');
+      P.setProperty('ARCH_STAGE', 'done'); P.setProperty('ARCH_CUT', cut); CacheService.getScriptCache().remove('rhead');
+      msg.push('主檔刪掉 ' + cut + ' 以前的列：原本 ' + before + ' ＝ 封存 ' + nOld + ' ＋ 主檔 ' + nNew + ' ✔');
+    } else if (stage === 'done') msg.push('之前已經做完（切點 ' + P.getProperty('ARCH_CUT') + '）');
+  } finally { lock.releaseLock(); }
+  var out = msg.join('\n') + '\n封存庫：' + ar.getUrl(); Logger.log(out); return out;
+}
+
 /* 還原匯入（編輯器選 rollbackImport → 執行）：把 src=surveycake 的列從 fact_response 拿掉，彙總表重建；raw_ 封存表另外手動刪 */
 function rollbackImport() {
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
