@@ -46,6 +46,9 @@ TWD = 32
 STORES = {1: "精明", 2: "草悟道", 3: "南京", 4: "士林", 5: "Focus", 6: "新竹", 7: "板橋", 8: "新店",
           9: "中壢", 10: "藝文", 11: "A13", 12: "SKM"}
 WEEKDAY = "一二三四五六日"
+# 104 崗位（13 個「X店」）→ 店號；台南店＝5 Focus、高雄店＝12 SKM（2026-10-28 跨店支援日獎金歸被支援店用）
+POS_STORE = {"精明店": 1, "草悟道店": 2, "南京店": 3, "士林店": 4, "台南店": 5, "新竹店": 6, "板橋店": 7, "新店店": 8,
+             "中壢店": 9, "藝文店": 10, "A13店": 11, "高雄店": 12}
 RULES = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "schedule_rules.md"), encoding="utf-8").read()
 MAX_FILE_B64 = 4_000_000
 MAX_SETTINGS_CHARS = 80_000
@@ -299,6 +302,17 @@ def _elsewhere(pos, title):
     if not pos:
         return False
     return pos.replace("店", "") not in (title or "")
+
+
+def _pos_store(pos):
+    """崗位字串 → 店號（對不上回 None）"""
+    pos = (pos or "").strip()
+    if pos in POS_STORE:
+        return POS_STORE[pos]
+    for k, v in POS_STORE.items():
+        if k.replace("店", "") and k.replace("店", "") in pos:
+            return v
+    return None
 
 
 def cell_hours(c):
@@ -1234,29 +1248,83 @@ def _rev_stale(st):
 
 
 def _emp_day_work(c, title=""):
-    """一位夥伴一天「真正在本店工作」的時數與不算的原因（規則同排班儀表板 bonusNonWork，改成讀 104 格子）"""
+    """一位夥伴一天「真正在本店工作」的時數、不算的原因、跨店支援段（規則同排班儀表板 bonusNonWork，改成讀 104 格子）。
+    回 (work, why, away)；away=[{store, hours, span}]：崗位填別店且不是會議／假別的時段 → 日獎金算在被支援店（2026-10-28 經營者裁定）"""
     if not c["segs"]:
-        return 0.0, ""
+        return 0.0, "", []
     if c["type"]:
-        return 0.0, f"班表寫「{c['type']}」"
+        return 0.0, f"班表寫「{c['type']}」", []
     dtag = c.get("dtag") or ""
     if BONUS_NOFLOOR_RE.search(dtag):
-        return 0.0, f"「{dtag}」"
-    any_tag = any(t or pz for _, _, t, pz in c["segs"])
+        return 0.0, f"「{dtag}」", []
+    any_tag = any(t for _, _, t, _ in c["segs"])
     if not any_tag and (BONUS_MEET_RE.search(dtag) or BONUS_LEAVE_RE.search(dtag)) and "指休" != dtag:
-        return 0.0, f"整天「{dtag}」"
-    work, why = 0.0, []
+        return 0.0, f"整天「{dtag}」", []
+    work, why, away = 0.0, [], []
     for s_, e_, t, pz in c["segs"]:
         h = (_mins(e_) - _mins(s_)) / 60
-        if _elsewhere(pz, title):
-            why.append(f"{s_}-{e_} 在{pz}")
-        elif BONUS_MEET_RE.search(t) or BONUS_NOFLOOR_RE.search(t):
+        if BONUS_MEET_RE.search(t) or BONUS_NOFLOOR_RE.search(t):
             why.append(f"{s_}-{e_}「{t}」")
         elif BONUS_LEAVE_RE.search(t) and "指休" not in t and "挪假" not in t:
             why.append(f"{s_}-{e_}「{t}」")
+        elif _elsewhere(pz, title):
+            sto = _pos_store(pz)
+            if sto:
+                away.append({"store": sto, "hours": round(h, 2), "span": f"{s_}-{e_}"})
+                why.append(f"{s_}-{e_} 支援{pz}（獎金算{pz}）")
+            else:
+                why.append(f"{s_}-{e_} 在{pz}")
         else:
             work += h
-    return round(work, 2), "、".join(why)
+    return round(work, 2), "、".join(why), away
+
+
+_sup_cache = {}
+
+
+def _support_index(ym):
+    """全部店這個月班表裡「崗位填別店」的時段 → {被支援店: {日: {工號: {id, name, from, hours, span, trainee}}}}。
+    用各店月檔的修改時間當快取鍵，檔沒變就不重算。"""
+    files = []
+    for store in sorted(STORES):
+        p = _dir() / f"{_key(store, ym)}.json"
+        try:
+            files.append((store, p.stat().st_mtime_ns))
+        except FileNotFoundError:
+            continue
+    sig = tuple(files)
+    with _glock:
+        hit = _sup_cache.get(ym)
+    if hit and hit[0] == sig:
+        return hit[1]
+    idx = {}
+    for store, _ in files:
+        try:
+            st = _load(store, ym)
+        except (OSError, ValueError):
+            continue
+        tpl = st.get("template")
+        if not tpl or not st.get("schedule"):
+            continue
+        shifts = (_ext(st) or {}).get("shifts") or {}
+        dtypes = set(tpl["info"]["dayTypes"])
+        for e in tpl["info"]["emps"]:
+            for k, v in (st["schedule"].get(e["id"]) or {}).items():
+                try:
+                    c = parse_cell(v, shifts, dtypes)
+                except ValueError:
+                    continue
+                _, _, away = _emp_day_work(c, tpl["info"]["title"])
+                for a in away:
+                    if a["store"] == store:
+                        continue
+                    g = idx.setdefault(a["store"], {}).setdefault(str(k), {}).setdefault(e["id"], {
+                        "id": e["id"], "name": e["name"], "from": store, "hours": 0.0, "span": [], "trainee": "實作" in e["name"]})
+                    g["hours"] = round(g["hours"] + a["hours"], 2)
+                    g["span"].append(a["span"])
+    with _glock:
+        _sup_cache[ym] = (sig, idx)
+    return idx
 
 
 def bonus_calc(st, ext=None):
@@ -1269,6 +1337,9 @@ def bonus_calc(st, ext=None):
     dtypes = set(tpl["info"]["dayTypes"])
     rev = (st.get("rev") or {}).get("days") or {}
     emps = tpl["info"]["emps"]
+    own_ids = {e["id"] for e in emps}
+    sup = (_support_index(st["ym"]).get(int(st["store"])) or {})
+    guests = {}   # 外店來支援的人：工號 → {id, name, from, days, work, bonus}
     days = {}
     by_emp = {e["id"]: 0 for e in emps}
     tot = hit_n = cross_n = biz = 0
@@ -1281,12 +1352,22 @@ def bonus_calc(st, ext=None):
                 c = parse_cell((st["schedule"].get(e["id"]) or {}).get(k, ""), shifts, dtypes)
             except ValueError:
                 continue
-            w, why = _emp_day_work(c, tpl["info"]["title"])
+            w, why, away = _emp_day_work(c, tpl["info"]["title"])
             if w <= 0 and not why:
                 continue
             trainee = "實作" in e["name"]
-            staff[e["id"]] = {"work": w, "why": why, "trainee": trainee, "bonus": 0}
+            staff[e["id"]] = {"work": w, "why": why, "trainee": trainee, "bonus": 0, "away": away}
             hours += w
+        for g in (sup.get(k) or {}).values():
+            if g["id"] in own_ids and (staff.get(g["id"]) or {}).get("work", 0) > 0:
+                continue   # 本店班表已經排了這個人，以本店班表為準，不重複算
+            staff[g["id"]] = {"work": g["hours"], "why": "", "trainee": g["trainee"], "bonus": 0, "away": [],
+                              "guest": True, "from": g["from"], "name": g["name"], "span": "、".join(g["span"])}
+            hours += g["hours"]
+            gg = guests.setdefault(g["id"], {"id": g["id"], "name": g["name"], "from": g["from"], "days": 0, "work": 0.0, "bonus": 0})
+            gg["days"] += 1
+            gg["work"] = round(gg["work"] + g["hours"], 2)
+            by_emp.setdefault(g["id"], 0)
         hours = round(hours, 2)
         r = rev.get(k) or {}
         rv = r.get("rev") or 0
@@ -1309,10 +1390,13 @@ def bonus_calc(st, ext=None):
                     x["bonus"] = int(BONUS_BASE * x["work"] / BONUS_STD_H * row["mult"] + 0.5)
                     by_emp[eid] += x["bonus"]
                     row["total"] += x["bonus"]
+                    if x.get("guest"):
+                        guests[eid]["bonus"] += x["bonus"]
         tot += row["total"]
         days[k] = row
     rvx = st.get("rev") or {}
-    return {"days": days, "month": {"total": tot, "hit_days": hit_n, "cross_days": cross_n, "biz_days": biz, "by_emp": by_emp},
+    return {"days": days, "month": {"total": tot, "hit_days": hit_n, "cross_days": cross_n, "biz_days": biz, "by_emp": by_emp,
+                                    "guests": sorted(guests.values(), key=lambda g: (g["from"], g["id"]))},
             "rev_fetched": rvx.get("fetched"), "rev_error": rvx.get("error") or "", "rev_days": len(rev), "voucher_ok": rvx.get("voucher_ok", False)}
 
 
@@ -1357,7 +1441,7 @@ def bonus_xlsx(stores, ym):
     ws4 = wb.create_sheet("說明")
     bold = Font(bold=True)
     fill = PatternFill("solid", fgColor="F3E9D8")
-    ws1.append(["店號", "店名", "工號", "姓名", "正職/兼職", "上班天數", "計獎工時", "日獎金合計"])
+    ws1.append(["店號", "店名", "工號", "姓名", "正職/兼職", "上班天數", "計獎工時", "日獎金合計", "備註"])
     ws2.append(["店號", "店名", "日期", "星期", "POS 淨營收", "甜點券$100 加回", "獎金營收", "店日工時", "級距上限(h)", "門檻", "達標", "倍數", "當日獎金合計", "當天上班（工時）"])
     hdr3 = None
     n_store = 0
@@ -1377,19 +1461,36 @@ def bonus_xlsx(stores, ym):
         for e in info["emps"]:
             days_on = sum(1 for k, r in b["days"].items() if (r["staff"].get(e["id"]) or {}).get("work", 0) > 0)
             work = round(sum((r["staff"].get(e["id"]) or {}).get("work", 0) for r in b["days"].values()), 2)
-            ws1.append([store, STORES.get(store, ""), e["id"], e["name"], etype.get(e["id"], ""), days_on, work, b["month"]["by_emp"].get(e["id"], 0)])
+            away = {}
+            for k, r in sorted(b["days"].items(), key=lambda kv: int(kv[0])):
+                for a in (r["staff"].get(e["id"]) or {}).get("away") or []:
+                    kk = (int(k), a["store"])
+                    away[kk] = round(away.get(kk, 0) + a["hours"], 2)
+            note = ("；".join(f"{int(ym[4:])}/{d} 支援{STORES.get(sto, sto)}店 {h:g}h" for (d, sto), h in away.items()) + "（獎金算在被支援店）") if away else ""
+            ws1.append([store, STORES.get(store, ""), e["id"], e["name"], etype.get(e["id"], ""), days_on, work, b["month"]["by_emp"].get(e["id"], 0), note])
             row = [store, STORES.get(store, ""), e["id"], e["name"]]
             for d in info["days"]:
                 x = (b["days"].get(str(d["d"])) or {}).get("staff", {}).get(e["id"])
                 row.append(x["bonus"] if x and x["bonus"] else None)
             row.append(b["month"]["by_emp"].get(e["id"], 0))
             ws3.append(row)
+        for g in b["month"].get("guests") or []:
+            frm = f"{g['from']}{STORES.get(g['from'], '')}店"
+            ws1.append([store, STORES.get(store, ""), g["id"], g["name"], f"外店支援（{frm}）", g["days"], g["work"], g["bonus"], f"從{frm}來支援，獎金算本店"])
+            row = [store, STORES.get(store, ""), g["id"], f"{g['name']}（{frm}支援）"]
+            for d in info["days"]:
+                x = (b["days"].get(str(d["d"])) or {}).get("staff", {}).get(g["id"])
+                row.append(x["bonus"] if x and x["bonus"] else None)
+            row.append(g["bonus"])
+            ws3.append(row)
         names = {e["id"]: e["name"] for e in info["emps"]}
         for d in info["days"]:
             r = b["days"].get(str(d["d"])) or {}
             if not r.get("hours") and not r.get("rev"):
                 continue
-            who = "、".join(f"{names.get(eid, eid)} {x['work']:g}h" + ("（實作）" if x["trainee"] else "") for eid, x in r["staff"].items() if x["work"] > 0)
+            who = "、".join(f"{x.get('name') or names.get(eid, eid)} {x['work']:g}h" + ("（實作）" if x["trainee"] else "")
+                            + (f"（{STORES.get(x['from'], x['from'])}店支援）" if x.get("guest") else "")
+                            for eid, x in r["staff"].items() if x["work"] > 0)
             ws2.append([store, STORES.get(store, ""), f"{ym[:4]}-{ym[4:]}-{d['d']:02d}", d["wd"], r.get("net"), r.get("voucher"), r.get("rev"), r.get("hours"),
                         r.get("cap"), r.get("threshold"), ("跨級 ×2" if r.get("cross") else "達標" if r.get("hit") else ("超過100h" if r.get("no_tier") else "未達標")) if r.get("rev") else "沒有營收資料",
                         r.get("mult"), r.get("total"), who])
@@ -1400,6 +1501,8 @@ def bonus_xlsx(stores, ym):
             c.alignment = Alignment(horizontal="center")
         ws.freeze_panes = "E2" if ws is ws3 else "A2"
     ws1.column_dimensions["D"].width = 12
+    ws1.column_dimensions["E"].width = 18
+    ws1.column_dimensions["I"].width = 50
     ws2.column_dimensions["N"].width = 60
     ws2.column_dimensions["C"].width = 12
     ws4["A1"] = "各店日獎金表（依門市排班工作台的班表估算）"
@@ -1408,7 +1511,8 @@ def bonus_xlsx(stores, ym):
         f"月份：{ym[:4]}-{ym[4:]}；產出時間：{dt.datetime.now():%Y-%m-%d %H:%M}",
         "班表來源：門市排班工作台（每天早上自動跟 104 同步；店長在 104 改班，隔天會跟上）。實際發放請以出勤紀錄核對。",
         "營收來源：排班分析資料倉（POS 淨營收，已扣全部折扣）＋「甜點券$100」折抵額加回（「自己人$100甜點券」不算）。",
-        "店日工時＝當天在本店真正工作的時數合計：假別（特休、病假…）、交流會議／區會／內訓／經管會、跨店支援（在別店）的時段不算；事務班、備品班、包館照算。",
+        "店日工時＝當天在本店真正工作的時數合計：假別（特休、病假…）、交流會議／區會／內訓／經管會的時段不算；事務班、備品班、包館照算。",
+        "跨店支援（崗位填別家店的時段）：那幾個小時算在「被支援的店」，用被支援店的營收與級距算獎金，列在被支援店底下（正職/兼職欄寫「外店支援」）；原店那幾個小時不算、備註欄會註明。被支援店的班表若本來就排了這位夥伴，以被支援店的班表為準，不重複算。",
         "級距（店日工時→營收門檻）：≤10h 10,000／≤20h 14,000／≤30h 29,000／≤40h 42,000／≤50h 53,000／≤60h 65,000／≤70h 77,000／≤80h 88,000／≤90h 100,000／≤100h 110,000；超過 100h 不發。",
         "達標＝獎金營收 ≥ 門檻（剛好等於也算）；營收 ≥ 下一級門檻＝跨級，獎金 ×2。",
         "每人日獎金＝200 元 × 個人計獎工時 ÷ 8 × 倍數（四捨五入）；名字含「實作」的實作夥伴工時計入全店、但不發。",
@@ -1465,7 +1569,7 @@ def _public(st):
         "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
         "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
-        "bonus": bonus_calc(st, ext),
+        "bonus": bonus_calc(st, ext), "stores": STORES,
     }
 
 

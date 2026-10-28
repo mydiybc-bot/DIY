@@ -217,7 +217,8 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
     <div id="bonusBox" class="mute">排出班表後，這裡會顯示每天的營業額、達標情形與每位夥伴的日獎金。</div>
     <details class="xhelp" style="margin-top:6px"><summary class="mute">ⓘ 日獎金怎麼算</summary><ul class="mute" style="margin:4px 0">
       <li>獎金營收＝POS 淨營收＋「甜點券$100」折抵額（「自己人$100甜點券」不算）。</li>
-      <li>店日工時＝當天在本店真正工作的時數：假別、交流會議／區會／內訓／經管會、在別店（崗位填別店）的時段不算；事務班、備品班、包館照算。</li>
+      <li>店日工時＝當天在本店真正工作的時數：假別、交流會議／區會／內訓／經管會的時段不算；事務班、備品班、包館照算。</li>
+      <li>跨店支援（崗位填別家店的時段）：那幾個小時算在被支援的店，用那家店的營收與級距算獎金、列在那家店底下；本店那幾個小時不算。被支援店的班表若本來就排了這位夥伴，以那邊的班表為準，不重複算。</li>
       <li>級距：≤10h $10,000、≤20h $14,000、≤30h $29,000、≤40h $42,000、≤50h $53,000、≤60h $65,000、≤70h $77,000、≤80h $88,000、≤90h $100,000、≤100h $110,000；超過 100h 不發。</li>
       <li>營收 ≥ 門檻＝達標；營收 ≥ 下一級門檻＝跨級，獎金 ×2。每人＝200 元 × 個人工時 ÷ 8 × 倍數。名字含「實作」的實作夥伴計工時、不發。</li>
       <li>營業額每 2 小時自動更新一次；當天與前一天的 POS 常還沒進資料倉，隔天再看。</li></ul></details>
@@ -420,17 +421,20 @@ $('markWrap').addEventListener('click',function(e){var td=e.target.closest('td.m
 
 /* ── 日獎金（2026-10-28） ── */
 function money(n){return '$'+Math.round(n||0).toLocaleString()}
+function storeNm(n){return n+((S&&S.stores&&S.stores[n])||'')}
 function bonusTitle(r,names){if(!r)return '';var t=[];if(r.rev)t.push('獎金營收 '+money(r.rev)+'（POS '+money(r.net)+(r.voucher?' ＋ 甜點券$100 '+money(r.voucher)+'×'+r.qty+'張':'')+'）');else t.push('還沒有 POS 營收資料');
   t.push('店日工時 '+r.hours+'h'+(r.cap?' → 級距 ≤'+r.cap+'h 門檻 '+money(r.threshold)+(r.next?'、下一級 '+money(r.next):''):r.no_tier?' → 超過 100h 沒有級距':''));
   t.push(r.cross?'跨級 ×2':r.hit?'達標 ×1':(r.rev?'未達標':''));
-  for(var k in r.staff){var x=r.staff[k];t.push((names[k]||k)+'：'+x.work+'h'+(x.bonus?' → '+money(x.bonus):'')+(x.why?'（不算：'+x.why+'）':'')+(x.trainee?'（實作夥伴不發）':''))}
+  for(var k in r.staff){var x=r.staff[k];t.push((x.guest?(x.name||k)+'（'+storeNm(x.from)+'店來支援 '+(x.span||'')+'）':(names[k]||x.name||k))+'：'+x.work+'h'+(x.bonus?' → '+money(x.bonus):'')+(x.why?'（不算：'+x.why+'）':'')+(x.trainee?'（實作夥伴不發）':''))}
   return t.filter(Boolean).join('\n')}
 function renderBonus(){
   var b=S.bonus,el=$('bonusBox');if(!b){el.className='mute';el.textContent='排出班表後，這裡會顯示每天的營業額、達標情形與每位夥伴的日獎金。';return}
   el.className='';var m=b.month,info=S.template.info;
   var h='<div class="bsum">'+(b.rev_days?'🎁 <b>本月日獎金合計 '+money(m.total)+'</b>　達標 '+m.hit_days+' 天（跨級加倍 '+m.cross_days+' 天）／有營收 '+m.biz_days+' 天　<span class="mute">營業額 '+fmtTs(b.rev_fetched*1000)+' 更新'+(b.voucher_ok?'':'（甜點券$100 這次沒抓到，先用 POS 淨營收）')+'</span>':(b.rev_fetched?'ℹ 這個月還沒有 POS 營收資料（還沒開始營業的月份；營業額先用預估）。':'⚠ 還沒抓到這個月的營業額'+(b.rev_error?'（'+esc(b.rev_error)+'）':'（抓取中，幾秒後重新整理）')+'，日獎金先不算。'))+'</div>';
   h+='<table class="hrs"><tr><th>夥伴</th><th>上班天數</th><th>計獎工時</th><th>日獎金合計</th></tr>'+info.emps.map(function(e){var days=0,work=0;for(var k in b.days){var x=b.days[k].staff[e.id];if(x&&x.work>0){days++;work+=x.work}}
-    return '<tr><td>'+esc(e.name)+'</td><td>'+days+'</td><td>'+(Math.round(work*10)/10)+'h</td><td><b>'+money(m.by_emp[e.id]||0)+'</b></td></tr>'}).join('')+'</table>';
+    var away=0;for(var k in b.days){var y=b.days[k].staff[e.id];if(y&&y.away)y.away.forEach(function(a){away+=a.hours})}
+    return '<tr><td>'+esc(e.name)+(away?'<br><span class="mute">支援別店 '+(Math.round(away*10)/10)+'h（算在被支援店）</span>':'')+'</td><td>'+days+'</td><td>'+(Math.round(work*10)/10)+'h</td><td><b>'+money(m.by_emp[e.id]||0)+'</b></td></tr>'}).join('')
+    +(m.guests||[]).map(function(g){return '<tr><td>'+esc(g.name)+'<br><span class="mute">'+esc(storeNm(g.from))+'店來支援</span></td><td>'+g.days+'</td><td>'+(Math.round(g.work*10)/10)+'h</td><td><b>'+money(g.bonus)+'</b></td></tr>'}).join('')+'</table>';
   el.innerHTML=h;
 }
 function dlB64(b64,name){var bin=atob(b64),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
@@ -495,6 +499,7 @@ function renderTable(){
   var tail=B?'<td></td><td></td>':'<td></td>';
   h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+=tail+'</tr>';
   h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+=tail+'</tr>';
+  if(B&&(B.month.guests||[]).length){h+='<tr class="sum"><td class="nm">外店支援</td>';info.days.forEach(function(d){var r=B.days[d.d],g=[];if(r)for(var k in r.staff){var x=r.staff[k];if(x.guest)g.push(esc(x.name||k)+' '+x.work+'h')}h+='<td class="mute" style="font-size:11px">'+g.join('<br>')+'</td>'});h+=tail+'</tr>'}
   h+='<tr class="sum"><td class="nm">營業額</td>';info.days.forEach(function(d){var r=B&&B.days[d.d];if(r&&r.rev)h+='<td class="rv" title="'+esc(bonusTitle(r,names))+'">'+Math.round(r.rev/1000)+'k</td>';else{var ev=revOf(d.d);h+='<td class="rv est" title="預估 '+ev+'">'+(ev?'預'+Math.round(ev/1000)+'k':'')+'</td>'}});h+=tail+'</tr>';
   h+='<tr class="sum"><td class="nm">人效 rev/h</td>';info.days.forEach(function(d){var r=B&&B.days[d.d],rv=(r&&r.rev)||revOf(d.d),hh=dayHrs[d.d]||0;h+='<td>'+(rv&&hh?light(d.d,rv/hh)+'<br>'+Math.round(rv/hh):'')+'</td>'});h+=tail+'</tr>';
   if(B){h+='<tr class="sum"><td class="nm">🎁 日獎金</td>';info.days.forEach(function(d){var r=B.days[d.d];var tt=esc(bonusTitle(r,names));
