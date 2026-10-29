@@ -681,15 +681,30 @@ function i18nTabletAuth_(pw) {
 }
 function i18nList_(p) {
   i18nTabletAuth_(p.tpw);
-  var src = i18nMeta_('i18n_src', I18N_SRC_HEAD), rc = {}, guide = i18nGuideNames_();
-  i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
+  var src = i18nMeta_('i18n_src', I18N_SRC_HEAD), rc = {}, guide = i18nGuideNames_(), rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD);
+  rm.rows.forEach(function (r) { rc[r.key] = r; });
   var pm = i18nPickMap_();   /* 沒勾的平板不列 */
   var out = src.rows.filter(function (s) { return s.state === 'ok' && i18nOn_(pm, s.id); }).map(function (s) {
-    var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: guide[i18nNameKey_(s.name)] || {} };
-    I18N_LANGS.forEach(function (l) { var r = rc[s.id + '|' + l]; o.langs[l] = i18nState_(r, s.fp); if (o.langs[l] === 'live') o.ver[l] = String(s.fp).slice(0, 8) + '|' + r.appr_at; });   /* ver：平板快取用，核准或原文改了就換 */
+    var g = guide[i18nNameKey_(s.name)] || {}, loc = {};
+    var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: loc };
+    I18N_LANGS.forEach(function (l) {
+      var r = rc[s.id + '|' + l]; o.langs[l] = i18nState_(r, s.fp);
+      if (o.langs[l] === 'live') o.ver[l] = String(s.fp).slice(0, 8) + '|' + r.appr_at;   /* ver：平板快取用，核准或原文改了就換 */
+      if (g[l]) loc[l] = g[l];
+      else if (o.langs[l] === 'live') { var t = i18nTrName_(rm.sh, r, o.ver[l]); if (t) loc[l] = t; }   /* 到店須知頁沒有這支（例：鳳梨酥）→ 用譯文自己的品名，卡片才不會只剩英文（2026-10-29） */
+    });
     return o;
   });
   return { data: { at: now_(), items: out } };
+}
+/* 譯文裡的品名（「在地名｜中文名」取前段）；快取 6 小時，核准或原文改了 ver 會換 */
+function i18nTrName_(sh, r, ver) {
+  var c = CacheService.getScriptCache(), k = 'i18n:tn:' + r.key + '|' + ver, hit = c.get(k);
+  if (hit != null) return hit;
+  var nm = '';
+  try { var tr = i18nReadJ_(sh, r._r, I18N_RCP_HEAD); nm = rbTrim_(String((tr && tr.name) || '').split('｜')[0]); } catch (e) { }
+  c.put(k, nm, 21600);
+  return nm;
 }
 function i18nGet_(p) {
   i18nTabletAuth_(p.tpw);
