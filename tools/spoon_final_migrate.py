@@ -5,12 +5,13 @@
 舊的 6 種食材 204 處不能丟；搬進去時每一處要對到「後台編號＋第幾步」，之後才能照它改正式食譜。
 
 用法：
-  python3 tools/spoon_final_migrate.py <spoon.json> <平匙行.tsv> <輸出.gs> [--check]
+  python3 tools/spoon_final_migrate.py <spoon.json> <平匙行.tsv> <輸出.gs> [--names 舊名稱.tsv] [--check]
     spoon.json  ：專案推動 GET ?action=spoon 的回傳（快照 lines 要已經有 recipe_id／step_no／seq，也就是新版 spoon_feed 跑過一次）
     平匙行.tsv  ：後台目前已是「平匙」的行（內建瀏覽器讀 /steps/recipeprint 產生）：recipe_id, 甜點, 第幾步, 步驟標題, 食材, 平匙數
+    舊名稱.tsv  ：recipe_id, 定案當時的甜點名稱（後台改名後用編號對；2026-10-29 下午 11 月新品改名時加）
     輸出.gs     ：暫時檔 zz_final_migrate.gs（內含資料＋zzFinalMigrate()；clasp push → 編輯器執行一次 → 刪檔再 push）
 對法：
-  ① 快照裡同甜點（改過名的照 ALIAS）同食材同克數、照順序 → 後台還寫 g
+  ① 快照裡同一支（定案名稱 → 舊名稱表查後台編號；查不到才用名稱，改過名的照 ALIAS）同食材同克數、照順序 → 後台還寫 g；甜點名稱換成後台現在的名稱
   ② 對不到 → 後台已是平匙的行，同甜點同食材且平匙數＝定案的 → 已改完後台（泡打粉記成 10/27 Ver.2 替換已套用）
   ③ 還是對不到 → 照樣搬，後台編號留白，回報清單
 """
@@ -38,23 +39,32 @@ def main():
     prog = json.load(open('static/spoon-progress.json', encoding='utf-8'))
     sp = json.load(open(sys.argv[1], encoding='utf-8'))
     sp = sp.get('data', sp)
-    snap = defaultdict(list)
+    snap, snapId = defaultdict(list), defaultdict(list)
     for l in sp['lines']:
         if not l.get('recipe_id'):
             sys.exit('快照還沒有後台編號（新版 spoon_feed 要先跑一次）')
         snap[(l['recipe'], l['ingredient'], float(l['grams']))].append(l)
+        snapId[(l['recipe_id'], l['ingredient'], float(l['grams']))].append(l)
+    idByName = {}
+    if '--names' in sys.argv:
+        for ln in open(sys.argv[sys.argv.index('--names') + 1], encoding='utf-8'):
+            f = ln.rstrip('\n').split('\t')
+            if len(f) == 2:
+                idByName[f[1]] = f[0]
     ml = {s['ingredient']: s.get('spoon_ml', '') for s in sp['set']}
     pf = defaultdict(list)
     for ln in open(sys.argv[2], encoding='utf-8'):
         f = ln.rstrip('\n').split('\t')
         if len(f) == 6:
-            pf[(f[1], f[4], float(f[5]))].append({'recipe_id': f[0], 'step_no': f[2], 'step_title': f[3]})
+            pf[(f[0], f[4], float(f[5]))].append({'recipe_id': f[0], 'recipe': f[1], 'step_no': f[2], 'step_title': f[3]})
+            idByName.setdefault(f[1], f[0])
     rows, miss, stat = [], [], defaultdict(int)
     for f in prog['ings']:
         ing, batch = f['ing'], 'M' + f['date'].replace('-', '')[2:] + '-' + f['ing']
         for i, r in enumerate(f['rows']):
             name = ALIAS.get(r['recipe'], r['recipe'])
-            k = (name, ing, float(r['grams']))
+            rid = idByName.get(name)
+            cand = snapId[(rid, ing, float(r['grams']))] if rid else snap[(name, ing, float(r['grams']))]
             o = {'fin_id': batch + '-' + ('000' + str(i))[-4:], 'batch': batch, 'ingredient': ing, 'recipe': name, 'grams': ns(r['grams']),
                  'g_per_spoon': ns(f['g']), 'spoon_ml': str(f.get('ml') or ml.get(ing, '') or ''), 'max_spoons': str(f['max']), 'tol_pct': str(f['tol']),
                  'calc_spoons': ns(r['spoons']) if r['spoons'] != '' else '', 'calc_ok': 'Y' if r['ok'] else 'N', 'calc_why': '' if r['ok'] else (r.get('why') or '維持秤重'),
@@ -62,13 +72,17 @@ def main():
                  'uses': '' if r.get('uses') in (None, '') else str(r['uses']), 'purpose': r.get('purpose', ''), 'use_step': r.get('step', ''),
                  'source': '搬家：' + f['file'], 'confirmed_at': f.get('mtime', f['date']), 'applied_at': '', 'applied_batch': '',
                  'updated_at': '', 'deleted': '', 'replaced_by': ''}
-            if snap[k]:
-                l = snap[k].pop(0)
-                o.update(recipe_id=l['recipe_id'], step_no=l['step_no'], step_title=l['step_title'], seq=l.get('seq') or '1')
+            if cand:
+                l = cand.pop(0)
+                if rid:   # 同一行也從「依名稱」清單拿掉，避免重複配對
+                    snap[(l['recipe'], ing, float(r['grams']))].remove(l)
+                else:
+                    snapId[(l['recipe_id'], ing, float(r['grams']))].remove(l)
+                o.update(recipe=l['recipe'], recipe_id=l['recipe_id'], step_no=l['step_no'], step_title=l['step_title'], seq=l.get('seq') or '1')
                 stat['後台還寫 g'] += 1
-            elif r['ok'] and pf[(name, ing, float(r['spoons']))]:
-                l = pf[(name, ing, float(r['spoons']))].pop(0)
-                o.update(recipe_id=l['recipe_id'], step_no=l['step_no'], step_title=l['step_title'], seq='1')
+            elif r['ok'] and rid and pf[(rid, ing, float(r['spoons']))]:
+                l = pf[(rid, ing, float(r['spoons']))].pop(0)
+                o.update(recipe=l['recipe'], recipe_id=l['recipe_id'], step_no=l['step_no'], step_title=l['step_title'], seq='1')
                 if ing in APPLIED:
                     o['applied_at'], o['applied_batch'] = APPLIED[ing]
                 stat['後台已是平匙'] += 1
