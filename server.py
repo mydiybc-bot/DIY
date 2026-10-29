@@ -75,6 +75,9 @@ class TrainingHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.serve_file("index.html", "text/html; charset=utf-8")
             return
+        if parsed.path in ("/r", "/R", "/r/"):   # 平板外語食譜短網址（2026-10-29 經營者同意）
+            self.send_response(HTTPStatus.FOUND); self.send_header("Location", "/static/tablet-recipe.html"); self.send_header("Content-Length", "0"); self.end_headers()
+            return
         if parsed.path == "/dashboard":
             self.serve_file("dashboard.html", "text/html; charset=utf-8")
             return
