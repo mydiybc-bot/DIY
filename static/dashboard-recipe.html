@@ -1379,7 +1379,8 @@ function parseRecipeHTML(html,fallbackName){
   var lines=[],warn=[];
   var els=doc.querySelectorAll('.ingred');
   var UNIT='(g|ml|cc|kg|支|個|包|片|張|顆|組|條|對|把|份|滴|杯|盒|罐|捲|卷|雙|朵|碗|台|匙|平匙|串|件|袋|瓶|台斤|斤)';
-  var re=new RegExp('^(.+?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*'+UNIT+'$');
+  /* 2026-10-29：後面可帶平匙括號——「砂糖 35 g (3.5平匙)」（Chat 產食譜的附註）、「砂糖 2.5 平匙（約30g）」→ 括號內容放 par（只認含「平匙」或「約…g」的括號，其他括號照舊看不懂） */
+  var re=new RegExp('^(.+?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*'+UNIT+'(?:\\s*[（(]\\s*([^（）()]*(?:平匙|約\\s*[0-9.]+\\s*g)[^（）()]*?)\\s*[）)])?$');
   if(els.length){
     Array.prototype.forEach.call(els,function(el){
       var c=el.cloneNode(true);
@@ -1387,7 +1388,7 @@ function parseRecipeHTML(html,fallbackName){
       var s2=c.textContent.replace(/ /g,' ').replace(/\s+/g,' ').trim();
       if(!s2)return;
       var m=s2.match(re);
-      if(m)lines.push({m:stripPos(m[1]),q:parseFloat(m[2]),u:m[3],zone:el.getAttribute('data-cate')||''});
+      if(m)lines.push({m:stripPos(m[1]),q:parseFloat(m[2]),u:m[3],zone:el.getAttribute('data-cate')||'',par:m[4]||''});
       else warn.push(s2)})}
   else{ /* 舊格式 fallback：逐行比對 */
     var ZONES={'洞洞牆區':1,'冰箱區':1,'模具區':1,'烘烤區':1,'請向店員拿取':1,'員工區':1,'凍庫區':1,'飲料區':1};
@@ -1395,7 +1396,7 @@ function parseRecipeHTML(html,fallbackName){
     var txt=doc.body?doc.body.innerText||doc.body.textContent:'';
     txt.split(/\n/).forEach(function(ln){ln=ln.replace(/ /g,' ').replace(/\s+/g,' ').trim();
       if(!ln||ZONES[ln]||CONT[ln])return;
-      var m=ln.match(re);if(m)lines.push({m:stripPos(m[1]),q:parseFloat(m[2]),u:m[3],zone:''})})}
+      var m=ln.match(re);if(m)lines.push({m:stripPos(m[1]),q:parseFloat(m[2]),u:m[3],zone:'',par:m[4]||''})})}
   var body=doc.body?(doc.body.textContent||''):'';
   return{name:name,lines:lines,warn:warn,text:body}}
 /* 內文提到但食材清單沒列 → 食譜檔漏列偵測（歷史上週用量低估的根因之一） */
@@ -2147,7 +2148,7 @@ function gvDate(v){if(v==null||v==='')return null;if(v instanceof Date)return is
    campaign_*＝選到的檔期快照（.json head 一起帶走）；req_id＝送件後系統配的申請單號（同一張再送＝更新同一張） */
 function blankHead(){return {brand:BRAND_DEFAULT,date:today(),period:'',name:'',diet:'',keep:'',fname:'',price:'',spec:'',pack:'',time:'',qty:'',cat:'',catOther:'',note:'',
   campaign_id:'',campaign_name:'',campaign_start:'',campaign_end:'',campaign_ship:'',campaign_early:'',req_id:'',revise:'',chkok:''}}   /* chkok：2026-10-28 內容檢查主廚按「確認沒問題」的項目（¦ 分隔） */   /* revise：2026-10-17 改版既有甜點＝'Y' */
-function newLine(){var o={m:'',q:'',u:'',zone:'',cat:'',id:'',pin:false,nopin:false,conv:'',simok:'',og:'',oo:'',op:'',mc:'',txt:''};NI_KEYS.forEach(function(k){o[k]=''});return o}   /* pin：主檔有、但填寫人按「加到新增表」手動加進表二（2026-09-18 經營者直接指示） */
+function newLine(){var o={m:'',q:'',u:'',zone:'',cat:'',id:'',pin:false,nopin:false,conv:'',simok:'',og:'',oo:'',op:'',mc:'',txt:'',sp:''};NI_KEYS.forEach(function(k){o[k]=''});return o}   /* pin：主檔有、但填寫人按「加到新增表」手動加進表二（2026-09-18 經營者直接指示） */
 /* 2026-10-18 經營者：主檔「停售」或「過季」的品項（不含不盤點等其他狀態）自動列進表二「新增食材/器模具」，提醒門市備料；
    填寫人按「✕ 移出」＝nopin（這張單不再自動列），再按「↓ 加到新增表」可加回。 */
 function autoT2(l){if(!String(l.m||'').trim()||isNewItem(l))return '';var s=skuOf(l.m);if(!s)return '';
@@ -2693,7 +2694,7 @@ function saveDraft(){if(LM)return;   /* 2026-10-08：申請表連結模式不動
     _savedAt=new Date().toTimeString().slice(0,5);var e=document.getElementById('apSaved');if(e)e.textContent='草稿已自動保存 '+_savedAt}catch(e){}},300)}
 /* 舊列結構搬平：v:2 的 l.ni.*（或 l.nw.*）→ l.*；v:1／v:2 的 est 丟棄；zone 走 ZONE_ALIAS */
 function normLine(l){var o=newLine();l=l||{};
-  ['m','q','u','zone','cat','id','conv','simok','og','oo','op','mc','txt'].forEach(function(k){if(l[k]!==undefined&&l[k]!==null)o[k]=l[k]});o.pin=!!l.pin;o.nopin=!!l.nopin;
+  ['m','q','u','zone','cat','id','conv','simok','og','oo','op','mc','txt','sp'].forEach(function(k){if(l[k]!==undefined&&l[k]!==null)o[k]=l[k]});o.pin=!!l.pin;o.nopin=!!l.nopin;
   var nest=l.ni||l.nw||null;
   NI_KEYS.forEach(function(k){var v=(l[k]!==undefined&&l[k]!==null&&l[k]!=='')?l[k]:(nest&&nest[k]!==undefined&&nest[k]!==null?nest[k]:'');o[k]=v});
   o.zone=mapZone(o.zone);return o}
@@ -2817,7 +2818,7 @@ function importFiles(fs){if(!fs||!fs.length)return;
         else AP.recipeMsg=bad?('門市食譜步驟沒有記下：這個檔案'+bad):'這個檔案看不到步驟（黃底的步驟標題），門市食譜步驟沒有記下';
         AP.lines=got.map(function(l){var s=skuOf(l.m);var cat=s?s.cat:(R.isTool(l.m)?'器具':'食材');
           var z=mapZone(l.zone)||defaultZone(l.m,cat);
-          var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';return o});
+          var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';spConv(o,l.par);return o});   /* 2026-10-29 平匙→克數 */
         var tu=rcs.length?stepUse(rcs,got):null;   /* 2026-10-19：步驟內文寫了用量、清單沒列的品項自動加進表一 */
         if(tu)tu.add.forEach(function(x){AP.lines.push(txLine(x))});
         if(!AP.lines.length)AP.lines=[newLine()];
@@ -3192,6 +3193,7 @@ function jsonObj(c){var d=new Date(),p=num(AP.head.price),rate=rateOf(c);
         per_store:(nw&&isToolLine(l)&&num(l.perStore)>0)?Math.round(num(l.perStore)):null,
         sim_ok:nw?String(l.simok||''):'',
         manual_cost:(!nw&&num(l.mc)>0)?num(l.mc):null,   /* 2026-10-17 主廚手填每份成本（主檔算不出的品項） */
+        sp_orig:String(l.sp||''),   /* 2026-10-29 食譜檔原寫平匙（表一照定案換成克數） */
         opt_group:String(l.og||'').trim(),opt_name:String(l.og||'').trim()?(String(l.oo||'').trim()||String(l.m).trim()):'',opt_pct:String(l.og||'').trim()?String(l.op||'').trim():'',opt_share:optShareOf(l),   /* 2026-10-17 客人選一 */
    /* 2026-10-17：主廚確認「不是主檔的這幾項」（sku_id 逗號分隔） */
         cat:lineCat(l),in_master:!nw,cost:row?(row.cost===null?null:r2(row.cost)):null,basis:row?row.s:(isToolLine(l)?'器具／模具不計價':''),tier:row?row.t:''}}),
@@ -3213,7 +3215,7 @@ function fromJson(j,quiet){if(!j||typeof j!=='object')throw new Error('不是申
   var lines=(j.lines||[]).map(function(x){x=x||{};if(isDraft)return normLine(x);
     var o=newLine();o.m=String(x.name||x.m||'');o.q=x.qty!==undefined?x.qty:(x.q||'');o.u=x.unit||x.u||'';o.conv=x.conv!=null?String(x.conv):'';o.zone=x.zone||'';o.id=x.sku_id||x.id||'';o.cat=x.cat||'';o.pin=!!x.pinned;o.nopin=!!x.nopin;
     var nw=x.is_new!==undefined?!!x.is_new:(x.in_master===false);
-    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';o.shelf=x.shelf||'';o.vname=x.vname||'';o.perStore=x.per_store!=null?String(x.per_store):'';o.simok=x.sim_ok||'';o.pkgN=x.pkg_n!=null?String(x.pkg_n):'';o.mc=x.manual_cost!=null?String(x.manual_cost):'';o.og=x.opt_group||'';o.oo=x.opt_name||'';o.op=x.opt_pct!=null?String(x.opt_pct):'';
+    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';o.sp=x.sp_orig||'';o.shelf=x.shelf||'';o.vname=x.vname||'';o.perStore=x.per_store!=null?String(x.per_store):'';o.simok=x.sim_ok||'';o.pkgN=x.pkg_n!=null?String(x.pkg_n):'';o.mc=x.manual_cost!=null?String(x.manual_cost):'';o.og=x.opt_group||'';o.oo=x.opt_name||'';o.op=x.opt_pct!=null?String(x.opt_pct):'';
     if(nw){o.pkgCost=x.pkg_cost!=null?x.pkg_cost:(x.pkgCost||'');o.pkgSpec=x.pkg_spec||x.pkgSpec||'';o.vendor=x.vendor||''}
     if(x.new_item){var n=x.new_item;o.sticker=o.sticker||n.sticker||'';o.pkgCost=o.pkgCost||n.pkg_cost||'';o.pkgSpec=o.pkgSpec||n.pkg_spec||'';o.store=o.store||n.store||'';o.take=o.take||n.take||'';o.supply=o.supply||n.supply||'';o.vendor=o.vendor||n.vendor||'';o.pkgType=o.pkgType||n.pkg_type||'';o.split=o.split||n.split||'';o.first=o.first||n.first||'';o.lnote=o.lnote||n.note||''}
     return normLine(o)});
@@ -3311,7 +3313,7 @@ function cost1HTML(l,row){return '<b class="'+costClass(row)+'">'+esc(costText(l
 function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=unitOK(l),key='l'+i,row=rowOf(c,l);
   var h='<tr data-ln="'+i+'">';
   h+='<td><div class="ap-sc"><input type="text" data-lf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
-    +(l.m?('<div class="ap-src">'+(s?esc(s.id)+' · '+esc(lineCat(l))+(s.vendor?' · '+esc(s.vendor):''):'主檔查無此品項')+(stale?' <span class="ap-warn">⚠ '+esc(stale)+'</span>':'')+'</div>'):'')+(l.txt&&l.m?'<div class="ap-hint" style="color:#2E6B8A" title="食譜「食材工具」清單沒列，匯入時從步驟內文帶入">🤖 清單沒列，從步驟內文帶入：「'+esc(l.txt)+'」</div>':'')+simBoxHTML(l,i)+nmHintHTML(l,i)+ckBoxHTML(l,i)+convNoteHTML(l)+mcBoxHTML(l,i,row)+optRowHTML(l,i,c)+'</td>';   /* 2026-10-07：新單位換算框放在較寬的品項欄 */
+    +(l.m?('<div class="ap-src">'+(s?esc(s.id)+' · '+esc(lineCat(l))+(s.vendor?' · '+esc(s.vendor):''):'主檔查無此品項')+(stale?' <span class="ap-warn">⚠ '+esc(stale)+'</span>':'')+'</div>'):'')+(l.txt&&l.m?'<div class="ap-hint" style="color:#2E6B8A" title="食譜「食材工具」清單沒列，匯入時從步驟內文帶入">🤖 清單沒列，從步驟內文帶入：「'+esc(l.txt)+'」</div>':'')+simBoxHTML(l,i)+nmHintHTML(l,i)+ckBoxHTML(l,i)+convNoteHTML(l)+spNoteHTML(l,i)+mcBoxHTML(l,i,row)+optRowHTML(l,i,c)+'</td>';   /* 2026-10-07：新單位換算框放在較寬的品項欄 */
   h+='<td><input type="number" step="any" min="0" data-lf="q" value="'+esc(l.q)+'" placeholder="數量"></td>';
   h+='<td><input type="text" data-lf="u" value="'+esc(l.u)+'" placeholder="'+esc(s?(s.useUnit||'g'):'單位')+'"></td>';
   h+='<td class="ap-money" data-cost1="'+i+'">'+cost1HTML(l,row)+'</td>';
@@ -4754,7 +4756,22 @@ function parseSteps(html,fname){var doc;try{doc=new DOMParser().parseFromString(
 /* 2026-10-29 經營者：申請表填寫時就提醒主廚改平匙（只提醒不擋；表一用料維持克數）→ 匯入的食譜步驟裡，專案推動已定案的食材寫 g 的列出建議平匙數（SPOON-HINT 在 <head>） */
 function spHintNow(){var r=AP.recipe;if(!rcOk(r))return '';
   return SpoonHint.html(SpoonHint.hints(r.steps),{act:'送件',redo:'請改 Word 食譜檔裡那幾步的用量（不用重新匯入申請表）；上傳門市平板（📤 新食譜上傳）時用改好的檔。'})}
-SpoonHint.on(function(){var el=document.getElementById('spHint');if(el)el.innerHTML=spHintNow()});
+/* 2026-10-29 經營者：匯入食譜檔時，表一遇到平匙專案已定案的食材寫平匙 → 照定案「食譜用克數」（g_per_spoon，不用真實克數）換成克數；
+   成本、採購照克數，門市食譜步驟（AP.recipe）仍是平匙。原寫法記在 l.sp（表一品項下方顯示、可「還原成平匙」，送件存在 lines.sp_orig）。
+   主廚在表一自己打平匙的不自動改，給「🥄 換成克數」按鈕。規格還沒讀到 → 先照原樣，讀到後重畫一次出現按鈕。 */
+function spSpec(m){var S=SpoonHint.state().spec;return S&&S[String(m||'').trim()]||null}
+function spCan(l){return String(l.u||'').trim()==='平匙'&&!isToolLine(l)&&num(l.q)>0&&!!spSpec(l.m)}
+function spConv(l,par){if(!spCan(l))return false;var sp=spSpec(l.m),q=num(l.q),about=par&&String(par).match(/約\s*([0-9.]+)\s*g/i);
+  l.sp=q+' 平匙'+(about?'（約 '+about[1]+' g）':'')+'｜1 平匙＝'+sp.g+' g';l.q=Math.round(q*sp.g*100)/100;l.u='g';return true}
+function spNoteHTML(l,i){var lk=lockedReq()||unitMode();
+  if(l.sp){var a=String(l.sp).split('｜');return '<div class="ap-okline" style="margin-top:2px">🥄 原寫「'+esc(a[0])+'」，照平匙定案 '+esc(a[1]||'')+' 換成 '+esc(num(l.q))+' g（成本、採購照克數）'+(lk?'':' <button class="ap-btn2" data-spundo="'+i+'">還原成平匙</button>')+'</div>'}
+  if(!lk&&spCan(l)){var sp=spSpec(l.m);return '<div class="ap-muted" style="margin-top:2px">🥄 平匙專案已定案「'+esc(String(l.m).trim())+'」1 平匙＝'+sp.g+' g：成本、採購要寫克數 <button class="ap-btn2" data-spgo="'+i+'">換成克數（'+esc(Math.round(num(l.q)*sp.g*100)/100)+' g）</button></div>'}
+  return ''}
+function wireSp(root){
+  root.querySelectorAll('[data-spgo]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.spgo];if(l&&spConv(l))ckDone()}});
+  root.querySelectorAll('[data-spundo]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.spundo];if(!l||!l.sp)return;var q=parseFloat(l.sp);if(!(q>0))return;l.q=q;l.u='平匙';l.sp='';ckDone()}})}
+SpoonHint.on(function(){var el=document.getElementById('spHint');if(el)el.innerHTML=spHintNow();
+  if(AP.lines.some(spCan)&&!(window.__ime&&__ime.on))render()});
 SpoonHint.load();
 function rcLineHTML(){var r=AP.recipe;
   if(rcOk(r))return '<div id="spHint">'+spHintNow()+'</div>'+'<div class="ap-okline" style="margin:2px 0 6px">🍰 門市食譜步驟已一起記下：<b>'+r.steps.length+'</b> 步（《'+esc(r.file||r.name)+'》）——門市平板的食譜請用「📤 新食譜上傳」上傳試做版，核准後在最下方 ③「🔗 接上試做版」</div>';
@@ -5193,6 +5210,7 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-pin]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.pin];if(!l)return;l.pin=true;l.nopin=false;OUT=null;saveDraft();render();var tr=document.querySelector('tr[data-n2="'+b.dataset.pin+'"]');if(tr){tr.scrollIntoView({behavior:'smooth',block:'center'});var inp=tr.querySelector('[data-nf="sticker"]');if(inp)inp.focus()}}});
   wireRevise(root);   /* 2026-10-17：改版既有甜點 */
   wireChk(root);   /* 2026-10-28：單位防呆＋內容檢查 */
+  wireSp(root);   /* 2026-10-29：平匙換克數 */
   root.querySelectorAll('[data-optset]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.optset];if(!l)return;var last=AP.lines.filter(function(x){return String(x.og||'').trim()}).slice(-1)[0];
     l.og=last?last.og:'內餡';l.oo='';l.op='';OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-optclr]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.optclr];if(!l)return;l.og='';l.oo='';l.op='';OUT=null;saveDraft();render()}});
