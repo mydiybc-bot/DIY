@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import os
 import unittest
 from http.cookiejar import CookieJar
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
+from storage_paths import data_file
 
-BASE_URL = "http://127.0.0.1:8765"
-PROGRESS_FILE = Path("/Users/diybc/Desktop/Chatgpt Codex/training_progress.json")
+
+# 測試連的伺服器;預設本機 8765,可用 TRAINING_TEST_URL 指向別的埠。
+BASE_URL = os.environ.get("TRAINING_TEST_URL", "http://127.0.0.1:8765")
+# 續練進度檔要跟伺服器同一個資料夾(同樣看 TRAINING_DATA_DIR),
+# 否則上一個測試留下的進度會讓下一個測試從第 2 題開始。
+PROGRESS_FILE = data_file("training_progress.json")
 
 
 def make_opener():
