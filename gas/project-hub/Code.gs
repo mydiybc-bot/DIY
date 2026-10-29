@@ -32,7 +32,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v2.0';   /* v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v2.1';   /* v2.1（2026-10-29）：確認轉換／記錄已套用改成每欄一次寫完（writeCols_），不再每列讀寫一次；v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -168,6 +168,19 @@ function append_(name, objs) {
 function writeRow_(name, rowNo, o) {
   var sh = sheet_(name), hdr = hdr_(name), rg = sh.getRange(rowNo, 1, 1, hdr.length);
   rg.setNumberFormat('@').setValues([rowVals_(name, o, rg.getDisplayValues()[0])]);
+}
+/* v2.1（2026-10-29 經營者：確認轉換很慢）：一次改很多列的幾個欄位 → 每欄一次寫完（原本每列讀一次寫一次，砂糖 98 處＝將近 200 趟）
+   all＝rows_(name) 讀回的整張（_row 連號），只寫有改到的列範圍；cols＝要寫的欄位名 */
+function writeCols_(name, all, changed, cols) {
+  if (!changed.length) return;
+  var sh = sheet_(name), hdr = hdr_(name), lo = changed[0]._row, hi = lo;
+  changed.forEach(function (r) { if (r._row < lo) lo = r._row; if (r._row > hi) hi = r._row; });
+  var span = all.filter(function (r) { return r._row >= lo && r._row <= hi; });
+  if (span.length !== hi - lo + 1) throw new Error('資料表列數對不上，先不寫，請重新整理再按一次');
+  cols.forEach(function (c) {
+    var j = hdr.indexOf(c); if (j < 0) throw new Error('資料表少了欄位 ' + c);
+    sh.getRange(lo, j + 1, span.length, 1).setNumberFormat('@').setValues(span.map(function (r) { return [r[c] == null ? '' : String(r[c])]; }));
+  });
 }
 function log_(action, table, target, detail) {
   try { append_('log', [{ ts: now_(), action: action, table: table || '', target: target || '', detail: String(detail || '').slice(0, 500) }]); } catch (e) {}
@@ -327,7 +340,7 @@ function finalConfirm_(b) {
   if (lines.some(function (l) { return !l.recipe_id || !l.step_no; })) throw new Error('食譜用量還沒記到後台編號和第幾步（要先按「🔄 更新食譜用量」一次），先不能確認');
   if (b.snap_date && lines[0].snap_date !== String(b.snap_date)) throw new Error('食譜用量在你打開頁面之後更新過（' + lines[0].snap_date + '），請重新整理頁面、看過再確認');
   var t = now_(), batch = 'F' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMdd-HHmmss'), uses = b.uses || {}, ml = String(b.spoon_ml == null ? '' : b.spoon_ml).trim();
-  var old = rows_('spoon_final').filter(function (r) { return r.deleted !== 'Y' && r.ingredient === ing; }), oldBy = {};
+  var allF = rows_('spoon_final'), old = allF.filter(function (r) { return r.deleted !== 'Y' && r.ingredient === ing; }), oldBy = {};
   old.forEach(function (r) { (oldBy[r.line_key] = oldBy[r.line_key] || []).push(r); });
   var newKeys = {}, add = [], kept = 0, keptList = [];
   lines.forEach(function (l, i) {
@@ -343,11 +356,12 @@ function finalConfirm_(b) {
     }
     add.push(row);
   });
-  var replaced = 0, untouched = 0;
+  var replaced = 0, untouched = 0, chg = [];
   old.forEach(function (r) {
-    if (newKeys[r.line_key]) { var c = clean_(r); c.deleted = 'Y'; c.replaced_by = batch; c.updated_at = t; writeRow_('spoon_final', r._row, c); replaced++; }
+    if (newKeys[r.line_key]) { r.deleted = 'Y'; r.replaced_by = batch; r.updated_at = t; chg.push(r); replaced++; }
     else untouched++;
   });
+  writeCols_('spoon_final', allF, chg, ['deleted', 'replaced_by', 'updated_at']);
   append_('spoon_final', add);
   /* 定案的規格同步存回平匙規格表（跟按「💾 存成設定」一樣，另記一列規格紀錄） */
   var sh = rows_('spoon_set').filter(function (r) { return r.ingredient === ing; })[0];
@@ -390,11 +404,12 @@ function finalApplied_(b) {
   if (!ids.length) throw new Error('沒有要記的項目');
   if (!b.undo && !batch) throw new Error('缺套用批號');
   var want = {}; ids.forEach(function (x) { want[x] = 1; });
-  var n = 0, t = now_();
-  rows_('spoon_final').forEach(function (r) {
+  var n = 0, t = now_(), allF = rows_('spoon_final'), chg = [];
+  allF.forEach(function (r) {
     if (r.deleted === 'Y' || !want[r.fin_id]) return;
-    var o = clean_(r); o.applied_at = b.undo ? '' : d; o.applied_batch = b.undo ? '' : batch; o.updated_at = t; writeRow_('spoon_final', r._row, o); n++;
+    r.applied_at = b.undo ? '' : d; r.applied_batch = b.undo ? '' : batch; r.updated_at = t; chg.push(r); n++;
   });
+  writeCols_('spoon_final', allF, chg, ['applied_at', 'applied_batch', 'updated_at']);
   if (n !== ids.length) throw new Error('只找到 ' + n + ' / ' + ids.length + ' 處（其餘可能被重新確認取代），已記錄找到的');
   log_('finalApplied', 'spoon_final', batch, (b.undo ? '取消 ' : '') + n + ' 處');
   return { ok: true, data: { n: n } };
