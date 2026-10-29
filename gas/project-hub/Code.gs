@@ -6,6 +6,7 @@
  *   ?action=ping          版號
  *   ?action=bundle        專案、階段、待決定事項、風險、人員
  *   ?action=spoon         平匙換算：食譜用量快照＋各食材的匙設定
+ *   ?action=spoonSpec     v2.2：各食材「最新定案」的平匙規格（新品申請表／📤 新食譜上傳提醒主廚改平匙用；只讀 spoon_final，輕）
  *   ?action=remind_preview 今天提醒信會寄什麼（只回項目與收件人姓名，不寄、不回 email）
  * 寫（POST，body＝JSON 字串；都要帶 pw＝權限中心 dim_auth「project」那列的密碼）：
  *   {action:'auth'}                                   只驗密碼
@@ -32,7 +33,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v2.1';   /* v2.1（2026-10-29）：確認轉換／記錄已套用改成每欄一次寫完（writeCols_），不再每列讀寫一次；v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v2.2';   /* v2.2（2026-10-29）：GET spoonSpec（各食材最新定案規格，給新品申請表／新食譜上傳提醒改平匙）；v2.1（2026-10-29）：確認轉換／記錄已套用改成每欄一次寫完（writeCols_），不再每列讀寫一次；v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -70,6 +71,7 @@ function doGet(e) {
     if (a === 'ping') res = { ok: true, ver: VER };
     else if (a === 'bundle') res = { ok: true, data: bundle_(), at: now_() };
     else if (a === 'spoon') res = { ok: true, data: spoon_(), at: now_() };
+    else if (a === 'spoonSpec') res = { ok: true, data: spoonSpec_(), at: now_() };
     else if (a === 'items') res = { ok: true, data: items_(), at: now_() };
     else if (a === 'remind_preview') res = { ok: true, data: remindPublic_(remindBuild_()), at: now_() };
     else res = { ok: false, error: '不認得的動作：' + a };
@@ -321,6 +323,19 @@ function evoSnap_(b) {
 
 /* ---------------- v2.0 定案明細 ---------------- */
 /* 跟頁面 judge() 同一套：平匙數＝重量 ÷ 一平匙克數，取最近的整數或 .5；誤差內、不超過上限、至少半匙才可換 */
+/* v2.2（2026-10-29 經營者：「新品申請表填寫時就提醒主廚改平匙；規格讀專案推動定案」）：
+   每種食材取定案明細（spoon_final 沒刪的）裡最新一次確認的規格；沒定案過的食材不回（不提醒） */
+function spoonSpec_() {
+  var by = {};
+  rows_('spoon_final').forEach(function (r) {
+    if (r.deleted === 'Y' || !r.ingredient || !(Number(r.g_per_spoon) > 0)) return;
+    var o = by[r.ingredient];
+    if (!o) o = by[r.ingredient] = { ingredient: r.ingredient, n: 0, confirmed_at: '' };
+    o.n++;
+    if (String(r.confirmed_at) >= o.confirmed_at) { o.confirmed_at = String(r.confirmed_at); o.g_per_spoon = r.g_per_spoon; o.spoon_ml = r.spoon_ml; o.max_spoons = r.max_spoons; o.tol_pct = r.tol_pct; }
+  });
+  return Object.keys(by).sort().map(function (k) { return by[k]; });
+}
 function judge_(grams, g, maxn, tol) {
   var n = grams / g, h = Math.round(n * 2) / 2, diff = h > 0 ? (h * g - grams) / grams : -1;
   var hit = Math.abs(n - h) < 1e-6 || (tol > 0 && Math.abs(diff) <= tol / 100 + 1e-9);

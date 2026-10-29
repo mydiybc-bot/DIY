@@ -24,6 +24,60 @@ window.__ime=(function(){
   return st;
 })();
 </script>
+<script>
+/* ===== SPOON-HINT（2026-10-29 經營者：「新品申請表填寫的時候，就要提醒主廚改平匙」；只提醒不擋、表一用料維持克數、規格讀專案推動定案、📤 新食譜上傳也一起提醒）=====
+   規格：專案推動 API GET ?action=spoonSpec（各食材最新一次「✅ 確認轉換到執行進度」的一平匙克數／最多幾匙／容許誤差；沒定案過的食材不提醒）。
+   換算規則跟專案推動平匙換算頁 judge() 一樣：克數÷一平匙克數，四捨五入到半平匙；剛好或在容許誤差內、不到上限＝改平匙，否則維持克數。
+   用法：SpoonHint.load() 讀規格（先用這台電腦上次存的，10 分鐘內不重讀）；SpoonHint.on(fn) 規格讀回來時叫 fn（頁面只更新提醒框，不整頁重畫）；
+        SpoonHint.hints(steps)＝[{step,title,ing,grams,h,ok,why,sp}]（steps：parseSteps 的 steps，或 [{t:'',ing:[[品名,數量,單位]]}]）；
+        SpoonHint.html(H,{redo:'…'})＝提醒框；SpoonHint.text(H)＝送出前確認框的一段字（沒有要改的回 ''）。
+   dashboard-recipe.html 與 recipe-upload.html 這段一字不差，要改兩頁一起改。 */
+window.SpoonHint=(function(){
+  var ID='AKfycbwBSEYcJb3iVwfcRAWQok5_v2EzRL9Lq55R80EtLEvxRSWhPoGfePMZdx7dCcwe4bD9Ig',GAS='https://script.google.com/macros/s/'+ID+'/exec',LS='spoonSpec_v1';
+  var S={spec:null,at:0,busy:false,err:'',subs:[]};
+  try{var c=JSON.parse(localStorage.getItem(LS)||'null');if(c&&c.spec){S.spec=c.spec;S.at=+c.at||0}}catch(e){}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function ns(x){return String(Math.round(Number(x)*1000)/1000)}
+  function got(list){var m={};(list||[]).forEach(function(o){var g=Number(o.g_per_spoon);if(o.ingredient&&g>0)m[o.ingredient]={g:g,ml:o.spoon_ml||'',max:Number(o.max_spoons)||0,tol:Number(o.tol_pct)||0,at:String(o.confirmed_at||'').slice(0,10)}});
+    S.spec=m;S.at=Date.now();S.err='';try{localStorage.setItem(LS,JSON.stringify({spec:m,at:S.at}))}catch(e){}}
+  function fire(){S.busy=false;S.subs.forEach(function(f){try{f()}catch(e){}})}
+  function jsonp(ok,bad){var cb='spHintCb'+Date.now(),el=document.createElement('script'),t=setTimeout(function(){fin();bad()},20000);
+    function fin(){clearTimeout(t);try{delete window[cb]}catch(e){window[cb]=undefined}if(el.parentNode)el.parentNode.removeChild(el)}
+    window[cb]=function(r){fin();if(r&&r.ok)ok(r.data);else bad()};el.onerror=function(){fin();bad()};
+    el.src=GAS+'?action=spoonSpec&callback='+cb;document.head.appendChild(el)}
+  function load(force){if(S.busy)return;if(!force&&S.spec&&Date.now()-S.at<600000)return;S.busy=true;
+    var ok=function(d){got(d);fire()},bad=function(){S.err='讀不到專案推動的平匙規格';fire()};
+    fetch('/api/gas/'+ID+'?action=spoonSpec').then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(r){if(!r||!r.ok)throw 0;ok(r.data)}).catch(function(){jsonp(ok,bad)})}
+  function judge(grams,g,maxn,tol){var n=grams/g,h=Math.round(n*2)/2,diff=h>0?(h*g-grams)/grams:-1;
+    var hit=Math.abs(n-h)<1e-6||(tol>0&&Math.abs(diff)<=tol/100+1e-9);
+    if(h<0.5)return {h:h,ok:false,why:'不到半平匙'};
+    if(!hit)return {h:h,diff:diff,ok:false,why:'不是整數或半平匙'};
+    if(maxn>0&&h>maxn)return {h:h,diff:diff,ok:false,why:'超過 '+maxn+' 平匙，太多'};
+    return {h:h,diff:diff,ok:true,why:''}}
+  function hints(steps){var out=[];if(!S.spec)return out;
+    (steps||[]).forEach(function(s,k){(s&&s.ing||[]).forEach(function(a){var nm=String(a[0]||'').trim(),q=Number(a[1]),u=String(a[2]||'').trim(),sp=S.spec[nm];
+      if(!sp||u!=='g'||!(q>0))return;var j=judge(q,sp.g,sp.max,sp.tol);
+      out.push({step:s.t?k+1:0,title:s.t||'',ing:nm,grams:q,h:j.h,ok:j.ok,why:j.why,diff:j.diff,sp:sp})})});
+    return out}
+  function specTxt(nm,sp){return esc(nm)+' 一平匙 '+ns(sp.g)+' g'+(sp.ml?'（'+esc(sp.ml)+' ml 量匙）':'')+(sp.max?'、最多 '+sp.max+' 平匙':'')+'、誤差 ±'+sp.tol+'%'+(sp.at?'｜'+esc(sp.at)+' 定案':'')}
+  function html(H,o){o=o||{};
+    if(!S.spec)return S.busy?'<div style="color:#777;font-size:13px;margin:4px 0">🥄 讀取平匙規格中…</div>':(S.err?'<div style="color:#777;font-size:13px;margin:4px 0">🥄 '+esc(S.err)+'，這次沒檢查平匙（不影響送出）</div>':'');
+    if(!H.length)return '<div style="color:#2E6B32;font-size:13px;margin:4px 0">🥄 平匙檢查：步驟裡沒有要改平匙的食材（已定案：'+esc(Object.keys(S.spec).join('、'))+'）</div>';
+    var ch=H.filter(function(x){return x.ok}),kp=H.length-ch.length,used={};H.forEach(function(x){used[x.ing]=x.sp});
+    var t='<div style="background:#FFF6DF;border:1px solid #E8C877;border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px;line-height:1.6">'
+      +'<div style="font-weight:bold;color:#8A5A00">🥄 門市食譜要改平匙：'+(ch.length?'<b>'+ch.length+'</b> 處要改':'')+(ch.length&&kp?'、':'')+(kp?kp+' 處照規格維持克數':'')+'</div>'
+      +'<div style="color:#6b5a2e">客人在門市用量匙量，平匙專案已定案的食材，食譜步驟請寫平匙。'+(ch.length?'<b>只提醒、不擋'+(o.act||'送出')+'</b>；':'')+'新品申請表的表一用料（成本、採購）照樣寫克數，不用改。'+(ch.length&&o.redo?esc(o.redo):'')+'</div>'
+      +'<table style="border-collapse:collapse;margin-top:4px;width:100%;font-size:13px"><tr style="color:#8A5A00;text-align:left"><th style="padding:2px 6px">步驟</th><th style="padding:2px 6px">食材</th><th style="padding:2px 6px">現在寫</th><th style="padding:2px 6px">改成</th><th style="padding:2px 6px">說明</th></tr>'
+      +H.map(function(x){return '<tr style="border-top:1px solid #F0DDA8"><td style="padding:2px 6px">'+(x.step?'第 '+x.step+' 步'+(x.title?'<div style="color:#999;font-size:12px">'+esc(x.title.slice(0,18))+'</div>':''):'—')+'</td><td style="padding:2px 6px">'+esc(x.ing)+'</td><td style="padding:2px 6px">'+ns(x.grams)+' g</td>'
+        +(x.ok?'<td style="padding:2px 6px;font-weight:bold;color:#B5470B">'+ns(x.h)+' 平匙</td><td style="padding:2px 6px;color:#666">'+(Math.abs(x.diff||0)>1e-9?'約 '+ns(x.h*x.sp.g)+' g（差 '+Math.round(x.diff*100)+'%，在容許誤差內）':'剛好')+'</td>'
+              :'<td style="padding:2px 6px;color:#666">維持 '+ns(x.grams)+' g</td><td style="padding:2px 6px;color:#666">'+esc(x.why)+'（換算 '+ns(x.h)+' 平匙），照規格維持秤重</td>')+'</tr>'}).join('')+'</table>'
+      +'<div style="color:#888;font-size:12px;margin-top:4px">規格（專案推動平匙換算定案）：'+Object.keys(used).map(function(k){return specTxt(k,used[k])}).join('；')+'</div></div>';
+    return t}
+  function text(H){var ch=(H||[]).filter(function(x){return x.ok});if(!ch.length)return '';
+    return '🥄 門市食譜還有 '+ch.length+' 處平匙食材寫克數（只提醒，可以照樣送出）：\n'+ch.slice(0,6).map(function(x){return '　'+(x.step?'第 '+x.step+' 步 ':'')+x.ing+' '+ns(x.grams)+' g → '+ns(x.h)+' 平匙'}).join('\n')+(ch.length>6?'\n　…共 '+ch.length+' 處':'')}
+  return {load:load,on:function(f){S.subs.push(f)},hints:hints,html:html,text:text,judge:judge,state:function(){return S}};
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>📝 新品申請表</title>
 <!-- 2026-10-17 深夜 🧬 食譜演化：①大圖用網站縮圖（static/thumbs/r/{id}.jpg，tools/make_thumbs.py：超過 200KB 的封面縮成長邊 480px），點圖在頁面上放大看、可再點「看原圖」②家族也看「相同步驟」（lineage.gs shared_steps；顯示「跟『X』共用 N 個圖片影片、M 個相同步驟」）。 -->
@@ -3723,6 +3777,7 @@ function sendReq(force){if(_busy)return;
   var nm=String(h.fname||'').trim()||String(h.name||'').trim(),isNew=!h.req_id,moved=!isNew&&AP.sub.campId&&AP.sub.campId!==h.campaign_id;
   if(!force&&!confirm((isNew?'送件到檔期':'更新已送出的申請單')+'\n\n檔期：'+campText()+'\n商品：'+(nm||'（還沒填名稱）')+'\n'
       +(isNew?'會新增一張申請單，系統自動編第幾支。':'會覆蓋「'+curLabel()+'」的內容。'+(moved?'\n⚠ 你改了檔期：送出後這張單會移到新檔期、重新編號。':''))
+      +(rcOk(AP.recipe)&&SpoonHint.text(SpoonHint.hints(AP.recipe.steps))?'\n\n'+SpoonHint.text(SpoonHint.hints(AP.recipe.steps)):'')   /* 2026-10-29 平匙提醒（不擋） */
       +'\n\n確定送出？'))return;
   var tk=null;
   /* 2026-10-07：送件中顯示已等幾秒；沒記主廚密碼時，密碼跟送件一趟送出（credRun） */
@@ -4696,8 +4751,13 @@ function parseSteps(html,fname){var doc;try{doc=new DOMParser().parseFromString(
   if(!steps.length)return null;
   steps.forEach(function(s){s.h=rcClean(s.h)});
   return {name:name,file:String(fname||''),info:info,steps:steps}}
+/* 2026-10-29 經營者：申請表填寫時就提醒主廚改平匙（只提醒不擋；表一用料維持克數）→ 匯入的食譜步驟裡，專案推動已定案的食材寫 g 的列出建議平匙數（SPOON-HINT 在 <head>） */
+function spHintNow(){var r=AP.recipe;if(!rcOk(r))return '';
+  return SpoonHint.html(SpoonHint.hints(r.steps),{act:'送件',redo:'請改 Word 食譜檔裡那幾步的用量（不用重新匯入申請表）；上傳門市平板（📤 新食譜上傳）時用改好的檔。'})}
+SpoonHint.on(function(){var el=document.getElementById('spHint');if(el)el.innerHTML=spHintNow()});
+SpoonHint.load();
 function rcLineHTML(){var r=AP.recipe;
-  if(rcOk(r))return '<div class="ap-okline" style="margin:2px 0 6px">🍰 門市食譜步驟已一起記下：<b>'+r.steps.length+'</b> 步（《'+esc(r.file||r.name)+'》）——門市平板的食譜請用「📤 新食譜上傳」上傳試做版，核准後在最下方 ③「🔗 接上試做版」</div>';
+  if(rcOk(r))return '<div id="spHint">'+spHintNow()+'</div>'+'<div class="ap-okline" style="margin:2px 0 6px">🍰 門市食譜步驟已一起記下：<b>'+r.steps.length+'</b> 步（《'+esc(r.file||r.name)+'》）——門市平板的食譜請用「📤 新食譜上傳」上傳試做版，核准後在最下方 ③「🔗 接上試做版」</div>';
   if(AP.recipeMsg)return '<div class="ap-muted" style="margin:2px 0 6px">🍰 '+esc(AP.recipeMsg)+'</div>';
   return ''}
 var RBST={'已核准':1,'已核准（採購寫入失敗）':1,'已寫入採購':1};
