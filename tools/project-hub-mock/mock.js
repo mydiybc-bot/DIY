@@ -73,6 +73,17 @@ var G = {
 var ctx = vm.createContext(Object.assign({ console: console }, G));
 ['Code.gs', 'seed.gs', 'purpose.gs'].concat(fs.readdirSync(GAS).filter(function (f) { return /^zz_.*\.gs$/.test(f); })).forEach(function (f) {   /* zz_*.gs＝要在編輯器跑一次的暫時檔，本機先跑 /mock/run?fn= 驗證 */ vm.runInContext(fs.readFileSync(path.join(GAS, f), 'utf8'), ctx, { filename: f }); });
 vm.runInContext('function __call(fn, arg){ return this[fn](arg); }', ctx);
+/* 2026-10-29：MOCK_SPOON＝線上 GET ?action=spoon 的 JSON（或同格式），先放進假試算表，用真資料點測平匙換算／執行進度 */
+if (process.env.MOCK_SPOON) {
+  var fx = JSON.parse(fs.readFileSync(process.env.MOCK_SPOON, 'utf8')); fx = fx.data || fx;
+  var TT = vm.runInContext('T', ctx);
+  [['spoon_lines', fx.lines], ['spoon_set', fx.set], ['spoon_spec_log', fx.spec_log], ['spoon_evo', fx.evo], ['spoon_final', fx.final]].forEach(function (x) {
+    if (!x[1] || !x[1].length) return;
+    var cols = TT[x[0]].cols, sh = MAIN.insertSheet(x[0]);
+    sh.rows = [cols.slice()].concat(x[1].map(function (o) { return cols.map(function (c) { return o[c] == null ? '' : String(o[c]); }); }));
+  });
+  console.log('MOCK_SPOON 已載入：' + process.env.MOCK_SPOON);
+}
 
 /* ---------- HTTP ---------- */
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };

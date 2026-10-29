@@ -6,6 +6,8 @@
      跟專案推動 spoon_lines 比：完全一樣 → 不寫（不備份）；有變 → 先把分頁複製成 bk_spoon_lines_MMdd-HHmm，再整張換掉。
    first_spoon（第一版平匙數）照舊資料同一支食譜同食材同克數帶過去；每一處另記 use_step／purpose（使用目的：
      領料那一步往後第一個步驟內容提到這個食材的步驟，依標題歸類；專案推動 purpose.gs 有人工修正的仍以那份為準）。
+   2026-10-29（經營者：定案明細要能直接拿來改正式食譜）：每一處另記 recipe_id（後台食譜編號）、step_no（第幾步，跟後台步驟順序一樣從 1 算）、
+     step_title（步驟標題）、seq（同一支同一步同食材同克數的第幾個）；比對有沒有變動也看這幾欄（食譜改名、步驟移動都算變動）。
    ⚠ 只讀後台，不改、不刪後台任何東西；只寫專案推動試算表的 spoon_lines 與備份分頁。
    入口：POST action=spoonRefresh（免身分密碼；同時間只跑一個）、排程 spoonDaily（每天 6 點，spoonFeedSetup 建）。 */
 var SF_SHEET = '1VE1dsSPk0Bl2dyTWrNo3G_oasD4pCR3ihllNedcOOT4';   /* 專案推動_資料庫 */
@@ -86,14 +88,16 @@ function sfRun_(p, by) {
   for (var b = 0; b < recs.length; b += SF_BATCH) {
     var part = recs.slice(b, b + SF_BATCH), htmls = sfFetch_(sess, part.map(function (r) { return r.id; }));
     part.forEach(function (r, j) {
-      var steps = sfSteps_(htmls[j]);
+      var steps = sfSteps_(htmls[j]), seen = {};
       steps.forEach(function (s, k) {
         s.ing.forEach(function (g) {
           if (g.u !== 'g') return;
           if (!ings[g.n]) { if (/粉|糖|鹽|巧克力/.test(g.n)) miss[g.n] = (miss[g.n] || 0) + 1; return; }
           var use = '';
           for (var x = k; x < steps.length && !use; x++) if (steps[x].c.indexOf(g.n) >= 0) use = steps[x].t;
-          lines.push({ recipe: r.title, ingredient: g.n, grams: String(g.q), use_step: use || s.t, purpose: sfPurpose_(use || s.t) });
+          var sk = (k + 1) + '|' + g.n + '|' + g.q; seen[sk] = (seen[sk] || 0) + 1;
+          lines.push({ recipe: r.title, ingredient: g.n, grams: String(g.q), use_step: use || s.t, purpose: sfPurpose_(use || s.t),
+            recipe_id: r.id, step_no: String(k + 1), step_title: s.t, seq: String(seen[sk]) });
         });
       });
     });
@@ -105,7 +109,9 @@ function sfRun_(p, by) {
   if (tRead > 270 && !p.dry) throw fail_('門市食譜後台這次很慢（讀了 ' + tRead + ' 秒），為了安全這次不寫入，資料維持原樣；請過幾分鐘再按一次', 'slow');
   /* ④ 跟現在的快照比 */
   var cur = sfTable_(ss, 'spoon_lines'), key = function (o) { return o.recipe + '|' + o.ingredient + '|' + Number(o.grams); };
-  var cnt = function (arr) { var o = {}; arr.forEach(function (x) { var k = key(x); o[k] = (o[k] || 0) + 1; }); return o; };
+  /* 比對變動多看後台編號、第幾步（2026-10-29）；first_spoon 帶過去仍用 key（甜點｜食材｜克數） */
+  var key2 = function (o) { return key(o) + '|' + (o.recipe_id || '') + '|' + (o.step_no || '') + '|' + (o.seq || ''); };
+  var cnt = function (arr) { var o = {}; arr.forEach(function (x) { var k = key2(x); o[k] = (o[k] || 0) + 1; }); return o; };
   var a = cnt(cur.rows), bb = cnt(lines), add = [], del = [];
   Object.keys(bb).forEach(function (k) { for (var i = (a[k] || 0); i < bb[k]; i++) add.push(k); });
   Object.keys(a).forEach(function (k) { for (var i = (bb[k] || 0); i < a[k]; i++) del.push(k); });
@@ -116,7 +122,7 @@ function sfRun_(p, by) {
     add: add.length, del: del.length, add_lines: add.slice(0, 60), del_lines: del.slice(0, 60),
     other_g: Object.keys(miss).sort(function (x, y) { return miss[y] - miss[x]; }).slice(0, 30).map(function (n) { return n + ' ' + miss[n]; }),
     ings: Object.keys(ings).length, by: by || 'button', t_read: tRead };
-  var curHasUse = cur.head.indexOf('use_step') >= 0;
+  var curHasUse = cur.head.indexOf('use_step') >= 0 && cur.head.indexOf('recipe_id') >= 0;   /* 舊格式沒有這些欄 → 一定重寫一次 */
   if (p.dry) { res.dry = true; res.changed = !!(add.length || del.length || !curHasUse); res.took = Math.round((Date.now() - t0) / 1000); return { msg: '試讀（沒寫）', data: res }; }
   if (!add.length && !del.length && curHasUse && !p.force) { res.changed = false; res.took = Math.round((Date.now() - t0) / 1000); return { msg: '沒有變動', data: res }; }
   /* ⑤ 有變 → 先備份，再整張換掉（first_spoon 照舊資料帶過去） */
@@ -126,10 +132,11 @@ function sfRun_(p, by) {
     if (cur.sh) { var old = ss.getSheetByName(bk); if (old) bk += '_' + Utilities.formatDate(new Date(), TZ, 'ss'); cur.sh.copyTo(ss).setName(bk); }
     var fsQ = {}; cur.rows.forEach(function (r) { (fsQ[key(r)] = fsQ[key(r)] || []).push(r.first_spoon || ''); });
     var stamp = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'), src = '門市食譜後台：台灣繁中啟用中 ' + recs.length + ' 支（自動讀取）';
-    var head = ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose'];
+    var head = ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose', 'recipe_id', 'step_no', 'step_title', 'seq'];
     cur.head.forEach(function (h) { if (h && head.indexOf(h) < 0) head.push(h); });
     var vals = [head].concat(lines.map(function (l) {
-      var q = fsQ[key(l)], o = { recipe: l.recipe, ingredient: l.ingredient, grams: l.grams, first_spoon: q && q.length ? q.shift() : '', snap_date: stamp, source: src, use_step: l.use_step, purpose: l.purpose };
+      var q = fsQ[key(l)], o = { recipe: l.recipe, ingredient: l.ingredient, grams: l.grams, first_spoon: q && q.length ? q.shift() : '', snap_date: stamp, source: src, use_step: l.use_step, purpose: l.purpose,
+        recipe_id: l.recipe_id, step_no: l.step_no, step_title: l.step_title, seq: l.seq };
       return head.map(function (h) { return o[h] == null ? '' : String(o[h]); });
     }));
     var sh = cur.sh || ss.insertSheet('spoon_lines');

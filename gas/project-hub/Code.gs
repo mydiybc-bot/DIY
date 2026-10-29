@@ -15,6 +15,9 @@
  *   {action:'specSave', ingredient, spoon_ml, g_per_spoon, real_g, note}      量匙規格（ml）＋食譜用克數＋真實克數；同時記一列 spoon_spec_log
  *                                                                              （2026-10-21 經營者：「儲存變更改成不需要密碼」→ 這個動作免 pw，其他寫入照舊要密碼）
  *   {action:'evoSnap', version, ver_date, rows:[…]}                           把頁面算好的換算記成一個版本（同一行同版本名稱會先標刪除再寫）
+ *   {action:'finalConfirm', ingredient, g_per_spoon, spoon_ml, max_spoons, tol_pct, snap_date, uses:{line_key:數}}   v2.0：平匙換算頁「✅ 確認轉換到執行進度」
+ *   {action:'finalEdit', fin_id, value('' 恢復系統算的｜數字｜'秤重'), reason}                               v2.0：已定案明細手動調整平匙數
+ *   {action:'finalApplied', fin_ids:[…], batch, date, undo}                                                 v2.0：記錄已套用到門市食譜後台（Claude 改完後台用）
  *   {action:'authSetup'}（免密碼）                   權限中心 dim_auth 補「project」列（只補沒有的；密碼空白＝還不能用，經營者在權限管理後台設）
  * 所有儲存格一律存純文字（避免數字、日期被試算表自動轉格式）。
  *
@@ -29,7 +32,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v1.9';   /* v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v2.0';   /* v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -42,7 +45,12 @@ var T = {
   decisions: { id: 'dec_id', cols: ['dec_id', 'project_id', 'no', 'question', 'suggestion', 'answer', 'status', 'decided_at', 'updated_at', 'deleted', 'due', 'blocks'] },
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
   people:    { id: 'person_id', cols: ['person_id', 'name', 'role', 'email', 'note', 'updated_at', 'deleted'] },
-  spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose'] },
+  spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose', 'recipe_id', 'step_no', 'step_title', 'seq'] },   /* v2.0：recipe_id＝後台食譜編號、step_no＝第幾步、seq＝同一步同食材同克數的第幾個 */
+  /* v2.0 定案明細（2026-10-29 經營者：「平匙換算頁按確認就把當下資料轉到執行進度；已定案明細的平匙數可手動調；正式食譜依這份調整」）
+     一處一列；line_key＝recipe_id|step_no|食材|克數|seq。calc_*＝系統依當下規格算的；manual_spoons＝手動（數字或「秤重」）；final_spoons＝最後要用的（空白＝維持秤重）。
+     重新確認同一食材：快照裡有的那幾處重算（舊列標 deleted=Y、replaced_by＝新批號），手動改過的照搬；快照裡已經沒有的（改完後台或停用）原樣保留。 */
+  spoon_final: { id: 'fin_id', cols: ['fin_id', 'batch', 'ingredient', 'recipe', 'recipe_id', 'step_no', 'step_title', 'grams', 'seq', 'line_key', 'g_per_spoon', 'spoon_ml', 'max_spoons', 'tol_pct',
+    'calc_spoons', 'calc_ok', 'calc_why', 'manual_spoons', 'manual_reason', 'manual_at', 'final_spoons', 'uses', 'purpose', 'use_step', 'source', 'confirmed_at', 'applied_at', 'applied_batch', 'updated_at', 'deleted', 'replaced_by'] },
   spoon_set: { id: 'ingredient', cols: ['ingredient', 'g_per_spoon', 'max_spoons', 'tol_pct', 'note', 'saved_at', 'spoon_ml', 'real_g', 'kind'] },   /* kind（v1.6）：deco＝裝飾乾料，只登記量匙與 1 匙實測克數，不做換算 */
   spoon_spec_log: { id: 'log_id', cols: ['log_id', 'ingredient', 'version', 'eff_date', 'spoon_ml', 'recipe_g', 'real_g', 'note', 'saved_at', 'deleted'] },
   spoon_evo: { id: 'evo_id', cols: ['evo_id', 'line_key', 'recipe', 'recipe_id', 'step', 'step_title', 'ingredient', 'grams', 'version', 'ver_date', 'spoons', 'spoon_ml', 'g_per_spoon', 'real_g', 'note', 'source', 'updated_at', 'deleted'] },
@@ -83,6 +91,9 @@ function doPost(e) {
         if (a === 'del') return del_(b.table, b.id);
         if (a === 'spoonSave') return spoonSave_(b);
         if (a === 'evoSnap') return evoSnap_(b);
+        if (a === 'finalConfirm') return finalConfirm_(b);
+        if (a === 'finalEdit') return finalEdit_(b);
+        if (a === 'finalApplied') return finalApplied_(b);
         throw new Error('不認得的動作：' + a);
       });
     }
@@ -199,7 +210,7 @@ function spoon_() {
     l.use_step = x ? x[0] : (l.use_step || ''); l.purpose = x ? x[1] : (l.purpose || '');
   });
   return { lines: lines, set: rows_('spoon_set').map(clean_), snap_date: lines.length ? lines[0].snap_date : '', source: lines.length ? lines[0].source : '',
-    spec_log: live_('spoon_spec_log'), evo: live_('spoon_evo') };
+    spec_log: live_('spoon_spec_log'), evo: live_('spoon_evo'), final: live_('spoon_final') };
 }
 
 /* ---------------- 寫 ---------------- */
@@ -293,6 +304,100 @@ function evoSnap_(b) {
   append_('spoon_evo', add);
   log_('evoSnap', 'spoon_evo', ver, '寫入 ' + add.length + ' 列、取代 ' + del + ' 列，生效 ' + vd);
   return { ok: true, data: { added: add, replaced: del } };
+}
+
+/* ---------------- v2.0 定案明細 ---------------- */
+/* 跟頁面 judge() 同一套：平匙數＝重量 ÷ 一平匙克數，取最近的整數或 .5；誤差內、不超過上限、至少半匙才可換 */
+function judge_(grams, g, maxn, tol) {
+  var n = grams / g, h = Math.round(n * 2) / 2, diff = h > 0 ? (h * g - grams) / grams : -1;
+  var hit = Math.abs(n - h) < 1e-6 || (tol > 0 && Math.abs(diff) <= tol / 100 + 1e-9);
+  if (h < 0.5) return { h: h, ok: false, why: '不到半平匙' };
+  if (!hit) return { h: h, ok: false, why: '不是整數或半平匙' };
+  if (maxn > 0 && h > maxn) return { h: h, ok: false, why: '超過 ' + maxn + ' 平匙，太多' };
+  return { h: h, ok: true, why: '' };
+}
+function lineKey_(o) { return [o.recipe_id, o.step_no, o.ingredient, Number(o.grams), o.seq || 1].join('|'); }
+function numStr_(x) { return String(Math.round(Number(x) * 1000) / 1000); }
+function finalConfirm_(b) {
+  var ing = String(b.ingredient || '').trim(), g = Number(b.g_per_spoon), maxn = Number(b.max_spoons) || 0, tol = Number(b.tol_pct) || 0;
+  if (!ing) throw new Error('缺食材');
+  if (!(g > 0 && g < 1000)) throw new Error('一平匙克數要大於 0');
+  var lines = rows_('spoon_lines').filter(function (l) { return l.ingredient === ing; });
+  if (!lines.length) throw new Error('食譜用量裡沒有「' + ing + '」');
+  if (lines.some(function (l) { return !l.recipe_id || !l.step_no; })) throw new Error('食譜用量還沒記到後台編號和第幾步（要先按「🔄 更新食譜用量」一次），先不能確認');
+  if (b.snap_date && lines[0].snap_date !== String(b.snap_date)) throw new Error('食譜用量在你打開頁面之後更新過（' + lines[0].snap_date + '），請重新整理頁面、看過再確認');
+  var t = now_(), batch = 'F' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyMMdd-HHmmss'), uses = b.uses || {}, ml = String(b.spoon_ml == null ? '' : b.spoon_ml).trim();
+  var old = rows_('spoon_final').filter(function (r) { return r.deleted !== 'Y' && r.ingredient === ing; }), oldBy = {};
+  old.forEach(function (r) { (oldBy[r.line_key] = oldBy[r.line_key] || []).push(r); });
+  var newKeys = {}, add = [], kept = 0, keptList = [];
+  lines.forEach(function (l, i) {
+    var lk = lineKey_(l), j = judge_(Number(l.grams), g, maxn, tol), o = (oldBy[lk] || [])[0];
+    newKeys[lk] = 1;
+    var row = { fin_id: batch + '-' + ('000' + i).slice(-4), batch: batch, ingredient: ing, recipe: l.recipe, recipe_id: l.recipe_id, step_no: l.step_no, step_title: l.step_title, grams: l.grams, seq: l.seq || '1', line_key: lk,
+      g_per_spoon: numStr_(g), spoon_ml: ml, max_spoons: String(maxn), tol_pct: String(tol), calc_spoons: numStr_(j.h), calc_ok: j.ok ? 'Y' : 'N', calc_why: j.why,
+      manual_spoons: '', manual_reason: '', manual_at: '', final_spoons: j.ok ? numStr_(j.h) : '', uses: uses[lk] == null ? (o ? o.uses : '') : String(uses[lk]),
+      purpose: l.purpose || '', use_step: l.use_step || '', source: '平匙換算頁確認', confirmed_at: t, applied_at: '', applied_batch: '', updated_at: t, deleted: '', replaced_by: '' };
+    if (o && o.manual_spoons !== '') {   /* 手動改過的照搬，不被重算蓋掉 */
+      row.manual_spoons = o.manual_spoons; row.manual_reason = o.manual_reason; row.manual_at = o.manual_at; row.final_spoons = o.final_spoons;
+      kept++; keptList.push(l.recipe + '：' + o.manual_spoons + (o.manual_spoons === '秤重' ? '' : ' 平匙'));
+    }
+    add.push(row);
+  });
+  var replaced = 0, untouched = 0;
+  old.forEach(function (r) {
+    if (newKeys[r.line_key]) { var c = clean_(r); c.deleted = 'Y'; c.replaced_by = batch; c.updated_at = t; writeRow_('spoon_final', r._row, c); replaced++; }
+    else untouched++;
+  });
+  append_('spoon_final', add);
+  /* 定案的規格同步存回平匙規格表（跟按「💾 存成設定」一樣，另記一列規格紀錄） */
+  var sh = rows_('spoon_set').filter(function (r) { return r.ingredient === ing; })[0];
+  var so = sh ? clean_(sh) : { ingredient: ing, real_g: '', kind: '' };
+  so.g_per_spoon = numStr_(g); so.max_spoons = String(maxn); so.tol_pct = String(tol); if (ml !== '') so.spoon_ml = numStr_(ml);
+  so.note = '確認轉換到執行進度（' + batch + '）'; so.saved_at = t;
+  if (sh) writeRow_('spoon_set', sh._row, so); else append_('spoon_set', [so]);
+  specLog_(so, '確認轉換到執行進度');
+  var okN = add.filter(function (r) { return r.final_spoons !== ''; }).length;
+  log_('finalConfirm', 'spoon_final', ing, batch + '：' + add.length + ' 處（換 ' + okN + '、秤重 ' + (add.length - okN) + '）、取代舊列 ' + replaced + '、手動照搬 ' + kept + '、快照外保留 ' + untouched);
+  return { ok: true, data: { batch: batch, rows: add, total: add.length, ok: okN, keep: add.length - okN, replaced: replaced, manual_kept: kept, manual_list: keptList, untouched: untouched, set: so } };
+}
+/* 手動調平匙數：value＝數字（0.5 的倍數，0.5～20）、'秤重'（改成維持秤重）、''（恢復系統算的） */
+function finalEdit_(b) {
+  var id = String(b.fin_id || ''), v = String(b.value == null ? '' : b.value).trim(), why = String(b.reason || '').trim();
+  var hit = rows_('spoon_final').filter(function (r) { return r.fin_id === id && r.deleted !== 'Y'; })[0];
+  if (!hit) throw new Error('找不到這一處（可能剛被重新確認取代了，請重新整理）');
+  if (hit.applied_at) throw new Error('這一處已經套用到門市食譜後台（' + hit.applied_batch + '），不能在這裡改；要改請跟 Claude 說');
+  var o = clean_(hit), before = o.final_spoons === '' ? '秤重' : o.final_spoons, t = now_();
+  if (v === '') { o.manual_spoons = ''; o.manual_reason = ''; o.manual_at = ''; o.final_spoons = o.calc_ok === 'Y' ? o.calc_spoons : ''; }
+  else {
+    if (why.length < 2) throw new Error('請寫手動調整的原因');
+    if (v === '秤重') o.final_spoons = '';
+    else {
+      var n = Number(v);
+      if (!(n > 0) || Math.abs(n * 2 - Math.round(n * 2)) > 1e-9) throw new Error('平匙數只能是 0.5 的倍數（例 1、1.5、2）');
+      if (n < 0.5 || n > 20) throw new Error('平匙數要在 0.5～20 之間');
+      v = numStr_(n); o.final_spoons = v;
+    }
+    o.manual_spoons = v; o.manual_reason = why.slice(0, 300); o.manual_at = t;
+  }
+  o.updated_at = t;
+  writeRow_('spoon_final', hit._row, o);
+  log_('finalEdit', 'spoon_final', id, o.recipe + '｜' + o.ingredient + ' ' + o.grams + ' g：' + before + ' → ' + (o.final_spoons === '' ? '秤重' : o.final_spoons) + (v === '' ? '（恢復系統算的）' : '（手動：' + why + '）'));
+  return { ok: true, data: o };
+}
+/* 記錄哪幾處已套用到門市食譜後台（undo＝清掉，後台還原時用） */
+function finalApplied_(b) {
+  var ids = b.fin_ids || [], batch = String(b.batch || '').trim(), d = String(b.date || today_());
+  if (!ids.length) throw new Error('沒有要記的項目');
+  if (!b.undo && !batch) throw new Error('缺套用批號');
+  var want = {}; ids.forEach(function (x) { want[x] = 1; });
+  var n = 0, t = now_();
+  rows_('spoon_final').forEach(function (r) {
+    if (r.deleted === 'Y' || !want[r.fin_id]) return;
+    var o = clean_(r); o.applied_at = b.undo ? '' : d; o.applied_batch = b.undo ? '' : batch; o.updated_at = t; writeRow_('spoon_final', r._row, o); n++;
+  });
+  if (n !== ids.length) throw new Error('只找到 ' + n + ' / ' + ids.length + ' 處（其餘可能被重新確認取代），已記錄找到的');
+  log_('finalApplied', 'spoon_final', batch, (b.undo ? '取消 ' : '') + n + ' 處');
+  return { ok: true, data: { n: n } };
 }
 
 /* ---------------- 每日提醒（跟前端「本週要做」同一套規則） ---------------- */
