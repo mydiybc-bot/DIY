@@ -156,6 +156,21 @@ button{font:inherit;cursor:pointer}
 .mt .acts{display:flex;gap:8px;margin-top:6px}
 .mt .acts button{border:0;border-radius:12px;padding:8px 14px;font-size:16px;background:#F3ECE8}
 .mt .acts .del{background:var(--badbg);color:var(--bad)}
+.neg{border:2px solid #F3C2BA;background:#FFF5F3;border-radius:16px;padding:12px;margin:0 0 10px}
+.neg .h{font-size:16px;color:var(--mute)}
+.neg .h b{color:var(--bad);font-size:20px;letter-spacing:1px}
+.neg .x{font-size:18px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
+.neg .k{display:inline-block;font-size:14px;border-radius:99px;padding:1px 9px;background:var(--badbg);color:var(--bad);margin-left:6px}
+.camp{border:2px solid #C8DCF2;background:#F3F8FE;border-radius:16px;padding:0;margin:0 0 10px}
+.camp summary{list-style:none;cursor:pointer;padding:12px}
+.camp summary::-webkit-details-marker{display:none}
+.camp .cn{font-size:21px;font-weight:800;color:#1F4A7A}
+.camp .cs{display:inline-block;font-size:15px;border-radius:99px;padding:1px 10px;background:#1F6FB8;color:#fff;margin-left:6px;vertical-align:2px}
+.camp .cd{font-size:16px;color:#40597A;margin-top:2px}
+.camp .cx{padding:0 12px 12px;font-size:17px}
+.camp .cx h4{margin:10px 0 2px;font-size:18px;color:#1F4A7A}
+.camp .cx ul{margin:0;padding-left:22px}
+.camp .cx .q{color:var(--mute);font-size:15px}
 @media (max-width:420px){.days{gap:4px}.day .q{font-size:17px}.goal{grid-template-columns:1fr}.top h1{font-size:24px}}
 </style>
 </head>
@@ -167,11 +182,12 @@ button{font:inherit;cursor:pointer}
 'use strict';
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API v6 */
 var SNAP_API = 'https://script.google.com/macros/s/AKfycbw55lxutTkj13v1E5pa3fVClI08K1ObXqj3V_VNOG3PV8rUaIe8l2ublZuEjMophVKFMw/exec'; /* 決策中心讀取窗口 */
+var REQ_API = 'https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';   /* 2026-10-30 食譜系統申請單 API 公開查詢（檔期、已核准新品） */
 var RSV_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';   /* 訂位資料管線：fn=refreshNear（15 分鐘內只抓一次今明後 3 天，12 店共用） */
 var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
 var WK = ['日','一','二','三','四','五','六'];
 var EMB = !!new URLSearchParams(location.search).get('embed');   /* 2026-10-17 被「自己做決策中心」入口裝進去 */
-var S = { sid: 0, pw: '', hq: false, day: null, live: null, mini: null, ann: null, err: {}, selDay: '', mgr: null, rsv: null, rsvBusy: false };
+var S = { sid: 0, pw: '', hq: false, day: null, live: null, mini: null, ann: null, rev: null, camp: null, campOpen: {}, err: {}, selDay: '', mgr: null, rsv: null, rsvBusy: false };
 var $app = document.getElementById('app'), $mask = document.getElementById('mask'), $sheet = document.getElementById('sheet');
 
 /* ---------- 小工具 ---------- */
@@ -224,7 +240,7 @@ function init(){
     var a = dcAuth(); s = Number(q.get('s')) || 0;
     if (!a || !(s >= 1 && s <= 12) || !(a.role === 'hq' || (a.role === 'store' && Number(a.sid) === s))) return relogin('請重新登入');
     S.sid = s; S.hq = a.role === 'hq'; S.pw = a.pw;
-    try { var c0 = JSON.parse(ls('st_cache_' + s) || 'null'); if (c0 && c0.day && c0.day.today === tpeToday()) { S.day = c0.day; S.live = c0.live; S.mini = c0.mini; S.ann = c0.ann; S.cached = c0.at; } } catch(e){}
+    try { var c0 = JSON.parse(ls('st_cache_' + s) || 'null'); if (c0 && c0.day && c0.day.today === tpeToday()) { S.day = c0.day; S.live = c0.live; S.mini = c0.mini; S.ann = c0.ann; S.rev = c0.rev || null; S.camp = c0.camp || null; S.cached = c0.at; } } catch(e){}
     renderMain(); load(); return;
   }
   if (!(s >= 1 && s <= 12)) return renderPick();
@@ -232,7 +248,7 @@ function init(){
   if (q.get('s') !== String(s)) history.replaceState(null, '', '?s=' + s);
   S.pw = ls('st_pw_' + s) || '';
   if (!S.pw) return renderLogin('');
-  try { var c = JSON.parse(ls('st_cache_' + s) || 'null'); if (c && c.day && c.day.today === tpeToday()) { S.day = c.day; S.live = c.live; S.mini = c.mini; S.ann = c.ann; S.cached = c.at; } } catch(e){}
+  try { var c = JSON.parse(ls('st_cache_' + s) || 'null'); if (c && c.day && c.day.today === tpeToday()) { S.day = c.day; S.live = c.live; S.mini = c.mini; S.ann = c.ann; S.rev = c.rev || null; S.camp = c.camp || null; S.cached = c.at; } } catch(e){}
   renderMain(); load();
 }
 function renderPick(){
@@ -274,12 +290,18 @@ function load(skipDay){
     function(e){ S.err.live = e.message; paint('week'); }));
   jobs.push(jsonpRetry(SNAP_API + '?action=mini&store=' + S.sid).then(function(j){ if (j && j.ok) S.mini = j; else S.err.mini = (j && j.error) || '讀取失敗'; paint('goal'); },
     function(e){ S.err.mini = e.message; paint('goal'); }));
+  jobs.push(jsonpRetry(SNAP_API + '?action=reviews&store=' + S.sid).then(function(j){ if (j && j.ok) S.rev = j; else S.err.rev = (j && j.error) || '讀取失敗'; paint('neg'); },
+    function(e){ S.err.rev = e.message; paint('neg'); }));
+  jobs.push(Promise.all([jsonpRetry(REQ_API + '?action=listCampaigns'), jsonpRetry(REQ_API + '?action=newItemsPub').catch(function(){ return null; })]).then(function(r){
+    if (!r[0] || !r[0].ok) { S.err.camp = (r[0] && r[0].msg) || '讀取失敗'; return; }
+    S.camp = { camps: r[0].data || [], items: (r[1] && r[1].ok && r[1].data && r[1].data.items) || [], itemsErr: !(r[1] && r[1].ok) }; paint('camp');
+  }, function(e){ S.err.camp = e.message; }));
   jobs.push(post({ action: 'active' }, 45000).then(function(j){ if (j.ok) S.ann = j.data; else S.err.ann = j.msg; paint('ann'); },
     function(e){ S.err.ann = e.message; paint('ann'); }));
   refreshRsv();
   Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){
     loading = false; S.cached = '';
-    if (S.pw && S.day) ls('st_cache_' + S.sid, JSON.stringify({ at: new Date().toISOString(), day: S.day, live: S.live, mini: S.mini, ann: S.ann }));
+    if (S.pw && S.day) ls('st_cache_' + S.sid, JSON.stringify({ at: new Date().toISOString(), day: S.day, live: S.live, mini: S.mini, ann: S.ann, rev: S.rev, camp: S.camp }));
     paint('fresh');
   });
   paint('fresh');
@@ -310,6 +332,8 @@ function renderMain(){
     '<div class="top"><h1>🏪 ' + esc(shortOf(S.sid)) + '店</h1><div class="dt">' + md(t) + '（' + WK[dObj(t).getDay()] + '）</div><button class="rf" id="rf" title="重新整理">↻</button></div>' +
     '<div class="fresh" id="fresh"></div>' +
     '<div class="sec"><h2>✅ 今天要做 <span class="n" id="todoN" style="display:none"></span></h2><div id="todo"></div></div>' +
+    '<div class="sec" id="negSec" style="display:none"><h2>😟 這 3 天的負評 <span class="n" id="negN"></span></h2><div id="neg"></div></div>' +
+    '<div class="sec" id="campSec" style="display:none"><h2>🆕 新品・新檔期</h2><div id="camp"></div></div>' +
     '<div class="sec"><h2>👥 團體客人 <span class="at" id="grpAt"></span></h2><div id="grp"></div></div>' +
     '<div class="sec"><h2>📅 這 7 天的客人 <span class="at" id="weekAt"></span></h2><div id="week"></div></div>' +
     '<div class="sec"><h2>🏆 本月目標</h2><div id="goal"></div></div>' +
@@ -325,7 +349,7 @@ function renderMain(){
   document.getElementById('out').onclick = function(){ if (!confirm('登出這台裝置？')) return; ls('st_pw_' + S.sid, null); ls('st_cache_' + S.sid, null); location.reload(); };
   document.getElementById('chg').onclick = function(){ ls('st_sid', null); location.href = location.pathname; };
   }
-  ['todo','grp','week','goal','ann','fresh','grpAt','weekAt'].forEach(paint);
+  ['todo','neg','camp','grp','week','goal','ann','fresh','grpAt','weekAt'].forEach(paint);
 }
 function paint(k){
   var el = document.getElementById(k); if (!el) return;
@@ -335,6 +359,8 @@ function paint(k){
   else if (k === 'week') el.innerHTML = weekHtml(), bindWeek();
   else if (k === 'goal') el.innerHTML = goalHtml();
   else if (k === 'ann') el.innerHTML = annHtml();
+  else if (k === 'neg') { var nh = negHtml(); el.innerHTML = nh; document.getElementById('negSec').style.display = nh ? '' : 'none'; }
+  else if (k === 'camp') { var ch = campHtml(); el.innerHTML = ch; document.getElementById('campSec').style.display = ch ? '' : 'none'; bindCamp(); }
   else if (k === 'grpAt') el.textContent = atLine(S.day && S.day.groups && S.day.groups.at);
   else if (k === 'weekAt') el.textContent = atLine(S.live && S.live.fut && S.live.fut.at);
 }
@@ -463,6 +489,58 @@ function goalHtml(){
     '<div class="bar"><i style="width:' + Math.min(100, Math.round(rev / tg * 100)) + '%;background:' + (rev >= tg ? 'var(--ok)' : 'var(--warn)') + '"></i></div><div class="s">' + (rev >= tg ? '這個月達標了 🎉' : '這個月還差 ' + (tg - rev) + ' 則') + '</div>' : '<div class="v">—</div>') + '</div>';
   return '<div class="goal">' + memCard + revCard + '</div>';
 }
+
+/* 😟 3 天內負評（2026-10-30 經營者：「門市今日頁，如果 3 天內有負評也需要列出來，給夥伴了解」）：決策中心 action=reviews 的 neg3（1～4 星、評論時間在今天往前 3 天內）。沒有就整塊不顯示 */
+function negHtml(){
+  var r = S.rev, n = document.getElementById('negN');
+  var ls3 = (r && r.neg3) || [];
+  if (n) { n.textContent = ls3.length; n.style.display = ls3.length ? '' : 'none'; }
+  if (!ls3.length) return '';
+  var dl = function(t){ var d = String(t || '').slice(0, 10); return d === today() ? '今天' : (Math.round((dObj(today()) - dObj(d)) / 86400000) === 1 ? '昨天' : (Math.round((dObj(today()) - dObj(d)) / 86400000) === 2 ? '前天' : md(d))); };
+  return '<div class="s" style="font-size:16px;color:var(--mute);margin:-4px 0 8px">看看客人哪裡不開心，大家一起注意 💪</div>' + ls3.map(function(x){
+    return '<div class="neg"><div class="h"><b>' + '★'.repeat(Math.max(0, Math.min(5, x.s || 0))) + '</b>　' + esc(dl(x.t)) + ' ' + esc(String(x.t || '').slice(11, 16)) + '・' + esc(x.a || '客人') + (x.k ? '<span class="k">' + esc(x.k) + '</span>' : '') + '</div>'
+      + '<div class="x">' + (x.x ? esc(x.x) : '（只給了星星，沒有寫字）') + '</div></div>';
+  }).join('');
+}
+
+/* 🆕 新品・新檔期（2026-10-30）：食譜系統申請單 API listCampaigns＋newItemsPub。顯示啟用中、還沒結束（沒填結束日＝開賣後 30 天內）、最早開賣日在 45 天內的檔期；點一下看細節 */
+var CAT_ORDER = ['食材', '耗材', '器具', '模具'];
+function addDay(s, n){ var d = dObj(s); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function campHtml(){
+  var C = S.camp; if (!C) return '';
+  var t = today(), list = (C.camps || []).map(function(c){
+    if (String(c.status || '') !== '啟用') return null;
+    var st = String(c['起'] || ''), en = String(c['迄'] || ''), ea = String(c['自己人搶先開賣日'] || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(st)) return null;
+    var first = (ea && ea < st) ? ea : st;
+    if (en ? en < t : addDay(st, 30) < t) return null;
+    if (first > addDay(t, 45)) return null;
+    return { c: c, id: String(c.campaign_id || c['檔期名稱']), st: st, en: en, ea: ea, first: first, left: Math.round((dObj(first) - dObj(t)) / 86400000),
+      state: t >= st ? '上市中' : (ea && t >= ea ? '自己人搶先中' : '即將上市'), items: (C.items || []).filter(function(it){ return it.campaign === c['檔期名稱']; }) };
+  }).filter(Boolean).sort(function(a, b){ return a.first < b.first ? -1 : 1; });
+  if (!list.length) return '';
+  return list.map(function(x){
+    var c = x.c, when = x.state === '即將上市' ? (x.left === 0 ? '今天開賣' : '還有 ' + x.left + ' 天') : x.state;
+    var h = '<details class="camp" data-camp="' + esc(x.id) + '"' + (S.campOpen[x.id] ? ' open' : '') + '><summary><div class="cn">' + esc(c['檔期名稱']) + '<span class="cs">' + esc(when) + '</span></div>'
+      + '<div class="cd">' + (x.ea ? '自己人 ' + md(x.ea) + ' 搶先・' : '') + md(x.st) + ' 開賣　👉 點我看細節</div></summary><div class="cx">';
+    h += '<h4>📅 期間</h4><ul>' + (x.ea ? '<li>自己人搶先：' + md(x.ea) + '（' + wk(x.ea) + '）</li>' : '') + '<li>正式開賣：' + md(x.st) + '（' + wk(x.st) + '）</li>'
+      + '<li>結束：' + (x.en ? md(x.en) + '（' + wk(x.en) + '）' : (c['類型'] === '常態菜單' ? '常態菜單，不會結束' : '還沒定')) + '</li>'
+      + (c['第一批配貨日'] ? '<li>第一批貨到店：' + md(c['第一批配貨日']) + '（' + wk(c['第一批配貨日']) + '）</li>' : '')
+      + (c['配合活動'] ? '<li>配合活動：' + esc(c['配合活動']) + '</li>' : '') + (c['檔期備註'] ? '<li>備註：' + esc(c['檔期備註']) + '</li>' : '') + '</ul>';
+    if (!x.items.length) return h + '<h4>🍰 新品</h4><div class="q">' + (C.itemsErr ? '新品這次沒讀到，按右上 ↻ 再試' : '新品還在審核，核准後這裡會自動出現') + '</div></div></details>';
+    h += '<h4>🍰 新品（' + x.items.length + ' 款）</h4><ul>' + x.items.map(function(it){ return '<li>' + esc(it.dessert) + '</li>'; }).join('') + '</ul>';
+    var byCat = {}, seen = {};
+    x.items.forEach(function(it){ (it.lines || []).forEach(function(l){ if (!l.is_new || seen[l.name]) return; seen[l.name] = 1; var k = CAT_ORDER.indexOf(l.cat) >= 0 ? l.cat : '食材'; (byCat[k] = byCat[k] || []).push(l); }); });
+    CAT_ORDER.forEach(function(k){
+      var ls2 = byCat[k] || [];
+      h += '<h4>🆕 新' + k + '（' + ls2.length + '）</h4>' + (ls2.length ? '<ul>' + ls2.map(function(l){
+        var ex = [l.sticker && l.sticker !== l.name ? '貼紙：' + l.sticker : '', l.zone ? '放：' + l.zone : '', l.container ? '容器：' + l.container : ''].filter(Boolean).join('・');
+        return '<li>' + esc(l.name) + (ex ? '<span class="q">（' + esc(ex) + '）</span>' : '') + '</li>'; }).join('') + '</ul>' : '<div class="q">沒有</div>');
+    });
+    return h + '</div></details>';
+  }).join('');
+}
+function bindCamp(){ document.querySelectorAll('#camp details[data-camp]').forEach(function(d){ d.addEventListener('toggle', function(){ S.campOpen[d.getAttribute('data-camp')] = d.open; }); }); }
 
 /* 📢 公告 */
 function annHtml(){

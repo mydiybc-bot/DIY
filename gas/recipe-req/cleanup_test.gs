@@ -95,7 +95,7 @@ function tcDelete() {
     SpreadsheetApp.flush();
     names.forEach(function (n) { after[n] = tcCount_(n); });
     campCacheClear_();
-    try { CacheService.getScriptCache().remove('pub:newitems:v7'); } catch (e) { }
+    try { CacheService.getScriptCache().remove('pub:newitems:v8'); } catch (e) { }
     var res = { ok: true, backup: bkName, backup_id: bk.getId(), before: before, after: after,
       camps: p.camps.length, reqs: p.reqs.length, tabs: p.tabs, left: tcSummary_(tcPlan_()) };
     log_('管理者', 'tcDelete', '', true, '刪測試檔期 ' + p.camps.length + ' 個、申請表 ' + p.reqs.length + ' 張；備份 ' + bk.getId());

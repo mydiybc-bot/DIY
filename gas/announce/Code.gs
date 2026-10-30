@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v7.1';   // 2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v8';   // 2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
@@ -959,4 +959,72 @@ function closeWorkDue20261015() {
     var msg = name + ' 批次改已完成 ' + ids.length + ' 件（期限 ≤ ' + CUT + '）；未完成 ' + openBefore + ' → ' + openAfter + '；資料列 ' + before + ' → ' + after + '（應相同）；備份分頁 ' + bk;
     log_('批次程式', 'closeWorkDue20261015', ids.join(',').slice(0, 300), true, msg); Logger.log(msg); Logger.log(ids.join('\n')); return msg;
   } finally { lock.releaseLock(); }
+}
+
+
+/* ================= v8（2026-10-30）門市雜記 =================
+   決策中心「📝 門市雜記」分頁：夥伴自由記事＋上傳圖片。全部用店密碼（store_N）或總部密碼（hpw）驗，只看得到、寫得到自己那家店。
+   - 分頁 fact_store_note（第一次用到時自動建）：只新增；刪除＝標記 deleted（列不真刪、圖片不刪，留在「門市雜記/<店號>/」）。
+   - 圖片：每則 ≤ NOTE_MAX_FILES 張、每張 ≤10MB、合計 ≤20MB，只收圖片副檔名；檔案設「知道連結可檢視」，畫面用 Drive 縮圖網址顯示。
+   - noteList 回最近 NOTE_LIST_MAX 則（讀最後 NOTE_TAIL 列）。 */
+TABS.fact_store_note = ['note_id', 'store', 'author', 'text', 'att', 'ts', 'deleted', 'deleted_at', 'deleted_by'];
+var NOTE_TEXT_MAX = 2000, NOTE_MAX_FILES = 6, NOTE_TAIL = 20000, NOTE_LIST_MAX = 300;
+var NOTE_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'];
+ACTIONS.noteList = noteList_; ACTIONS.noteAdd = noteAdd_; ACTIONS.noteDel = noteDel_;
+['noteList', 'noteAdd', 'noteDel'].forEach(function (a) { OPEN[a] = 1; });   /* 自己驗店密碼 */
+['noteAdd', 'noteDel'].forEach(function (a) { WRITES[a] = 1; });
+function noteTab_() { var ss = ss_(); if (!ss.getSheetByName('fact_store_note')) ensureTab_(ss, 'fact_store_note'); }
+function noteOut_(n) { var att = []; try { att = n.att ? JSON.parse(n.att) : []; } catch (e) { att = []; } return { id: n.note_id, author: n.author, text: n.text, ts: n.ts, att: att }; }
+function noteList_(p) {
+  var st = storeAuth_(p); noteTab_();
+  var rows = loadTail_('fact_store_note', NOTE_TAIL).rows.filter(function (n) { return Number(n.store) === st.id && n.deleted !== 'Y'; });
+  rows.sort(function (a, b) { return a.ts < b.ts ? 1 : (a.ts > b.ts ? -1 : 0); });
+  return { data: { store: { id: st.id, short: st.short }, at: now_(), total: rows.length, notes: rows.slice(0, NOTE_LIST_MAX).map(noteOut_) } };
+}
+function noteAdd_(p) {
+  var st = storeAuth_(p); noteTab_();
+  var author = cleanTxt_(p.author, 30).replace(/\s+/g, ' ').trim();
+  if (!author) throw fail_('請填寫你的名字', 'invalid');
+  var text = cleanTxt_(p.text, NOTE_TEXT_MAX + 50).replace(/\r\n?/g, '\n').trim();
+  if (text.length > NOTE_TEXT_MAX) throw fail_('每則最多 ' + NOTE_TEXT_MAX + ' 字', 'invalid');
+  var files = Array.isArray(p.files) ? p.files : [];
+  if (!text && !files.length) throw fail_('請寫一點內容或附上圖片', 'invalid');
+  if (files.length > NOTE_MAX_FILES) throw fail_('每則最多 ' + NOTE_MAX_FILES + ' 張圖片', 'invalid');
+  var blobs = [], total = 0;
+  files.forEach(function (f, i) {
+    var name = cleanTxt_(f && f.name, 150).replace(/[\\\/:*?"<>|]/g, '_').trim() || ('photo' + (i + 1) + '.jpg'), m = name.match(/\.([A-Za-z0-9]{1,5})$/), ext = m ? m[1].toLowerCase() : '';
+    if (NOTE_EXT.indexOf(ext) < 0) throw fail_('「' + name + '」不是圖片（可上傳：' + NOTE_EXT.join('、') + '）', 'invalid');
+    var bytes = Utilities.base64Decode(String((f && f.b64) || ''));
+    if (!bytes.length) throw fail_('「' + name + '」是空的', 'invalid');
+    if (bytes.length > DISC_MAX_FILE) throw fail_('「' + name + '」超過 10MB', 'invalid');
+    total += bytes.length;
+    if (total > DISC_MAX_TOTAL) throw fail_('這次的圖片合計超過 20MB，請分成幾則', 'invalid');
+    blobs.push({ blob: Utilities.newBlob(bytes, cleanTxt_(f.mime, 100) || 'image/jpeg', name), size: bytes.length });
+  });
+  rate_('note:s:' + st.id, 20, 60, '這家店 1 分鐘內記太多則，請稍後再送');
+  rate_('note:all', 60, 60, '全部門市 1 分鐘內記太多則，請稍後再送');
+  rate_('note:day:' + today_(), 1000, 86400, '今天的門市雜記已達上限（1000 則），請聯絡管理者');
+  var att = [];
+  if (blobs.length) {
+    var folder = subOf_(sub_('門市雜記'), String(st.id));
+    blobs.forEach(function (b) {
+      var f = folder.createFile(b.blob);
+      try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (se) { }
+      att.push({ name: b.blob.getName(), size: b.size, mime: b.blob.getContentType(), id: f.getId(), url: f.getUrl() });
+    });
+  }
+  var t = loadTail_('fact_store_note', 1);
+  var o = { note_id: 'N' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + Math.floor(Math.random() * 900 + 100), store: String(st.id), author: author, text: text,
+    att: att.length ? JSON.stringify(att) : '', ts: now_(), deleted: '', deleted_at: '', deleted_by: '' };
+  put_(t, nextRow_(t), o);
+  return { id: o.note_id, data: { note: noteOut_(o) }, msg: '門市雜記 ' + o.note_id + '：' + st.short + '｜' + author + (att.length ? '｜圖片 ' + att.length + ' 張' : '') };
+}
+function noteDel_(p) {
+  var st = storeAuth_(p); noteTab_();
+  var who = cleanTxt_(p.who, 30).replace(/\s+/g, ' ').trim(); if (!who) throw fail_('請填寫你的名字', 'invalid');
+  var id = String(p.id || ''), t = loadTail_('fact_store_note', NOTE_TAIL), n = t.rows.filter(function (x) { return x.note_id === id && Number(x.store) === st.id; })[0];
+  if (!id || !n) throw fail_('找不到這則（可能已刪除）', 'notfound');
+  if (n.deleted === 'Y') return { id: id, data: { id: id }, msg: '已刪除過' };
+  putCols_(t, n._row, { deleted: 'Y', deleted_at: now_(), deleted_by: who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'deleted_by'; });
+  return { id: id, data: { id: id }, msg: '刪除門市雜記 ' + id + '：' + st.short + '｜' + who };
 }

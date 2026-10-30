@@ -2140,7 +2140,7 @@ function pushInfo_(rid) {
    不回定價、成本、用量、配方步驟、簽核人（BOM 表本來就公開、用量採購系統自己讀）。結果快取 2 分鐘，12 店同時開不會重讀試算表。 */
 var PUB_ST = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 function newItemsPub_() {
-  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v7', hit = cache.get(ck);
+  var cache = CacheService.getScriptCache(), ck = 'pub:newitems:v8', hit = cache.get(ck);
   if (hit) { try { return JSON.parse(hit); } catch (e) { } }
   var t = load_('fact_recipe_req', true), ct = load_('fact_campaign'), camp = {};
   ct.rows.forEach(function (r) { camp[str_(r.campaign_id)] = r; });
@@ -2156,7 +2156,7 @@ function newItemsPub_() {
       var nm = str_(l.name).trim(); if (!nm || seen[nm]) return null; seen[nm] = 1;
       var u = U[nm] || {};
       var o = { name: nm, is_new: !!l.is_new, vname: str_(l.vname).trim(), sticker: str_(l.sticker).trim(), supply: str_(l.supply).trim(),
-        zone: str_(l.zone).trim(), container: str_(u['容器']).trim(),
+        zone: str_(l.zone).trim(), container: str_(u['容器']).trim(), cat: str_(l.cat).trim(),   /* v8（2026-10-30）：品類別（食材／耗材／器具／模具），決策中心「新品・檔期」分類顯示 */
         link: str_(u['購買連結']).trim(), vendor_override: str_(u['供應商覆寫']).trim(), note: str_(u['品項備註']).trim() };
       return (o.vname || o.sticker || o.link || o.vendor_override || o.supply || o.note || o.zone || o.container || o.is_new) ? o : null;
     }).filter(Boolean);

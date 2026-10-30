@@ -37,6 +37,7 @@ REQUIRED = [
     'schedule-workbench.html',   # 門市排班工作台（2026-10-26 新建；對話框要能打中文）
     'survey.html', 'dashboard-survey.html',   # 顧客問卷（2026-10-28 新建；留言題／留言搜尋要能打中文）
     'poll.html', 'dashboard-poll.html',   # 門市內部調查＋門市問卷管理（2026-10-30 新建；填寫、編輯題目要能打中文）
+    'store-notes.html',   # 門市雜記（2026-10-30 新建；決策中心 📝 分頁，記事、搜尋要能打中文）
 ]
 
 # 不加的頁面與原因

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<!-- 2026-10-30 新建「📝 門市雜記」（經營者：「在店長看板右側再加一頁『門市雜記』，讓夥伴可以自由填寫需要記錄的事項，也可以上傳圖片」）。
+     ・只在「自己做決策中心」入口裡用（decision-center.html#note，iframe ?embed=1&s=店號）；直接打開會轉到入口。
+     ・身分：入口登入存的 localStorage dc_auth_v1（店＝store_N 店密碼送 spw；總部＝task_hq 送 hpw，可看任何一家店）。每次讀寫都由公告 API v8 在伺服器驗密碼。
+     ・後端：公告及工作清單 API v8 noteList／noteAdd／noteDel（分頁 fact_store_note；圖片存 Drive「門市雜記/<店號>/」，知道連結可檢視）。
+     ・圖片上傳前在這台裝置縮到長邊 1600px（JPEG），每則最多 6 張；刪除＝標記刪除（圖片留在 Drive）。
+     ・中文輸入：寫字框、搜尋框只建一次，送出／重新整理／搜尋只重畫下面的清單（見 rules「儀表板輸入框一定要能打中文」）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>門市雜記｜自己做決策中心</title>
+<style>
+:root{--red:#C4412F;--bg:#FFF8F2;--card:#fff;--ink:#3A2A24;--mute:#8A6F66;--line:#F0DDD3;--ok:#3E9A62;--bad:#D0402F;--badbg:#FBE4E0;--blue:#3F86B0}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:18px;line-height:1.5;-webkit-text-size-adjust:100%}
+button{font:inherit;cursor:pointer}
+.wrap{max-width:760px;margin:0 auto;padding:12px 16px 80px}
+.top{display:flex;align-items:center;gap:10px;padding:6px 0 10px}
+.top h1{margin:0;font-size:26px;flex:1}
+.top .rf{border:0;background:#fff;border-radius:14px;width:48px;height:48px;font-size:24px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.sec{background:var(--card);border-radius:20px;padding:14px;margin:0 0 14px;box-shadow:0 1px 4px rgba(120,60,40,.08)}
+.sec h2{margin:0 0 8px;font-size:20px}
+label{display:block;font-size:15px;color:var(--mute);margin:8px 0 4px}
+input[type=text],textarea{width:100%;font-size:18px;padding:11px 12px;border-radius:14px;border:2px solid #E3CFC6;font-family:inherit;background:#fff}
+textarea{min-height:110px;resize:vertical}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.pic{border:2px dashed #D9C3B8;background:#FFFBF8;border-radius:14px;padding:10px 16px;font-size:17px;color:var(--ink)}
+.go{margin-left:auto;border:0;border-radius:14px;background:var(--red);color:#fff;font-size:19px;font-weight:800;padding:11px 26px}
+.go:disabled{opacity:.5}
+.pv{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.pv .th{position:relative;width:86px;height:86px;border-radius:12px;overflow:hidden;background:#F3ECE8}
+.pv .th img{width:100%;height:100%;object-fit:cover;display:block}
+.pv .th button{position:absolute;top:3px;right:3px;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:14px;line-height:26px;padding:0}
+.msg{min-height:22px;font-size:16px;margin-top:8px}
+.msg.bad{color:var(--bad)}.msg.ok{color:var(--ok)}
+.tool{display:flex;gap:10px;align-items:center;margin:0 0 8px}
+.tool input{flex:1}
+.cnt{font-size:14px;color:var(--mute);white-space:nowrap}
+.nt{border:2px solid var(--line);border-radius:16px;padding:12px;margin:0 0 10px;background:#fff}
+.nt .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:15px;color:var(--mute)}
+.nt .h b{font-size:18px;color:var(--ink)}
+.nt .h .del{margin-left:auto;border:0;background:none;color:var(--mute);font-size:14px;text-decoration:underline;padding:2px 4px}
+.nt .x{font-size:18px;white-space:pre-wrap;word-break:break-word;margin-top:4px}
+.nt .imgs{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:8px}
+.nt .imgs a{display:block;border-radius:12px;overflow:hidden;background:#F3ECE8;aspect-ratio:1/1}
+.nt .imgs img{width:100%;height:100%;object-fit:cover;display:block}
+.empty,.wait{color:var(--mute);font-size:17px;padding:8px 2px}
+.err{color:var(--bad);font-size:16px;padding:8px 2px}
+.more{width:100%;border:2px solid #E3CFC6;background:#fff;border-radius:14px;padding:10px;font-size:17px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>📝 <span id="ttl">門市雜記</span></h1><button class="rf" id="rf" title="重新整理">↻</button></div>
+  <div class="sec" id="form">
+    <h2>✏️ 記一則</h2>
+    <div style="font-size:15px;color:var(--mute)">要交接、要記住的事都可以寫在這裡（客人特別交代、設備狀況、東西放哪裡、拍照留底…），同一家店的夥伴都看得到。</div>
+    <label for="who">你的名字</label>
+    <input type="text" id="who" maxlength="20" placeholder="例：小美" autocomplete="off">
+    <label for="txt">要記什麼</label>
+    <textarea id="txt" maxlength="2000" placeholder="寫下要記錄的事…"></textarea>
+    <div class="pv" id="pv"></div>
+    <div class="bar">
+      <label class="pic" for="file" style="margin:0;cursor:pointer">📷 加照片</label>
+      <input type="file" id="file" accept="image/*" multiple style="display:none">
+      <span class="cnt" id="picN"></span>
+      <button class="go" id="go" type="button">送出</button>
+    </div>
+    <div class="msg" id="fm"></div>
+  </div>
+  <div class="sec">
+    <div class="tool"><input type="text" id="q" placeholder="🔎 找找看（名字、內容）" autocomplete="off"><span class="cnt" id="lc"></span></div>
+    <div id="list"><div class="wait">⏳ 讀取中…</div></div>
+  </div>
+</div>
+<script>
+(function(){
+'use strict';
+var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API v8（noteList／noteAdd／noteDel） */
+var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
+var MAX_FILES = 6, MAX_SIDE = 1600, PAGE = 30, WHO_KEY = 'st_note_who';
+var S = { sid: 0, pw: '', hq: false, notes: null, total: 0, err: '', busy: false, pics: [], show: PAGE, q: '' };
+var $ = function(id){ return document.getElementById(id); };
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function ls(k, v){ try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch(e){ return null; } }
+function shortOf(id){ for (var i = 0; i < STORES.length; i++) if (STORES[i][0] === id) return STORES[i][1]; return id + ' 號'; }
+function rq(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function dcAuth(){ try { var o = JSON.parse(ls('dc_auth_v1') || 'null'); return o && o.pw && o.exp > Date.now() ? o : null; } catch(e){ return null; } }
+function relogin(msg){ try { if (window.parent !== window && parent.DC) return parent.DC.relogin(msg || ''); } catch(e){} location.replace('decision-center.html#note'); }
+function post(body, ms, noRetry){
+  ms = ms || 60000;
+  var once = function(){
+    var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function(){ ctl.abort(); }, ms) : 0;
+    return fetch(ANN_API, { method: 'POST', body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined, redirect: 'follow' })
+      .then(function(r){ return r.text(); })
+      .then(function(t){ clearTimeout(tm); try { return JSON.parse(t); } catch(e){ throw new Error('系統忙碌，請再按一次'); } },
+            function(e){ clearTimeout(tm); throw new Error(e && e.name === 'AbortError' ? '網路太慢，請再按一次' : '連不上，請再按一次'); });
+  };
+  return noRetry ? once() : once().catch(function(){ return new Promise(function(res){ setTimeout(res, 1500); }).then(once); });
+}
+function auth(extra){ var o = { store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }; for (var k in extra) o[k] = extra[k]; return o; }
+function tpeToday(){ var d = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function tsTxt(t){ t = String(t || ''); var d = t.slice(0, 10), td = tpeToday();
+  return (d === td ? '今天' : (d.slice(0, 4) === td.slice(0, 4) ? Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10)) : d.replace(/-/g, '/'))) + ' ' + t.slice(11, 16); }
+function img(id, w){ return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w' + (w || 600); }
+
+function init(){
+  var q = new URLSearchParams(location.search), s = Number(q.get('s')) || 0, a = dcAuth();
+  if (!q.get('embed')) { location.replace('decision-center.html' + (s ? '?s=' + s : '') + '#note'); return; }
+  if (!a || !(s >= 1 && s <= 12) || !(a.role === 'hq' || (a.role === 'store' && Number(a.sid) === s))) return relogin('請重新登入');
+  S.sid = s; S.hq = a.role === 'hq'; S.pw = a.pw;
+  $('ttl').textContent = shortOf(s) + '店・門市雜記';
+  document.title = '門市雜記｜' + shortOf(s) + '店';
+  $('who').value = ls(WHO_KEY) || '';
+  $('rf').onclick = function(){ load(); };
+  $('file').onchange = function(){ addPics(this.files); this.value = ''; };
+  $('go').onclick = send;
+  $('q').addEventListener('input', function(){ if (window.__ime && __ime.on) return; S.q = $('q').value.trim(); S.show = PAGE; paintList(); });
+  load();
+}
+function load(){
+  S.err = ''; if (!S.notes) paintList();
+  post(auth({ action: 'noteList' }), 45000).then(function(j){
+    if (!j.ok) { if (j.code === 'auth') return relogin(j.msg); S.err = j.msg || '讀取失敗'; return paintList(); }
+    S.notes = j.data.notes || []; S.total = j.data.total || S.notes.length; paintList();
+  }).catch(function(e){ S.err = e.message; paintList(); });
+}
+/* 只重畫清單（寫字框、搜尋框都不動） */
+function paintList(){
+  if (window.__ime && __ime.on) { setTimeout(paintList, 300); return; }
+  var el = $('list');
+  if (!S.notes) {
+    el.innerHTML = S.err ? '<div class="err">😵 沒讀到：' + esc(S.err) + '</div><button class="more" id="re" type="button">再試一次</button>' : '<div class="wait">⏳ 讀取中…</div>';
+    if ($('re')) $('re').onclick = load;
+    $('lc').textContent = ''; return;
+  }
+  var q = S.q.toLowerCase(), rows = q ? S.notes.filter(function(n){ return (String(n.author) + ' ' + String(n.text)).toLowerCase().indexOf(q) >= 0; }) : S.notes;
+  $('lc').textContent = q ? '找到 ' + rows.length + ' 則' : '共 ' + (S.total || rows.length) + ' 則';
+  if (!rows.length) { el.innerHTML = '<div class="empty">' + (q ? '找不到「' + esc(S.q) + '」' : '還沒有雜記，寫第一則吧 ✏️') + '</div>'; return; }
+  var h = (S.err ? '<div class="err">⚠️ 這次更新失敗（' + esc(S.err) + '），下面是之前讀到的</div>' : '') + rows.slice(0, S.show).map(function(n){
+    var att = (n.att || []).filter(function(a){ return a && a.id; });
+    return '<div class="nt"><div class="h"><b>' + esc(n.author) + '</b><span>' + esc(tsTxt(n.ts)) + '</span><button class="del" data-del="' + esc(n.id) + '" type="button">刪除</button></div>'
+      + (n.text ? '<div class="x">' + esc(n.text) + '</div>' : '')
+      + (att.length ? '<div class="imgs">' + att.map(function(a){ return '<a href="' + esc(img(a.id, 2000)) + '" target="_blank" rel="noopener" title="點我看大圖"><img loading="lazy" src="' + esc(img(a.id, 600)) + '" alt="' + esc(a.name || '照片') + '"></a>'; }).join('') + '</div>' : '') + '</div>';
+  }).join('');
+  if (rows.length > S.show) h += '<button class="more" id="more" type="button">再看 ' + Math.min(PAGE, rows.length - S.show) + ' 則（還有 ' + (rows.length - S.show) + ' 則）</button>';
+  el.innerHTML = h;
+  if ($('more')) $('more').onclick = function(){ S.show += PAGE; paintList(); };
+  el.querySelectorAll('[data-del]').forEach(function(b){ b.onclick = function(){ del(b.getAttribute('data-del'), b); }; });
+}
+
+/* ---------- 照片：先縮小（長邊 1600px、JPEG）再上傳 ---------- */
+function paintPics(){
+  $('pv').innerHTML = S.pics.map(function(p, i){ return '<div class="th"><img src="' + p.url + '" alt=""><button type="button" data-rm="' + i + '" title="拿掉">✕</button></div>'; }).join('');
+  $('pv').querySelectorAll('[data-rm]').forEach(function(b){ b.onclick = function(){ var p = S.pics.splice(Number(b.getAttribute('data-rm')), 1)[0]; try { URL.revokeObjectURL(p.url); } catch(e){} paintPics(); }; });
+  $('picN').textContent = S.pics.length ? S.pics.length + ' / ' + MAX_FILES + ' 張' : '';
+}
+function addPics(files){
+  var arr = Array.prototype.slice.call(files || []), msg = '';
+  arr.forEach(function(f){
+    if (S.pics.length >= MAX_FILES) { msg = '每則最多 ' + MAX_FILES + ' 張照片'; return; }
+    if (!/^image\//.test(f.type || '') && !/\.(jpe?g|png|gif|webp|heic|heif)$/i.test(f.name || '')) { msg = '「' + f.name + '」不是照片'; return; }
+    S.pics.push({ file: f, url: URL.createObjectURL(f) });
+  });
+  paintPics(); $('fm').className = 'msg bad'; $('fm').textContent = msg;
+}
+function toB64(blob){ return new Promise(function(res, rej){ var r = new FileReader(); r.onload = function(){ res(String(r.result).split(',')[1] || ''); }; r.onerror = function(){ rej(new Error('照片讀不到')); }; r.readAsDataURL(blob); }); }
+function shrink(p, i){
+  var f = p.file, base = (String(f.name || 'photo').replace(/\.[^.]+$/, '') || 'photo').slice(0, 60);
+  return new Promise(function(res){
+    var im = new Image();
+    im.onload = function(){
+      try {
+        var w = im.naturalWidth, h = im.naturalHeight, k = Math.min(1, MAX_SIDE / Math.max(w, h)), c = document.createElement('canvas');
+        c.width = Math.round(w * k); c.height = Math.round(h * k);
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+        c.toBlob(function(b){ res(b ? { blob: b, name: base + '.jpg', mime: 'image/jpeg' } : null); }, 'image/jpeg', 0.85);
+      } catch(e){ res(null); }
+    };
+    im.onerror = function(){ res(null); };
+    im.src = p.url;
+  }).then(function(r){
+    if (r) return r;
+    if (f.size > 10 * 1024 * 1024) throw new Error('「' + f.name + '」太大（超過 10MB），請換一張');
+    return { blob: f, name: f.name || ('photo' + (i + 1) + '.jpg'), mime: f.type || 'image/jpeg' };   /* 這台裝置縮不了（例：電腦打不開 HEIC）就原檔上傳 */
+  }).then(function(r){ return toB64(r.blob).then(function(b64){ return { name: r.name, mime: r.mime, b64: b64 }; }); });
+}
+function send(){
+  if (S.busy) return;
+  var who = $('who').value.trim(), txt = $('txt').value.replace(/\s+$/, ''), fm = $('fm');
+  fm.className = 'msg bad';
+  if (!who) { fm.textContent = '請先寫你的名字'; $('who').focus(); return; }
+  if (!txt.trim() && !S.pics.length) { fm.textContent = '請寫一點內容或加照片'; $('txt').focus(); return; }
+  S.busy = true; $('go').disabled = true; $('go').textContent = S.pics.length ? '上傳照片中…' : '送出中…'; fm.className = 'msg'; fm.textContent = '';
+  ls(WHO_KEY, who);
+  var id = rq();   /* 同一次送出重送也只記一則（伺服器用 rq 擋重複） */
+  Promise.all(S.pics.map(shrink)).then(function(files){
+    return post(auth({ action: 'noteAdd', author: who, text: txt, files: files, rq: id }), 120000);
+  }).then(function(j){
+    if (!j.ok) { if (j.code === 'auth') return relogin(j.msg); throw new Error(j.msg || '沒有存到'); }
+    $('txt').value = ''; S.pics.forEach(function(p){ try { URL.revokeObjectURL(p.url); } catch(e){} }); S.pics = []; paintPics();
+    fm.className = 'msg ok'; fm.textContent = '✅ 記好了';
+    if (S.notes && j.data && j.data.note && !S.notes.some(function(n){ return n.id === j.data.note.id; })) { S.notes.unshift(j.data.note); S.total = (S.total || 0) + 1; }
+    paintList();
+  }).catch(function(e){ fm.className = 'msg bad'; fm.textContent = '😵 ' + e.message; })
+    .then(function(){ S.busy = false; $('go').disabled = false; $('go').textContent = '送出'; });
+}
+function del(id, btn){
+  var who = $('who').value.trim() || ls(WHO_KEY) || '';
+  if (!who) { who = (prompt('誰要刪除？請寫你的名字') || '').trim(); if (!who) return; }
+  if (!confirm('確定刪除這則雜記？')) return;
+  btn.disabled = true; btn.textContent = '刪除中…';
+  post(auth({ action: 'noteDel', id: id, who: who, rq: rq() }), 45000).then(function(j){
+    if (!j.ok) { if (j.code === 'auth') return relogin(j.msg); throw new Error(j.msg || '刪不掉'); }
+    S.notes = (S.notes || []).filter(function(n){ return n.id !== id; }); S.total = Math.max(0, (S.total || 1) - 1); paintList();
+  }).catch(function(e){ btn.disabled = false; btn.textContent = '刪除'; alert(e.message); });
+}
+init();
+})();
+</script>
+</body>
+</html>

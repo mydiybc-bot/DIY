@@ -2334,6 +2334,7 @@ function doGet(e) {
     else if (act === 'fresh') out = webFresh_();
     else if (act === 'equip') out = webEquip_();
     else if (act === 'mini') out = webMini_(p.store);   // 2026-10-13：門市今日（夥伴頁）只要自己人、好評幾個數字
+    else if (act === 'reviews') out = webReviews_(p.store);   // 2026-10-30：店長看板「本月有效評論／負評」、門市今日「3 天內負評」
     else out = { ok: false, error: '不支援的 action' };
   } catch (err) { out = { ok: false, error: '讀取失敗：' + shortErr_(err && err.message || err) }; }
   var json = JSON.stringify(out);
@@ -3069,4 +3070,48 @@ function webMini_(store) {
   }
   var o = all.stores[sid] || {};
   return { ok: true, version: WEB_VER, store: Number(sid), memNew: o.memNew, memNeed: o.memNeed, memRate: o.memRate, memAt: o.memAt, rev: o.rev, revTarget: o.revTarget, revAt: o.revAt };
+}
+
+
+// ============================================================
+// j. 2026-10-30 本月評論清單（action=reviews&store=N）：店長看板左側「⭐ 本月 Google 評論」、門市今日「3 天內負評」
+//   - 來源：評論 GAS action=recent（本月、上月、近 40 天；含評論時間與 AI 判讀）。
+//   - 有效評論口徑＝google-reviews.html isValidReview（2026-10-26 起）：AI 判讀過 → aiValid（5 星＋有文字＋AI 判斷有提到人或抓到夥伴名）；還沒判讀 → 規則版 isValidReview（本檔照抄那支）。
+//   - 負評＝1～4 星（評論頁同口徑）。月份以「年月」欄（抓取歸月）為準，與評論頁、快照 D 類一致；3 天內負評看評論時間。
+//   - 12 店一起算、暫存 10 分鐘（REV_LIST_TTL）。不回 reviewId。
+// ============================================================
+var REV_LIST_TTL = 600, REV_NEG_DAYS = 3;
+function revAiValid_(r) { return r.stars === 5 && !!validContent(r).trim() && (r.aiP === 'Y' || !!r.aiN); }
+function webReviews_(store) {
+  var sid = String(Number(store) || ''); if (!sid || Number(sid) < 1 || Number(sid) > 12) return { ok: false, error: '店號不對' };
+  var c = CacheService.getScriptCache(), key = 'revlist|v1|', hit = c.get(key + sid);   /* 每店各存一份（12 店合起來會超過暫存單筆 100KB 上限） */
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var all = null;
+  {
+    var res = UrlFetchApp.fetch(SRC.REV_API + '?action=recent', { muteHttpExceptions: true, followRedirects: true });
+    var d = JSON.parse(res.getContentText() || '{}');
+    if (!d || !d.ok) return { ok: false, error: '評論資料讀取失敗' };
+    var map = readStoreMap_(snapSS_()), byName = map.byCol['評論'] || {};
+    var now = new Date(), today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd'), negFrom = Utilities.formatDate(new Date(now.getTime() - (REV_NEG_DAYS - 1) * 86400000), TZ, 'yyyy-MM-dd');
+    all = { at: d.at, cur: d.cur, today: today, negFrom: negFrom, stores: {} };
+    (d.rows || []).forEach(function (x) {
+      var id = byName[String(x[0] || '').trim()]; if (!id) return;
+      var r = { store: String(x[0] || ''), author: String(x[1] || ''), ts: String(x[2] || ''), ym: String(x[3] || ''), stars: (x[4] === '' || x[4] === null) ? null : Number(x[4]), text: String(x[5] || ''), aiP: String(x[6] || ''), aiN: String(x[7] || ''), neg: String(x[8] || '') };
+      var valid = r.aiP ? revAiValid_(r) : isValidReview(r), isNeg = r.stars !== null && r.stars <= 4;
+      var inMonth = r.ym === d.cur, inNeg3 = isNeg && r.ts.slice(0, 10) >= negFrom;
+      if (!(inMonth && (valid || isNeg)) && !inNeg3) return;
+      var S = all.stores[id] = all.stores[id] || { valid: [], neg: [], neg3: [] };
+      var o = { t: r.ts, a: r.author.slice(0, 30), s: r.stars, x: cleanGoogleTranslation(r.text).trim().slice(0, 300), p: r.aiN, k: r.neg, ai: r.aiP ? 1 : 0 };
+      if (inMonth && valid) S.valid.push(o);
+      if (inMonth && isNeg) S.neg.push(o);
+      if (inNeg3) S.neg3.push(o);
+    });
+    Object.keys(all.stores).forEach(function (k) { ['valid', 'neg', 'neg3'].forEach(function (f) { all.stores[k][f].sort(function (a, b) { return a.t < b.t ? 1 : -1; }); }); });
+  }
+  var outOf = function (k) { var o = all.stores[k] || { valid: [], neg: [], neg3: [] };
+    return { ok: true, version: WEB_VER + '+rev1', store: Number(k), at: all.at, month: all.cur, today: all.today, negFrom: all.negFrom, target: MONTHLY_REVIEW_TARGET, valid: o.valid, neg: o.neg, neg3: o.neg3 }; };
+  var put = {};
+  for (var k = 1; k <= 12; k++) { var js = JSON.stringify(outOf(String(k))); if (js.length < 95000) put[key + k] = js; }
+  try { c.putAll(put, REV_LIST_TTL); } catch (e) {}
+  return outOf(sid);
 }
