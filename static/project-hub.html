@@ -906,6 +906,13 @@ function judge(grams, g, maxn, tol){
 }
 function rate(lines, g, maxn, tol){ var ok = 0; lines.forEach(function(l){ if (judge(Number(l.grams), g, maxn, tol).ok) ok++; }); return lines.length ? ok / lines.length : 0; }
 function spoonSetOf(ing){ return (S.spoon.set || []).filter(function(x){ return x.ingredient === ing; })[0]; }
+/* 2026-10-30 經營者：食材選單標出已處理的。fin＝定案明細有這食材（確認轉換過）；saved＝在換算頁按過「💾 存成設定」（規格紀錄有「換算頁存檔」）；其餘 todo */
+var ING_MARK = { fin: '✅', saved: '💾', todo: '⬜' };
+function ingState(ing){
+  if ((S.spoon.final || []).some(function(x){ return x.ingredient === ing && x.deleted !== 'Y'; })) return 'fin';
+  if ((S.spoon.spec_log || []).some(function(x){ return x.ingredient === ing && x.version === '換算頁存檔' && x.deleted !== 'Y'; })) return 'saved';
+  return 'todo';
+}
 /* ----- 上月使用次數（POS 品項月報） ----- */
 /* 食譜名稱跟收銀機品名不一樣、又猜不出來的，寫在這裡（一支食譜可對多個品名，次數相加） */
 var RECIPE_POS = {
@@ -978,7 +985,7 @@ function tabSpoon(p){
   if (S.g === '') { S.g = set ? set.g_per_spoon : ''; S.ml = set && set.spoon_ml != null ? String(set.spoon_ml) : ''; S.maxn = set && set.max_spoons !== '' ? set.max_spoons : '8'; S.tol = set ? (set.tol_pct || '0') : '0'; }
   var g = Number(S.g), maxn = Number(S.maxn) || 0, tol = Number(S.tol) || 0, lines = by[S.ing];
   var h = '<div class="card"><div class="sp-ctl">'
-    + '<label>食材<select id="spIng">' + ings.map(function(i){ var st = spoonSetOf(i); return '<option value="' + esc(i) + '"' + (i === S.ing ? ' selected' : '') + '>' + esc(i) + '（' + by[i].length + ' 項）' + (st ? '｜存 ' + esc(st.g_per_spoon) + ' g' : '') + '</option>'; }).join('') + '</select></label>'
+    + '<label>食材<select id="spIng">' + ings.map(function(i){ var st = spoonSetOf(i); return '<option value="' + esc(i) + '"' + (i === S.ing ? ' selected' : '') + '>' + ING_MARK[ingState(i)] + ' ' + esc(i) + '（' + by[i].length + ' 項）' + (st ? '｜存 ' + esc(st.g_per_spoon) + ' g' : '') + '</option>'; }).join('') + '</select></label>'
     + '<label>一平匙＝幾 g<input id="spG" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(S.g) + '" placeholder="例 9.6"></label>'
     + '<label>量匙規格（ml）<input id="spMl" type="number" inputmode="decimal" min="0" step="0.1" value="' + esc(S.ml) + '" placeholder="例 5" style="width:90px"></label>'
     + '<label>一項最多幾平匙<select id="spMax">' + [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10'],['12','12'],['15','15']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.maxn) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
@@ -989,6 +996,7 @@ function tabSpoon(p){
     + '<button class="btn ghost" type="button" id="spRef" title="重新讀門市食譜後台（台灣繁中啟用中），更新前自動備份">🔄 更新食譜用量</button>'
     + '</div>'
     + '<div class="muted" style="margin-top:6px">食譜用量：' + esc(S.spoon.snap_date || '') + ' 讀取（' + esc(S.spoon.source || '') + '，共 ' + S.spoon.lines.length + ' 項）；每天早上 6 點自動更新</div>'
+    + (function(){ var n = { fin: 0, saved: 0, todo: 0 }; ings.forEach(function(i){ n[ingState(i)]++; }); return '<div class="muted" style="margin-top:4px">食材選單標記：' + ING_MARK.fin + ' 已確認轉換 ' + n.fin + ' 種｜' + ING_MARK.saved + ' 已存設定（還沒確認轉換）' + n.saved + ' 種｜' + ING_MARK.todo + ' 還沒處理 ' + n.todo + ' 種</div>'; })()
     + (lastFin ? '<div class="muted" style="margin-top:8px">✅ 上次定案（' + esc(String(lastFin.confirmed_at).slice(0, 16)) + '）：一平匙 ' + esc(lastFin.g_per_spoon) + ' g、最多 ' + (Number(lastFin.max_spoons) ? esc(lastFin.max_spoons) + ' 平匙' : '不限') + '、誤差 ' + esc(lastFin.tol_pct || 0) + '%（畫面一打開就帶這組）</div>' : '')
     + '<div class="muted" style="margin-top:8px">' + (set ? '目前存的設定：一平匙 ' + esc(set.g_per_spoon) + ' g、量匙 ' + (set.spoon_ml ? esc(set.spoon_ml) + ' ml' : '未填') + '、最多 ' + (Number(set.max_spoons) ? esc(set.max_spoons) + ' 平匙' : '不限') + '、誤差 ' + esc(set.tol_pct || 0) + '%（' + esc(set.note || '') + '，' + esc(set.saved_at || '') + '）' : '這個食材還沒存設定。') + '</div></div>';
   if (g > 0) {
