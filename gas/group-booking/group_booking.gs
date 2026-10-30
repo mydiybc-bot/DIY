@@ -84,7 +84,7 @@ function gbStatus() {
 
 // ============ 設定 ============
 const GB = {
-  VERSION: 'gb-v1.4.2-20261030',
+  VERSION: 'gb-v1.4.3-20261030',
   BASE: 'https://diybc.azurewebsites.net',
   TZ: 'Asia/Taipei',
   DAYS_AHEAD: 60,            // 抓今天～60 天後（未來訂位表只有 35 天，團體常更早訂）
@@ -804,6 +804,9 @@ function gbPurResolver_(mapRows, desserts) {
     name = String(name || '').trim();
     if (!name) return { name: name, ok: false, approx: false };
     if (known(name)) return { name: name, ok: true, approx: false };
+    // v1.4.3：英文介面的雙語名「Oreo Brownies｜小黑炭Oreo布朗尼」→ 用「｜」後面的中文名比對（採購網頁 bkResolve 同步改）
+    const bi = name.split(/[｜|]/);
+    if (bi.length > 1) { const sub = bi[bi.length - 1].trim(); if (sub) { const rs = resolve(sub); if (rs.ok) return { name: rs.name, ok: true, approx: true }; } }
     const k1 = norm(name, 1), k2 = norm(name, 2); let hit;
     hit = uniq(ix.l1[k1]); if (hit) return { name: hit, ok: true, approx: hit !== name };
     hit = uniq(ix.l2[k2]); if (hit) return { name: hit, ok: true, approx: true };
