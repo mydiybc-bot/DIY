@@ -47,7 +47,7 @@ var POLL_SEED = {
 
 /* ---------------- 設定表 ---------------- */
 function pollDim_() {
-  var sh = sheet_('dim_poll', POLL_HEAD, [1]), P = PropertiesService.getScriptProperties();
+  var sh = sheet_('dim_poll', POLL_HEAD, [1, 7, 8]), P = PropertiesService.getScriptProperties();
   if (!P.getProperty('POLL_SEEDED')) {
     var have = {}; if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { have[String(r[0])] = 1; });
     Object.keys(POLL_SEED).forEach(function (id) {
@@ -65,8 +65,9 @@ function pollAllRaw_() {
   var sh = pollDim_(), out = [];
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, POLL_HEAD.length).getValues().forEach(function (r, i) {
     var fields = []; try { fields = JSON.parse(r[4] || '[]'); } catch (e) { }
+    function ds(x) { return x instanceof Date ? tz_(x, 'yyyy-MM-dd HH:mm') : String(x); }   /* 試算表會把日期字串自動轉成日期 */
     out.push({ row: i + 2, id: String(r[0]), title: String(r[1]), intro: String(r[2]), status: String(r[3] || 'open'), fields: fields,
-      kmax: Number(r[5]) || 0, created: String(r[6]), updated: String(r[7]), by: String(r[8]) });
+      kmax: Number(r[5]) || 0, created: ds(r[6]), updated: ds(r[7]), by: String(r[8]) });
   });
   try { c.put('polls:v1', JSON.stringify(out), 120); } catch (e) { }
   return out;
