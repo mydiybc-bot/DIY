@@ -89,6 +89,8 @@ window.__ime=(function(){
   table.rows td.amt input{text-align:right}
   .bc{font-size:11px;color:#77706A;text-align:right;margin-top:2px}
   .bc.near{color:#B26A00;font-weight:700}.bc.full{color:#A3321F;font-weight:800}
+  .ainote{font-size:12px;color:#8A5A00;line-height:1.45;margin-top:3px}
+  .ainote b{color:#A3321F}
   table.rows tr.low td{background:#FFF7E6}
   table.rows tfoot td{font-weight:800;border-top:2px solid #2F5D50;padding:8px 6px}
   .conf{display:inline-block;font-size:12px;border-radius:10px;padding:1px 8px;white-space:nowrap}
@@ -416,7 +418,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
   <div class="card">
     <h2><span class="step">3</span>核對明細</h2>
-    <div class="muted" style="margin-bottom:8px">每一列一張單據（一張收據有不同科目會拆成多列）。黃底＝AI 沒把握，請對照照片改。金額請填實際付款金額。</div>
+    <div class="muted" style="margin-bottom:8px">每一列一張單據（一張收據有不同科目會拆成多列）。黃底＝AI 沒把握，請對照照片改。金額請填實際付款金額。品項下方的小字是 AI 的提醒，只給你核對用，不會印到申請表；「備註」欄是店內寫給會計的，沒有就留白。</div>
     <div class="tbl-wrap">
       <table class="rows">
         <thead><tr><th style="width:42px">#</th><th style="min-width:260px">品項／用途</th><th style="width:170px">會計科目</th><th style="width:140px">發票號碼</th><th style="width:100px">金額</th><th>備註</th><th style="width:70px">AI 把握</th><th style="width:36px"></th></tr></thead>
@@ -614,9 +616,20 @@ function postApi(body, ms) {
 
 function readPhoto(p) {
   p.status = 'reading'; p.msg = '整理照片…'; paintPhoto(p);
-  function send(rotated) {
-    var body = { action: 'read', store: $('fStore').value, who: $('fWho').value.trim(), img: p.full.split(',')[1], mt: 'image/jpeg', rotated: !!rotated };
+  function send() {
+    var body = { action: 'read', store: $('fStore').value, who: $('fWho').value.trim(), img: p.full.split(',')[1], mt: 'image/jpeg', rotated: p.turns || 0 };
     return postApi(body).catch(function () { p.msg = '連線不穩，再試一次…'; paintPhoto(p); return postApi(body); });
+  }
+  /* AI 說照片是橫的／倒的 → 轉正再送；轉完 AI 會再檢查一次，還歪就再轉（後端最多要求轉 2 次，2026-10-30） */
+  function sendTurn() {
+    return send().then(function (r) {
+      if (!r || !r.ok || !r.rotate || (p.turns || 0) >= 2) return r;
+      p.msg = '照片是歪的，轉正後重讀…'; paintPhoto(p);
+      return rotateUrl(p.full, r.rotate, 0.9).then(function (im) {
+        p.full = im.dataUrl; p.w = im.w; p.h = im.h; p.turns = (p.turns || 0) + 1; p.rotated = true;
+        return rotateUrl(p.thumb, r.rotate, 0.7).then(function (t) { p.thumb = t.dataUrl; paintPhoto(p); return sendTurn(); });
+      });
+    });
   }
   return (p.full ? Promise.resolve(null) : shrink(p.file, 2200, 0.9).then(function (im) {
     p.full = im.dataUrl; p.w = im.w; p.h = im.h; p.bad = quality(im.canvas);
@@ -624,15 +637,7 @@ function readPhoto(p) {
   })).then(function () {
     if (p.bad && !p.forceSend) { p.status = 'blur'; p.msg = '⚠ ' + p.bad + '，AI 可能讀錯。建議刪掉重拍（光線亮一點、拿穩、對焦金額），或照樣送出。'; paintPhoto(p); return 'stop'; }
     p.msg = 'AI 讀取中…（約 10～30 秒）'; paintPhoto(p);
-    return send(p.rotated).then(function (r) {
-      if (!r || !r.ok || !r.rotate || p.rotated) return r;
-      /* AI 說照片是橫的／倒的 → 轉正再讀一次 */
-      p.msg = '照片是歪的，轉正後重讀…'; paintPhoto(p);
-      return rotateUrl(p.full, r.rotate, 0.9).then(function (im) {
-        p.full = im.dataUrl; p.w = im.w; p.h = im.h; p.rotated = true;
-        return rotateUrl(p.thumb, r.rotate, 0.7).then(function (t) { p.thumb = t.dataUrl; paintPhoto(p); return send(true); });
-      });
-    });
+    return sendTurn();
   }).then(function (r) {
     if (r === 'stop') return;
     if (!r || !r.ok) throw new Error((r && r.msg) || '辨識失敗');
@@ -641,8 +646,9 @@ function readPhoto(p) {
     if (!recs.length) { p.status = 'err'; p.msg = '讀不到單據：' + (r.reason || '請確認照片清楚、是收據、發票、簽收單或 POS 截圖') + '（可以手動加一筆）'; paintPhoto(p); return; }
     recs.forEach(function (x, k) {
       var dupInv = p.dups.some(function (d) { return (d.kind === 'invoice' || d.kind === 'key') && d.n === k; });
+      /* 備註欄留給店內寫給會計（2026-10-30 經營者）：AI 的提醒只顯示在網頁品項下方，不進申請表 */
       addRow({ photo: p.id, items: x.items, category: x.category, invoice_no: x.invoice_no, amount: x.amount,
-        note: [x.note, dupInv ? '⚠可能重複請款' : ''].filter(Boolean).join('；'), confidence: x.confidence });
+        ai: x.note || '', dup: dupInv, confidence: x.confidence });
     });
     p.status = 'ok'; p.msg = '✓ 讀到 ' + recs.length + ' 筆' + (p.rotated ? '（已自動轉正）' : '') + (typeof r.left === 'number' && r.left < 30 ? '（今天全公司還能辨識 ' + r.left + ' 次）' : '');
     paintPhoto(p);
@@ -654,15 +660,16 @@ function readPhoto(p) {
 /* ---------- 3. 明細表（只新增／刪除列，不重建） ---------- */
 function addRow(o) {
   var r = { id: ++S.seq, photo: o.photo || 0, items: pcCut(pcHalf(o.items || ''), ITEM_MAX), category: ACCTS.indexOf(o.category) >= 0 ? o.category : '6240 雜費',
-    invoice_no: o.invoice_no || '', amount: Number(o.amount) || 0, note: o.note || '', confidence: o.confidence || '' };
+    invoice_no: o.invoice_no || '', amount: Number(o.amount) || 0, note: o.note || '', ai: o.ai || '', dup: !!o.dup, confidence: o.confidence || '' };
   S.rows.push(r);
   var tr = document.createElement('tr'); tr.id = 'r' + r.id; if (r.confidence === '低') tr.className = 'low';
   tr.innerHTML = '<td class="no"></td>' +
-    '<td><input data-k="items" value="' + esc(r.items) + '" placeholder="例：水果-繁昌青果"><div class="bc"></div></td>' +
+    '<td><input data-k="items" value="' + esc(r.items) + '" placeholder="例：水果-繁昌青果"><div class="bc"></div>' +
+    (r.ai || r.dup ? '<div class="ainote">' + (r.dup ? '<b>⚠ 可能重複請款</b>' + (r.ai ? '；' : '') : '') + (r.ai ? 'AI：' + esc(r.ai) : '') + '</div>' : '') + '</td>' +
     '<td><select data-k="category">' + ACCTS.map(function (c) { return '<option' + (c === r.category ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></td>' +
     '<td><input data-k="invoice_no" value="' + esc(r.invoice_no) + '" placeholder="收據可空白"></td>' +
     '<td class="amt"><input data-k="amount" inputmode="numeric" value="' + (r.amount || '') + '"></td>' +
-    '<td><input data-k="note" value="' + esc(r.note) + '"></td>' +
+    '<td><input data-k="note" value="' + esc(r.note) + '" placeholder="店內寫給會計（可空白）"></td>' +
     '<td>' + (r.photo ? '<span class="conf ' + ({ '高': 'h', '中': 'm', '低': 'l' }[r.confidence] || 'm') + '">' + esc(r.confidence || '—') + '</span><div class="muted">照片#' + r.photo + '</div>' : '<span class="muted">手動</span>') + '</td>' +
     '<td><button class="rm" type="button" title="刪除這列" data-delrow="' + r.id + '">✕</button></td>';
   var itemsIn = tr.querySelector('[data-k="items"]'), bc = tr.querySelector('.bc');
@@ -683,7 +690,10 @@ function addRow(o) {
     else if (k === 'items') { var v = pcCut(pcHalf(e.target.value).trim(), ITEM_MAX); if (v !== e.target.value) { e.target.value = v; r.items = v; count(); } }   /* 離開欄位：全形英數轉半形 */
   });
   count();
-  $('rowsBody').appendChild(tr);
+  /* 照片是兩張同時讀、轉正的較慢 → 依照片編號插入，明細順序跟照片一樣（手動加的照樣排最後，2026-10-30） */
+  tr.dataset.photo = r.photo;
+  var before = r.photo ? Array.prototype.filter.call($('rowsBody').children, function (x) { return +x.dataset.photo > r.photo; })[0] : null;
+  $('rowsBody').insertBefore(tr, before || null);
   refreshTotals();
   return r;
 }
