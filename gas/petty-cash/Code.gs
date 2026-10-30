@@ -14,7 +14,7 @@
          → 用來抓「同一張發票／同一張照片已經報過」；不存照片本身。
    防濫用：網址公開在 repo，沒有密碼 → 每天全站最多 DAILY_CAP 次辨識（超過回 cap，隔天自動恢復）。
    ===================================================================== */
-var VER = 'pc-2026-10-30.2';
+var VER = 'pc-2026-10-30.3';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -94,7 +94,7 @@ function read_(b) {
     catch (e) { /* Opus 失敗就照用 Sonnet 的結果，不讓店長卡住 */ }
   }
   var md5 = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, img));
-  var recs = (r.json.receipts || []).map(norm_);
+  var recs = fitSplit_((r.json.receipts || []).map(norm_));
   /* 查重複＋寫紀錄同一段排隊：多人同秒送時，不會寫到同一列互蓋，後到的也看得到先到的那筆（2026-10-27） */
   logSheet_();
   var lock = LockService.getScriptLock(), locked = lock.tryLock(30000), dups;
@@ -149,8 +149,26 @@ function norm_(x) {
     items: fitItems_(goods, vendor), vendor: toHalf_(vendor).slice(0, 40),
     invoice_no: inv.slice(0, 20), doc_type: dt, amount: amt, category: cat,
     confidence: ['高', '中', '低'].indexOf(x.confidence) >= 0 ? x.confidence : '中', note: String(x.note || '').slice(0, 120),
-    keys: keys_(dt, vendor, x.date, amt, x.txn_ids)
+    keys: keys_(dt, vendor, x.date, amt, x.txn_ids),
+    doc: Math.max(1, Math.round(Number(x.doc) || 1)), total: Math.round(Number(x.total) || 0)
   };
+}
+
+/* 同一張單據拆成多個科目（2026-10-30 經營者）：各筆加總一定要等於單據總計。
+   含稅換算四捨五入差 1～2 元 → 調最後一筆；差更多 → 不動金額、標低把握請店長看 */
+function fitSplit_(recs) {
+  var by = {};
+  recs.forEach(function (r) { (by[r.doc] = by[r.doc] || []).push(r); });
+  Object.keys(by).forEach(function (d) {
+    var g = by[d], total = g[0].total;
+    if (g.length < 2 || !(total > 0)) return;
+    var sum = g.reduce(function (s, r) { return s + r.amount; }, 0), diff = total - sum;
+    if (!diff) return;
+    if (Math.abs(diff) <= 2) { g[g.length - 1].amount += diff; return; }
+    g.forEach(function (r) { r.confidence = '低'; });
+    g[0].note = ('拆科目後加總 ' + sum + ' ≠ 單據總計 ' + total + '，請核對；' + g[0].note).slice(0, 120);
+  });
+  return recs;
 }
 
 /* 查重複用的鍵（沒有發票號碼的單據）：簽收單＝受款人＋日期＋金額；POS 截圖＝每筆交易序號、每筆「取出」的時間＋金額 */
@@ -204,7 +222,10 @@ var SYS = [
   '  6204 差旅交通費：停車費、計程車、高鐵、台鐵、油資、過路費。',
   '  6201-003 薪資-實作費用：現金簽收單（付給實作人員的費用）。',
   '  2825 暫收款：POS截圖（退還客人的包館／大組預收訂金）。',
-  '- 同一張單據同時有不同科目的品項（例：全聯同時買食材和清潔用品），依科目拆成多筆：每筆的 goods 只寫該科目的品項、amount 是該科目品項的金額（折扣依比例分攤），各筆 amount 加總必須等於單據實付總額；invoice_no、vendor、doc_type 相同。',
+  '- 同一張單據同時有不同科目的品項（例：全聯同時買食材和清潔用品；網購發票上的「物流費／運費」要另拆成 6205 運費，goods 寫 運費），依科目拆成多筆：每筆的 goods 只寫該科目的品項、amount 是該科目品項的金額（折扣依比例分攤），各筆 amount 加總必須等於單據實付總額；invoice_no、vendor、doc_type、doc、total 相同，拆出的各筆要連在一起回傳。',
+  '- 拆科目時金額一律寫含稅：明細是未稅（下方有「銷售額合計＋營業稅＝總計」）就用 明細金額×1.05 四捨五入；四捨五入後加總和總計差 1、2 元時，調整最後一筆讓加總剛好等於總計。例：片鹼 1036、物流費 94、總計 1186 → 片鹼 1088、運費 98。',
+  '- doc：這筆屬於照片裡第幾張單據（從 1 開始），同一張單據拆出的各筆填同一個數字。',
+  '- total：這張單據的實付總額（總計），同一張拆出的各筆都填同一個數字。',
   '- confidence：高／中／低。字跡模糊、熱感紙褪色、金額看不清、手寫塗改就給低或中。',
   '- note：需要店長確認的地方（看不清的字、手寫、金額有疑問、外幣、拆科目的依據），沒有就填空字串。',
   '核對規則（手寫、模糊單據特別要做）：',
@@ -234,11 +255,12 @@ var SCHEMA = {
     receipts: {
       type: 'array', items: {
         type: 'object', additionalProperties: false,
-        required: ['goods', 'vendor', 'invoice_no', 'doc_type', 'date', 'txn_ids', 'amount', 'category', 'confidence', 'note'],
+        required: ['doc', 'goods', 'vendor', 'invoice_no', 'doc_type', 'date', 'txn_ids', 'amount', 'total', 'category', 'confidence', 'note'],
         properties: {
           goods: { type: 'string' }, vendor: { type: 'string' }, invoice_no: { type: 'string' },
           doc_type: { type: 'string', enum: ['電子發票證明聯', '統一發票', '收據', '現金簽收單', 'POS截圖', '其他'] },
           date: { type: 'string' }, txn_ids: { type: 'array', items: { type: 'string' } },
+          doc: { type: 'integer' }, total: { type: 'integer' },
           amount: { type: 'integer' }, category: { type: 'string', enum: ACCTS },
           confidence: { type: 'string', enum: ['高', '中', '低'] }, note: { type: 'string' }
         }
