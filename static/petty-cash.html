@@ -87,6 +87,10 @@ window.__ime=(function(){
   table.rows td{padding:5px 4px;border-bottom:1px solid #F0E8E2;vertical-align:top}
   table.rows input,table.rows select{width:100%;font-family:inherit;font-size:14px;padding:6px 6px;border:1px solid #DDD3CC;border-radius:6px;background:#fff}
   table.rows td.amt input{text-align:right}
+  .rowact{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin-top:4px}
+  .rowact button{font-family:inherit;font-size:12px;color:#2F5D50;background:#EEF6F1;border:1px solid #C5DDCF;border-radius:10px;padding:1px 8px;cursor:pointer;white-space:nowrap}
+  .rowact button:hover{background:#DCEDE3}
+  .rowact button[hidden]{display:none}
   .bc{font-size:11px;color:#77706A;text-align:right;margin-top:2px}
   .bc.near{color:#B26A00;font-weight:700}.bc.full{color:#A3321F;font-weight:800}
   .ainote{font-size:12px;color:#8A5A00;line-height:1.45;margin-top:3px}
@@ -427,7 +431,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
   <div class="card">
     <h2><span class="step">3</span>核對明細</h2>
-    <div class="muted" style="margin-bottom:8px">每一列一張單據（一張收據有不同科目會拆成多列）。黃底＝AI 沒把握，請對照照片改。金額請填實際付款金額。品項下方的小字是 AI 的提醒，只給你核對用，不會印到申請表；「備註」欄是店內寫給會計的，沒有就留白。</div>
+    <div class="muted" style="margin-bottom:8px">每一列一張單據（一張收據有不同科目會拆成多列；拆錯了按金額下方的「↑ 併入上列」合回去，要多拆一個科目按「＋ 拆一列」）。黃底＝AI 沒把握，請對照照片改。金額請填實際付款金額。品項下方的小字是 AI 的提醒，只給你核對用，不會印到申請表；「備註」欄是店內寫給會計的，沒有就留白。</div>
     <div class="tbl-wrap">
       <table class="rows">
         <thead><tr><th style="width:42px">#</th><th style="min-width:260px">品項／用途</th><th style="width:136px">會計科目</th><th style="width:100px">金額</th><th style="width:140px">發票號碼</th><th>備註</th><th style="width:70px">AI 把握</th><th style="width:36px"></th></tr></thead>
@@ -575,11 +579,17 @@ function addFiles(list) {
 function paintPhoto(p, isNew) {
   var el = $('ph' + p.id);
   if (!el) { el = document.createElement('div'); el.className = 'ph'; el.id = 'ph' + p.id; $('photos').appendChild(el); }
-  var dupHtml = (p.dups || []).map(function (d) {
-    /* kind：photo 同一張照片／invoice 同一個發票號碼／key 簽收單或 POS 交易序號（2026-10-30） */
-    return '<div class="dup">⚠ 可能重複：' + (d.kind === 'photo' ? '這張照片' : d.kind === 'key' ? esc(d.label) : '發票 ' + esc(d.invoice_no)) + ' 在 ' + esc(d.at) + ' 已由 ' + esc(d.store) + ' ' + esc(d.who) + ' 辨識過' +
-      (d.kind !== 'photo' && d.amount ? '（$' + money(d.amount) + '）' : '') + '，請確認不是重複請款</div>';
-  }).join('');
+  /* kind：photo 同一張照片／invoice 同一個發票號碼／key 簽收單或 POS 交易序號（2026-10-30）
+     一張照片的重複提醒合成一個框：相同的只列一次，同一次辨識（時間＋門市＋人）的寫在一起（2026-10-30 經營者） */
+  var seen = {}, when = [], byWhen = {};
+  (p.dups || []).forEach(function (d) {
+    var what = (d.kind === 'photo' ? '這張照片' : d.kind === 'key' ? esc(d.label) : '發票 ' + esc(d.invoice_no)) + (d.kind !== 'photo' && d.amount ? '（$' + money(d.amount) + '）' : '');
+    var w = esc(d.at) + ' 已由 ' + esc(d.store) + ' ' + esc(d.who) + ' 辨識過';
+    if (seen[what + w]) return; seen[what + w] = 1;
+    if (!byWhen[w]) { byWhen[w] = []; when.push(w); }
+    byWhen[w].push(what);
+  });
+  var dupHtml = when.length ? '<div class="dup">⚠ 可能重複請款，請確認：' + when.map(function (w) { return byWhen[w].join('、') + ' 在 ' + w; }).join('；') + '</div>' : '';
   el.innerHTML = (p.thumb ? '<img src="' + p.thumb + '" alt="收據照片 ' + p.id + '" data-zoom="' + p.id + '">' : '<div style="width:96px;height:96px;border-radius:8px;background:#EEE;flex:none"></div>') +
     '<div class="pbody"><div><b>照片 #' + p.id + '</b> <span class="muted">' + esc(p.name) + '</span></div>' +
     '<div class="pst ' + p.status + '">' + esc(p.msg) + '</div>' + dupHtml +
@@ -601,6 +611,8 @@ document.addEventListener('click', function (e) {
     S.photos = S.photos.filter(function (p) { return p.id !== id; }); var el = $('ph' + id); if (el) el.remove(); refreshTotals();
     if (initUpload.fab) initUpload.fab();
   }
+  else if (t.dataset && t.dataset.merge) mergeUp(+t.dataset.merge);
+  else if (t.dataset && t.dataset.split) splitRow(+t.dataset.split);
   else if (t.dataset && t.dataset.delrow) {
     if (!confirm('刪除這一列明細？')) return;
     removeRow(+t.dataset.delrow); refreshTotals();
@@ -707,7 +719,9 @@ function addRow(o) {
     '<td><input data-k="items" value="' + esc(r.items) + '" placeholder="例：水果-繁昌青果"><div class="bc"></div>' +
     (r.ai || r.dup ? '<div class="ainote">' + (r.dup ? '<b>⚠ 可能重複請款</b>' + (r.ai ? '；' : '') : '') + (r.ai ? 'AI：' + esc(r.ai) : '') + '</div>' : '') + '<div class="grpsum"></div></td>' +
     '<td><select data-k="category">' + ACCTS.map(function (c) { return '<option value="' + c + '"' + (c === r.category ? ' selected' : '') + '>' + acctName(c) + '</option>'; }).join('') + '</select></td>' +
-    '<td class="amt"><input data-k="amount" inputmode="numeric" value="' + (r.amount || '') + '"></td>' +
+    '<td class="amt"><input data-k="amount" inputmode="numeric" value="' + (r.amount || '') + '"><div class="rowact">' +
+    '<button type="button" data-merge="' + r.id + '" title="這列金額加到上一列，這列刪除">↑ 併入上列</button>' +
+    '<button type="button" data-split="' + r.id + '" title="同一張單據多一個科目">＋ 拆一列</button></div></td>' +
     '<td><input data-k="invoice_no" value="' + esc(r.invoice_no) + '" placeholder="收據可空白"></td>' +
     '<td><input data-k="note" value="' + esc(r.note) + '" placeholder="店內寫給會計（可空白）"></td>' +
     '<td>' + (r.photo ? '<span class="conf ' + ({ '高': 'h', '中': 'm', '低': 'l' }[r.confidence] || 'm') + '">' + esc(r.confidence || '—') + '</span><div class="muted">照片#' + r.photo + '</div>' : '<span class="muted">手動</span>') + '</td>' +
@@ -732,10 +746,26 @@ function addRow(o) {
   count();
   /* 照片是兩張同時讀、轉正的較慢 → 依照片編號插入，明細順序跟照片一樣（手動加的照樣排最後，2026-10-30） */
   tr.dataset.photo = r.photo; tr.dataset.grp = r.grp;
-  var before = r.photo ? Array.prototype.filter.call($('rowsBody').children, function (x) { return +x.dataset.photo > r.photo; })[0] : null;
+  var before = o.after ? o.after.nextSibling : r.photo ? Array.prototype.filter.call($('rowsBody').children, function (x) { return +x.dataset.photo > r.photo; })[0] : null;
   $('rowsBody').insertBefore(tr, before || null);
   refreshTotals();
   return r;
+}
+function rowById(id) { return S.rows.filter(function (r) { return r.id === id; })[0]; }
+/* 同一張單據科目判錯時：併入上列＝金額加到上一列、這列刪除；拆一列＝在下面加一列同單據（2026-10-30 經營者） */
+function mergeUp(id) {
+  var tr = $('r' + id), up = tr && tr.previousElementSibling, r = rowById(id), u = up && rowById(+up.id.slice(1));
+  if (!r || !u || up.dataset.grp !== tr.dataset.grp) return;
+  var amt = Number(r.amount) || 0, to = (Number(u.amount) || 0) + amt;
+  if (!confirm('把這列 $' + money(amt) + ' 併入上一列「' + (u.items || '未填品項') + '」？\n合併後上一列金額 $' + money(to) + '，這一列會刪除。')) return;
+  u.amount = to; up.querySelector('[data-k="amount"]').value = to;
+  removeRow(id); refreshTotals(); toast('已合併：上一列金額改成 $' + money(to));
+}
+function splitRow(id) {
+  var r = rowById(id), tr = $('r' + id); if (!r || !tr) return;
+  var n = addRow({ after: tr, photo: r.photo, grp: r.grp, total: r.total, invoice_no: r.invoice_no, category: r.category });
+  var ntr = $('r' + n.id); if (ntr) ntr.querySelector('[data-k="items"]').focus();
+  toast('已加一列：填品項、科目、金額，再把上一列金額減掉');
 }
 function removeRow(id) { S.rows = S.rows.filter(function (r) { return r.id !== id; }); var tr = $('r' + id); if (tr) tr.remove(); }
 function refreshTotals() {
@@ -748,6 +778,7 @@ function refreshTotals() {
     if (first) no++;
     tr.querySelector('td.no').textContent = first ? no : '';
     tr.classList.toggle('gin', !last); tr.classList.toggle('grp', !(first && last));
+    tr.querySelector('[data-merge]').hidden = first;   /* 「併入上列」只出現在同一張單據的第二列以後 */
     var gs = tr.querySelector('.grpsum'), txt = '', bad = false;
     if (last && !first) {
       var mem = [], gsum = 0, tot = 0;
