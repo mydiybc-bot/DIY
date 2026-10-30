@@ -92,6 +92,10 @@ window.__ime=(function(){
   .ainote{font-size:12px;color:#8A5A00;line-height:1.45;margin-top:3px}
   .ainote b{color:#A3321F}
   table.rows tr.low td{background:#FFF7E6}
+  table.rows tr.gin td{border-bottom-color:transparent}
+  table.rows tr.grp td.no{border-left:3px solid #C9A96E}
+  .grpsum{font-size:12px;color:#2F5D50;margin-top:3px;font-weight:700}
+  .grpsum:empty{display:none}.grpsum.bad{color:#A3321F}
   table.rows tfoot td{font-weight:800;border-top:2px solid #2F5D50;padding:8px 6px}
   .conf{display:inline-block;font-size:12px;border-radius:10px;padding:1px 8px;white-space:nowrap}
   .conf.h{background:#E3F2EA;color:#2F5D50}.conf.m{background:#EEF3FA;color:#23436E}.conf.l{background:#FDECEA;color:#A3321F}
@@ -648,7 +652,7 @@ function readPhoto(p) {
       var dupInv = p.dups.some(function (d) { return (d.kind === 'invoice' || d.kind === 'key') && d.n === k; });
       /* 備註欄留給店內寫給會計（2026-10-30 經營者）：AI 的提醒只顯示在網頁品項下方，不進申請表 */
       addRow({ photo: p.id, items: x.items, category: x.category, invoice_no: x.invoice_no, amount: x.amount,
-        ai: x.note || '', dup: dupInv, confidence: x.confidence });
+        ai: x.note || '', dup: dupInv, confidence: x.confidence, grp: p.id + '-' + (x.doc || k + 1), total: x.total || 0 });
     });
     p.status = 'ok'; p.msg = '✓ 讀到 ' + recs.length + ' 筆' + (p.rotated ? '（已自動轉正）' : '') + (typeof r.left === 'number' && r.left < 30 ? '（今天全公司還能辨識 ' + r.left + ' 次）' : '');
     paintPhoto(p);
@@ -660,12 +664,13 @@ function readPhoto(p) {
 /* ---------- 3. 明細表（只新增／刪除列，不重建） ---------- */
 function addRow(o) {
   var r = { id: ++S.seq, photo: o.photo || 0, items: pcCut(pcHalf(o.items || ''), ITEM_MAX), category: ACCTS.indexOf(o.category) >= 0 ? o.category : '6240 雜費',
-    invoice_no: o.invoice_no || '', amount: Number(o.amount) || 0, note: o.note || '', ai: o.ai || '', dup: !!o.dup, confidence: o.confidence || '' };
+    invoice_no: o.invoice_no || '', amount: Number(o.amount) || 0, note: o.note || '', ai: o.ai || '', dup: !!o.dup, confidence: o.confidence || '', total: Number(o.total) || 0 };
+  r.grp = o.grp || 'm' + r.id;   /* 同一張單據拆成多個科目的列共用 grp → 同一個編碼（2026-10-30） */
   S.rows.push(r);
   var tr = document.createElement('tr'); tr.id = 'r' + r.id; if (r.confidence === '低') tr.className = 'low';
   tr.innerHTML = '<td class="no"></td>' +
     '<td><input data-k="items" value="' + esc(r.items) + '" placeholder="例：水果-繁昌青果"><div class="bc"></div>' +
-    (r.ai || r.dup ? '<div class="ainote">' + (r.dup ? '<b>⚠ 可能重複請款</b>' + (r.ai ? '；' : '') : '') + (r.ai ? 'AI：' + esc(r.ai) : '') + '</div>' : '') + '</td>' +
+    (r.ai || r.dup ? '<div class="ainote">' + (r.dup ? '<b>⚠ 可能重複請款</b>' + (r.ai ? '；' : '') : '') + (r.ai ? 'AI：' + esc(r.ai) : '') + '</div>' : '') + '<div class="grpsum"></div></td>' +
     '<td><select data-k="category">' + ACCTS.map(function (c) { return '<option' + (c === r.category ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></td>' +
     '<td><input data-k="invoice_no" value="' + esc(r.invoice_no) + '" placeholder="收據可空白"></td>' +
     '<td class="amt"><input data-k="amount" inputmode="numeric" value="' + (r.amount || '') + '"></td>' +
@@ -681,7 +686,7 @@ function addRow(o) {
       count();
     }
     r[k] = k === 'amount' ? (Number(String(e.target.value).replace(/[^\d.\-]/g, '')) || 0) : e.target.value;
-    if (k !== 'note') { if (tr.className === 'low') tr.className = ''; }
+    if (k !== 'note') tr.classList.remove('low');
     refreshTotals();
   });
   tr.addEventListener('change', function (e) {
@@ -691,7 +696,7 @@ function addRow(o) {
   });
   count();
   /* 照片是兩張同時讀、轉正的較慢 → 依照片編號插入，明細順序跟照片一樣（手動加的照樣排最後，2026-10-30） */
-  tr.dataset.photo = r.photo;
+  tr.dataset.photo = r.photo; tr.dataset.grp = r.grp;
   var before = r.photo ? Array.prototype.filter.call($('rowsBody').children, function (x) { return +x.dataset.photo > r.photo; })[0] : null;
   $('rowsBody').insertBefore(tr, before || null);
   refreshTotals();
@@ -700,7 +705,24 @@ function addRow(o) {
 function removeRow(id) { S.rows = S.rows.filter(function (r) { return r.id !== id; }); var tr = $('r' + id); if (tr) tr.remove(); }
 function refreshTotals() {
   var sum = 0; S.rows.forEach(function (r) { sum += Number(r.amount) || 0; });
-  var nos = $('rowsBody').querySelectorAll('td.no'); for (var i = 0; i < nos.length; i++) nos[i].textContent = i + 1;
+  /* 編碼＝第幾張單據：同一張拆成多個科目的列連在一起、只在第一列顯示編碼，最後一列下方寫這張單據的合計（對不上發票總計標紅） */
+  var trs = $('rowsBody').children, no = 0, byId = {};
+  S.rows.forEach(function (r) { byId['r' + r.id] = r; });
+  for (var i = 0; i < trs.length; i++) {
+    var tr = trs[i], g = tr.dataset.grp, first = !i || trs[i - 1].dataset.grp !== g, last = i === trs.length - 1 || trs[i + 1].dataset.grp !== g;
+    if (first) no++;
+    tr.querySelector('td.no').textContent = first ? no : '';
+    tr.classList.toggle('gin', !last); tr.classList.toggle('grp', !(first && last));
+    var gs = tr.querySelector('.grpsum'), txt = '', bad = false;
+    if (last && !first) {
+      var mem = [], gsum = 0, tot = 0;
+      for (var j = i; j >= 0 && trs[j].dataset.grp === g; j--) mem.push(byId[trs[j].id]);
+      mem.forEach(function (r) { if (r) { gsum += Number(r.amount) || 0; tot = tot || r.total; } });
+      bad = tot > 0 && gsum !== tot;
+      txt = '↑ 同一張單據拆 ' + mem.length + ' 個科目，合計 $' + money(gsum) + (tot > 0 ? (bad ? '，和單據總計 $' + money(tot) + ' 不同，請核對' : '（＝單據總計）') : '');
+    }
+    if (gs) { gs.textContent = txt; gs.className = 'grpsum' + (bad ? ' bad' : ''); }
+  }
   $('sumCell').textContent = money(sum); $('cntCell').textContent = S.rows.length ? S.rows.length + ' 筆' : '';
   $('rowsEmpty').style.display = S.rows.length ? 'none' : '';
 }
@@ -746,10 +768,15 @@ window.buildXlsx = function (m) {
     var head = ['編碼', '品項／用途', '會計科目', '發票號碼', '金額', '備註'];
     head.forEach(function (h, i) { var c = cell(5, i + 1, h, B, { horizontal: 'center' }); c.fill = HEAD_FILL; });
     ws.getRow(5).height = 24;
-    var r0 = 6;
+    var r0 = 6, no = 0;
     m.rows.forEach(function (r, k) {
-      var row = r0 + k;
-      cell(row, 1, k + 1, F, { horizontal: 'center' });
+      var row = r0 + k, first = !k || m.rows[k - 1].grp !== r.grp;
+      /* 編碼＝第幾張單據：同一張拆成多個科目的列共用一個編碼、編碼格合併（2026-10-30） */
+      if (first) {
+        no++; cell(row, 1, no, F, { horizontal: 'center' });
+        var n = 1; while (k + n < m.rows.length && m.rows[k + n].grp === r.grp) n++;
+        if (n > 1) ws.mergeCells(row, 1, row + n - 1, 1);
+      } else bd(row, 1);
       cell(row, 2, r.items, F, { wrapText: true });
       cell(row, 3, r.category);
       cell(row, 4, r.invoice_no || null, F, { horizontal: 'center' });
