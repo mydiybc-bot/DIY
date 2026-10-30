@@ -105,7 +105,12 @@ window.__ime=(function(){
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2F5D50;color:#fff;padding:9px 16px;border-radius:10px;font-size:14px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.2)}
   .toast[hidden]{display:none}
   .zoom{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:9998;cursor:zoom-out}
-  .zoom img{max-width:96vw;max-height:94vh}
+  .zoom img{max-width:96vw;max-height:94vh;cursor:default}
+  .zoom .zprev,.zoom .znext{position:absolute;top:50%;transform:translateY(-50%);width:52px;height:72px;border:1px solid rgba(255,255,255,.5);border-radius:10px;background:rgba(0,0,0,.55);color:#fff;font-size:44px;line-height:1;cursor:pointer}
+  .zoom .zprev{left:12px}.zoom .znext{right:12px}
+  .zoom .zprev:hover:not(:disabled),.zoom .znext:hover:not(:disabled){background:rgba(0,0,0,.75)}
+  .zoom .zprev:disabled,.zoom .znext:disabled{opacity:.25;cursor:default}
+  .zoom .zcap{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);color:#fff;font-size:14px;background:rgba(0,0,0,.5);padding:4px 12px;border-radius:12px;white-space:nowrap}
   .empty{padding:18px;text-align:center;color:#77706A}
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -384,7 +389,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <ol>
         <li>選門市、填申請人姓名（下次會自動記住）。</li>
         <li>按「📷 拍照」一次拍一張（拍完按右下角「拍下一張」繼續），或按「🖼️ 選照片」一次選很多張。照片拍歪、橫的、倒的都沒關係，AI 會自己轉正。</li>
-        <li>AI 讀完會把每張單據變成明細的一列，品項寫成「水果-繁昌青果」；同一張收據有食材也有雜費，會拆成兩列。<b>黃底</b>是 AI 沒把握的，請對照照片改正；點縮圖可以放大看。</li>
+        <li>AI 讀完會把每張單據變成明細的一列，品項寫成「水果-繁昌青果」；同一張收據有食材也有雜費，會拆成兩列。<b>黃底</b>是 AI 沒把握的，請對照照片改正；點縮圖可以放大看，放大後按兩側箭頭（手機左右滑）換上一張、下一張。</li>
         <li>品項／用途最多 60 位元組（中文 30 字；英文、數字、符號算半個字），要直接輸入鼎新。</li>
         <li>沒有發票的請款也可以拍：<b>現金簽收單</b>（實作費用，品項會寫成「實作-王小明」）、<b>退包館訂金的 POS 截圖</b>（交易支付明細表的預收訂金、關帳小結的取出退訂；一張圖彙整成一列，例：預收訂金9/5~9/16）。</li>
         <li>沒有照片的單據按「＋ 手動加一筆」。</li>
@@ -425,9 +430,9 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
     <div class="muted" style="margin-bottom:8px">每一列一張單據（一張收據有不同科目會拆成多列）。黃底＝AI 沒把握，請對照照片改。金額請填實際付款金額。品項下方的小字是 AI 的提醒，只給你核對用，不會印到申請表；「備註」欄是店內寫給會計的，沒有就留白。</div>
     <div class="tbl-wrap">
       <table class="rows">
-        <thead><tr><th style="width:42px">#</th><th style="min-width:260px">品項／用途</th><th style="width:170px">會計科目</th><th style="width:140px">發票號碼</th><th style="width:100px">金額</th><th>備註</th><th style="width:70px">AI 把握</th><th style="width:36px"></th></tr></thead>
+        <thead><tr><th style="width:42px">#</th><th style="min-width:260px">品項／用途</th><th style="width:136px">會計科目</th><th style="width:100px">金額</th><th style="width:140px">發票號碼</th><th>備註</th><th style="width:70px">AI 把握</th><th style="width:36px"></th></tr></thead>
         <tbody id="rowsBody"></tbody>
-        <tfoot><tr><td colspan="4" style="text-align:right">合計</td><td id="sumCell" style="text-align:right">0</td><td colspan="3" id="cntCell"></td></tr></tfoot>
+        <tfoot><tr><td colspan="3" style="text-align:right">合計</td><td id="sumCell" style="text-align:right">0</td><td colspan="4" id="cntCell"></td></tr></tfoot>
       </table>
     </div>
     <div id="rowsEmpty" class="empty">還沒有明細，先上傳照片或手動加一筆。</div>
@@ -585,7 +590,7 @@ function paintPhoto(p, isNew) {
 
 document.addEventListener('click', function (e) {
   var t = e.target;
-  if (t.dataset && t.dataset.zoom) { var p = findPhoto(+t.dataset.zoom); if (p) zoom(p.full || p.thumb); }
+  if (t.dataset && t.dataset.zoom) zoom(+t.dataset.zoom);
   else if (t.dataset && t.dataset.retry) { var p2 = findPhoto(+t.dataset.retry); if (p2) { p2.status = 'wait'; p2.msg = '排隊中…'; paintPhoto(p2); pump(); } }
   else if (t.dataset && t.dataset.sendany) { var p3 = findPhoto(+t.dataset.sendany); if (p3) { p3.forceSend = true; p3.status = 'wait'; p3.msg = '排隊中…'; paintPhoto(p3); pump(); } }
   else if (t.dataset && t.dataset.delph) {
@@ -602,7 +607,36 @@ document.addEventListener('click', function (e) {
   }
 });
 function findPhoto(id) { for (var i = 0; i < S.photos.length; i++) if (S.photos[i].id === id) return S.photos[i]; return null; }
-function zoom(src) { var z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = '<img src="' + src + '" alt="放大的收據">'; z.onclick = function () { z.remove(); }; document.body.appendChild(z); }
+/* 放大看照片：兩側箭頭／鍵盤左右鍵／手機左右滑換上一張、下一張；點照片外面或 Esc 關閉（2026-10-30 經營者） */
+function zoom(id) {
+  var ps = S.photos.filter(function (p) { return p.full || p.thumb; }), i = ps.findIndex(function (p) { return p.id === id; });
+  if (i < 0) return;
+  var z = document.createElement('div'); z.className = 'zoom';
+  z.innerHTML = '<img alt="放大的收據"><button type="button" class="zprev" aria-label="上一張">‹</button><button type="button" class="znext" aria-label="下一張">›</button><div class="zcap"></div>';
+  var img = z.querySelector('img'), prev = z.querySelector('.zprev'), next = z.querySelector('.znext'), cap = z.querySelector('.zcap');
+  function show(k) {
+    i = Math.max(0, Math.min(ps.length - 1, k)); var p = ps[i];
+    img.src = p.full || p.thumb; cap.textContent = '照片 #' + p.id + '（' + (i + 1) + '／' + ps.length + '）';
+    prev.disabled = i === 0; next.disabled = i === ps.length - 1;
+    prev.hidden = next.hidden = ps.length < 2;
+  }
+  function close() { z.remove(); document.removeEventListener('keydown', key); }
+  function key(e) {
+    if (e.key === 'ArrowLeft') show(i - 1); else if (e.key === 'ArrowRight') show(i + 1); else if (e.key === 'Escape') close(); else return;
+    e.preventDefault();
+  }
+  z.addEventListener('click', function (e) {
+    if (e.target === prev) show(i - 1); else if (e.target === next) show(i + 1); else if (e.target !== img) close();
+  });
+  var x0 = null;
+  z.addEventListener('touchstart', function (e) { x0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+  z.addEventListener('touchend', function (e) {
+    if (x0 === null) return; var dx = e.changedTouches[0].clientX - x0; x0 = null;
+    if (Math.abs(dx) > 50) show(dx < 0 ? i + 1 : i - 1);
+  });
+  document.addEventListener('keydown', key);
+  document.body.appendChild(z); show(i);
+}
 
 function pump() {
   while (S.busy < 2) {
@@ -673,8 +707,8 @@ function addRow(o) {
     '<td><input data-k="items" value="' + esc(r.items) + '" placeholder="例：水果-繁昌青果"><div class="bc"></div>' +
     (r.ai || r.dup ? '<div class="ainote">' + (r.dup ? '<b>⚠ 可能重複請款</b>' + (r.ai ? '；' : '') : '') + (r.ai ? 'AI：' + esc(r.ai) : '') + '</div>' : '') + '<div class="grpsum"></div></td>' +
     '<td><select data-k="category">' + ACCTS.map(function (c) { return '<option value="' + c + '"' + (c === r.category ? ' selected' : '') + '>' + acctName(c) + '</option>'; }).join('') + '</select></td>' +
-    '<td><input data-k="invoice_no" value="' + esc(r.invoice_no) + '" placeholder="收據可空白"></td>' +
     '<td class="amt"><input data-k="amount" inputmode="numeric" value="' + (r.amount || '') + '"></td>' +
+    '<td><input data-k="invoice_no" value="' + esc(r.invoice_no) + '" placeholder="收據可空白"></td>' +
     '<td><input data-k="note" value="' + esc(r.note) + '" placeholder="店內寫給會計（可空白）"></td>' +
     '<td>' + (r.photo ? '<span class="conf ' + ({ '高': 'h', '中': 'm', '低': 'l' }[r.confidence] || 'm') + '">' + esc(r.confidence || '—') + '</span><div class="muted">照片#' + r.photo + '</div>' : '<span class="muted">手動</span>') + '</td>' +
     '<td><button class="rm" type="button" title="刪除這列" data-delrow="' + r.id + '">✕</button></td>';
