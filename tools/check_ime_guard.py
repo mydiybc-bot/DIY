@@ -36,6 +36,7 @@ REQUIRED = [
     'petty-cash.html',   # 零用金報銷（2026-10-24 新建）
     'schedule-workbench.html',   # 門市排班工作台（2026-10-26 新建；對話框要能打中文）
     'survey.html', 'dashboard-survey.html',   # 顧客問卷（2026-10-28 新建；留言題／留言搜尋要能打中文）
+    'poll.html',   # 門市內部調查（2026-10-30 新建；填寫人、備註要能打中文）
 ]
 
 # 不加的頁面與原因

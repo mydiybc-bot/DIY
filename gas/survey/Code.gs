@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-28.9';
+var VER = 'survey-2026-10-30.10';   /* .10：加門市內部調查（poll.gs） */
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -73,6 +73,8 @@ function doGet(e) {
     else if (p.action === 'stats') o = stats_(p);
     else if (p.action === 'stats2') o = stats2_(p);
     else if (p.action === 'qlist') o = qlist_();
+    else if (p.action === 'poll_form') o = pollForm_(p);       /* 門市內部調查（poll.gs） */
+    else if (p.action === 'poll_result') o = pollResult_(p);
     else throw fail_('不認得的動作', 'act');
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }
   if (p.callback && /^[A-Za-z_$][\w$]*$/.test(p.callback)) {
@@ -91,6 +93,7 @@ function doPost(e) {
     else if (b.action === 'qsave') o = qsave_(b);
     else if (b.action === 'qrestore') o = qrestore_(b);
     else if (b.action === 'qauth') { authPwd_(b.pwd); o = { auth: true }; }
+    else if (b.action === 'poll_submit') o = pollSubmit_(b);   /* 門市內部調查（poll.gs） */
     else throw fail_('不認得的動作', 'act');
     o.ok = true; o.act = b.action;
   } catch (err) { o = { ok: false, code: err.code || 'err', msg: errMsg_(err) }; }

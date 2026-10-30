@@ -74,7 +74,7 @@ var G = {
   Logger: { log: function (s) { LOGS.push(String(s)); console.log('[GAS]', s); } }
 };
 var ctx = vm.createContext(Object.assign({ console: console }, G));
-['Code.gs'].forEach(function (f) { vm.runInContext(fs.readFileSync(path.join(GAS, f), 'utf8'), ctx, { filename: f }); });
+['Code.gs', 'poll.gs'].forEach(function (f) { vm.runInContext(fs.readFileSync(path.join(GAS, f), 'utf8'), ctx, { filename: f }); });
 vm.runInContext('function __call(fn, arg){ return this[fn](arg); }', ctx);
 
 /* 灌假資料：n 筆，隨機店、隨機答案，時間散在最近 120 天（src=mock，儀表板算進去） */
