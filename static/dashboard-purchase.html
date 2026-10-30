@@ -1715,7 +1715,7 @@ function expiredWin(s){if(!(EXPIRE_WINDOW_DAYS>0))return true;
 function expiredItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&!s.status&&skuForStore(st,s)&&skuExpired(s)&&expiredWin(s);});}
 function exclItems(st){return SKUS.filter(function(s){return usedOf(st,s)&&statusOf(st,s)==="已停售"&&aggOf(st,s).week>0;});}
 function upInfo(st,s){var a=aggOf(st,s);if(!a.launch)return null;var d=new Date(String(a.launch).replace(/\//g,"-"));return {days:Math.max(0,Math.ceil((d-TODAY)/864e5))};}
-function toast(m){var t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove("on");},1500);}
+function toast(m,ms){var t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove("on");},ms||1500);}   /* 2026-10-30：ms＝顯示多久（等待中的提示用） */
 function post(payload,silent){ if(staleBlock())return Promise.resolve();   /* 2026-10-04 效能 1-1：顯示舊資料期間不寫 */
   if(payload&&payload.store!=null&&!stWriteOK(payload.store))return Promise.resolve();   /* co 批：店長身分寫入別店 → 擋下 */
   if(!GAS_URL||GAS_URL.indexOf("__")===0){if(!silent)toast("（試用：未接 GAS，僅本機）");return Promise.resolve();}
@@ -4828,37 +4828,42 @@ function hctBox(o){if(!dcoOn()||o.status==="已取消"||(HCT.rows!==null&&!hctOn
   var L0=L[0],today=L.every(function(l){return l.date===hctToday();}),open=L.every(function(l){return l.status==="已建單";}),disp=L.some(function(l){return l.dispatch==="Y";}),cs=hctCsOf(L0.cs);
   h+='<span class="muted">'+escH(cs.name)+'｜到著站 '+escH(L0.erstno||"—")+'｜'+escH(L0.date.slice(4,6)+"/"+L0.date.slice(6))+'</span>'
     +'<span class="dcost" style="background:'+(open?"#d97706":"#16a34a")+'">'+(open?"已建單・未交寄":"已交寄")+'</span>'+(disp?'<span class="dcost" style="background:#0369a1">已叫新竹收件</span>':'')+(L0.env==="test"?'<span class="dcost" style="background:#6b7280">測試</span>':'')
-    +'<span style="flex:1"></span><button class="btn sm ghost" data-hctprint="'+k+'"'+dis+'>🖨 補印標籤</button><button class="btn sm ghost" data-hctquery="'+k+'"'+dis+' title="向新竹系統查這張訂單的貨號，確認新竹那邊有收到">🔍 向新竹核對</button>';
+    +'<span style="flex:1"></span><button class="btn sm ghost" data-hctprint="'+k+'"'+(dis||(HCTP.on?' disabled':''))+'>'+(HCTP.on===o.id?'⏳ 讀取標籤中…':'🖨 補印標籤')+'</button><button class="btn sm ghost" data-hctquery="'+k+'"'+(dis||(HCTQ.on?' disabled':''))+' title="向新竹系統查這張訂單的貨號，確認新竹那邊有收到">'+(HCTQ.on===o.id?'⏳ 向新竹查詢中…約 5 秒':'🔍 向新竹核對')+'</button>';
   if(open&&today)h+='<button class="btn sm ghost" data-hctfix="'+k+'"'+dis+'>✏️ 改件數'+(cs.mode==="S"?'尺寸':'重量')+'</button><button class="btn sm ghost" style="color:#C0392B;border-color:#C0392B" data-hctvoid="'+k+'"'+dis+'>作廢</button>';
   if(disp)h+='<button class="btn sm ghost" style="color:#C0392B;border-color:#C0392B" data-hctdcx="'+k+'"'+dis+' title="司機還沒來收件前才能取消；取消後這個貨號不能再叫一次">取消叫收件</button>';
+  var Q=HCTQ.res[o.id];if(Q)h+='<div style="flex-basis:100%;font-size:13px;color:'+(Q.ok?'#15803d':'#B3261E')+'">'+Q.items.map(escH).join('　')+' <span class="muted">（'+String(Q.at.getHours()).padStart(2,"0")+':'+String(Q.at.getMinutes()).padStart(2,"0")+' 向新竹核對）</span></div>';   /* 2026-10-30 */
   h+='<div style="flex-basis:100%;display:flex;gap:6px 14px;flex-wrap:wrap;font-size:13px">'+L.map(function(l){return '<span>'+(L.length>1?'第'+(l.box||1)+'箱 ':'')+'貨號 <b style="font-size:15px">'+escH(hctDash(l.edelno))+'</b> <span class="muted">'+(l.mode==="S"?hctQty(l):l.boxes+' 件・'+hctQty(l))+'</span></span>';}).join('')+'</div>';
   if(open&&!today)h+='<div style="flex-basis:100%;font-size:12px;color:#8A5A00;display:flex;gap:8px;flex-wrap:wrap;align-items:center">⚠️ 這組托運單是 '+escH(L0.date.slice(4,6)+"/"+L0.date.slice(6))+' 開的、還沒交寄。今天要寄請重開（舊的會自動作廢）：'+hctForm(o,L,"🚚 重開今天的托運單")+'</div>';
   if(E.fix&&open&&today)h+='<div style="flex-basis:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+hctForm(o,L,"💾 更正並重印")+'<span class="muted" style="font-size:12px">同計費方式貨號不變（多的箱子另開、少的作廢）；舊標籤丟掉、改貼新印的</span></div>';
   return h+'</div>';}
-/* 開列印視窗要在按下的當下開（之後才開會被瀏覽器擋） */
-function hctWin(msg){var w=window.open("","_blank");if(!w){toast("瀏覽器擋了新視窗，請允許彈出視窗後再按一次");return null;}
-  try{w.document.open();w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>新竹托運標籤</title></head><body style="font-family:sans-serif;padding:24px;font-size:16px">⏳ '+escH(msg||"讀取中…")+'</body></html>');w.document.close();}catch(e){}
-  return w;}
+/* 2026-10-30：列印改在本頁的隱形框裡印（原本開新分頁、由本頁叫它列印 → 列印視窗開著時採購系統整個卡住，切回來像當機）。
+   列印視窗直接蓋在採購系統上，印完或取消就回到原畫面；也不會被瀏覽器擋彈出視窗。 */
+var HCTP={on:""};   /* 正在讀標籤的訂單（按鈕顯示「讀取標籤中」） */
+function hctPrintHtml(html){var old=document.getElementById("hctPrintFrame");if(old)old.parentNode.removeChild(old);
+  var f=document.createElement("iframe");f.id="hctPrintFrame";f.setAttribute("aria-hidden","true");f.tabIndex=-1;
+  f.style.cssText="position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none";
+  document.body.appendChild(f);var w=f.contentWindow,d=w.document;d.open();d.write(html);d.close();
+  var done=false,go=function(){if(done)return;done=true;toast("🖨 已開啟列印視窗",2500);setTimeout(function(){try{w.focus();w.print();}catch(e){toast("⚠️ 列印沒有開成功："+e.message,5000);}},80);};
+  var imgs=Array.prototype.slice.call(d.images||[]).filter(function(i){return !i.complete;}),n=imgs.length;   /* 標籤圖載完才印，避免印出空白 */
+  if(!n)go();else{imgs.forEach(function(i){i.onload=i.onerror=function(){if(--n<=0)go();};});setTimeout(go,4000);}}
 /* 標籤列印：10×10 公分、一頁一張；按重量的托運單印「件數」張（一箱貼一張），按尺寸的一筆就是一箱、印 1 張 */
-function hctPrintLabels(labels,w){labels=(labels||[]).filter(function(l){return l&&l.img;});
-  if(!labels.length){try{w.close();}catch(e){}toast("沒有可以列印的標籤");return;}
+function hctPrintLabels(labels){labels=(labels||[]).filter(function(l){return l&&l.img;});
+  if(!labels.length){toast("沒有可以列印的標籤");return;}
   var pages=[],test=labels.some(function(l){return l.env==="test";});
   labels.forEach(function(l){var n=l.mode==="S"?1:Math.max(1,Math.min(99,num(l.boxes)||1));for(var i=1;i<=n;i++)pages.push('<div class="lb"><img src="data:image/png;base64,'+l.img+'" alt="'+escA(l.edelno)+'"></div>');});
   var ttl=labels.length===1?("新竹托運標籤 "+hctDash(labels[0].edelno)):("新竹托運標籤 "+labels.length+" 張托運單");
-  w.document.open();
-  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+escH(ttl)+'</title><style>@page{size:100mm 100mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}'
+  hctPrintHtml('<!doctype html><html><head><meta charset="utf-8"><title>'+escH(ttl)+'</title><style>@page{size:100mm 100mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}'
     +'.lb{width:100mm;height:100mm;overflow:hidden;break-after:page;page-break-after:always}.lb:last-child{break-after:auto;page-break-after:auto}.lb img{display:block;width:100mm;height:100mm}'
     +'.bar{position:sticky;top:0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#fff;border-bottom:1px solid #999;padding:8px 14px;font:14px sans-serif}'
     +'.bar button{font-size:15px;padding:6px 16px;border-radius:8px;border:1px solid #0369a1;background:#0369a1;color:#fff;cursor:pointer}'
     +'@media screen{body{background:#8f8f8f}.lb{margin:12px auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.35)}}@media print{.noprint{display:none!important}}</style></head><body>'
     +'<div class="bar noprint"><b>🖨 '+escH(ttl)+'</b><span>共 '+pages.length+' 張標籤（每箱一張）　·　紙張 10×10 公分、邊界無、縮放 100%</span>'+(test?'<span style="color:#B3261E">🧪 測試帳號的標籤，不能真的寄</span>':'')+'<span style="flex:1"></span><button type="button" onclick="window.print()">🖨 列印</button></div>'
-    +pages.join("")+'</body></html>');
-  w.document.close();setTimeout(function(){try{w.focus();w.print();}catch(e){}},600);}
+    +pages.join("")+'</body></html>');}
 function hctFetchImgs(ids){return dcoJsonp({action:"hct",ids:ids.join(","),img:"1"}).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到標籤");return hctIndex(d.labels);});}
-function hctPrintIds(ids){ids=ids.filter(Boolean);if(!ids.length){toast("沒有可以列印的標籤");return;}
-  var w=hctWin("讀取 "+ids.length+" 張訂單的托運標籤…");if(!w)return;
-  hctFetchImgs(ids).then(function(m){var all=[];ids.forEach(function(id){(m[id]||[]).forEach(function(l){all.push(l);});});hctPrintLabels(all,w);})
-    .catch(function(e){try{w.close();}catch(x){}toast("⚠️ "+e.message);});}
+function hctPrintIds(ids){ids=ids.filter(Boolean);if(!ids.length){toast("沒有可以列印的標籤");return;}if(HCTP.on)return;
+  HCTP.on=ids.length===1?ids[0]:"*";render();toast("⏳ 讀取 "+ids.length+" 張訂單的托運標籤中…約 3～5 秒",8000);
+  hctFetchImgs(ids).then(function(m){var all=[];ids.forEach(function(id){(m[id]||[]).forEach(function(l){all.push(l);});});HCTP.on="";render();hctPrintLabels(all);})
+    .catch(function(e){HCTP.on="";render();toast("⚠️ "+e.message,5000);});}
 /* 產生（或同日更正）托運單 → 直接開標籤列印 */
 function hctCreate(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o||DCO.busy)return;
   var L=HCT.byId[id]||[],E=hctIn(id),cs=hctCsOf(E.cs!=null?E.cs:(L[0]?L[0].cs:hctCsList()[0].code)),S=cs.mode==="S";
@@ -4875,14 +4880,13 @@ function hctCreate(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;}
   var fix=L.length&&L.every(function(l){return l.status==="已建單"&&l.date===hctToday()&&l.cs===cs.code;});
   if(typeof confirm==="function"&&!confirm((fix?"更正":"產生")+"新竹托運單？\n\n收件："+rcv.name+"\n電話："+rcv.tel+"\n地址："+rcv.addr+"\n計費："+cs.name+"\n"+desc+"\n訂單："+id
     +(fix?"\n\n原來的貨號不變，請丟掉舊標籤、改貼新印的。":(L.length?"\n\n舊的托運單（"+L[0].date+"）會作廢。":""))+(HCT.env==="test"?"\n\n🧪 目前是測試帳號，標籤不能真的寄。":"")))return;
-  var w=hctWin("向新竹物流取貨號中…");if(!w)return;
-  DCO.busy=true;render();var t0=Date.now();
+  DCO.busy=true;render();var t0=Date.now();toast("⏳ 向新竹物流取貨號中…約 5～10 秒，好了會自動跳出列印",12000);
   dcoWrite(body,function(){   /* 讀不到回應時回讀：這張單有托運單、且是剛剛之後寫的 → 算成功 */
       return hctFetchImgs([id]).then(function(m){var x=m[id]||[];return (x.length&&x.every(function(l){return l.img&&new Date(String(l.updated).replace(" ","T")+"+08:00").getTime()>=t0-60000;}))?{ok:true,labels:x}:null;});})
     .then(function(r){DCO.busy=false;if(ST.hctIn)delete ST.hctIn[id];var labs=r.labels||(r.label?[r.label]:[]);
       if(r.env)HCT.env=r.env;
-      hctPrintLabels(labs,w);toast("✅ 新竹貨號 "+labs.map(function(l){return hctDash(l.edelno);}).join("、")+(r.fix?"（已更正）":""));dcoRefresh();render();})
-    .catch(function(e){DCO.busy=false;try{w.close();}catch(x){}hctReset();render();toast("⚠️ 托運單沒有完整產生："+e.message);});}
+      hctPrintLabels(labs);toast("✅ 新竹貨號 "+labs.map(function(l){return hctDash(l.edelno);}).join("、")+(r.fix?"（已更正）":""));dcoRefresh();render();})
+    .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ 托運單沒有完整產生："+e.message,6000);});}
 function hctVoid(id){var L=HCT.byId[id];if(!L||!L.length||DCO.busy)return;
   if(typeof confirm==="function"&&!confirm("作廢新竹托運單 "+L.map(function(l){return hctDash(l.edelno);}).join("、")+"（訂單 "+id+"）？\n\n作廢後這些貨號不會交給新竹，貼好的標籤請撕掉。"))return;
   DCO.busy=true;render();
@@ -4890,10 +4894,13 @@ function hctVoid(id){var L=HCT.byId[id];if(!L||!L.length||DCO.busy)return;
     .then(function(){DCO.busy=false;dcoRefresh();render();toast("✅ 已作廢 "+L.length+" 張托運單");})
     .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ "+e.message);});}
 /* 向新竹核對（QueryEDELNO，只讀） */
-function hctQuery(id){if(DCO.busy)return;DCO.busy=true;render();
-  dcoPostRaw({action:"hctQuery",id:id}).then(function(r){DCO.busy=false;render();if(!(r&&r.ok))throw dcoApiErr(r);
-      alert("新竹系統查詢結果（訂單 "+id+"）：\n\n"+r.result.map(function(x){return "託運單號 "+x.epino+"："+(x.success==="Y"?"✅ 貨號 "+hctDash(x.edelno):"❌ "+(x.err||"查無資料"));}).join("\n"));})
-    .catch(function(e){DCO.busy=false;render();toast("⚠️ 查詢沒成功："+e.message);});}
+var HCTQ={on:"",res:{}};   /* 2026-10-30：正在核對的訂單、核對結果（新竹要 3～6 秒才回；按鈕改顯示「查詢中」，結果寫在卡片上） */
+function hctQuery(id){if(DCO.busy||HCTQ.on)return;HCTQ.on=id;delete HCTQ.res[id];render();
+  dcoPostRaw({action:"hctQuery",id:id}).then(function(r){if(!(r&&r.ok))throw dcoApiErr(r);
+      HCTQ.res[id]={ok:r.result.every(function(x){return x.success==="Y";}),at:new Date(),
+        items:r.result.map(function(x){return x.success==="Y"?"✅ 新竹有收到，貨號 "+hctDash(x.edelno):"❌ 託運單號 "+x.epino+"："+(x.err||"新竹查無資料");})};})
+    .catch(function(e){HCTQ.res[id]={ok:false,at:new Date(),items:["⚠️ 查詢沒成功："+e.message+"（可以再按一次）"]};})
+    .then(function(){HCTQ.on="";render();});}
 function hctDispatchCancel(id){if(DCO.busy)return;
   if(typeof confirm==="function"&&!confirm("取消叫新竹來收這張訂單（"+id+"）的貨？\n\n司機還沒收件前才有效；取消後這個貨號就不能再叫收件，要寄得重開托運單。"))return;
   DCO.busy=true;render();
@@ -4918,7 +4925,7 @@ function hctView(){var dIn=ST.hctDay||ymd(new Date()),day=dIn.replace(/-/g,""),i
   if(act.length){h+='<div style="overflow-x:auto"><table class="dcot"><tr><th>貨號</th><th>計費</th><th>到著站</th><th>收件門市</th><th class="right">件數</th><th class="right">重量／尺寸</th><th>訂單</th><th>狀態</th>'+(dsp?'<th>叫收件</th>':'')+'</tr>'
     +act.map(function(l){return '<tr><td><b>'+escH(hctDash(l.edelno))+'</b></td><td>'+escH(hctCsOf(l.cs).name)+'</td><td>'+escH(l.erstno)+'</td><td>'+escH(storeName(l.store))+'</td><td class="right">'+l.boxes+'</td><td class="right">'+escH(hctQty(l))+'</td><td>'+escH(l.id)+'</td><td>'+(l.status==="已建單"?'<span style="color:#d97706">未交寄</span>':'<span style="color:#16a34a">已交寄</span>')+(l.env==="test"?' <span class="muted">（測試）</span>':'')+'</td>'
       +(dsp?'<td>'+(l.dispatch==="Y"?'<span style="color:#0369a1">已通知</span>':(l.dispatch==="取消"?'<span class="muted">已取消</span>':(/^N/.test(l.dispatch||"")?'<span style="color:#B3261E" title="'+escA(l.dispatch)+'">沒叫到</span>':'—')))+'</td>':'')+'</tr>';}).join('')+'</table></div>';
-    h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm ghost" data-hctprintday="'+escA(day)+'"'+(DCO.busy?' disabled':'')+'>🖨 補印這天全部標籤</button>'
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm ghost" data-hctprintday="'+escA(day)+'"'+(DCO.busy||HCTP.on?' disabled':'')+'>'+(HCTP.on==="*"?'⏳ 讀取標籤中…':'🖨 補印這天全部標籤')+'</button>'
       +(isToday&&wait.length?'<button class="btn sm" data-hctreport="1"'+(DCO.busy?' disabled':'')+'>📋 確認今日出貨＋印託運總表'+(dsp?'＋叫新竹收件':'')+'（'+wait.length+' 張）</button>':'')
       +(sent.length?'<button class="btn sm ghost" data-hcttotal="'+escA(day)+'">📋 再印一次託運總表</button>':'')
       +(dsp&&isToday&&undisp.length?'<button class="btn sm ghost" data-hctdisp="1"'+(DCO.busy?' disabled':'')+'>📞 通知新竹來收件（'+undisp.length+' 張）</button>':'')+'</div>';
@@ -4930,8 +4937,7 @@ function hctReport(){if(DCO.busy)return;var day=hctToday(),list=(HCT.day[day]||[
   if(!list.length){toast("今天沒有還沒確認的托運單");return;}
   var hr=new Date().getHours();
   if(typeof confirm==="function"&&!confirm("確認今天出貨？\n\n會把今天 "+list.length+" 張托運單交給新竹物流，並印出託運總表（每個客代一張、一式兩份交司機）。"+(dsp?"\n同時通知新竹來收件（15:00 前當天收，之後排下一個工作天）。":"")+"\n確認後這些托運單就不能再改或作廢。"+(hr>=18?"\n\n⚠️ 已經過了 18:00，新竹可能排到明天收件，建議先打電話給站所。":"")))return;
-  var w=hctWin("向新竹物流確認出貨中…");if(!w)return;
-  DCO.busy=true;render();
+  DCO.busy=true;render();toast("⏳ 向新竹物流確認出貨中…好了會自動跳出託運總表列印",15000);
   dcoPostRaw({action:"hctReport",date:day}).then(function(r){if(!(r&&r.ok))throw dcoApiErr(r);DCO.busy=false;
       if(r.cs)HCT.cfg=Object.assign({},HCT.cfg||{},{cs:r.cs,companyName:r.companyName});
       hctReset();render();
@@ -4939,11 +4945,11 @@ function hctReport(){if(DCO.busy)return;var day=hctToday(),list=(HCT.day[day]||[
       if(r.fail&&r.fail.length)msg.push("⚠️ 有 "+r.fail.length+" 張新竹沒有接受：\n"+r.fail.map(function(f){return f.id+" "+hctDash(f.edelno)+"："+f.err;}).join("\n")+"\n這幾張不會印在總表上，請聯絡新竹站所。");
       if(r.dispatch&&(r.dispatch.fail.length||!r.dispatch.done))msg.push("⚠️ 通知新竹來收件沒有全部成功（成功 "+r.dispatch.done+" 張）"+(r.dispatch.msg?"：\n"+r.dispatch.msg:"")+"\n請在這頁按「📞 通知新竹來收件」再試，或打電話給站所。");
       if(msg.length)alert(msg.join("\n\n"));
-      hctPrintTotal(r.labels.filter(function(l){return l.status==="已交寄";}),day,w);toast("✅ 已確認出貨 "+r.done+" 張"+(r.dispatch&&r.dispatch.done?"，已通知新竹收件 "+r.dispatch.done+" 張":""));})
-    .catch(function(e){DCO.busy=false;hctReset();render();try{w.close();}catch(x){}toast("⚠️ 確認出貨沒有完成："+e.message+"（請按 🔄 重新整理看狀態，不要重複按）");});}
+      hctPrintTotal(r.labels.filter(function(l){return l.status==="已交寄";}),day);toast("✅ 已確認出貨 "+r.done+" 張"+(r.dispatch&&r.dispatch.done?"，已通知新竹收件 "+r.dispatch.done+" 張":""));})
+    .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ 確認出貨沒有完成："+e.message+"（請按 🔄 重新整理看狀態，不要重複按）",8000);});}
 /* 託運總表：照新竹《託運總表文件 v1.0.0》格式，A4 橫式；每個客代一張，每張一式兩份（司機帶回一份、司機簽名後出貨中心留一份） */
-function hctPrintTotal(list,day,w){w=w||hctWin("");if(!w)return;
-  if(!list.length){try{w.close();}catch(e){}toast("沒有已確認出貨的托運單");return;}
+function hctPrintTotal(list,day){
+  if(!list.length){toast("沒有已確認出貨的托運單");return;}
   var d=day.slice(0,4)+"/"+day.slice(4,6)+"/"+day.slice(6),now=slipNow().slice(0,16).replace(/-/g,"/"),co=(HCT.cfg&&HCT.cfg.companyName)||"",groups={},order=[];
   list.forEach(function(l){var c=l.cs||"";if(!groups[c]){groups[c]=[];order.push(c);}groups[c].push(l);});
   var pages=[];
@@ -4954,8 +4960,7 @@ function hctPrintTotal(list,day,w){w=w||hctWin("");if(!w)return;
       +'<table class="table"><thead><tr><th>序</th><th>查貨號碼</th><th>到著站</th><th>收貨人名稱</th><th>收貨人地址</th><th>收貨人電話</th><th>件數</th><th>重量</th><th>傳票區分</th><th>代收貨款</th><th>報值金額</th><th>訂單編號</th><th>備註</th></tr></thead><tbody>'+rows+'</tbody></table>'
       +'<div class="footer"><div>合計：'+g.length+' 筆</div><div>總計：'+boxes+' 件</div></div>'
       +'<div class="sign-area"><div>收貨司機簽收：<span class="line"></span></div><div>客戶簽收：<span class="line"></span></div><div>收貨日：<span class="line"></span></div></div></div>');});});
-  w.document.open();
-  w.document.write('<!doctype html><html lang="zh-TW"><head><meta charset="utf-8"><title>新竹物流託運總表 '+d+'</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",Arial,sans-serif;color:#000;background:#fff}'
+  hctPrintHtml('<!doctype html><html lang="zh-TW"><head><meta charset="utf-8"><title>新竹物流託運總表 '+d+'</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",Arial,sans-serif;color:#000;background:#fff}'
     +'.page{width:277mm;min-height:190mm;border:1px solid #000;padding:5mm;margin:auto;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}'
     +'.header{text-align:center;font-size:18pt;font-weight:bold;margin-bottom:4mm}.info{display:flex;justify-content:space-between;font-size:10pt;line-height:18px}'
     +'.table{width:100%;border-collapse:collapse;table-layout:auto;font-size:8.5pt;margin-top:5mm}.table th{border:1px solid #000;text-align:center;padding:3px;height:25px;white-space:nowrap}'
@@ -4964,8 +4969,7 @@ function hctPrintTotal(list,day,w){w=w||hctWin("");if(!w)return;
     +'.line{display:inline-block;width:120px;border-bottom:1px solid #000;margin-left:5px;height:18px}'
     +'.bar{display:flex;gap:12px;align-items:center;padding:8px 14px;border-bottom:1px solid #999;font:14px sans-serif}.bar button{font-size:15px;padding:6px 16px;border-radius:8px;border:1px solid #0369a1;background:#0369a1;color:#fff}'
     +'@media screen{body{background:#8f8f8f}.page{margin:12px auto;background:#fff}}@media print{.noprint{display:none!important}}</style></head><body><div class="bar noprint"><b>📋 新竹物流託運總表 '+d+'</b><span>'+order.length+' 個客代 × 一式兩份，紙張 A4 橫式</span><span style="flex:1"></span><button type="button" onclick="window.print()">🖨 列印</button></div>'
-    +pages.join('')+'</body></html>');
-  w.document.close();setTimeout(function(){try{w.focus();w.print();}catch(e){}},500);}
+    +pages.join('')+'</body></html>');}
 document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target:null;if(!t)return;var b;   /* 2026-10-21 新竹托運單按鈕（事件委派） */
   if((b=t.closest("[data-hctgo]"))){ev.preventDefault();hctCreate(b.getAttribute("data-hctgo"));return;}
   if((b=t.closest("[data-hctprint]"))){ev.preventDefault();hctPrintIds([b.getAttribute("data-hctprint")]);return;}
