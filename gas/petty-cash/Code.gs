@@ -6,7 +6,7 @@
      GET  ?action=ping                    → {ok, ver}
      POST {action:'read', store, who, img(base64), mt, rotated}
           → AI 讀一張照片（可能含多張單據）→ {ok, receipts:[…], rotate, dups:[…], left}
-          照片橫放／倒放（rotate≠0）且前端還沒轉過 → 不讀、不記錄，只回 rotate，前端轉正後帶 rotated:true 再送一次（2026-10-29）
+          照片橫放／倒放（rotate≠0）且前端轉不到 2 次 → 不讀、不記錄，只回 rotate，前端轉正後帶 rotated:已轉次數 再送（2026-10-29；10-30 改問「上方朝哪邊」＋轉完再檢查）
           沒有發票的請款（2026-10-30）：現金簽收單（實作-姓名，6201-003）、包館退訂金 POS 截圖（預收訂金＋取出退訂，一張圖一列，2825）
           → 查重複改用 keys（簽收單：受款人＋日期＋金額；POS：交易序號／取出時間＋金額），存在 pc_log 的 keys 欄
    AI：呼叫訓練站 /api/recipe/translate（Claude；身分密碼由本程式從「食譜系統_申請單」dim_role 的「管理者」讀，不經人手）
@@ -14,7 +14,7 @@
          → 用來抓「同一張發票／同一張照片已經報過」；不存照片本身。
    防濫用：網址公開在 repo，沒有密碼 → 每天全站最多 DAILY_CAP 次辨識（超過回 cap，隔天自動恢復）。
    ===================================================================== */
-var VER = 'pc-2026-10-30.1';
+var VER = 'pc-2026-10-30.2';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -24,7 +24,9 @@ var IMG_MAX = 3000000;
 /* 2026-10-29 經營者：類別改成鼎新會計科目（依 115/08–09 三帳套「撥補零用金」傳票實際用到的科目；文具／雜項購置／耗材一律歸雜費；6220 研發費用只有體驗中心用，不列）。前端 ACCTS 要一致 */
 var ACCTS = ['5201 進貨食材', '6240 雜費', '6217 清潔費', '6205 運費', '6206 郵電費', '6207 修繕費', '6209 水電費',
   '6219 職工福利', '6204 差旅交通費', '6201-003 薪資-實作費用', '2825 暫收款'];
-var ITEM_MAX = 60;   /* 品項／用途最多 60 位元組（中文、全形算 2，半形算 1）：要直接輸入鼎新摘要 */
+/* 單據上方（標題那一側）朝照片哪一邊 → 照片要順時針轉幾度才正 */
+var ROT_BY_ORIENT = { '上': 0, '右': 270, '下': 180, '左': 90 };
+var ITEM_MAX = 60;  /* 品項／用途最多 60 位元組（中文、全形算 2，半形算 1）：要直接輸入鼎新摘要 */
 var LOG_HEAD = ['time', 'store', 'who', 'img_md5', 'n', 'date', 'vendor', 'items', 'invoice_no', 'doc_type', 'amount', 'category', 'confidence', 'note', 'model', 'ms', 'keys'];
 
 function fail_(msg, code) { var e = new Error(msg); e.code = code || 'err'; return e; }
@@ -83,9 +85,10 @@ function read_(b) {
   if (['image/jpeg', 'image/png', 'image/webp'].indexOf(mt) < 0) throw fail_('只收 JPG／PNG／WEBP 照片', 'input');
   var left = capTake_();
   var t0 = Date.now(), r = ai_(img, mt);
-  /* 照片橫放／倒放：先請前端轉正再讀（歪著讀容易錯），這次不記錄 */
-  var rot = Number(r.json.rotate) || 0;
-  if (rot && !b.rotated) return { receipts: [], reason: '', rotate: rot, dups: [], model: r.model, left: left };
+  /* 照片橫放／倒放：先請前端轉正再讀（歪著讀容易錯），這次不記錄。
+     2026-10-30：AI 回「順時針幾度」常把左右轉弄反 → 改問「單據上方朝哪一邊」，前端轉完再送時再檢查一次，還歪就再轉（最多轉 2 次） */
+  var rot = ROT_BY_ORIENT[r.json.orient] || 0, turns = Number(b.rotated) || 0;
+  if (rot && turns < 2) return { receipts: [], reason: '', rotate: rot, dups: [], model: r.model, left: left };
   if (needHard_(r.json)) {
     try { var r2 = ai_(img, mt, HARD_MODEL); if ((r2.json.receipts || []).length || !(r.json.receipts || []).length) r = r2; }
     catch (e) { /* Opus 失敗就照用 Sonnet 的結果，不讓店長卡住 */ }
@@ -179,7 +182,8 @@ var SYS = [
   '你是台灣連鎖烘焙 DIY 門市的會計助手，負責把店長拍的收據、發票照片整理成零用金報銷明細，明細會直接輸入鼎新會計系統。',
   '照片也可能是沒有發票的請款：「現金簽收單」或「POS 系統截圖（退包館訂金）」，規則在最後兩段。',
   '一張照片裡可能有 1 張以上的單據；每張單據至少回傳一筆，不要把不同單據合併。',
-  '先判斷照片方向：rotate＝照片要「順時針」轉幾度，單據上的字才會變成正的（0／90／180／270）。已經是正的、或只是稍微歪一點就填 0。',
+  '先判斷照片方向：orient＝單據的「上方」（標題、店名那一側，也就是字正著讀時字的頭頂）現在朝向照片的哪一邊：上／右／下／左。',
+  '  例：字是倒過來的＝下；字要把頭往右歪才讀得順（字的頭頂朝右）＝右；字的頭頂朝左＝左。已經是正的、或只是稍微歪一點就填 上。',
   '欄位規則：',
   '- goods：買了什麼，用半形斜線 / 分隔主要品項，越短越好（中文 20 字內），例：廚房紙巾/洗碗精/oreo。不要寫店名、不要寫數量和單價。',
   '- vendor：賣方簡稱，例：全聯、家樂福、好市多、繁昌青果、郵局。去掉「股份有限公司」「福利中心」「XX 分店」這類字。',
@@ -223,9 +227,9 @@ var SYS = [
 ].join('\n');
 
 var SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['rotate', 'receipts', 'reason'],
+  type: 'object', additionalProperties: false, required: ['orient', 'receipts', 'reason'],
   properties: {
-    rotate: { type: 'integer', enum: [0, 90, 180, 270] },
+    orient: { type: 'string', enum: ['上', '右', '下', '左'] },
     reason: { type: 'string' },
     receipts: {
       type: 'array', items: {
