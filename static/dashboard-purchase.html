@@ -4913,19 +4913,62 @@ function framePrint(html,prep){var old=document.getElementById("printFrame");if(
   var imgs=Array.prototype.slice.call(d.images||[]).filter(function(i){return !i.complete;}),n=imgs.length;
   if(!n)go();else{imgs.forEach(function(i){i.onload=i.onerror=function(){if(--n<=0)go();};});setTimeout(go,4000);}}
 var HCTP={on:""};   /* 正在讀標籤的訂單（按鈕顯示「讀取標籤中」） */
-/* 標籤列印：10×10 公分、一頁一張；按重量的托運單印「件數」張（一箱貼一張），按尺寸的一筆就是一箱、印 1 張 */
+/* 標籤列印（2026-10-30 改）：新竹的 A4 標籤紙，一頁 2 欄 × 3 列共 6 格（每格寬 10.5、高約 10 公分，左上角已印新竹 logo）。
+   新竹給的標籤圖是正方形，每格置中印 9.8 公分見方，圖上的 logo 疊在紙上的 logo。
+   按重量的托運單印「件數」張（一箱貼一張），按尺寸的一筆就是一箱、印 1 張。
+   印之前先跳小視窗選「從第幾格開始」（用剩的半張紙可以接著印），預設＝上次印完的下一格；位置對不準可微調（存在這台電腦）。 */
+var HCT_LBL={cols:2,rows:3,cw:105,rh:99,sz:98};
+function hctLblNum(k,def,lo,hi){var v=parseFloat(lsGet(k));return isNaN(v)?def:Math.max(lo,Math.min(hi,v));}
 function hctPrintLabels(labels){labels=(labels||[]).filter(function(l){return l&&l.img;});
   if(!labels.length){toast("沒有可以列印的標籤");return;}
-  var pages=[],test=labels.some(function(l){return l.env==="test";});
-  labels.forEach(function(l){var n=l.mode==="S"?1:Math.max(1,Math.min(99,num(l.boxes)||1));for(var i=1;i<=n;i++)pages.push('<div class="lb"><img src="data:image/png;base64,'+l.img+'" alt="'+escA(l.edelno)+'"></div>');});
+  var imgs=[],test=labels.some(function(l){return l.env==="test";});
+  labels.forEach(function(l){var n=l.mode==="S"?1:Math.max(1,Math.min(99,num(l.boxes)||1));for(var i=1;i<=n;i++)imgs.push(l);});
   var ttl=labels.length===1?("新竹托運標籤 "+hctDash(labels[0].edelno)):("新竹托運標籤 "+labels.length+" 張托運單");
-  framePrint('<!doctype html><html><head><meta charset="utf-8"><title>'+escH(ttl)+'</title><style>@page{size:100mm 100mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}'
-    +'.lb{width:100mm;height:100mm;overflow:hidden;break-after:page;page-break-after:always}.lb:last-child{break-after:auto;page-break-after:auto}.lb img{display:block;width:100mm;height:100mm}'
-    +'.bar{position:sticky;top:0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#fff;border-bottom:1px solid #999;padding:8px 14px;font:14px sans-serif}'
-    +'.bar button{font-size:15px;padding:6px 16px;border-radius:8px;border:1px solid #0369a1;background:#0369a1;color:#fff;cursor:pointer}'
-    +'@media screen{body{background:#8f8f8f}.lb{margin:12px auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.35)}}@media print{.noprint{display:none!important}}</style></head><body>'
-    +'<div class="bar noprint"><b>🖨 '+escH(ttl)+'</b><span>共 '+pages.length+' 張標籤（每箱一張）　·　紙張 10×10 公分、邊界無、縮放 100%</span>'+(test?'<span style="color:#B3261E">🧪 測試帳號的標籤，不能真的寄</span>':'')+'<span style="flex:1"></span><button type="button" onclick="window.print()">🖨 列印</button></div>'
-    +pages.join("")+'</body></html>');}
+  var per=HCT_LBL.cols*HCT_LBL.rows,start=Math.round(hctLblNum("hctLblNext",1,1,per)),n=imgs.length;
+  var old=document.getElementById("hctLblPick");if(old)old.parentNode.removeChild(old);
+  var d=document.createElement("div");d.id="hctLblPick";d.className="modal-bg";d.style.zIndex="99990";
+  d.innerHTML='<div class="modal" role="dialog" aria-modal="true" style="max-width:400px">'
+    +'<div style="font-size:17px;font-weight:800;margin-bottom:4px">🖨 列印新竹托運標籤</div>'
+    +'<div class="sub" style="margin-bottom:10px">共 <b>'+n+'</b> 張標籤（每箱一張）　·　A4 標籤紙一頁 6 格</div>'
+    +(test?'<div style="color:#B3261E;font-size:13px;margin-bottom:8px">🧪 測試帳號的標籤，不能真的寄</div>':'')
+    +'<div style="font-weight:700;margin-bottom:6px">從第幾格開始印？<span class="sub" style="font-weight:400">（點格子；用過的格子會跳過）</span></div>'
+    +'<div id="hlGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;width:200px;margin:0 auto"></div>'
+    +'<div id="hlInfo" style="text-align:center;margin:8px 0 2px;font-size:14px"></div>'
+    +'<details style="margin-top:8px;font-size:13px"><summary style="cursor:pointer;color:#555">位置對不準？微調（公釐）</summary>'
+      +'<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px">'
+      +'<label>往右 <input id="hlDx" type="number" step="0.5" min="-10" max="10" style="width:64px"></label>'
+      +'<label>往下 <input id="hlDy" type="number" step="0.5" min="-10" max="10" style="width:64px"></label>'
+      +'<span class="sub">負數＝往左／往上。會記在這台電腦。</span></div></details>'
+    +'<div class="sub" style="margin-top:10px;font-size:12.5px;line-height:1.6">列印視窗請選：紙張 <b>A4</b>、邊界 <b>無</b>、縮放 <b>100%（預設）</b>、不要勾「頁首和頁尾」</div>'
+    +'<div style="display:flex;gap:10px;margin-top:12px"><button type="button" class="btn" id="hlGo" style="flex:1">🖨 列印</button>'
+    +'<button type="button" class="btn ghost" id="hlNo">取消</button></div></div>';
+  document.body.appendChild(d);
+  var dx=d.querySelector("#hlDx"),dy=d.querySelector("#hlDy");dx.value=hctLblNum("hctLblDx",0,-10,10);dy.value=hctLblNum("hctLblDy",0,-10,10);
+  function paint(){var g="",k=0;for(var c=1;c<=per;c++){var used=c<start,lab=!used&&k<n;if(lab)k++;
+      g+='<button type="button" data-c="'+c+'" style="height:56px;border-radius:8px;cursor:pointer;font:inherit;font-size:13px;line-height:1.3;'
+        +(used?'border:1px dashed #bbb;background:#f1f1f1;color:#999':lab?'border:2px solid #0369a1;background:#e0f2fe;color:#0369a1;font-weight:700':'border:1px solid #ccc;background:#fff;color:#999')+'">'
+        +'第 '+c+' 格<br>'+(used?'已用過':lab?'印這格':'空著')+'</button>';}
+    d.querySelector("#hlGrid").innerHTML=g;
+    var pages=Math.ceil((start-1+n)/per);
+    d.querySelector("#hlInfo").innerHTML='需要 <b>'+pages+'</b> 頁標籤紙'+(pages>1?'（第 1 頁從第 '+start+' 格開始，之後每頁從第 1 格）':'');}
+  paint();
+  function close(){document.removeEventListener("keydown",esc,true);if(d.parentNode)d.parentNode.removeChild(d);}
+  function esc(e){if(e.key==="Escape")close();}
+  document.addEventListener("keydown",esc,true);
+  d.onclick=function(e){if(e.target===d){close();return;}var b=e.target.closest&&e.target.closest("[data-c]");if(b){start=+b.getAttribute("data-c");paint();}};
+  d.querySelector("#hlNo").onclick=close;
+  d.querySelector("#hlGo").onclick=function(){
+    var ox=Math.max(-10,Math.min(10,num(dx.value))),oy=Math.max(-10,Math.min(10,num(dy.value)));
+    lsSet("hctLblDx",String(ox));lsSet("hctLblDy",String(oy));lsSet("hctLblNext",String((start-1+n)%per+1));close();
+    var L=HCT_LBL,sheets=[],cur=null,slots=[];for(var c=1;c<start;c++)slots.push(null);imgs.forEach(function(l){slots.push(l);});
+    slots.forEach(function(l,i){var p=i%per;if(!p){cur=[];sheets.push(cur);}if(!l)return;
+      var col=p%L.cols,row=Math.floor(p/L.cols);
+      cur.push('<img src="data:image/png;base64,'+l.img+'" alt="'+escA(l.edelno)+'" style="left:'+(col*L.cw+(L.cw-L.sz)/2+ox)+'mm;top:'+(row*L.rh+(L.rh-L.sz)/2+oy)+'mm">');});
+    framePrint('<!doctype html><html><head><meta charset="utf-8"><title>'+escH(ttl)+'</title><style>@page{size:A4 portrait;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}'
+      +'.sh{position:relative;width:210mm;height:296mm;overflow:hidden;break-after:page;page-break-after:always}.sh:last-child{break-after:auto;page-break-after:auto}'
+      +'.sh img{position:absolute;display:block;width:'+L.sz+'mm;height:'+L.sz+'mm}</style></head><body>'
+      +sheets.map(function(s){return '<div class="sh">'+s.join("")+'</div>';}).join("")+'</body></html>');};
+  d.querySelector("#hlGo").focus();}
 function hctFetchImgs(ids){return dcoJsonp({action:"hct",ids:ids.join(","),img:"1"}).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到標籤");return hctIndex(d.labels);});}
 function hctPrintIds(ids){ids=ids.filter(Boolean);if(!ids.length){toast("沒有可以列印的標籤");return;}if(HCTP.on)return;
   HCTP.on=ids.length===1?ids[0]:"*";render();toast("⏳ 讀取 "+ids.length+" 張訂單的托運標籤中…約 3～5 秒",8000);
