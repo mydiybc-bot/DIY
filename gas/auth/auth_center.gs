@@ -1,5 +1,10 @@
 /** ═══════════════════════════════════════════════════════════════════
- * 儀表板權限中心 auth_center.gs v1.2（2026-10-04 效能第 2 批，保守版）
+ * 儀表板權限中心 auth_center.gs v1.3（2026-10-30 分組密碼）
+ * v1.3：①dim_auth 加 H 欄 group：填了組別代號（grp_store／grp_center／grp_boss）的列，改用「那一組」的密碼驗證；
+ *         組別列密碼空白或找不到 → 照舊用自己這列的密碼（不會突然全部進不去）；組別列 enabled＝N → 整組停用
+ *       ②組別列本身不能直接當儀表板驗（verify 回「不允許」）③admin_list 多回 group／group_name，後台組員列顯示「用哪一組」
+ *       ④一次性函式 setupGroups_v13（編輯器執行）：先備份 dim_auth → 加三組 → 分組 → 刪不再使用的列 → 建「密碼放哪裡」分頁；
+ *         密碼只在程式裡複製，不顯示、不寫進紀錄 ⑤selfTestGroups_v13：用表上的密碼逐列驗一次，只記 ok／不 ok
  * v1.2：①dim_auth 讀取結果放 CacheService 2 分鐘（verify／checkAdmin 用；admin_set／admin_unlock 成功後清掉 → 後台改密碼、停用立刻生效；
  *         直接在 Sheet 手改最多 2 分鐘後生效）②登入紀錄照寫、不拿掉，但改成「回應組好之後最後一步」寫，且 try/catch 包住（寫失敗不影響登入）
  *       ③試算表只開一次（ss_ 共用）④回傳格式一字不變（含 ttl_hours）；ping 回 v1.2
@@ -42,7 +47,8 @@ var FAIL_WINDOW_SEC = 600;
 
 var COL = { id:1, name:2, password:3, ttl:4, enabled:5, updated:6, note:7 };
 var AUTH_CACHE_SEC = 120;            /* v1.2：dim_auth 讀取結果快取秒數（admin_set／admin_unlock 後清掉） */
-var AUTH_CACHE_KEY = 'dim_auth:v1';
+var AUTH_CACHE_KEY = 'dim_auth:v2';   /* v1.3：多了 group 欄，換 key 免讀到舊格式 */
+var GROUP_PREFIX = 'grp_';
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -54,7 +60,7 @@ function doGet(e) {
       case 'admin_list': out = adminList_(p); break;
       case 'admin_set':  out = adminSet_(p);  break;
       case 'admin_unlock': out = adminUnlock_(p); break;
-      case 'ping':       out = { ok: true, ver: 'v1.2' }; break;
+      case 'ping':       out = { ok: true, ver: 'v1.3' }; break;
       default:           out = { ok: false, error: 'unknown action' };
     }
   } catch (err) {
@@ -87,7 +93,7 @@ function rows_() {
   if (!sh) throw new Error('找不到 ' + TAB_AUTH + ' 分頁，請先執行 seedAuthSheet');
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 7).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 8).getValues();
   var arr = [];
   for (var i = 0; i < vals.length; i++) {
     var v = vals[i];
@@ -100,18 +106,29 @@ function rows_() {
       ttl_hours: Number(v[3]) || 12,
       enabled: String(v[4] || 'Y').toUpperCase(),
       updated_at: v[5] || '',
-      note: String(v[6] || '')
+      note: String(v[6] || ''),
+      group: String(v[7] || '').trim()
     });
   }
   return arr;
 }
 
 function findDash_(id, fresh) {   /* fresh＝略過快取直接讀 Sheet（要寫入前用，列號才是現況） */
-  var arr = fresh ? rows_() : rowsCached_();
+  return findIn_(fresh ? rows_() : rowsCached_(), id);
+}
+function findIn_(arr, id) {
   for (var i = 0; i < arr.length; i++) {
     if (arr[i].dashboard_id === id) return arr[i];
   }
   return null;
+}
+
+/* v1.3：這一列實際要比對的密碼與是否停用。有分組、而且組別列有密碼 → 用組別的；否則用自己的 */
+function effective_(arr, d) {
+  var g = d.group ? findIn_(arr, d.group) : null;
+  if (g && g.enabled !== 'Y') return { password: d.password, disabled: true, group: g };
+  if (g && g.password) return { password: g.password, disabled: false, group: g };
+  return { password: d.password, disabled: false, group: null };
 }
 
 /* v1.2：log_ 先排隊，doGet 組好回應後 flushLog_ 一次寫（照寫、不拿掉——稽核密碼外流要靠它） */
@@ -134,7 +151,7 @@ function verify_(p) {
   var id = String(p.dashboard || '').trim();
   var pwd = String(p.pwd || '');
   if (!id || !pwd) return { ok: false, error: '缺少參數' };
-  if (id === '__admin__') return { ok: false, error: '不允許' };
+  if (id === '__admin__' || id.indexOf(GROUP_PREFIX) === 0) return { ok: false, error: '不允許' };
 
   var cache = CacheService.getScriptCache();
   var fk = 'fail_' + id;
@@ -144,11 +161,13 @@ function verify_(p) {
     return { ok: false, locked: true, error: '嘗試次數過多，請 10 分鐘後再試' };
   }
 
-  var d = findDash_(id);
+  var arr = rowsCached_();
+  var d = findIn_(arr, id);
   if (!d) { log_('verify', id, 'not_found'); return { ok: false, error: '查無此儀表板設定' }; }
-  if (d.enabled !== 'Y') { log_('verify', id, 'disabled'); return { ok: false, error: '此儀表板已停用' }; }
+  var ef = effective_(arr, d);
+  if (d.enabled !== 'Y' || ef.disabled) { log_('verify', id, 'disabled'); return { ok: false, error: '此儀表板已停用' }; }
 
-  if (d.password !== pwd) {
+  if (!ef.password || ef.password !== pwd) {
     cache.put(fk, String(fails + 1), FAIL_WINDOW_SEC);
     log_('verify', id, 'wrong_pwd');
     return { ok: false, error: '密碼錯誤' };
@@ -172,7 +191,11 @@ function adminList_(p) {
   var cache = CacheService.getScriptCache();
   for (var i = 0; i < arr.length; i++) {
     if (arr[i].dashboard_id === '__admin__') continue;
+    var gr = arr[i].group ? findIn_(arr, arr[i].group) : null;
     list.push({
+      group: arr[i].group,
+      group_name: gr ? gr.name : '',
+      group_active: !!(gr && gr.password),
       fails: Number(cache.get('fail_' + arr[i].dashboard_id) || 0),
       dashboard_id: arr[i].dashboard_id,
       name: arr[i].name,
@@ -255,3 +278,120 @@ function seedAuthSheet() {
 }
 /* v1.1：pnl／monthly 已納入本系統（第二批 v3.1 交辦書同步移除 hub 的 PWD_B）。 */
 /* v1.2（2026-10-04）：dim_auth 快取 2 分鐘＋登入紀錄最後一步寫＋試算表只開一次；回傳格式不變。回滾＝管理部署作業 → 編輯 → 版本選回上一版。 */
+
+/* ── v1.3 一次性：分組密碼（2026-10-30 經營者裁定「照建議改」）── 編輯器選 setupGroups_v13 → 執行 ──
+   ①整張 dim_auth 複製成「dim_auth_備份_YYYYMMDD-HHmm」（舊的 dim_auth_備份_* 刪掉，只留最新一份）
+   ②加三組：grp_store 門市（密碼＝原 hub 那組，門市照舊不用改）、grp_center 體驗中心（＝原 hub_hq 那組）、grp_boss 老闆（＝原 pnl 那組）
+   ③H 欄寫每列屬於哪一組；刪掉已不使用的列（店長交辦 12、區主管交辦 4、舊預算頁）
+   ④建「密碼放哪裡」分頁（只寫位置、不寫密碼）
+   密碼全在程式裡複製，Logger 只印代號與「改了／沒改」。重跑安全：已有組別列就不重加、不覆蓋組別密碼。 */
+var GROUPS_V13 = [
+  ['grp_store',  '🟢 門市（店長＋夥伴）共用密碼', 'hub',    '門市照舊用這組；店長或夥伴離職時只改這一格'],
+  ['grp_center', '🟡 體驗中心共用密碼',           'hub_hq', '體驗中心同事、區主管用；改這一格＝下面所有 🟡 頁一起換'],
+  ['grp_boss',   '🔴 老闆專用密碼（財務）',       'pnl',    '只有老闆；損益、月會']
+];
+var MEMBERS_V13 = {
+  grp_store:  ['hub', 'store_1', 'store_2', 'store_3', 'store_4', 'store_5', 'store_6', 'store_7', 'store_8', 'store_9', 'store_10', 'store_11', 'store_12',
+               'purchase', 'reservation', 'pettycash', 'announce'],
+  grp_center: ['hub_hq', 'task_hq', 'purchase_hq', 'pos', 'schedule', 'zijiren', 'reviews', 'recipe', 'project', 'supplier', 'survey', 'poll', 'announce_pub'],
+  grp_boss:   ['pnl', 'monthly']
+};
+var DEAD_V13 = ['budget', 'task_zone_n1', 'task_zone_n2', 'task_zone_n3', 'task_zone_cs'];
+for (var _n = 1; _n <= 12; _n++) DEAD_V13.push('task_store_' + _n);
+
+function setupGroups_v13() {
+  var ss = ss_(), sh = ss.getSheetByName(TAB_AUTH);
+  var before = rows_();
+  if (!before.length) throw new Error('dim_auth 是空的，停止');
+  var ts = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd-HHmm');
+  ss.getSheets().forEach(function (t) { if (/^dim_auth_備份_/.test(t.getName())) ss.deleteSheet(t); });
+  var bk = sh.copyTo(ss).setName('dim_auth_備份_' + ts);
+
+  var byId = {}; before.forEach(function (r) { byId[r.dashboard_id] = r; });
+  GROUPS_V13.forEach(function (g) {
+    if (!byId[g[0]] && !(byId[g[2]] && byId[g[2]].password)) throw new Error('來源列 ' + g[2] + ' 沒有密碼，停止（什麼都沒改，備份分頁可刪）');
+  });
+  var groupOf = {};
+  Object.keys(MEMBERS_V13).forEach(function (g) { MEMBERS_V13[g].forEach(function (id) { groupOf[id] = g; }); });
+
+  var now = new Date(), out = [], used = {};
+  function push(r, grp) { out.push([r.dashboard_id, r.name, r.password, r.ttl_hours, r.enabled, r.updated_at || now, r.note, grp || '']); used[r.dashboard_id] = 1; }
+  if (byId['__admin__']) push(byId['__admin__'], '');
+  GROUPS_V13.forEach(function (g) {
+    var ex = byId[g[0]];
+    if (ex) push(ex, '');
+    else { out.push([g[0], g[1], byId[g[2]].password, 12, 'Y', now, g[3], '']); used[g[0]] = 1; }
+  });
+  GROUPS_V13.forEach(function (g) {
+    MEMBERS_V13[g[0]].forEach(function (id) { if (byId[id]) push(byId[id], g[0]); });
+  });
+  var dropped = [];
+  before.forEach(function (r) {
+    if (used[r.dashboard_id]) return;
+    if (DEAD_V13.indexOf(r.dashboard_id) >= 0) { dropped.push(r.dashboard_id); return; }
+    push(r, '');   /* 沒列在任何一組的（平板外語食譜、總分類帳通行碼、以後新加的）照舊用自己的密碼 */
+  });
+
+  var n = out.length, lastOld = sh.getLastRow();
+  sh.getRange(1, 1, 1, 8).setValues([['dashboard_id', 'name', 'password', 'ttl_hours', 'enabled', 'updated_at', 'note', 'group']]);
+  if (lastOld > 1) sh.getRange(2, 1, lastOld - 1, 8).clearContent();
+  sh.getRange(2, 3, n, 1).setNumberFormat('@');
+  sh.getRange(2, 1, n, 8).setValues(out);
+  authCacheClear_();
+
+  /* 前後比對：每個留下來的代號，實際生效的密碼有沒有變（只印代號） */
+  var after = rows_(), changed = [], same = [];
+  before.forEach(function (r) {
+    if (dropped.indexOf(r.dashboard_id) >= 0 || r.dashboard_id === '__admin__') return;
+    var a = findIn_(after, r.dashboard_id);
+    if (!a) throw new Error('少了 ' + r.dashboard_id + '，請從備份分頁還原');
+    (effective_(after, a).password === r.password ? same : changed).push(r.dashboard_id);
+  });
+  writeWhereTab_();
+  var msg = '完成。備份分頁：' + bk.getName() + '｜前 ' + before.length + ' 列 → 後 ' + after.length + ' 列（含 3 組別列）｜刪掉 ' + dropped.length + ' 列：' + dropped.join('、') +
+            '｜密碼換成組別的：' + (changed.join('、') || '無') + '｜沒變：' + same.length + ' 列';
+  Logger.log(msg);
+  return msg;
+}
+
+/* 驗證：用表上的密碼，每一列都走一次真正的 verify 判斷（不寫登入紀錄、不顯示密碼） */
+function selfTestGroups_v13() {
+  authCacheClear_();
+  var arr = rows_(), bad = [], ok = 0;
+  arr.forEach(function (d) {
+    var id = d.dashboard_id;
+    if (id === '__admin__' || id.indexOf(GROUP_PREFIX) === 0 || d.enabled !== 'Y') return;
+    var ef = effective_(arr, d);
+    if (!ef.password) { bad.push(id + '（沒有密碼）'); return; }
+    var r1 = verify_({ dashboard: id, pwd: ef.password });
+    var r2 = verify_({ dashboard: id, pwd: ef.password + '#x' });
+    if (r1.ok && !r2.ok) ok++; else bad.push(id);
+    CacheService.getScriptCache().remove('fail_' + id);   /* 故意錯的那一次不算進防暴力次數 */
+  });
+  var g = verify_({ dashboard: 'grp_store', pwd: 'x' });
+  _logQ = [];   /* 測試不留登入紀錄 */
+  var msg = '自我測試：通過 ' + ok + ' 列｜不通過：' + (bad.join('、') || '無') + '｜組別列直接驗＝' + (g.error || '?');
+  Logger.log(msg);
+  return msg;
+}
+
+function writeWhereTab_() {
+  var ss = ss_(), name = '密碼放哪裡', t = ss.getSheetByName(name) || ss.insertSheet(name, 0);
+  var rows = [
+    ['種類', '放在哪裡', '怎麼查／怎麼改', '備註'],
+    ['儀表板密碼', '本試算表 dim_auth 分頁', '看最上面三組：🟢 門市、🟡 體驗中心、🔴 老闆。改一格＝那一組的頁全部換', 'H 欄 group 寫每頁屬於哪一組；要把某頁換組，改它的 H 欄即可（最多 2 分鐘生效）'],
+    ['權限後台密碼', '本試算表 dim_auth 的 __admin__ 列', 'admin-auth.html 登入用', '只有老闆'],
+    ['平板外語食譜', 'dim_auth 的 tablet_i18n 列', '門市平板輸入一次記 30 天', '是平板用的，不跟人分組；改了平板要重輸'],
+    ['外部網站帳密（104、Shopline、WACA、肚肚、食譜後台、LINE Pay…）', 'Google 密碼管理工具', 'passwords.google.com（用 mydiybc@gmail.com 登入）', '登入網站時讓 Chrome 記住即可'],
+    ['總分類帳通行碼', 'Render diybc-ledger 環境變數 UPDATE_TOKEN', 'Claude 管；本機 ~/.config/diybc/secrets.env 也有一份', 'dim_auth 的 ledger_update 列只是紀錄'],
+    ['程式用的金鑰（Claude API 等）', '本機 ~/.config/diybc/secrets.env、Render 環境變數、各 GAS 指令碼屬性', 'Claude 管，老闆不用記', '這裡只寫位置、不寫密碼'],
+    ['新品申請表裡的主廚／簽核人密碼', '食譜系統_申請單 試算表 dim_role、dim_signer', '新品申請表 🔑 密碼管理', '跟本表分開管'],
+    ['忘記的時候', '用 Google 帳號打開本試算表', '或跟 Claude 說「X 的密碼在哪」', '首頁體驗中心畫面有「🔑 密碼總表」按鈕']
+  ];
+  t.clear();
+  t.getRange(1, 1, rows.length, 4).setValues(rows);
+  t.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#fde68a');
+  t.setFrozenRows(1);
+  t.setColumnWidths(1, 4, 280);
+  t.getRange(1, 1, rows.length, 4).setWrap(true).setVerticalAlignment('top');
+}
