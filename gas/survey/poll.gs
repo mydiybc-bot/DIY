@@ -135,7 +135,7 @@ function pollSubmit_(b) {
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
     var P = PropertiesService.getScriptProperties(), ck = 'pcnt_' + poll.id + '_' + today_(), n = Number(P.getProperty(ck) || 0);
-    if (n >= POLL_CAP) throw fail_('今天這份調查的填寫次數已達上限，請明天再試或聯絡總部', 'cap');
+    if (n >= POLL_CAP) throw fail_('今天這份調查的填寫次數已達上限，請明天再試或聯絡體驗中心', 'cap');
     P.setProperty(ck, String(n + 1));
     var sh = pollSheet_(poll.id, keys), head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
     var need = keys.filter(function (k) { return head.indexOf(k) < 0; });   /* 調查之後加了題目 → 補在 ua 前面 */
@@ -250,7 +250,7 @@ function pollClean_(poll, old) {
 }
 function pollSave_(b) {
   pollAuth_(b.pwd);
-  var poll = b.poll || {}, by = clean_(b.by, 30) || '總部', now = tz_(new Date(), 'yyyy-MM-dd HH:mm');
+  var poll = b.poll || {}, by = clean_(b.by, 30) || '體驗中心', now = tz_(new Date(), 'yyyy-MM-dd HH:mm');
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
     pollBust_();
@@ -276,7 +276,7 @@ function pollStatus_(b) {
   pollBust_();
   var old = pollFind_(b.p), now = tz_(new Date(), 'yyyy-MM-dd HH:mm'), sh = pollDim_();
   sh.getRange(old.row, 4).setValue(st);
-  sh.getRange(old.row, 8, 1, 2).setValues([[now, clean_(b.by, 30) || '總部']]);
+  sh.getRange(old.row, 8, 1, 2).setValues([[now, clean_(b.by, 30) || '體驗中心']]);
   SpreadsheetApp.flush();
   pollBust_(); CacheService.getScriptCache().remove('plist:v1');
   return { id: old.id, status: st };   /* 刪除只是藏起來：設定列與回覆分頁都留著 */

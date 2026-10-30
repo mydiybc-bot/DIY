@@ -67,7 +67,7 @@ function capTake_() {
   var lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
     var P = PropertiesService.getScriptProperties(), k = capKey_(), n = Number(P.getProperty(k) || 0);
-    if (n >= DAILY_CAP) throw fail_('今天全公司的辨識次數已用完（' + DAILY_CAP + ' 次），明天再試，或請總部調高上限', 'cap');
+    if (n >= DAILY_CAP) throw fail_('今天全公司的辨識次數已用完（' + DAILY_CAP + ' 次），明天再試，或請體驗中心調高上限', 'cap');
     P.setProperty(k, String(n + 1));
     /* 順手清 3 天前的計數 */
     P.getKeys().forEach(function (x) { if (/^cnt_\d{8}$/.test(x) && x < 'cnt_' + Utilities.formatDate(new Date(Date.now() - 3 * 864e5), 'Asia/Taipei', 'yyyyMMdd')) P.deleteProperty(x); });
@@ -304,7 +304,7 @@ function ai_(img, mt, first) {
     if (code !== 200) {
       var m = JSON.stringify((j && j.error) || j).slice(0, 300);
       if (code === 401) throw fail_('AI 服務身分驗證失敗：' + m, 'ai');
-      if (/credit balance|billing/i.test(m)) throw fail_('Claude API 額度用完了，請總部到 Console 確認額度', 'credit');
+      if (/credit balance|billing/i.test(m)) throw fail_('Claude API 額度用完了，請體驗中心到 Console 確認額度', 'credit');
       if ((code === 400 || code === 404) && /model/i.test(m) && model === MODELS[0]) { model = MODELS[1]; continue; }
       last = 'AI 回應錯誤 ' + code + '：' + m;
       if (code >= 500 || code === 429) { Utilities.sleep(2000 * (n + 1)); continue; }

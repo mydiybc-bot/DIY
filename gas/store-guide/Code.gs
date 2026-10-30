@@ -52,7 +52,7 @@ function syncNow() { return sync_('手動'); }
 function syncThrottled_() {
   var pr = PropertiesService.getScriptProperties(), last = Number(pr.getProperty('sync_ms') || 0);
   if (Date.now() - last < SYNC_GAP_MS) return { ok: false, error: '剛更新過，' + Math.ceil((SYNC_GAP_MS - (Date.now() - last)) / 60000) + ' 分鐘後再試', status: status_() };
-  var r = sync_('總部按鈕');
+  var r = sync_('體驗中心按鈕');
   return { ok: r.result === 'ok', status: status_() };
 }
 

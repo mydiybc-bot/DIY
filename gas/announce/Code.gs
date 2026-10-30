@@ -131,7 +131,7 @@ function doPost(e) {
   else {
     var needPub = PUB_ONLY[act] || (act === 'whoami' && p.role === 'pub');
     /* v7：決策中心用「總部」身分登入時帶 asHq，發佈／修改／刪除改驗總部密碼（task_hq）；沒帶照舊驗 announce_pub */
-    try { if (needPub && p.asHq) { auth_(p.password, DASH_HQ); who = '發佈者（總部）'; } else who = auth_(p.password, needPub ? DASH_PUB : DASH_VIEW); }
+    try { if (needPub && p.asHq) { auth_(p.password, DASH_HQ); who = '發佈者（體驗中心）'; } else who = auth_(p.password, needPub ? DASH_PUB : DASH_VIEW); }
     catch (err) { Utilities.sleep(800); res = { ok: false, act: act, code: 'auth', msg: errMsg_(err) }; log_('', act, '', false, res.msg); return out_(res); }
   }
   var lock = LockService.getScriptLock();
@@ -658,7 +658,7 @@ function zoneStores_(z) { return STORE_DEF.filter(function (s) { return s[3] ===
 function storeAuth_(p) {
   var st = storeOf_(p.store);
   if (String(p.hpw || '').trim()) {
-    try { auth_(p.hpw, DASH_HQ); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '總部密碼不對').replace('請輸入密碼', '請輸入總部密碼'), 'auth'); }
+    try { auth_(p.hpw, DASH_HQ); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '體驗中心密碼不對').replace('請輸入密碼', '請輸入體驗中心密碼'), 'auth'); }
     return st;
   }
   try { auth_(p.spw, 'store_' + st.id); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '店密碼不對').replace('請輸入密碼', '請輸入店密碼'), 'auth'); }
@@ -669,7 +669,7 @@ function mgrAuth_(p) {
   var st = storeOf_(p.store), role = String(p.role || ''), dash, scope, label;
   if (role === 'store') { dash = 'store_' + st.id; scope = [st.id]; label = st.short + '店'; }   /* v7：一店一組密碼（原 task_store_N 店長交辦密碼不再使用） */
   else if (role === 'zone') { dash = 'task_zone_' + st.zone; scope = zoneStores_(st.zone); label = ZONE_DEF[st.zone] + '區主管'; }
-  else if (role === 'hq') { dash = 'task_hq'; scope = STORE_DEF.map(function (s) { return s[0]; }); label = '總部'; }
+  else if (role === 'hq') { dash = 'task_hq'; scope = STORE_DEF.map(function (s) { return s[0]; }); label = '體驗中心'; }
   else throw fail_('請選身分', 'bad');
   try { auth_(p.mpw, dash); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '交辦密碼不對').replace('請輸入密碼', '請輸入交辦密碼'), 'auth'); }
   return { role: role, scope: scope, label: label, store: st };
@@ -753,7 +753,7 @@ function storeDay_(p) {
     if (d && String(d.ts).slice(0, 10) !== today) return;   /* 之前就做完的不再顯示，只留今天打勾的讓大家看到 */
     tasks.push({ id: t.task_id, title: t.title, note: t.note, freq: t.freq, when: taskWhen_(t), occ: occ,
       st: d ? 'done' : (occ < today ? 'late' : 'today'), who: d ? d.who : '', doneNote: d ? d.note : '', doneAt: d ? String(d.ts).slice(11, 16) : '',
-      by: t.creator_role === 'hq' ? '總部' : (t.creator_role === 'zone' ? '區主管' : '店長') });
+      by: t.creator_role === 'hq' ? '體驗中心' : (t.creator_role === 'zone' ? '區主管' : '店長') });
   });
   var ord = { late: 0, today: 1, done: 2 };
   tasks.sort(function (a, b) { return ord[a.st] - ord[b.st] || String(a.occ).localeCompare(String(b.occ)) || String(a.title).localeCompare(String(b.title)); });

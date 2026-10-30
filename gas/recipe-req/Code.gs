@@ -1608,13 +1608,13 @@ function planPush_(rid) {
     /* 店＝甜點品牌別 ∩ 檔期品牌別（檔期只在自己做、甜點預設兩個品牌 → 只放自己做 1～10 店；同採購系統檔期新品用檔期品牌別） */
     var bD = ptName_(h.brand), bC = camp ? ptName_(camp['品牌別']) : '', stores = brandStores_(bD || bC), haveSt = {};
     if (bD && bC && BRAND_STORES[bD] && BRAND_STORES[bC]) stores = stores.filter(function (n) { return BRAND_STORES[bC].indexOf(n) >= 0; });
-    if (!stores.length) warn.push('甜點品牌別「' + bD + '」和檔期品牌別「' + bC + '」沒有共同的店：新器具／模具各店標配沒有寫，請總部到採購系統店別參數設定');
+    if (!stores.length) warn.push('甜點品牌別「' + bD + '」和檔期品牌別「' + bC + '」沒有共同的店：新器具／模具各店標配沒有寫，請體驗中心到採購系統店別參數設定');
     if (P.par) P.par.vals.forEach(function (r) { var n = Number(r[P.par.col['店號']]); if (n > 0) haveSt[n] = 1; });
     if (Object.keys(haveSt).length) stores = stores.filter(function (n) { return haveSt[n]; });
     newTools.forEach(function (r) {
       var l = lineBy[r.name] || {};
-      if (!(l.perStore > 0)) { warn.push('新' + r.cat + '「' + r.name + '」申請表沒填「每店要幾個」：各店標配是 0（採購系統不會提醒補貨），請總部到採購系統店別參數設定'); return; }
-      if (!P.par) { warn.push('店別參數讀不到（' + P.parerr + '）：新' + r.cat + '「' + r.name + '」每店 ' + l.perStore + ' 個要請總部手動設定標配'); return; }
+      if (!(l.perStore > 0)) { warn.push('新' + r.cat + '「' + r.name + '」申請表沒填「每店要幾個」：各店標配是 0（採購系統不會提醒補貨），請體驗中心到採購系統店別參數設定'); return; }
+      if (!P.par) { warn.push('店別參數讀不到（' + P.parerr + '）：新' + r.cat + '「' + r.name + '」每店 ' + l.perStore + ' 個要請體驗中心手動設定標配'); return; }
       stores.forEach(function (st) {
         var o = { '店號': st, 'sku_id': r.sku_id, '標配數量': l.perStore };
         parRows.push(P.par.H.map(function (hh) { return o[hh] === undefined ? '' : o[hh]; }));
