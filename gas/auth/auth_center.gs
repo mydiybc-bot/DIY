@@ -395,3 +395,54 @@ function writeWhereTab_() {
   t.setColumnWidths(1, 4, 280);
   t.getRange(1, 1, rows.length, 4).setWrap(true).setVerticalAlignment('top');
 }
+
+/* ── 2026-10-30 經營者：「不知道每個儀表板該用什麼密碼」→ 建「每頁密碼對照」分頁（編輯器執行 writeCheatSheet_v13）──
+   每列一個儀表板；「用哪組」「密碼」兩欄是公式，跟著 dim_auth 的 H 欄與組別密碼自動變，不用再維護。只寫這個新分頁，不碰 dim_auth。 */
+var CHEAT_V13 = [
+  ['首頁（🏪 門市畫面）', 'hub', ''],
+  ['首頁（🏢 體驗中心畫面）', 'hub_hq', ''],
+  ['決策中心（選 1～12 號店）', 'store_1', '12 家店同一組'],
+  ['決策中心（選 🏢 體驗中心）', 'task_hq', ''],
+  ['決策中心「📋 月會」分頁', 'monthly', ''],
+  ['門市排班工作台', 'store_1', '跟決策中心選店同一組'],
+  ['採購系統', 'purchase', ''],
+  ['採購系統 切「體驗中心／經營者」', 'purchase_hq', ''],
+  ['訂位分析', 'reservation', ''],
+  ['POS 銷售', 'pos', ''],
+  ['排班分析', 'schedule', ''],
+  ['Google 評論', 'reviews', ''],
+  ['自己人會員', 'zijiren', ''],
+  ['零用金報銷', 'pettycash', ''],
+  ['損益（P&L）', 'pnl', ''],
+  ['新品申請表／新食譜上傳／外國人到店服務管理', 'recipe', ''],
+  ['專案推動', 'project', ''],
+  ['海外代理商購買平台', 'supplier', ''],
+  ['顧客問卷', 'survey', ''],
+  ['門市問卷管理', 'poll', ''],
+  ['公告發佈（舊管理者模式）', 'announce_pub', ''],
+  ['平板外語食譜', 'tablet_i18n', '平板輸一次記 30 天'],
+  ['權限後台（admin-auth）', '__admin__', '只有老闆'],
+  ['口語應對訓練站', '', '員工自己的帳號，不在這張表']
+];
+function writeCheatSheet_v13() {
+  var ss = ss_(), name = '每頁密碼對照', t = ss.getSheetByName(name) || ss.insertSheet(name, 0);
+  t.clear();
+  var rows = [['儀表板', '用哪組密碼（自動）', '密碼（自動帶出）', '備註', '代號']];
+  CHEAT_V13.forEach(function (c, i) {
+    var r = i + 2, id = 'E' + r;
+    if (!c[1]) { rows.push([c[0], '—', '—', c[2], '']); return; }
+    var g = 'IFERROR(VLOOKUP(' + id + ',dim_auth!A:H,8,FALSE),"")';
+    rows.push([c[0],
+      '=IF(' + g + '="","自己一組",IFERROR(VLOOKUP(' + g + ',dim_auth!A:B,2,FALSE),"?"))',
+      '=IF(' + g + '="",IFERROR(VLOOKUP(' + id + ',dim_auth!A:C,3,FALSE),"查無"),IFERROR(VLOOKUP(' + g + ',dim_auth!A:C,3,FALSE),"查無"))',
+      c[2], c[1]]);
+  });
+  t.getRange(1, 1, rows.length, 5).setValues(rows);
+  t.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#fde68a');
+  t.setFrozenRows(1);
+  t.setColumnWidth(1, 330); t.setColumnWidth(2, 230); t.setColumnWidth(3, 180); t.setColumnWidth(4, 200); t.setColumnWidth(5, 110);
+  t.getRange(2, 5, rows.length - 1, 1).setFontColor('#999999');
+  ss.setActiveSheet(t);
+  Logger.log('每頁密碼對照：' + (rows.length - 1) + ' 列（公式，會跟著 dim_auth 自動變）');
+  return rows.length - 1;
+}
