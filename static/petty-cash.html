@@ -380,10 +380,11 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
         <li>按「📷 拍照」一次拍一張（拍完按右下角「拍下一張」繼續），或按「🖼️ 選照片」一次選很多張。照片拍歪、橫的、倒的都沒關係，AI 會自己轉正。</li>
         <li>AI 讀完會把每張單據變成明細的一列，品項寫成「水果-繁昌青果」；同一張收據有食材也有雜費，會拆成兩列。<b>黃底</b>是 AI 沒把握的，請對照照片改正；點縮圖可以放大看。</li>
         <li>品項／用途最多 60 位元組（中文 30 字；英文、數字、符號算半個字），要直接輸入鼎新。</li>
+        <li>沒有發票的請款也可以拍：<b>現金簽收單</b>（實作費用，品項會寫成「實作-王小明」）、<b>退包館訂金的 POS 截圖</b>（交易支付明細表的預收訂金、關帳小結的取出退訂；一張圖彙整成一列，例：預收訂金9/5~9/16）。</li>
         <li>沒有照片的單據按「＋ 手動加一筆」。</li>
         <li>核對好按「⬇ 下載零用金申請表」，紙本單據依明細編號排好，簽核後寄回體驗中心給會計。</li>
       </ol>
-      <div style="margin-top:6px">紅框「可能重複」：這張發票號碼或這張照片之前已經辨識過，請確認不是重複請款。</div>
+      <div style="margin-top:6px">紅框「可能重複」：這張發票號碼、這張照片、同一張簽收單（受款人＋日期＋金額）或同一筆 POS 交易之前已經辨識過，請確認不是重複請款。</div>
     </div>
   </div>
   </div></details>
@@ -563,8 +564,9 @@ function paintPhoto(p, isNew) {
   var el = $('ph' + p.id);
   if (!el) { el = document.createElement('div'); el.className = 'ph'; el.id = 'ph' + p.id; $('photos').appendChild(el); }
   var dupHtml = (p.dups || []).map(function (d) {
-    return '<div class="dup">⚠ 可能重複：' + (d.kind === 'photo' ? '這張照片' : '發票 ' + esc(d.invoice_no)) + ' 在 ' + esc(d.at) + ' 已由 ' + esc(d.store) + ' ' + esc(d.who) + ' 辨識過' +
-      (d.kind === 'invoice' && d.amount ? '（$' + money(d.amount) + '）' : '') + '，請確認不是重複請款</div>';
+    /* kind：photo 同一張照片／invoice 同一個發票號碼／key 簽收單或 POS 交易序號（2026-10-30） */
+    return '<div class="dup">⚠ 可能重複：' + (d.kind === 'photo' ? '這張照片' : d.kind === 'key' ? esc(d.label) : '發票 ' + esc(d.invoice_no)) + ' 在 ' + esc(d.at) + ' 已由 ' + esc(d.store) + ' ' + esc(d.who) + ' 辨識過' +
+      (d.kind !== 'photo' && d.amount ? '（$' + money(d.amount) + '）' : '') + '，請確認不是重複請款</div>';
   }).join('');
   el.innerHTML = (p.thumb ? '<img src="' + p.thumb + '" alt="收據照片 ' + p.id + '" data-zoom="' + p.id + '">' : '<div style="width:96px;height:96px;border-radius:8px;background:#EEE;flex:none"></div>') +
     '<div class="pbody"><div><b>照片 #' + p.id + '</b> <span class="muted">' + esc(p.name) + '</span></div>' +
@@ -636,9 +638,9 @@ function readPhoto(p) {
     if (!r || !r.ok) throw new Error((r && r.msg) || '辨識失敗');
     p.dups = r.dups || [];
     var recs = r.receipts || [];
-    if (!recs.length) { p.status = 'err'; p.msg = '讀不到單據：' + (r.reason || '請確認照片清楚、是收據或發票') + '（可以手動加一筆）'; paintPhoto(p); return; }
+    if (!recs.length) { p.status = 'err'; p.msg = '讀不到單據：' + (r.reason || '請確認照片清楚、是收據、發票、簽收單或 POS 截圖') + '（可以手動加一筆）'; paintPhoto(p); return; }
     recs.forEach(function (x, k) {
-      var dupInv = p.dups.some(function (d) { return d.kind === 'invoice' && d.n === k; });
+      var dupInv = p.dups.some(function (d) { return (d.kind === 'invoice' || d.kind === 'key') && d.n === k; });
       addRow({ photo: p.id, items: x.items, category: x.category, invoice_no: x.invoice_no, amount: x.amount,
         note: [x.note, dupInv ? '⚠可能重複請款' : ''].filter(Boolean).join('；'), confidence: x.confidence });
     });
