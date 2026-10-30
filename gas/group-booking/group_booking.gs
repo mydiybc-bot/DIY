@@ -84,7 +84,7 @@ function gbStatus() {
 
 // ============ 設定 ============
 const GB = {
-  VERSION: 'gb-v1.4.1-20261007',
+  VERSION: 'gb-v1.4.2-20261030',
   BASE: 'https://diybc.azurewebsites.net',
   TZ: 'Asia/Taipei',
   DAYS_AHEAD: 60,            // 抓今天～60 天後（未來訂位表只有 35 天，團體常更早訂）
@@ -786,7 +786,8 @@ function gbPurResolver_(mapRows, desserts) {
   const DSET = {}; desserts.forEach(function (d) { DSET[d] = 1; });
   function norm(s, lvl) {
     let t = String(s == null ? '' : s).replace(/[\s\u3000]+/g, '').replace(/（/g, '(').replace(/）/g, ')').replace(/／/g, '/').toLowerCase();
-    if (lvl >= 2) t = t.replace(/【[^】]*】/g, '').replace(/\((葷|素|全素|蛋奶素|奶素|蛋素|限)\)$/, '').replace(/-限$/, '').replace(/限定$/, '');
+    // v1.4.2：結尾的門市限制註記「(信義、高雄無法製作)」不是甜點名稱的一部分，先拿掉再比（採購網頁 bkNorm 同步改）
+    if (lvl >= 2) t = t.replace(/【[^】]*】/g, '').replace(/(\([^()]*無法[^()]*\))+$/, '').replace(/\((葷|素|全素|蛋奶素|奶素|蛋素|限)\)$/, '').replace(/-限$/, '').replace(/限定$/, '');
     return t;
   }
   const set = {}; Object.keys(BKMAP).forEach(function (k) { set[k] = 1; }); desserts.forEach(function (d) { if (d && !set[d]) set[d] = 1; });
