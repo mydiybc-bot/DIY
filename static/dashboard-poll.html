@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<!-- 2026-10-30 新建「🗳 門市問卷管理」（經營者：總部儀表板多一個問卷儀表板，未來可以管理這些問卷）
+     總部開給各店填的內部問卷（第一份：擠花袋使用狀況調查）：新增／編輯題目（右邊即時預覽）、複製通知訊息與網址、看結果、結束收件、刪除（只藏起來）。
+     資料：顧客問卷 GAS（gas/survey/poll.gs）poll_list／poll_save／poll_status／poll_auth；填寫頁 poll.html?p=<代號>。
+     閘門 DASH_ID=poll（權限中心 dim_auth 由 GAS pollAuthSetup() 補列；密碼先同總部 hub）；寫入要再輸入同一組密碼、兩層確認。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>門市問卷管理｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FBF8F5;color:#2A2320;font-size:14px;line-height:1.55}
+  a{color:#8B3A2A}
+  button,input,select,textarea{font-family:inherit;font-size:14px}
+  .mt-header{background:linear-gradient(100deg,#2E5E4E,#5A9C7F);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:13px;opacity:.92}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-main{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#EAF5EF;border-color:#B9DCC8;color:#245442}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A3A40;font-size:13px}
+  .dsb-sop.open{display:block}.dsb-sop ol{margin:0;padding-left:20px}
+  .muted{color:#77706A;font-size:12px}
+  .btn{border:0;border-radius:8px;background:#2E5E4E;color:#fff;font-weight:700;padding:8px 14px;cursor:pointer;white-space:nowrap}
+  .btn.ghost{background:#fff;color:#2E5E4E;border:1px solid #B9DCC8}
+  .btn.warn{background:#fff;color:#B03A2E;border:1px solid #E8B4AE}
+  .btn.sm{padding:5px 10px;font-size:13px}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .bar .grow{flex:1}
+  /* 問卷卡片 */
+  .plist{display:grid;gap:12px}
+  .pc{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:14px 16px}
+  .pc.closed{background:#F7F5F3}
+  .pc h3{margin:0 0 4px;font-size:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .chip{font-size:12px;font-weight:700;border-radius:999px;padding:1px 9px}
+  .chip.open{background:#E5F4EA;color:#2F8F5B}.chip.closed{background:#EEE;color:#666}
+  .meter{height:8px;background:#EEE6DE;border-radius:99px;overflow:hidden;margin:8px 0 4px;max-width:420px}
+  .meter i{display:block;height:100%;background:#5A9C7F}
+  .pc .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .resbox{margin-top:10px;border:1px solid #E6D8CF;border-radius:10px;overflow:hidden}
+  .resbox iframe{width:100%;height:640px;border:0;display:block;background:#FFF8EC}
+  /* 編輯器 */
+  .ed{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+  @media(max-width:980px){.ed{grid-template-columns:1fr}.ed .pv{display:none}}
+  .ed .pv{position:sticky;top:12px;border:1px solid #E6D8CF;border-radius:14px;overflow:hidden;background:#FFF8EC}
+  .ed .pv iframe{width:100%;height:calc(100vh - 80px);border:0;display:block}
+  .ed .pv .pvh{font-size:12px;font-weight:700;color:#77706A;padding:6px 10px;background:#fff;border-bottom:1px solid #E6D8CF}
+  .card{background:#fff;border:1px solid #E6D8CF;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+  .card.fixed{background:#F7F5F3}
+  .lab{display:block;font-size:12px;font-weight:700;color:#5A4A40;margin:8px 0 4px}
+  .inp{width:100%;border:1px solid #D8C8BE;border-radius:8px;padding:8px 10px;background:#fff}
+  textarea.inp{min-height:70px;resize:vertical}
+  .qh{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .qh .no{background:#2E5E4E;color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;text-align:center;font-weight:800;font-size:13px;flex:none}
+  .qh .grow{flex:1}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .row>*{flex:1;min-width:120px}
+  .row>.btn,.row>.chk{flex:none;min-width:0}
+  .chk{display:inline-flex;gap:6px;align-items:center;font-size:13px;font-weight:700;flex:none;min-width:0}
+  .cond{background:#F4F9F6;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:13px}
+  .cond .vals{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px}
+  .err{background:#FADBD8;color:#B03A2E;border-radius:8px;padding:8px 12px;font-weight:700;margin-bottom:12px}
+  .stat{font-size:13px;font-weight:700;color:#77706A}.stat.dirty{color:#B4530B}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9000;padding:16px}
+  .modal>div{background:#fff;border-radius:14px;padding:20px;width:min(460px,100%)}
+  .modal h3{margin:0 0 8px}
+  .modal .row-btn{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+  .copyta{width:100%;min-height:150px;border:1px solid #D8C8BE;border-radius:8px;padding:8px;font-size:13px}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+/* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
+   2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
+   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+(function(){
+  var DASH_ID = 'poll';
+  var DASH_NAME = '門市問卷管理';   /* 與 dim_auth 的 name 欄一致 */
+  var KEY = 'dash_auth_' + DASH_ID, A = window.__dashAuth;
+  /* 只有食譜系統：2026-09-29 B 階段簽核連結（#sign=）不經本頁密碼，改由簽核頁用簽核人 PIN 驗證（看內容一定要 PIN）；
+     簽核頁不載入其他分頁的資料，換成其他網址會整頁重新載入、重新過這道密碼 */
+  if (DASH_ID === 'recipe' && /^#sign=/.test(location.hash || '')) { window.__SIGN_MODE = true; return; }
+  /* 放行旗標：P&L 靠 __pnlAuthed／__pnlStartApp 決定何時開始抓資料（2026-08-12c，見該頁 autoLoginFromHub）；其他頁多一個旗標無影響 */
+  function pass(){
+    window['__' + DASH_ID + 'Authed'] = true;
+    var f = window['__' + DASH_ID + 'StartApp'];
+    if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
+  }
+  try {
+    var o = JSON.parse(A.get(KEY) || 'null');
+    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+  } catch(_){}
+  A.del(KEY);
+  document.documentElement.style.visibility = 'hidden';
+  /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
+  A.warm();
+  function show(){
+    var d = document.createElement('div');
+    d.id = 'authGate';
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
+    d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
+      + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="position:relative">'
+      + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
+      + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
+      + '</div>'
+      + '<div id="agErr" style="color:#C43030;font-size:12px;min-height:16px;margin:6px 0"></div>'
+      + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
+      + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
+    document.body.appendChild(d);
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
+    inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
+    var eye = document.getElementById('agEye');
+    if (eye) eye.onclick = function(){
+      var showPw = inp.type === 'password';
+      inp.type = showPw ? 'text' : 'password';
+      eye.textContent = showPw ? '🙈' : '👁';
+      inp.focus();
+    };
+    var busy = false;   /* 驗證中再按 Enter／進入不重送 */
+    function go(){
+      var v = (inp.value||'').trim(); if (!v || busy) return;
+      busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
+      A.verify(DASH_ID, v, function(r){
+        busy = false; err.style.color = '#C43030';
+        if (r && r.ok) {
+          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+          /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
+             頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
+             改為就地拆除遮罩即可。 */
+          if (d && d.parentNode) d.parentNode.removeChild(d);
+          document.documentElement.style.visibility = '';
+          pass();
+        } else {
+          var _msg = (r && r.error) || '驗證失敗';
+          /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
+             2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
+          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          err.textContent = _msg;
+          btn.disabled = false; btn.textContent = '進入';
+          if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
+          inp.focus();
+        }
+      }, function(t){ err.style.color = '#6F4E45'; err.textContent = t; });
+    }
+    btn.onclick = go;
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+    setTimeout(function(){ inp.focus(); }, 150);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+  else show();
+})();
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>🗳 門市問卷管理</h1>
+  <span class="mt-sub">總部要各店回報事情（例：擠花袋破損）→ 開問卷、發網址、看誰還沒填</span>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp" ontoggle="document.body.classList.toggle('uhelp-on',this.open)"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 即時</b>
+    <span>店員按送出就進資料庫；這頁每次打開讀最新（最多慢 1 分鐘）</span>
+    <span id="dsbFresh">🕒 讀取中…</span>
+    <button class="dsb-info" type="button" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <ol>
+        <li><b>開新問卷</b>：按「＋ 新增問卷」，填名稱、說明，一題一題加（單選、複選、簡答、長段文字、數字）。第一題「店別」系統固定。右邊即時看到店員手機上的樣子。按「💾 儲存」要輸入「門市問卷管理」密碼。</li>
+        <li><b>發給門市</b>：卡片上「📋 複製通知訊息」會複製一段可以直接貼到 LINE 群組／104 公告的文字（含網址）。</li>
+        <li><b>看結果</b>：「📊 看結果」展開各店最新一筆、還沒填的店。同一家店重填以最新為準，舊的都留在資料庫。</li>
+        <li><b>結束收件</b>：收齊了按「⏸ 結束收件」，店員再打開會看到「已結束」、不能送出；要再收按「▶ 重新開放」。</li>
+        <li><b>改題目</b>：已經有人填的問卷也可以改；拿掉的題目舊答案還在資料庫，只是不再出現。<b>「刪除」只是從清單藏起來</b>，資料不會刪。</li>
+        <li>資料存在「顧客問卷_資料庫」試算表：設定在 <code>dim_poll</code>，回覆在 <code>poll_問卷代號</code> 分頁。</li>
+      </ol>
+    </div>
+  </div>
+  </div></details>
+
+  <div id="vList">
+    <div class="bar"><button class="btn" type="button" id="btnNew">＋ 新增問卷</button><span class="grow"></span><button class="btn ghost sm" type="button" id="btnReload">🔄 重新整理</button></div>
+    <div class="plist" id="plist"><div class="muted">讀取中…</div></div>
+  </div>
+
+  <div id="vEdit" hidden>
+    <div class="bar"><button class="btn ghost" type="button" id="edBack">⬅ 回問卷清單</button><span class="stat" id="edStat"></span><span class="grow"></span><button class="btn" type="button" id="edSave" disabled>💾 儲存</button></div>
+    <div class="err" id="edErr" hidden></div>
+    <div class="ed">
+      <div>
+        <div class="card">
+          <label class="lab" for="edTitle">問卷名稱（店員看到的標題）</label>
+          <input class="inp" id="edTitle" maxlength="80" placeholder="例：擠花袋使用狀況調查">
+          <label class="lab" for="edIntro">說明（選填；為什麼要填、填一份就好…）</label>
+          <textarea class="inp" id="edIntro" maxlength="1000"></textarea>
+        </div>
+        <div class="card fixed"><div class="qh"><span class="no">1</span><b class="grow">店別</b><span class="muted">系統固定（12 店），必填</span></div></div>
+        <div id="edQs"></div>
+        <button class="btn ghost" type="button" id="edAdd">＋ 加一題</button>
+      </div>
+      <div class="pv"><div class="pvh">📱 店員看到的樣子（預覽，不會送出）</div><iframe id="edPv" title="預覽"></iframe></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 🗳 門市問卷管理（2026-10-30 建）=====
+   資料：顧客問卷 GAS（gas/survey/poll.gs）poll_list／poll_save／poll_status／poll_auth；填寫頁 poll.html。
+   中文輸入規則：編輯器的輸入框只在「切換題型、加題、刪題、移動」時才重建；打字只改資料（ED）＋更新預覽與條件勾選區，不碰輸入框本身。 */
+var API = 'https://script.google.com/macros/s/AKfycbxrsYaYLdXqjUeGvG8_CZ--5znw5izXr6tcgmfC0MbJ32T1KY_TS8UkVqimxS2Jajx0/exec';
+var QS = (function () { var o = {}; location.search.replace(/^\?/, '').split('&').forEach(function (kv) { if (!kv) return; var i = kv.indexOf('='); o[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); }); return o; })();
+if (QS.api) API = QS.api;   /* 本機模擬：?api=/api */
+var PROXY = API.replace(/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/, '/api/gas/$1');
+if (PROXY === API) PROXY = API.charAt(0) === '/' ? API : '';
+var APIQ = QS.api ? '&api=' + encodeURIComponent(QS.api) : '';
+var FILL_BASE = location.origin + location.pathname.replace(/[^/]*$/, '') + 'poll.html';
+var TYPES = [['single', '單選'], ['multi', '複選'], ['text', '簡答'], ['long', '長段文字'], ['number', '數字']];
+function E(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+function apiGet(qs) {
+  function direct() {
+    return new Promise(function (ok, no) {
+      var name = '__pm' + Math.random().toString(36).slice(2), s = document.createElement('script'), tm = setTimeout(function () { done(); no(new Error('timeout')); }, 30000);
+      function done() { clearTimeout(tm); try { delete window[name]; } catch (e) { window[name] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); }
+      window[name] = function (d) { done(); ok(d); };
+      s.src = API + '?' + qs + '&callback=' + name + '&_=' + Date.now(); s.onerror = function () { done(); no(new Error('net')); };
+      document.head.appendChild(s);
+    });
+  }
+  if (!PROXY) return direct();
+  return fetch(PROXY + '?' + qs, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('proxy ' + r.status); return r.json(); }).catch(direct);
+}
+function apiPost(body) {
+  function direct() { return fetch(API, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, credentials: 'omit' }).then(function (r) { return r.json(); }); }
+  if (!PROXY) return direct();
+  return fetch(PROXY, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' }, cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('proxy ' + r.status); return r.json(); })
+    .catch(function (e) { if (/^proxy/.test(e.message || '')) return direct(); throw e; });
+}
+
+/* ---------- 小視窗 ---------- */
+function modal(html) { closeModal(); var d = document.createElement('div'); d.className = 'modal'; d.id = 'modal'; d.innerHTML = '<div>' + html + '</div>'; document.body.appendChild(d); return d; }
+function closeModal() { var m = E('modal'); if (m) m.remove(); }
+function getPw() {
+  var pw = ''; try { pw = sessionStorage.getItem('pm:pw') || ''; } catch (e) { }
+  if (pw) return Promise.resolve(pw);
+  return new Promise(function (ok, no) {
+    modal('<h3>🔑 輸入「門市問卷管理」密碼</h3><div class="muted">新增、修改、結束收件要再確認一次身分（跟進這頁的密碼一樣）。只記在這個分頁。</div><div style="margin-top:10px"><input class="inp" type="password" id="pmPw" autocomplete="current-password" placeholder="密碼"></div><div class="err" id="pmPwErr" hidden style="margin-top:8px"></div><div class="row-btn"><button type="button" class="btn ghost" id="pmPwNo">取消</button><button type="button" class="btn" id="pmPwOk">確認</button></div>');
+    var inp = E('pmPw'); inp.focus();
+    function go() {
+      var v = inp.value; if (!v) return;
+      E('pmPwOk').disabled = true; E('pmPwOk').textContent = '確認中…';
+      apiPost({ action: 'poll_auth', pwd: v }).then(function (r) {
+        if (r && r.ok) { try { sessionStorage.setItem('pm:pw', v); } catch (e) { } closeModal(); ok(v); return; }
+        E('pmPwErr').textContent = (r && r.msg) || '密碼不對'; E('pmPwErr').hidden = false; E('pmPwOk').disabled = false; E('pmPwOk').textContent = '確認'; inp.select();
+      }).catch(function () { E('pmPwErr').textContent = '連不上，請再按一次'; E('pmPwErr').hidden = false; E('pmPwOk').disabled = false; E('pmPwOk').textContent = '確認'; });
+    }
+    E('pmPwOk').onclick = go; E('pmPwNo').onclick = function () { closeModal(); no(new Error('cancel')); };
+    inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && !ev.isComposing) go(); });
+  });
+}
+/* 寫入：先拿密碼，密碼過期（被改）就清掉重問一次 */
+function writeGas(body) {
+  return getPw().then(function (pw) {
+    body.pwd = pw; body.by = '總部';
+    return apiPost(body).then(function (r) {
+      if (r && !r.ok && r.code === 'auth') { try { sessionStorage.removeItem('pm:pw'); } catch (e) { } }
+      return r;
+    });
+  });
+}
+
+/* ================= 清單 ================= */
+var LIST = { polls: [], n_stores: 12, open: {} };
+function fillUrl(id) { return FILL_BASE + '?p=' + encodeURIComponent(id); }
+function loadList() {
+  E('plist').innerHTML = '<div class="muted">讀取中…</div>';
+  apiGet('action=poll_list').then(function (d) {
+    if (!d || !d.ok) throw new Error((d && d.msg) || '讀取失敗');
+    LIST.polls = d.polls; LIST.n_stores = d.n_stores || 12;
+    E('dsbFresh').textContent = '🕒 資料時間 ' + d.at;
+    renderList();
+  }).catch(function (e) { E('plist').innerHTML = '<div class="err">讀不到問卷清單：' + esc(e.message || e) + '。請按「🔄 重新整理」。</div>'; });
+}
+function renderList() {
+  if (!LIST.polls.length) { E('plist').innerHTML = '<div class="card muted">還沒有問卷，按「＋ 新增問卷」開第一份。</div>'; return; }
+  E('plist').innerHTML = LIST.polls.map(function (p) {
+    var pct = Math.round(p.stores / LIST.n_stores * 100), op = p.status === 'open';
+    return '<div class="pc' + (op ? '' : ' closed') + '" data-id="' + esc(p.id) + '">'
+      + '<h3>' + esc(p.title) + ' <span class="chip ' + (op ? 'open' : 'closed') + '">' + (op ? '收件中' : '已結束') + '</span></h3>'
+      + '<div class="muted">代號 ' + esc(p.id) + '｜' + (p.fields.length) + ' 題｜建立 ' + esc(p.created) + '｜最後修改 ' + esc(p.updated) + '（' + esc(p.by) + '）</div>'
+      + '<div class="meter"><i style="width:' + pct + '%"></i></div>'
+      + '<div><b>' + p.stores + ' / ' + LIST.n_stores + ' 店</b> 已回覆，共 ' + p.n + ' 筆' + (p.last ? '｜最新 ' + esc(p.last) : '') + '</div>'
+      + '<div class="acts">'
+      + '<button class="btn sm" data-act="res">' + (LIST.open[p.id] ? '▴ 收起結果' : '📊 看結果') + '</button>'
+      + '<button class="btn ghost sm" data-act="msg">📋 複製通知訊息</button>'
+      + '<button class="btn ghost sm" data-act="url">🔗 複製填寫網址</button>'
+      + '<a class="btn ghost sm" style="text-decoration:none" target="_blank" rel="noopener" href="' + esc(fillUrl(p.id) + APIQ) + '">↗ 開填寫頁</a>'
+      + '<button class="btn ghost sm" data-act="edit">✏️ 編輯題目</button>'
+      + '<button class="btn ghost sm" data-act="dup">📄 複製成新問卷</button>'
+      + '<button class="btn ghost sm" data-act="' + (op ? 'close' : 'open') + '">' + (op ? '⏸ 結束收件' : '▶ 重新開放') + '</button>'
+      + '<button class="btn warn sm" data-act="del">🗑 刪除</button>'
+      + '</div>'
+      + (LIST.open[p.id] ? '<div class="resbox"><iframe loading="lazy" title="結果" src="poll.html?p=' + encodeURIComponent(p.id) + '&view=result&embed=1' + APIQ + '"></iframe></div>' : '')
+      + '</div>';
+  }).join('');
+}
+function copyText(t, okMsg) {
+  function fallback() { modal('<h3>請手動複製</h3><textarea class="copyta" id="cpTa"></textarea><div class="row-btn"><button class="btn" type="button" onclick="closeModal()">關閉</button></div>'); E('cpTa').value = t; E('cpTa').select(); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { toast(okMsg); }, fallback); else fallback();
+}
+function toast(t) { var d = document.createElement('div'); d.textContent = t; d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2E5E4E;color:#fff;padding:8px 16px;border-radius:99px;font-weight:700;z-index:9999'; document.body.appendChild(d); setTimeout(function () { d.remove(); }, 1800); }
+E('plist').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-act]'); if (!b) return;
+  var id = b.closest('.pc').dataset.id, p = LIST.polls.filter(function (x) { return x.id === id; })[0], act = b.dataset.act;
+  if (act === 'res') { LIST.open[id] = !LIST.open[id]; renderList(); }
+  else if (act === 'url') copyText(fillUrl(id), '已複製填寫網址');
+  else if (act === 'msg') copyText('【' + p.title + '】\n' + (p.intro ? p.intro + '\n' : '') + '\n請各店協助填寫（每店一份，資料有變可以重填）：\n' + fillUrl(id) + '\n\n謝謝大家！', '已複製通知訊息，可以貼到群組');
+  else if (act === 'edit') openEditor(p, false);
+  else if (act === 'dup') openEditor(p, true);
+  else if (act === 'close' || act === 'open' || act === 'del') {
+    var words = { close: ['結束收件', '店員再打開會看到「已結束」，不能送出。之後可以重新開放。'], open: ['重新開放', '店員又可以填寫、送出。'], del: ['刪除', '只是從清單藏起來，設定和回覆都還留在資料庫。'] }[act];
+    if (!confirm('確定要「' + words[0] + '」這份問卷？\n\n' + p.title + '\n' + words[1])) return;
+    if (act === 'del' && !confirm('再確認一次：刪除「' + p.title + '」（已有 ' + p.n + ' 筆回覆）？')) return;
+    if (act !== 'del' && !confirm('再按一次確定「' + words[0] + '」。')) return;
+    b.disabled = true;
+    writeGas({ action: 'poll_status', p: id, status: act === 'close' ? 'closed' : act === 'open' ? 'open' : 'deleted' }).then(function (r) {
+      if (!r || !r.ok) throw new Error((r && r.msg) || '沒有成功');
+      toast('已' + words[0]); loadList();
+    }).catch(function (err) { b.disabled = false; if (err.message !== 'cancel') alert('沒有成功：' + (err.message || err)); });
+  }
+});
+E('btnReload').onclick = loadList;
+E('btnNew').onclick = function () { openEditor(null, false); };
+
+/* ================= 編輯器 ================= */
+var ED = { id: '', updated: '', title: '', intro: '', qs: [], dirty: false, seq: 0 };
+function newKey() { ED.seq++; return 'new_' + Date.now().toString(36) + ED.seq; }
+function uiType(f) { return f.type === 'text' && f.long ? 'long' : f.type; }
+function openEditor(p, dup) {
+  ED = { id: p && !dup ? p.id : '', updated: p && !dup ? p.updated : '', title: p ? (dup ? p.title + '（複製）' : p.title) : '', intro: p ? p.intro : '', qs: [], dirty: !!dup, seq: 0 };
+  var map = {};
+  (p ? p.fields : [{ k: 'x', type: 'text', title: '填寫人姓名', required: true }]).forEach(function (f) {
+    if (f.k === 'store') return;
+    var k = dup || !p ? newKey() : f.k; map[f.k] = k;
+    ED.qs.push({ k: k, t: uiType(f), title: f.title || '', options: (Array.isArray(f.options) ? f.options : []).join('\n'), required: !!f.required, hint: f.hint || '', unit: f.unit || '', min: f.min == null ? '' : f.min, max: f.max == null || f.type !== 'number' ? '' : f.max,
+      ck: f.cond ? (map[f.cond.k] || f.cond.k) : '', cv: f.cond ? f.cond.vals.slice() : [] });
+  });
+  if (!p) ED.dirty = true;
+  E('vList').hidden = true; E('vEdit').hidden = false; window.scrollTo(0, 0);
+  E('edTitle').value = ED.title; E('edIntro').value = ED.intro; showErr('');
+  renderQs(); setStat();
+  var pv = E('edPv'); if (!pv.src) pv.src = 'poll.html?preview=1' + APIQ; else sendPreview();
+}
+function setStat() { var s = E('edStat'); s.textContent = ED.dirty ? '● 有還沒儲存的修改' : (ED.id ? '已儲存' : ''); s.classList.toggle('dirty', ED.dirty); E('edSave').disabled = !ED.dirty; }
+function dirty() { ED.dirty = true; setStat(); sendPreviewSoon(); }
+function optsOf(q) { return q.options.split('\n').map(function (x) { return x.trim(); }).filter(function (x) { return x; }); }
+function qCard(q, i) {
+  var h = '<div class="card" data-i="' + i + '"><div class="qh"><span class="no">' + (i + 2) + '</span>'
+    + '<input class="inp grow" data-f="title" maxlength="200" placeholder="題目文字" value="' + esc(q.title) + '">'
+    + '<select class="inp" data-f="t" style="flex:none;width:auto">' + TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (q.t === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('') + '</select></div>';
+  if (q.t === 'single' || q.t === 'multi') h += '<label class="lab">選項（一行一個）</label><textarea class="inp" data-f="options" placeholder="例：\n尚未遇到\n偶爾\n多次">' + esc(q.options) + '</textarea>';
+  if (q.t === 'number') h += '<div class="row"><div><label class="lab">單位</label><input class="inp" data-f="unit" maxlength="10" placeholder="例：個" value="' + esc(q.unit) + '"></div><div><label class="lab">最小</label><input class="inp" data-f="min" type="number" placeholder="0" value="' + esc(q.min) + '"></div><div><label class="lab">最大</label><input class="inp" data-f="max" type="number" placeholder="1000000" value="' + esc(q.max) + '"></div></div>';
+  h += '<label class="lab">小提示（選填，題目下面的灰字）</label><input class="inp" data-f="hint" maxlength="200" value="' + esc(q.hint) + '">';
+  h += '<div class="cond" data-cond></div>';
+  h += '<div class="row" style="margin-top:10px"><label class="chk"><input type="checkbox" data-f="required"' + (q.required ? ' checked' : '') + '> 必填</label><span style="flex:1"></span>'
+    + '<button class="btn ghost sm" type="button" data-mv="-1" style="flex:none"' + (i === 0 ? ' disabled' : '') + '>↑</button><button class="btn ghost sm" type="button" data-mv="1" style="flex:none"' + (i === ED.qs.length - 1 ? ' disabled' : '') + '>↓</button>'
+    + '<button class="btn warn sm" type="button" data-rm style="flex:none">刪除這題</button></div></div>';
+  return h;
+}
+function renderQs() { E('edQs').innerHTML = ED.qs.map(qCard).join(''); renderConds(); }
+/* 顯示條件區：只有下拉與勾選框（沒有打字），前面題目的選項一改就重畫這一塊 */
+function renderConds() {
+  E('edQs').querySelectorAll('[data-cond]').forEach(function (box) {
+    var i = Number(box.closest('.card').dataset.i), q = ED.qs[i], prev = ED.qs.slice(0, i).filter(function (x) { return (x.t === 'single' || x.t === 'multi') && optsOf(x).length; });
+    if (q.ck && !prev.some(function (x) { return x.k === q.ck; })) { q.ck = ''; q.cv = []; }
+    var h = '顯示條件：<select class="inp" data-f="ck" style="width:auto;display:inline-block;padding:4px 8px"><option value="">一定出現</option>'
+      + prev.map(function (x) { return '<option value="' + esc(x.k) + '"' + (q.ck === x.k ? ' selected' : '') + '>當「' + esc(x.title || '（未命名）').slice(0, 24) + '」選了…</option>'; }).join('') + '</select>';
+    if (q.ck) {
+      var dep = prev.filter(function (x) { return x.k === q.ck; })[0], os = optsOf(dep);
+      q.cv = q.cv.filter(function (v) { return os.indexOf(v) >= 0; });
+      h += '<div class="vals">' + os.map(function (o) { return '<label class="chk"><input type="checkbox" data-cv="' + esc(o) + '"' + (q.cv.indexOf(o) >= 0 ? ' checked' : '') + '> ' + esc(o) + '</label>'; }).join('') + '</div>';
+    }
+    box.innerHTML = h;
+  });
+}
+E('edTitle').addEventListener('input', function () { ED.title = this.value; dirty(); });
+E('edIntro').addEventListener('input', function () { ED.intro = this.value; dirty(); });
+E('edQs').addEventListener('input', function (e) {
+  var f = e.target.dataset.f, card = e.target.closest('.card'); if (!f || !card || f === 't' || f === 'ck' || f === 'required') return;
+  ED.qs[Number(card.dataset.i)][f] = e.target.value;
+  if (f === 'options' || f === 'title') renderConds();   /* 只重畫條件區（沒有輸入框），正在打的字不受影響 */
+  dirty();
+});
+E('edQs').addEventListener('change', function (e) {
+  var card = e.target.closest('.card'); if (!card) return;
+  var q = ED.qs[Number(card.dataset.i)], f = e.target.dataset.f;
+  if (f === 't') { q.t = e.target.value; renderQs(); }
+  else if (f === 'required') q.required = e.target.checked;
+  else if (f === 'ck') { q.ck = e.target.value; q.cv = []; renderConds(); }
+  else if (e.target.dataset.cv != null) { var v = e.target.dataset.cv, at = q.cv.indexOf(v); if (e.target.checked && at < 0) q.cv.push(v); if (!e.target.checked && at >= 0) q.cv.splice(at, 1); }
+  else return;
+  dirty();
+});
+E('edQs').addEventListener('click', function (e) {
+  var card = e.target.closest('.card'); if (!card) return;
+  var i = Number(card.dataset.i);
+  if (e.target.dataset.mv) { var j = i + Number(e.target.dataset.mv); var t = ED.qs[i]; ED.qs[i] = ED.qs[j]; ED.qs[j] = t; renderQs(); dirty(); }
+  else if (e.target.hasAttribute('data-rm')) {
+    if (!confirm('刪除第 ' + (i + 2) + ' 題「' + (ED.qs[i].title || '未命名') + '」？\n（已經填過的答案還留在資料庫）')) return;
+    ED.qs.splice(i, 1); renderQs(); dirty();
+  }
+});
+E('edAdd').onclick = function () {
+  ED.qs.push({ k: newKey(), t: 'single', title: '', options: '', required: true, hint: '', unit: '', min: '', max: '', ck: '', cv: [] });
+  renderQs(); dirty();
+  var cards = E('edQs').querySelectorAll('.card'), last = cards[cards.length - 1];
+  last.scrollIntoView({ behavior: 'smooth', block: 'center' }); last.querySelector('[data-f=title]').focus();
+};
+E('edBack').onclick = function () {
+  if (ED.dirty && !confirm('還有沒儲存的修改，離開會丟掉。確定嗎？')) return;
+  E('vEdit').hidden = true; E('vList').hidden = false; ED.dirty = false; loadList();
+};
+window.addEventListener('beforeunload', function (e) { if (!E('vEdit').hidden && ED.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+function toPoll() {
+  return { id: ED.id, title: ED.title.trim(), intro: ED.intro.trim(), fields: ED.qs.map(function (q) {
+    var f = { k: q.k, type: q.t === 'long' ? 'text' : q.t, title: q.title.trim(), required: q.required, hint: q.hint.trim() };
+    if (q.t === 'long') f.long = true;
+    if (q.t === 'single' || q.t === 'multi') f.options = optsOf(q);
+    if (q.t === 'number') { f.unit = q.unit.trim(); f.min = q.min; f.max = q.max; }
+    if (q.ck) f.cond = { k: q.ck, vals: q.cv.slice() };
+    return f;
+  }) };
+}
+/* 預覽：照存檔的樣子傳給 poll.html?preview=1（店別放在第一題） */
+var pvTimer = 0;
+function sendPreviewSoon() { clearTimeout(pvTimer); pvTimer = setTimeout(sendPreview, 300); }
+function sendPreview() {
+  var w = E('edPv').contentWindow; if (!w) return;
+  var p = toPoll(), stores = ['台北南京', '台北士林', '吳寶春自己做（台北信義A13）', '新北板橋', '新北新店', '桃園中壢', '桃園藝文', '新竹文化', '台中精明', '台中草悟道', '台南Focus', '吳寶春自己做（高雄SKM Park）'];
+  p.fields.forEach(function (f) { if (f.type === 'number' && f.max === '') f.max = 1000000; });
+  p.fields.unshift({ k: 'store', type: 'single', title: '店別', options: stores, required: true });
+  p.status = 'open';
+  w.postMessage({ type: 'poll-preview', poll: p }, location.origin);
+}
+window.addEventListener('message', function (e) { if (e.origin === location.origin && e.data && e.data.type === 'poll-preview-ready') sendPreview(); });
+
+function showErr(t) { var e = E('edErr'); e.textContent = t || ''; e.hidden = !t; if (t) e.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+function check() {   /* 前端先擋常見錯誤（後端會再檢查一次） */
+  if (!ED.title.trim()) return '問卷名稱不能空白';
+  if (!ED.qs.length) return '至少要有一題（店別以外）';
+  for (var i = 0; i < ED.qs.length; i++) {
+    var q = ED.qs[i], n = i + 2;
+    if (!q.title.trim()) return '第 ' + n + ' 題沒有題目文字';
+    if (q.t === 'single' || q.t === 'multi') {
+      var os = optsOf(q); if (os.length < 2) return '第 ' + n + ' 題「' + q.title + '」至少要 2 個選項（一行一個）';
+      for (var j = 0; j < os.length; j++) { if (os.indexOf(os[j]) !== j) return '第 ' + n + ' 題有重複的選項：' + os[j]; if (os[j].indexOf('|') >= 0) return '第 ' + n + ' 題的選項不能有「|」符號'; }
+    }
+    if (q.ck && !q.cv.length) return '第 ' + n + ' 題「' + q.title + '」的顯示條件至少要勾一個答案';
+  }
+  return '';
+}
+E('edSave').onclick = function () {
+  var msg = check(); if (msg) return showErr(msg); showErr('');
+  if (!confirm((ED.id ? '儲存對「' + ED.title + '」的修改？\n店員下次打開就是新題目。' : '建立新問卷「' + ED.title + '」？\n建立後會拿到填寫網址。'))) return;
+  if (!confirm('再按一次確定儲存。')) return;
+  var b = E('edSave'); b.disabled = true; b.textContent = '儲存中…';
+  writeGas({ action: 'poll_save', poll: toPoll(), updated: ED.updated }).then(function (r) {
+    b.textContent = '💾 儲存';
+    if (!r || !r.ok) { setStat(); return showErr((r && r.msg) || '沒有儲存成功'); }
+    var isNew = !ED.id; ED.dirty = false;
+    toast(isNew ? '已建立新問卷' : '已儲存');
+    E('vEdit').hidden = true; E('vList').hidden = false; loadList();
+    if (isNew) setTimeout(function () { copyText(fillUrl(r.id), '已建立，填寫網址已複製'); }, 300);
+  }).catch(function (err) { b.textContent = '💾 儲存'; setStat(); if (err.message !== 'cancel') showErr('沒有儲存成功：' + (err.message || err)); });
+};
+
+loadList();
+</script>
+</body>
+</html>

@@ -2,7 +2,8 @@
 <!-- 🗳 門市內部調查（2026-10-30 建）
      填寫：poll.html?p=<調查代號>（例：?p=pipingbag 擠花袋使用狀況）
      結果：poll.html?p=<調查代號>&view=result（各店最新一筆＋還沒填的店）
-     題目設定在 GAS（gas/survey/poll.gs 的 POLLS），這頁照設定畫，不用改這頁就能加新調查。
+     題目設定在 GAS 資料庫 dim_poll，由總部「🗳 門市問卷管理」（dashboard-poll.html）新增／編輯；這頁照設定畫。
+     ?preview=1：管理頁右邊的預覽（postMessage 'poll-preview' 傳題目；不讀 GAS、不送出）；&embed=1：嵌在管理頁裡，藏頁首。
      輸入框只建一次、打字不重畫（中文輸入規則），已加 IME-GUARD。 -->
 <html lang="zh-Hant">
 <head>
@@ -74,6 +75,8 @@ window.__ime=(function(){
   .tag{display:inline-block;border-radius:999px;padding:0 .55rem;font-size:.8rem;font-weight:700}
   .t0{background:#E5F4EA;color:#2F8F5B}.t1{background:#FFF1C2;color:#8A6200}.t2{background:#FFE0CC;color:#B4530B}.t3{background:#FADBD8;color:#B03A2E}
   h3{margin:1.2rem 0 .5rem;font-size:1rem}
+  body.embed .top,body.embed .dsb{display:none}
+  .closed{background:#FADBD8;color:#B03A2E;border-radius:.6rem;padding:.7rem 1rem;font-weight:700;margin-bottom:1rem}
 </style>
 </head>
 <body>
@@ -116,7 +119,7 @@ function apiPost(body) {
 }
 
 /* ================= 填寫 ================= */
-var S = { poll: null, a: {}, id: '', busy: false };
+var S = { poll: null, a: {}, id: '', busy: false, preview: false };
 function newId() { return 'pl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 function shown(f) {
   if (!f.cond) return true;
@@ -128,7 +131,7 @@ function applyCond() {   /* 只切換顯示，不重畫輸入框 */
   S.poll.fields.forEach(function (f) { var el = $('f_' + f.k); if (el) el.classList.toggle('hide', !shown(f)); });
 }
 function renderForm() {
-  var p = S.poll, h = '<div class="intro">' + esc(p.intro) + '</div>';
+  var p = S.poll, h = (p.status === 'closed' ? '<div class="closed">這份調查已經結束收件，謝謝大家！</div>' : '') + (p.intro ? '<div class="intro">' + esc(p.intro).replace(/\n/g, '<br>') + '</div>' : '');
   p.fields.forEach(function (f) {
     h += '<section class="q" id="f_' + f.k + '"><h2>' + esc(f.title) + (f.required ? '<span class="req">＊必填</span>' : '') + '</h2>';
     if (f.hint) h += '<div class="hint">' + esc(f.hint) + '</div>';
@@ -145,13 +148,18 @@ function renderForm() {
   });
   h += '<div class="msg" id="err"></div><a class="back" href="?p=' + encodeURIComponent(PID) + '&view=result">📊 看各店填寫結果</a>';
   $('main').innerHTML = h;
-  $('main').insertAdjacentHTML('afterend', '<div class="bar" id="bar"><button class="btn" type="button" id="send">送出</button></div>');
-  var last = lsGet('pl:store');
-  if (last && p.fields[0].options.indexOf(last) >= 0) pick('store', last);
+  if (!$('bar')) $('main').insertAdjacentHTML('afterend', '<div class="bar" id="bar"><button class="btn" type="button" id="send">送出</button></div>');
+  if (p.status === 'closed' || S.preview) { $('send').disabled = true; $('send').textContent = S.preview ? '預覽（不會送出）' : '已結束收件'; }
   $('main').addEventListener('click', function (e) { var b = e.target.closest('.opt'); if (b) pick(b.dataset.k, b.dataset.v); });
   $('main').addEventListener('input', function (e) { var k = e.target.dataset && e.target.dataset.k; if (k) { S.a[k] = e.target.value; $('f_' + k).classList.remove('miss'); } });
+  if (S.preview) return applyCond();   /* 預覽：可以點來看條件題，但不預選店、不送出 */
+  var last = lsGet('pl:store');
+  if (last && p.fields[0].options.indexOf(last) >= 0) pick('store', last);
   $('send').addEventListener('click', send);
   applyCond();
+}
+function renderFormPreview() {   /* 預覽每次整頁重畫沒關係：預覽頁沒人在打字 */
+  var m = $('main').cloneNode(false); $('main').parentNode.replaceChild(m, $('main')); renderForm();
 }
 function pick(k, v) {
   var f = S.poll.fields.filter(function (x) { return x.k === k; })[0];
@@ -164,7 +172,7 @@ function pick(k, v) {
   applyCond();
 }
 function send() {
-  if (S.busy) return;
+  if (S.busy || S.preview || S.poll.status === 'closed') return;
   var miss = [];
   document.querySelectorAll('.q.miss').forEach(function (el) { el.classList.remove('miss'); });
   S.poll.fields.forEach(function (f) {
@@ -231,6 +239,18 @@ function renderResult(d) {
 
 /* ================= 啟動 ================= */
 function start() {
+  if (QS.embed) document.body.classList.add('embed');
+  if (QS.preview) {   /* 管理頁預覽：題目由 postMessage 傳進來，店員看到的樣子 */
+    S.preview = true; $('dsb').textContent = '預覽：不會送出';
+    $('main').innerHTML = '<p>在左邊編輯題目，這裡會即時顯示店員看到的樣子。</p>';
+    window.addEventListener('message', function (e) {
+      if (e.origin !== location.origin || !e.data || e.data.type !== 'poll-preview') return;
+      var y = window.scrollY; S.poll = e.data.poll; S.a = {}; $('ttl').textContent = '🗳 ' + (S.poll.title || '（還沒取名）');
+      renderFormPreview(); window.scrollTo(0, y);
+    });
+    if (window.parent !== window) window.parent.postMessage({ type: 'poll-preview-ready' }, location.origin);
+    return;
+  }
   var isRes = QS.view === 'result';
   apiGet('action=' + (isRes ? 'poll_result' : 'poll_form') + '&p=' + encodeURIComponent(PID)).then(function (d) {
     if (!d || !d.ok) throw new Error((d && d.msg) || '讀不到調查');
