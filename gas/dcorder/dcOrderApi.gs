@@ -1,6 +1,12 @@
 /**
- * diybc-dcorder-api  v1.5（2026-10-28 新竹物流托運單第二版：照新竹 v16.0.4 規格）
+ * diybc-dcorder-api  v1.6（2026-10-30 門市「本輪已叫貨」標記）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
+ *
+ * v1.6：新分頁 dc_vmark（一列＝一次標記的一個品項）：門市在訂貨單按「✓ 已向某廠商叫貨」或「這週下單完成（剩下的不叫）」時記下來，
+ *       平板、電腦看到同一份。出貨中心的單不用標（送出的訂單本身就是紀錄）。
+ *       GET  vmarks &store=店號 &days=N（預設 45）→ {marks:[{mid,store,vendor,kind,time,status,undoTime,items:[{sku_id,name,qty,unit}]}]}
+ *       POST vmark {store, vendor, kind:'叫貨'|'不叫', mid, items:[{sku_id,name,qty,unit}]}（同一個 mid 再送只回原標記）
+ *       POST vunmark {store, mid}：復原（狀態改「已復原」，列保留備查）
  *
  * v1.5：照新竹 2026-10-27 寄來的 v16.0.4 規格改：SOAP 1.2；測試／正式網址分開（HCT_ENV）；多客代（HCT_CS，重量計費 W／總長計費 S，
  *       總長一箱一筆）；託運單號只用數字（訂單號＋序號 2 碼）；確認出貨一批 20；新增 POST hctDispatch／hctDispatchCancel／hctQuery；
@@ -31,14 +37,14 @@
  *   dc_stock       出貨中心庫存（只記「記數量」的品項；沒列在這裡＝無限量）
  *   dc_log         所有異動紀錄
  *
- * 讀：GET  ?action=ping｜orders｜stock｜locs &token=…（可加 callback= 走 JSONP）
+ * 讀：GET  ?action=ping｜orders｜stock｜locs｜vmarks &token=…（可加 callback= 走 JSONP）
  * 寫：POST text/plain JSON {token, action:create|cancel|status|ship|stockSet|stockAdj|locSet|edit|merge, …}
  *
  * 部署：部署 → 新增部署作業 → 網頁應用程式；執行身分＝我；存取權＝所有人。
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.5-hct2';
+var DCO_VER = 'v1.6-vmark';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -49,6 +55,8 @@ var SH_HCT = 'dc_hct';   /* v1.3：新竹托運單 */
 var H_HCT = ['訂單號', '店號', '託運單號', '新竹貨號', '到著站', '件數', '重量', '出貨日', '狀態', '收件人', '電話', '地址', '環境', '建立時間', '更新時間', '交寄時間', '客代', '計費', '商品種類', '箱序', '派遣', '派遣時間'];   /* v1.5 加最後 6 欄 */
 var SH_HCTIMG = 'dc_hct_img';   /* v1.3：標籤圖另放一頁（一張約 15,000 字），平常讀托運單不用讀圖；只留 HCT_IMG_DAYS 天 */
 var H_HCTIMG = ['託運單號', '新竹貨號', '標籤', '建立時間'];
+var SH_VMARK = 'dc_vmark';   /* v1.6：門市「本輪已叫貨／不叫」標記 */
+var H_VMARK = ['標記號', '店號', '廠商', '類型', '標記時間', 'sku_id', '品名', '數量', '單位', '狀態', '復原時間'];
 var HCT_IMG_DAYS = 60;
 var DCO_MERGED_PREFIX = '已併入 ';                    /* v1.2：被合併的訂單備註開頭（前端靠它顯示「已併入」） */
 var OPEN_ST = { '待處理': 1, '備貨中': 1 };
@@ -127,6 +135,7 @@ function setup() {
   dcoEnsure_(ss, SH_LOC, H_LOC, ['A', 'C']);   /* v1.2 */
   dcoEnsure_(ss, SH_HCT, H_HCT, ['A', 'B', 'C', 'D', 'E', 'H', 'K']);   /* v1.3 */
   dcoEnsure_(ss, SH_HCTIMG, H_HCTIMG, ['A', 'B']);                     /* v1.3 */
+  dcoEnsure_(ss, SH_VMARK, H_VMARK, ['A', 'B', 'F']);                   /* v1.6 */
   Logger.log('✅ 出貨中心訂單試算表：' + ss.getUrl());
   return ss.getUrl();
 }
@@ -215,6 +224,7 @@ function doGet(e) {
     if (p.action === 'orders') return dcoOut_({ ok: true, orders: dcoOrders_(p) }, cb);
     if (p.action === 'stock') return dcoOut_({ ok: true, stock: dcoStock_(), locs: dcoLocs_() }, cb);   /* v1.2：多回 locs，舊前端不讀這欄 */
     if (p.action === 'locs') return dcoOut_({ ok: true, locs: dcoLocs_() }, cb);
+    if (p.action === 'vmarks') return dcoOut_({ ok: true, marks: vmList_(p) }, cb);   /* v1.6 */
     if (p.action === 'hct') { var hp = hctPub_(); return dcoOut_({ ok: true, env: hp.env, cfg: hp, labels: hctList_(p) }, cb); }   /* v1.3；v1.5 多回 cfg（客代清單、派遣，不含帳密） */
     return dcoOut_({ ok: false, error: '未知的 action' }, cb);
   } catch (err) {
@@ -253,6 +263,58 @@ function dcoStock_() {
   });
 }
 
+/* ── v1.6：門市「本輪已叫貨／不叫」標記 ───────────────────────── */
+/* 分頁不存在時（舊試算表）補建；dcoSheet_ 只在缺分頁時跑 setup，這裡直接補這一張 */
+function vmTable_() {
+  var ss = dcoSS_();
+  if (!ss.getSheetByName(SH_VMARK)) dcoEnsure_(ss, SH_VMARK, H_VMARK, ['A', 'B', 'F']);
+  return dcoRead_(SH_VMARK);
+}
+function vmList_(p) {
+  var store = dcoStr_(p.store), since = new Date(Date.now() - (dcoNum_(p.days) || 45) * 86400000), by = {}, list = [];
+  vmTable_().rows.forEach(function (r) {
+    var mid = dcoStr_(r['標記號']); if (!mid) return;
+    if (store && dcoStr_(r['店號']) !== store) return;
+    var t = r['標記時間'];
+    if (t instanceof Date && t < since) return;
+    var m = by[mid];
+    if (!m) {
+      m = by[mid] = { mid: mid, store: dcoStr_(r['店號']), vendor: dcoStr_(r['廠商']), kind: dcoStr_(r['類型']), time: dcoFmt_(t),
+        status: dcoStr_(r['狀態']) || '有效', undoTime: dcoFmt_(r['復原時間']), items: [] };
+      list.push(m);
+    }
+    m.items.push({ sku_id: dcoStr_(r['sku_id']), name: dcoStr_(r['品名']), qty: dcoNum_(r['數量']), unit: dcoStr_(r['單位']) });
+  });
+  list.sort(function (a, b) { return a.time < b.time ? 1 : -1; });
+  return list;
+}
+function vmMark_(b) {
+  var store = dcoStr_(b.store), mid = dcoStr_(b.mid), kind = dcoStr_(b.kind) === '不叫' ? '不叫' : '叫貨';
+  var items = (b.items || []).filter(function (it) { return dcoStr_(it.sku_id); });
+  if (!store) return { ok: false, error: '缺少店號' };
+  if (!mid) return { ok: false, error: '缺少標記號' };
+  if (!items.length) return { ok: false, error: '沒有品項' };
+  var t = vmTable_();
+  for (var i = 0; i < t.rows.length; i++) if (dcoStr_(t.rows[i]['標記號']) === mid) return { ok: true, mid: mid, dup: true };
+  var now = new Date(), vendor = dcoStr_(b.vendor).slice(0, 60);
+  var out = items.map(function (it) {
+    return [mid, store, vendor, kind, now, dcoStr_(it.sku_id), dcoStr_(it.name).slice(0, 100), dcoNum_(it.qty), dcoStr_(it.unit).slice(0, 20), '有效', ''];
+  });
+  t.sh.getRange(t.sh.getLastRow() + 1, 1, out.length, H_VMARK.length).setValues(out);
+  dcoLog_('vmark', mid, store, { vendor: vendor, kind: kind, n: out.length });
+  return { ok: true, mid: mid, time: dcoFmt_(now), n: out.length };
+}
+function vmUnmark_(b) {
+  var store = dcoStr_(b.store), mid = dcoStr_(b.mid);
+  if (!mid) return { ok: false, error: '缺少標記號' };
+  var t = vmTable_(), rs = t.rows.filter(function (r) { return dcoStr_(r['標記號']) === mid && (!store || dcoStr_(r['店號']) === store); });
+  if (!rs.length) return { ok: false, error: '找不到這筆標記' };
+  var now = new Date(), cS = dcoCol_(t, '狀態'), cU = dcoCol_(t, '復原時間');
+  rs.forEach(function (r) { t.sh.getRange(r._row, cS).setValue('已復原'); t.sh.getRange(r._row, cU).setValue(now); });
+  dcoLog_('vunmark', mid, store, { n: rs.length });
+  return { ok: true, mid: mid, n: rs.length };
+}
+
 /* ── POST ───────────────────────────────────────────────────── */
 function doPost(e) {
   var body = {};
@@ -277,6 +339,8 @@ function doPost(e) {
     else if (a === 'hctDispatch') r = hctDispatch_(body);             /* v1.5 */
     else if (a === 'hctDispatchCancel') r = hctDispatchCancel_(body); /* v1.5 */
     else if (a === 'hctQuery') r = hctQuery_(body);                   /* v1.5 */
+    else if (a === 'vmark') r = vmMark_(body);                        /* v1.6 */
+    else if (a === 'vunmark') r = vmUnmark_(body);                    /* v1.6 */
     else r = { ok: false, error: '未知的 action' };
     return dcoOut_(r);
   } catch (err) {

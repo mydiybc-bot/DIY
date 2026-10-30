@@ -3074,19 +3074,23 @@ function viewOrder(){var store=ST.storeId,live=liveItems(store);
   var skipped=live.filter(function(s){return !countedForOrder(store,s)&&!zeroDemand(store,s)&&!okOf(store,s);}).length;   /* 2026-09-01 v 批：零需求不算「未盤」；x 批：✓ 足夠不算 */
   var nOk=live.filter(function(s){return okOf(store,s);}).length;
   var need=live.filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};}).filter(function(x){return x.r.packs>0;}).concat(tailManual(store));   /* 含已取消勾選者，供畫面列出可再勾回；av 批：＋清貨尾手動填量 */
+  var ready=ordReady(store),sp=ordSplit(store,need),doneL=sp.done;need=sp.todo;   /* 2026-10-30：本輪已下單／不叫的移到下方 */
   var skipNote=(skipped>0?('<div class="note">🔕 有 <b>'+skipped+'</b> 項這輪還沒盤，所以不在訂貨單裡（沒盤＝當作這次不用訂）。其中有要訂的，請回「📋 盤點」填現有數量。</div>'):'')
     +(nOk>0?('<div class="note" style="background:#eef8ee">✅ 有 <b>'+nOk+'</b> 項這輪按了「✓ 足夠」，不在訂貨單裡。</div>'):'');
   var campH='';   /* 2026-09-05 aq 批：訂貨單不再顯示「🥮 檔期備料進度」（經營者要求只看訂貨單）；曲線版總表在總部「檔期備貨」分頁 */
-  if(!need.length)return campH+skipNote+'<div class="card">本店這次沒有要訂的 🎉</div>'+dcoPanel(store,[]);   /* cn 批：沒有建議也能加品項向出貨中心下單 */
+  if(!ready)skipNote='<div class="note">⏳ 正在讀取本週下單紀錄（出貨中心訂單、已叫貨標記）…讀完已下單的品項會收到下方。</div>'+skipNote;
+  if(!need.length)return campH+skipNote+(doneL.length?ordSection(store,doneL,true):'<div class="card">本店這次沒有要訂的 🎉</div>')+dcoPanel(store,[]);   /* cn 批：沒有建議也能加品項向出貨中心下單；2026-10-30：全部叫完＝「本週下單完成」 */
+  if(ready)skipNote+=ordBar(store,need,doneL);
   var byV={};need.forEach(function(x){var vd=vendorOf(store,x.s);(byV[vd]=byV[vd]||[]).push(x);});var total=0;
   var html=campH+seasonStrip()+'<div class="note">門市：'+storeChip(store)+'<span class="tabhelp">　·　<b>這頁做什麼：</b>系統照盤點算出「這次該訂多少」，依廠商分好。<br><b>怎麼做：</b>① 看每項建議量，要改就直接改數字；這次不訂就取消勾選　② 向出貨中心叫的：到下面「送出給出貨中心」區塊，按「📤 以「'+escH(storeName(store))+'」送出」　③ 向其他廠商叫的：按最下面「複製訂貨單」，貼給廠商。<br>想看以前下過的單，請到「🧾 訂單查詢」。</span></div>'+skipNote;
-  Object.keys(byV).sort().forEach(function(vd){html+='<div class="vh"><span class="vn">'+(vd||"未指定廠商")+'</span><span class="vl"></span></div><div class="card" style="padding:4px 12px">';
+  Object.keys(byV).sort().forEach(function(vd){html+='<div class="vh"><span class="vn">'+(vd||"未指定廠商")+'</span><span class="vl"></span>'+(ready&&dcoOn()&&!/出貨中心/.test(vd)?'<button class="btn sm ghost" data-ordvd="'+escA(vd)+'" title="已經把這一組勾選的品項傳給廠商了，按這裡記下來；平板、電腦都會看到">✓ 已向「'+escH(vd||"未指定廠商")+'」叫貨</button>':'')+'</div><div class="card" style="padding:4px 12px">';
     byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,off=ST.orderOff[s.id],unit=dur?s.useUnit:s.buyUnit;if(!off){var _tpq=pqOf(store,s);total+=(dur?(_tpq>0?ceilDiv(num(qty),_tpq):num(qty)):num(qty))*s.price;}   /* x 批：器具模具數量是使用單位，單價是每採購單位。2026-09-08 az 批：改進位——器具模具只能整包買（小矽膠模建議 7 個＝買 2 組），不進位會讓本單金額低於總覽頁的同一個數字 */
       html+='<div class="row"><input type="checkbox" class="ck" data-off="'+s.id+'" '+(off?'':'checked')+'>'+skuThumb(s,"o")+'<div class="nm"><b>'+dispName(store,s)+'</b>'+newBadgeAll(store,s)+supplyBadge(store,s)+(isDC(store,s)?dcoStockBadge(s.id):'')+'<div class="sub">'+(x.tail?'<span style="color:#8A5A00;font-weight:600">🧹 清貨尾・店長手動填（檔期已結束，系統不建議採購）</span>':('建議 '+def+' '+unit+(!dur&&pqEff(store,s)>0&&!pqNoise(store,s)?'（'+fmt(pqOf(store,s))+' '+s.useUnit+'/'+s.buyUnit+'）':'')+adjLink(s.id)))+'</div>'+wBadge(store,s)+'</div><div class="right"><input class="sm" type="number" data-oq="'+s.id+'" value="'+qty+'"> <span class="muted">'+unit+'</span></div></div>';});
     html+='</div>';});
+  html+=ordSection(store,doneL,false);   /* 2026-10-30：本輪已下單（收合） */
   html+=dcoPanel(store,need.filter(function(x){return isDC(store,x.s);}));   /* cn 批：出貨中心品項直接送單 */
   html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>'+(ST.adjSku?adjModal(store):'');return html;}
-function orderText(store){var need=orderNeed(store);
+function orderText(store){var need=orderTodo(store);   /* 2026-10-30：已下單的不再複製 */
   var byV={};need.forEach(function(x){var vd=vendorOf(store,x.s);(byV[vd]=byV[vd]||[]).push(x);});var lines=["【"+storeName(store)+" 訂貨單】 "+new Date().toLocaleDateString("zh-TW")];
   Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def;lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+(x.tail?"(清貨尾・手動)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?("（"+fmt(pqOf(store,s))+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
 
@@ -4461,7 +4465,7 @@ function dcoLoadStock(){DCO.stockLd=true;
 function dcoLoadMonth(ym){DCO.monthLd[ym]=true;
   return dcoJsonp({action:"orders",sfrom:ym+"-01",sto:ym+"-31"}).then(function(d){DCO.month[ym]=(d&&d.ok)?d.orders.filter(function(o){return o.status==="已出貨";}):[];})
     .catch(function(e){DCO.month[ym]=[];toast("⚠️ 讀不到 "+ym+" 的訂單（"+e.message+"）");}).then(function(){DCO.monthLd[ym]=false;if(ST.tab==="訂單")render();});}
-function dcoRefresh(){DCO.store={};DCO.storeLd={};DCO.all=null;DCO.month={};DCO.stock=null;hctReset();}   /* 2026-10-21：新竹托運單一起重讀 */
+function dcoRefresh(){DCO.store={};DCO.storeLd={};DCO.all=null;DCO.month={};DCO.stock=null;hctReset();VM.store={};VM.ld={};}   /* 2026-10-30：已叫貨標記一起重讀 */   /* 2026-10-21：新竹托運單一起重讀 */
 function dcoOrderable(s){return dcAny(s)&&String(s.status||"").trim()!=="停售"&&!skuExpired(s);}
 function dcoStockOf(id){var a=DCO.stock||[];for(var i=0;i<a.length;i++)if(a[i].sku_id===id)return a[i];return null;}
 function dcoPending(id){var n=0;(DCO.all||[]).forEach(function(o){if(o.status==="待處理"||o.status==="備貨中")o.lines.forEach(function(l){if(l.sku_id===id)n+=l.qty;});});return n;}
@@ -4471,7 +4475,79 @@ function dcoStBadge(st){return '<span class="dcost" style="background:'+(DCO_ST_
 function dcoTime(t){return String(t||"").slice(5,16).replace("-","/");}
 /* 門市訂貨單：這次要送的品項（建議清單裡勾選的出貨中心品項＋手動加的） */
 function dcoNeedList(store){return liveItems(store).filter(function(s){return countedForOrder(store,s)&&!okOf(store,s);}).map(function(s){return {s:s,r:rowFor(store,s)};})
-  .filter(function(x){return x.r.packs>0;}).concat(tailManual(store)).filter(function(x){return isDC(store,x.s);});}   /* 與 viewOrder 的 need 同一條件 */
+  .filter(function(x){return x.r.packs>0;}).concat(tailManual(store)).filter(function(x){return isDC(store,x.s)&&!ordRec(store,x.s);});}   /* 與 viewOrder 的 need 同一條件；2026-10-30：本輪已下單的不再送 */
+/* ===== 2026-10-30：本輪已下單（經營者選方案 A＋B）=====
+   問題：訂貨單只看本輪盤點數字，下單後品項照樣列著。1 號店 10/30 送出 202610300101 後 7 項還勾著；
+   「今天已經送出」提醒隔天就消失 → 很容易同一批再送一次。其他廠商（複製訂貨單）系統完全沒紀錄。
+   規則：品項在「盤點之後（也在本機盤點輪次開始之後）、且 7 天內」有下列任一紀錄＝本輪已處理，移到下方「✓ 本輪已下單」：
+     ① 出貨中心訂單（DCO.store，未取消）有這個品項
+     ② 門市標記（diybc-dcorder-api v1.6 的 dc_vmark）：「✓ 已向某廠商叫貨」或「這週下單完成（剩下的不叫）」，未復原
+   重新盤點（盤點時間晚於下單）或滿 7 天就回到訂貨單。紀錄都在雲端，平板與電腦一致。
+   全部叫完 ⇒ 頁首「✅ 本週下單完成」（方案 B）。總覽頁的各店金額（orderNeed）不扣已下單，照舊。 */
+var VM={store:{},ld:{}},ORD_WIN=7*864e5;
+function vmLoad(st){VM.ld[st]=true;
+  return dcoJsonp({action:"vmarks",store:st,days:45}).then(function(d){if(d&&d.ok)VM.store[st]=d.marks;else VM.store[st]=VM.store[st]||[];})
+    .catch(function(){VM.store[st]=VM.store[st]||[];}).then(function(){VM.ld[st]=false;if(ST.tab==="訂貨單")render();});}
+function ordReady(st){if(!dcoOn())return true;
+  if(DCO.store[st]===undefined&&!DCO.storeLd[st])dcoLoadStore(st);
+  if(VM.store[st]===undefined&&!VM.ld[st])vmLoad(st);
+  return DCO.store[st]!==undefined&&VM.store[st]!==undefined;}
+function ordT(t){var d=new Date(String(t||"").replace(" ","T")+"+08:00");return isNaN(d.getTime())?0:d.getTime();}
+/* 這個品項本輪最新一筆下單紀錄；沒有回 null */
+function ordRec(st,s){if(!dcoOn())return null;
+  var ss=sessStart(st),from=Math.max(Date.now()-ORD_WIN,num(ivOf(st,s).t),ss>0?ss:0),best=null;
+  (DCO.store[st]||[]).forEach(function(o){if(o.status==="已取消")return;var t=ordT(o.time);if(t<from)return;
+    var l=o.lines.filter(function(l){return l.sku_id===s.id;})[0];if(!l)return;
+    if(!best||t>best.t)best={t:t,kind:"dco",id:o.id,status:o.status,qty:l.qty,unit:l.unit};});
+  (VM.store[st]||[]).forEach(function(m){if(m.status==="已復原")return;var t=ordT(m.time);if(t<from)return;
+    var it=m.items.filter(function(i){return i.sku_id===s.id;})[0];if(!it)return;
+    if(!best||t>best.t)best={t:t,kind:m.kind==="不叫"?"skip":"vm",id:m.mid,vendor:m.vendor,qty:it.qty,unit:it.unit};});
+  return best;}
+function ordSplit(st,list){var todo=[],done=[];list.forEach(function(x){var r=ordRec(st,x.s);if(r)done.push({s:x.s,r:x.r,tail:x.tail,rec:r});else todo.push(x);});return {todo:todo,done:done};}
+function orderTodo(store){return orderNeed(store).filter(function(x){return !ordRec(store,x.s);});}
+function ordWhen(t){var d=new Date(t);return (d.getMonth()+1)+"/"+d.getDate()+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
+function ordLabel(r){return r.kind==="dco"?("📤 出貨中心 "+escH(r.id)+"（"+escH(r.status)+"）"):r.kind==="skip"?"🚫 這週不叫":("✓ 已向「"+escH(r.vendor||"未指定廠商")+"」叫貨");}
+function ordGroups(doneL){var g={},out=[];doneL.forEach(function(x){var k=x.rec.kind+"|"+x.rec.id;if(!g[k]){g[k]={r:x.rec,items:[]};out.push(g[k]);}g[k].items.push(x);});
+  out.sort(function(a,b){return b.r.t-a.r.t;});return out;}
+/* 頁首進度列：已下單幾項、還沒叫幾項、「這週下單完成」鈕 */
+function ordBar(store,need,doneL){
+  return '<div class="card" style="padding:10px 12px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>🧾 本週下單進度</b>'
+    +'<span class="pill" style="background:#E8F5E9;color:#2E7D32">已下單 '+doneL.length+' 項</span><span class="pill" style="background:#FFF4E5;color:#8A5A00">還沒叫 '+need.length+' 項</span>'
+    +'<span style="flex:1"></span><button class="btn sm ghost" data-orddone="1"'+(DCO.busy?' disabled':'')+' title="剩下的這週都不叫：全部移到下方，頁首顯示「本週下單完成」">✅ 這週下單完成（剩下 '+need.length+' 項不叫）</button></div>'
+    +'<div class="sub muted" style="margin-top:4px">送出給出貨中心的品項會自動收到下方；其他廠商傳完單後，按該廠商旁的「✓ 已向…叫貨」。</div></div>';}
+/* 已下單區（all＝全部叫完：顯示「本週下單完成」） */
+function ordSection(store,doneL,all){if(!doneL.length)return "";
+  var gs=ordGroups(doneL),open=!!ST.ordOpen;
+  var h='<div class="card"'+(all?' style="background:#eef8ee;border-color:#9ccc9c"':'')+'>';
+  if(all)h+='<div style="font-size:16px;font-weight:700;color:#2E7D32">✅ 本週下單完成</div><div class="sub" style="margin:2px 0 8px">最後一筆 '+ordWhen(gs[0].r.t)+'。下次盤點按「🔄 重新盤點 → 新的一週」，盤完訂貨單就會重新出現；沒重盤的話，滿 7 天也會自動回來。</div>';
+  h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer" data-ordopen="1"><b>✓ 本輪已下單 '+doneL.length+' 項</b><span class="sub muted" style="flex:1">'
+    +gs.map(function(g){return ordLabel(g.r)+' '+g.items.length+' 項';}).join('、')+'</span><span class="muted">'+(open?'▾ 收合':'▸ 展開')+'</span></div>';
+  if(open)gs.forEach(function(g){var r=g.r;
+    h+='<div class="dcorow"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>'+ordLabel(r)+'</b><span class="muted">'+ordWhen(r.t)+'</span><span style="flex:1"></span>'
+      +(r.kind==="dco"?'<span class="sub muted">要取消請到下方「出貨中心訂單」</span>':'<button class="btn sm ghost" data-ordundo="'+escA(r.id)+'"'+(DCO.busy?' disabled':'')+'>↩ 復原</button>')+'</div>'
+      +'<div class="sub">'+g.items.map(function(x){return escH(dispName(store,x.s))+(x.rec.kind==="skip"?'':' × '+dec(x.rec.qty)+' '+escH(x.rec.unit));}).join('、')+'</div></div>';});
+  return h+'</div>';}
+/* 寫標記：kind＝叫貨｜不叫；先放進畫面（樂觀），再背景重讀雲端 */
+function ordMark(store,vendor,kind,list){if(DCO.busy||!dcoOn())return;if(!stWriteOK(store))return;
+  var items=list.map(function(x){var s=x.s,dur=isDur(s),q=num(ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:(dur?x.r.suggested:x.r.packs));
+    return {sku_id:s.id,name:s.name,qty:kind==="不叫"?0:q,unit:dur?s.useUnit:s.buyUnit};});
+  if(!items.length){toast("沒有要標記的品項");return;}
+  var mid="m"+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+  DCO.busy=true;render();
+  dcoWrite({action:"vmark",store:store,vendor:vendor,kind:kind,mid:mid,items:items},
+    function(){return dcoJsonp({action:"vmarks",store:store,days:2}).then(function(d){return (d&&d.ok&&d.marks.some(function(m){return m.mid===mid;}))?{ok:true}:null;});})
+  .then(function(r){DCO.busy=false;var d=new Date();
+      VM.store[store]=[{mid:mid,store:String(store),vendor:vendor,kind:kind,status:"有效",items:items,
+        time:(r&&r.time)||(ymd(d)+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+":"+("0"+d.getSeconds()).slice(-2))}].concat(VM.store[store]||[]);
+      render();vmLoad(store);toast(kind==="不叫"?"✅ 已記下：剩下 "+items.length+" 項這週不叫":"✅ 已記下：向「"+(vendor||"未指定廠商")+"」叫了 "+items.length+" 項");})
+  .catch(function(e){DCO.busy=false;render();toast("⚠️ 沒有記下來："+e.message);});}
+function ordUndo(store,mid){if(DCO.busy||!dcoOn())return;if(!stWriteOK(store))return;
+  if(typeof confirm==="function"&&!confirm("復原這筆標記？裡面的品項會回到訂貨單上。"))return;
+  DCO.busy=true;render();
+  dcoWrite({action:"vunmark",store:store,mid:mid},
+    function(){return dcoJsonp({action:"vmarks",store:store,days:45}).then(function(d){return (d&&d.ok&&d.marks.some(function(m){return m.mid===mid&&m.status==="已復原";}))?{ok:true}:null;});})
+  .then(function(){DCO.busy=false;(VM.store[store]||[]).forEach(function(m){if(m.mid===mid)m.status="已復原";});render();vmLoad(store);toast("↩ 已復原");})
+  .catch(function(e){DCO.busy=false;render();toast("⚠️ 復原失敗："+e.message);});}
 function dcoLines(store,list){var out=[];
   list.forEach(function(x){var s=x.s,r=x.r,dur=isDur(s);if(ST.orderOff[s.id])return;
     var q=num(ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:(dur?r.suggested:r.packs));if(!(q>0))return;
@@ -4520,6 +4596,7 @@ function dcoMyOrders(store){var mine=DCO.store[store];
   return h+'</div>';}
 function dcoSubmit(){var store=ST.storeId;if(DCO.busy||!dcoOn())return;
   if(!stWriteOK(store))return;   /* co 批 */
+  if(!ordReady(store)){toast("本週下單紀錄還在讀取，請等幾秒再送（避免同一批送兩次）");return;}   /* 2026-10-30 */
   var lines=dcoLines(store,dcoNeedList(store));if(!lines.length){toast("沒有要送出的品項");return;}
   var tot=0;lines.forEach(function(l){tot+=l.qty*l.price;});
   var today=ymd(new Date()),todays=(DCO.store[store]||[]).filter(function(o){return o.time.slice(0,10)===today&&o.status!=="已取消";});
@@ -6706,7 +6783,7 @@ function wire(){
     ST.orderEdit[id]=v;render();};});
   var cp=$("#copyOrder");if(cp)cp.onclick=function(){navigator.clipboard&&navigator.clipboard.writeText(orderText(ST.storeId));
     /* x 批：fact_order 只寫訂貨單上真的有的品項（本輪盤過、未標足夠、勾選中）；器具模具一併寫（訂購量＝使用單位數，j 批漏寫修正） */
-    var st=ST.storeId,items=orderNeed(st)
+    var st=ST.storeId,items=orderTodo(st)
       .map(function(x){return {sku_id:x.s.id,qty:(ST.orderEdit[x.s.id]!=null?ST.orderEdit[x.s.id]:(isDur(x.s)?x.r.suggested:x.r.packs))};})
       .filter(function(it){return it.qty>0;});
     if(items.length){post({type:"order",store:st,items:items},true);
@@ -7334,6 +7411,17 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
     ST.dcExtra=ST.dcExtra||{};ST.dcExtra[st]=ST.dcExtra[st]||{};ST.dcExtra[st][s.id]=num(ST.dcExtra[st][s.id])+qn;render();toast("已加入："+s.name+" ×"+qn);return;}
   if(d("[data-dcorm]")){if(ST.dcExtra&&ST.dcExtra[st])delete ST.dcExtra[st][el.getAttribute("data-dcorm")];render();return;}
   if(d("#dcoSubmit")){dcoSubmit();return;}
+  if(d("[data-ordopen]")){ST.ordOpen=!ST.ordOpen;render();return;}   /* 2026-10-30：本輪已下單 */
+  if(d("[data-ordvd]")){var vd=el.getAttribute("data-ordvd"),vl=ordSplit(st,orderNeed(st)).todo.filter(function(x){return (vendorOf(st,x.s)||"")===vd;});
+    if(!vl.length){toast("這一組沒有勾選的品項");return;}
+    if(typeof confirm==="function"&&!confirm("確定已向「"+(vd||"未指定廠商")+"」叫了這 "+vl.length+" 項？\n\n"+vl.map(function(x){return "・"+dispName(st,x.s);}).join("\n")+"\n\n記下後會移到下方「本輪已下單」；沒勾的品項留在訂貨單上。"))return;
+    ordMark(st,vd,"叫貨",vl);return;}
+  if(d("[data-orddone]")){var all=liveItems(st).filter(function(s){return countedForOrder(st,s)&&!okOf(st,s);}).map(function(s){return {s:s,r:rowFor(st,s)};}).filter(function(x){return x.r.packs>0;}).concat(tailManual(st));
+    var rest=ordSplit(st,all).todo;
+    if(!rest.length){toast("已經沒有還沒叫的品項");return;}
+    if(typeof confirm==="function"&&!confirm("這週下單完成？\n\n剩下 "+rest.length+" 項（含沒勾的）這週都不叫，會移到下方「本輪已下單」。\n要叫的請先送出或按「✓ 已向…叫貨」再按這個。"))return;
+    ordMark(st,"","不叫",rest);return;}
+  if(d("[data-ordundo]")){ordUndo(st,el.getAttribute("data-ordundo"));return;}
   if(d("[data-oqgo]")){shInit();ST.tab="大平台";ST.shMode="訂單";render();try{window.scrollTo(0,0);}catch(e0){}return;}   /* 2026-10-07 訂貨單 → 訂單查詢 */
   if(d("[data-dcoexp]")){var ex=el.getAttribute("data-dcoexp");ST.dcoExp=ST.dcoExp||{};ST.dcoExp[ex]=!ST.dcoExp[ex];render();return;}
   if(d("[data-dcocx]")){var cid2=el.getAttribute("data-dcocx"),by=el.getAttribute("data-by")||"dc";
