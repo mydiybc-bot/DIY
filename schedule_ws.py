@@ -57,6 +57,18 @@ MAX_API_MESSAGES = 60
 # 營業額／日獎金（2026-10-28）：營收用排班分析 GAS（fact_daily_sales＋甜點券$100），口徑見 dashboard-schedule skill「🎁 日獎金口徑」
 REV_API = "https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec"
 REV_TTL = 2 * 3600
+
+# 行政院人事行政總處「政府行政機關辦公日曆表」114～116 年（2025～2027，2026-10-31 從 dgpa.gov.tw 附件逐格讀放假底色）
+# TW_OFF＝落在週一～五的放假日（國定假日、補假、春節）；TW_WORK＝週末補行上班日。新年度公告後照同樣方式補一行。
+TW_OFF = {
+    "2025": "01-01 01-27 01-28 01-29 01-30 01-31 02-28 04-03 04-04 05-30 09-29 10-06 10-10 10-24 12-25",
+    "2026": "01-01 02-16 02-17 02-18 02-19 02-20 02-27 04-03 04-06 05-01 06-19 09-25 09-28 10-09 10-26 12-25",
+    "2027": "01-01 02-04 02-05 02-08 02-09 02-10 03-01 04-05 04-06 04-30 06-09 09-15 09-28 10-11 10-25 12-24 12-31",
+}
+TW_WORK = {
+    "2025": "02-08",
+}
+REV_EST_RETRY = 3600
 BONUS_TIERS = [(10, 10000), (20, 14000), (30, 29000), (40, 42000), (50, 53000), (60, 65000), (70, 77000), (80, 88000), (90, 100000), (100, 110000)]
 BONUS_BASE, BONUS_STD_H = 200, 8
 BONUS_LEAVE_RE = re.compile(r"特休|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災")
@@ -409,11 +421,91 @@ def _prev_ym(ym):
     return f"{y - 1}12" if m == 1 else f"{y}{m - 1:02d}"
 
 
+def _tw_off(day):
+    """政府辦公日曆的放假日（週末＋平日放假；扣掉週末補班）"""
+    k = day.strftime("%m-%d")
+    y = str(day.year)
+    if k in TW_WORK.get(y, "").split():
+        return False
+    return day.weekday() >= 5 or k in TW_OFF.get(y, "").split()
+
+
+def base_est(ym):
+    """正職基準估算（2026-10-31 經營者：照行政院辦公日曆估，店長可改）：休假＝週末、國定假日＝平日放假、標準時數＝上班日×8"""
+    y, m = int(ym[:4]), int(ym[4:])
+    if str(y) not in TW_OFF:
+        return None
+    n = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)).day
+    days = [dt.date(y, m, d) for d in range(1, n + 1)]
+    wk = [d for d in days if d.weekday() >= 5 and d.strftime("%m-%d") not in TW_WORK.get(str(y), "").split()]
+    hol = [d for d in days if d.weekday() < 5 and d.strftime("%m-%d") in TW_OFF[str(y)].split()]
+    work = n - len(wk) - len(hol)
+    src = f"行政院 {y} 年辦公日曆：{m} 月 {n} 天－週末 {len(wk)} 天－國定假日 {len(hol)} 天" + \
+          (f"（{'、'.join(f'{d.month}/{d.day}' for d in hol)}）" if hol else "") + f"＝上班 {work} 天 × 8h"
+    return {"std_hours": work * 8, "off_days": len(wk), "holidays": len(hol), "src": src}
+
+
+def rev_est_fetch(store, ym):
+    """營收預估（2026-10-31 經營者：照去年同月實際）：去年同月每天營業額，平日／假日（週末＋國定假日）各取平均，取到百位"""
+    ly = f"{int(ym[:4]) - 1}{ym[4:]}"
+    days = fetch_rev(store, ly)["days"]
+    wd, we = [], []
+    for d, v in days.items():
+        (we if _tw_off(dt.date(int(ly[:4]), int(ly[4:]), int(d))) else wd).append(v["rev"])
+    if len(wd) < 3 or len(we) < 2:
+        return {"weekday": None, "weekend": None, "src": f"去年 {int(ly[4:])} 月營業資料不足（平日 {len(wd)} 天／假日 {len(we)} 天），請自己填", "fetched": time.time()}
+    avg = lambda a: int(round(sum(a) / len(a), -2))
+    return {"weekday": avg(wd), "weekend": avg(we), "fetched": time.time(),
+            "src": f"去年 {ly[:4]} 年 {int(ly[4:])} 月 POS 實際：平日 {len(wd)} 天平均、假日 {len(we)} 天平均（含國定假日）"}
+
+
+def rev_est_ensure(store, ym):
+    """還沒算過（或上次失敗超過 1 小時）就抓一次去年同月；去年的數字不會變，算過就留著"""
+    k = _key(store, ym)
+    with _lock(k):
+        st = _load(store, ym)
+        re_ = st.get("rev_est") or {}
+        if not st.get("template") or re_.get("fetched") or time.time() - (re_.get("tried") or 0) < REV_EST_RETRY:
+            return
+    with _glock:
+        if ("est", k) in _rev_jobs:   # 別的請求正在抓，這次先不等
+            return
+        _rev_jobs.add(("est", k))
+    try:
+        try:
+            data = rev_est_fetch(store, ym)
+        except Exception as ex:   # noqa: BLE001
+            data = {"error": f"{type(ex).__name__}: {str(ex)[:120]}", "tried": time.time()}
+        with _lock(k):
+            st = _load(store, ym)
+            st["rev_est"] = data
+            _save(st)
+    finally:
+        with _glock:
+            _rev_jobs.discard(("est", k))
+
+
 def mset_view(st):
-    """本月設定（含預設值）：夥伴清單跟著 104 範本；正職／兼職、目標時數沒填的先抄上個月"""
+    """本月設定（含預設值）：夥伴清單跟著 104 範本；正職／兼職、目標時數沒填的先抄上個月；
+    正職基準、營收預估沒填的先放估算值（est 記哪些是估的，畫面標「估算」，店長改了存檔就是店長的）"""
     ms = copy.deepcopy(st.get("mset") or {})
     ms.setdefault("base", {})
     ms.setdefault("revenue", {})
+    est = {"fields": []}
+    be = base_est(st["ym"])
+    if be:
+        est["base_src"] = be["src"]
+        for f in ("std_hours", "off_days", "holidays"):
+            if ms["base"].get(f) is None:
+                ms["base"][f] = be[f]
+                est["fields"].append(f)
+    rv = st.get("rev_est") or {}
+    est["rev_src"] = rv.get("src") or ("去年同月營收讀取失敗：" + rv["error"] if rv.get("error") else "")
+    for f in ("weekday", "weekend"):
+        if ms["revenue"].get(f) is None and rv.get(f):
+            ms["revenue"][f] = rv[f]
+            est["fields"].append("rev_" + f)
+    ms["est"] = est
     ms.setdefault("emps", {})
     ms.setdefault("marks", {})
     ms.setdefault("special", [])
@@ -436,7 +528,10 @@ def mset_view(st):
             ms["emps"][e["id"]] = cur
         if cur.get("type") == "正職" and not cur.get("target"):
             must = (s104.get(e["name"]) or {}).get("mustHour")
-            cur["target_hint"] = must or ms["base"].get("std_hours")
+            cur["target_hint"] = ms["base"].get("std_hours") or must
+            if ms["base"].get("std_hours"):   # 2026-10-31 經營者：正職目標時數直接套本月標準時數（店長可改）
+                cur["target"] = ms["base"]["std_hours"]
+                cur["target_est"] = True
     ms["emps"] = {k: v for k, v in ms["emps"].items() if any(e["id"] == k for e in info.get("emps") or [])}
     ms["marks"] = {k: v for k, v in ms["marks"].items() if any(e["id"] == k for e in info.get("emps") or [])}
     return ms
@@ -498,8 +593,10 @@ def mark_set(st, eid, day, value):
 
 def form_ready(st, cfg):
     """表單填到可以排班了嗎（班別有填、營收預估有填）"""
-    ms = st.get("mset") or {}
-    return bool(cfg.get("shifts")) and bool((ms.get("revenue") or {}).get("weekday")) and bool((ms.get("revenue") or {}).get("weekend"))
+    if not st.get("template"):
+        return False
+    rv = mset_view(st)["revenue"]   # 估算值也算（店長沒改就照估算排）
+    return bool(cfg.get("shifts")) and bool(rv.get("weekday")) and bool(rv.get("weekend"))
 
 
 def form_text(st, cfg):
@@ -1618,6 +1715,7 @@ def handle(path, body):
         running = (_jobs.get(k) or {}).get("status") == "running"
 
     if act == "state":
+        rev_est_ensure(store, ym)
         with lk:
             st = _load(store, ym)
         if st.get("schedule") and _rev_stale(st):
