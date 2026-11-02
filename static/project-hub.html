@@ -143,6 +143,8 @@ window.__ime=(function(){
   .sp-big>div{flex:1 1 150px;border:1px solid #E3DCD6;border-radius:10px;padding:10px 14px;background:#fff}
   .sp-big b{display:block;font-size:24px;font-variant-numeric:tabular-nums;color:#23436E}
   .sp-big .ok b{color:#2E6B43}.sp-big .no b{color:#A3321F}
+  #mbT input[type=number],#mbT select{font-family:inherit;font-size:14px;padding:4px 6px;border:1px solid #CFC6BF;border-radius:6px;background:#fff}
+  #mbT input[type=number]{width:78px}#mbT input[type=checkbox]{width:18px;height:18px}
   .sp-sug{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px}
   /* 平匙規格與演進（2026-10-21） */
   .sl-sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
@@ -906,6 +908,9 @@ function judge(grams, g, maxn, tol){
 }
 function rate(lines, g, maxn, tol){ var ok = 0; lines.forEach(function(l){ if (judge(Number(l.grams), g, maxn, tol).ok) ok++; }); return lines.length ? ok / lines.length : 0; }
 function spoonSetOf(ing){ return (S.spoon.set || []).filter(function(x){ return x.ingredient === ing; })[0]; }
+var SP_MAX = [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10'],['12','12'],['15','15']];
+var SP_TOL = [['0','0%（要剛好）'],['5','±5%'],['10','±10%'],['15','±15%'],['20','±20%']];
+function optsHtml(list, v){ return list.map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(v) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join(''); }
 /* 2026-10-30 經營者：食材選單標出已處理的。fin＝定案明細有這食材（確認轉換過）；saved＝在換算頁按過「💾 存成設定」（規格紀錄有「換算頁存檔」）；其餘 todo */
 var ING_MARK = { fin: '✅', saved: '💾', todo: '⬜' };
 function ingState(ing){
@@ -978,6 +983,7 @@ function tabSpoon(p){
   var by = {};
   S.spoon.lines.forEach(function(l){ (by[l.ingredient] = by[l.ingredient] || []).push(l); });
   var ings = Object.keys(by).sort(function(a, b){ return by[b].length - by[a].length; });
+  if (S.multi) { tabSpoonMulti(p, by, ings); return; }
   if (!S.ing || !by[S.ing]) { S.ing = ings[0]; S.g = ''; }
   var set = spoonSetOf(S.ing), lastFin = finLast(S.ing);
   /* 2026-10-29：定案過的食材預設帶「上次定案的規格」（避免用規格表較舊的數字按確認把定案蓋掉） */
@@ -988,12 +994,13 @@ function tabSpoon(p){
     + '<label>食材<select id="spIng">' + ings.map(function(i){ var st = spoonSetOf(i); return '<option value="' + esc(i) + '"' + (i === S.ing ? ' selected' : '') + '>' + ING_MARK[ingState(i)] + ' ' + esc(i) + '（' + by[i].length + ' 項）' + (st ? '｜存 ' + esc(st.g_per_spoon) + ' g' : '') + '</option>'; }).join('') + '</select></label>'
     + '<label>一平匙＝幾 g<input id="spG" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(S.g) + '" placeholder="例 9.6"></label>'
     + '<label>量匙規格（ml）<input id="spMl" type="number" inputmode="decimal" min="0" step="0.1" value="' + esc(S.ml) + '" placeholder="例 5" style="width:90px"></label>'
-    + '<label>一項最多幾平匙<select id="spMax">' + [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10'],['12','12'],['15','15']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.maxn) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
-    + '<label>容許誤差<select id="spTol">' + [['0','0%（要剛好）'],['5','±5%'],['10','±10%'],['15','±15%'],['20','±20%']].map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(S.tol) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>'
+    + '<label>一項最多幾平匙<select id="spMax">' + optsHtml(SP_MAX, S.maxn) + '</select></label>'
+    + '<label>容許誤差<select id="spTol">' + optsHtml(SP_TOL, S.tol) + '</select></label>'
     + (editing() ? '<button class="btn" type="button" id="spSave"' + (g > 0 ? '' : ' disabled') + '>💾 存成「' + esc(S.ing) + '」的設定</button>' : '')
     + '<button class="btn" type="button" id="spFin"' + (g > 0 ? '' : ' disabled') + ' title="把這個食材畫面上的全部資料（規格＋每一處平匙數）轉成執行進度的定案明細">✅ 確認轉換到執行進度</button>'
     + '<button class="btn ghost" type="button" id="spXls" title="下載 Excel：可選只匯出目前畫面，或完整匯出">📥 匯出 Excel</button>'
     + '<button class="btn ghost" type="button" id="spRef" title="重新讀門市食譜後台（台灣繁中啟用中），更新前自動備份">🔄 更新食譜用量</button>'
+    + '<button class="btn ghost" type="button" id="spMulti" title="勾選多個食材，一次存設定或一次確認轉換到執行進度">☑ 一次處理多個食材</button>'
     + '</div>'
     + '<div class="muted" style="margin-top:6px">食譜用量：' + esc(S.spoon.snap_date || '') + ' 讀取（' + esc(S.spoon.source || '') + '，共 ' + S.spoon.lines.length + ' 項）；每天早上 6 點自動更新</div>'
     + (function(){ var n = { fin: 0, saved: 0, todo: 0 }; ings.forEach(function(i){ n[ingState(i)]++; }); return '<div class="muted" style="margin-top:4px">食材選單標記：' + ING_MARK.fin + ' 已確認轉換 ' + n.fin + ' 種｜' + ING_MARK.saved + ' 已存設定（還沒確認轉換）' + n.saved + ' 種｜' + ING_MARK.todo + ' 還沒處理 ' + n.todo + ' 種</div>'; })()
@@ -1042,6 +1049,7 @@ function tabSpoon(p){
   if ($('spNo')) $('spNo').onchange = function(){ S.onlyNo = this.checked; re(); };
   if ($('spSort')) $('spSort').onchange = function(){ S.sortNo = this.checked; re(); };
   $('spRef').onclick = function(){ spoonRefreshUI(); };
+  $('spMulti').onclick = function(){ S.multi = true; re(); window.scrollTo(0, 0); };
   $('spXls').onclick = function(){   /* 2026-10-22：先問要匯出哪一種 */
     var b = $('spXls'), go = function(mode){ close(); b.disabled = true; spoonXls(by, ings, mode).then(function(n){ toast('✅ 已下載「' + n + '」（在瀏覽器的「下載」資料夾）'); }, function(e){ toast('❌ 匯出失敗：' + (e.message || e)); }).then(function(){ b.disabled = false; }); };
     var curOk = g > 0;
@@ -1072,6 +1080,161 @@ function tabSpoon(p){
       } }
     ]);
   };
+}
+
+/* ----- ☑ 一次處理多個食材（2026-11-02 經營者：「一次可以勾選多個食材，進行存設定或轉換到執行進度」）
+   每種食材用自己那一列的規格（預設＝上次定案，沒定案過＝存的設定，跟單一食材畫面打開時一樣），表格裡可改。
+   勾選的一種一種依序呼叫 spoonSave／finalConfirm（後端不變，跟單一食材按鈕同一個寫入）。
+   表格裡打字只改該列「可更換率」那一格，不重畫表格 ----- */
+function specDef(ing){
+  var set = spoonSetOf(ing), lf = finLast(ing), sml = set && set.spoon_ml != null ? String(set.spoon_ml) : '';
+  if (lf) return { g: String(lf.g_per_spoon), ml: lf.spoon_ml ? String(lf.spoon_ml) : sml, maxn: String(lf.max_spoons || '0'), tol: String(lf.tol_pct || '0') };
+  if (set) return { g: String(set.g_per_spoon), ml: sml, maxn: String(set.max_spoons !== '' ? set.max_spoons : '8'), tol: String(set.tol_pct || '0') };
+  return { g: '', ml: '', maxn: '8', tol: '0' };
+}
+function mbOf(ing){ if (!S.mb[ing]) { S.mb[ing] = specDef(ing); S.mb[ing].on = false; } return S.mb[ing]; }
+function mbRate(ing, lines){
+  var m = mbOf(ing), g = Number(m.g); if (!(g > 0)) return '<span class="muted">先填克數</span>';
+  var ok = lines.filter(function(l){ return judge(Number(l.grams), g, Number(m.maxn) || 0, Number(m.tol) || 0).ok; }).length;
+  return '<b>' + Math.round(ok / lines.length * 100) + '%</b> <span class="muted">' + ok + '/' + lines.length + '</span>';
+}
+function tabSpoonMulti(p, by, ings){
+  S.mb = S.mb || {};
+  var f = S.mbF || '', show = ings.filter(function(i){ return !f || ingState(i) === f; });
+  var h = '<div class="card"><div class="sp-ctl">'
+    + '<button class="btn ghost" type="button" id="mbBack">← 回單一食材</button>'
+    + '<label>只看<select id="mbF">' + optsHtml([['', '全部 ' + ings.length + ' 種'], ['todo', ING_MARK.todo + ' 還沒處理'], ['saved', ING_MARK.saved + ' 已存設定（還沒確認轉換）'], ['fin', ING_MARK.fin + ' 已確認轉換']], f) + '</select></label>'
+    + '<button class="btn ghost" type="button" id="mbAll">全選列表</button>'
+    + '<button class="btn ghost" type="button" id="mbNone">全部取消</button>'
+    + '</div><div class="sp-ctl" style="margin-top:10px">'
+    + '<label>勾選的「最多幾平匙」一起改成<select id="mbSetMax"><option value="">（不改）</option>' + optsHtml(SP_MAX, '-') + '</select></label>'
+    + '<label>勾選的「容許誤差」一起改成<select id="mbSetTol"><option value="">（不改）</option>' + optsHtml(SP_TOL, '-') + '</select></label>'
+    + '<button class="btn ghost" type="button" id="mbApply">套用到勾選的</button>'
+    + '</div><div class="muted" style="margin-top:8px">每種食材用自己那一列的規格（打開時帶上次定案的；沒定案過帶存的設定），可以直接在表格裡改。勾好後按最下面的按鈕，系統一種一種依序寫入。</div></div>';
+  h += '<div class="card"><div class="tw"><table class="t" id="mbT"><thead><tr><th><input type="checkbox" id="mbHead" title="全選／全不選目前列表"' + (show.length && show.every(function(i){ return mbOf(i).on; }) ? ' checked' : '') + '></th><th>食材</th><th style="text-align:right">用到幾項</th><th>一平匙（g）</th><th>量匙（ml）</th><th>最多幾平匙</th><th>容許誤差</th><th style="text-align:right">可更換率</th><th>目前狀態</th></tr></thead><tbody>'
+    + show.map(function(i){
+      var m = mbOf(i), st = ingState(i), lf = finLast(i);
+      return '<tr data-mb="' + esc(i) + '"' + (m.on ? ' class="sel"' : '') + '><td><input type="checkbox" class="mbOn"' + (m.on ? ' checked' : '') + '></td><td>' + ING_MARK[st] + ' ' + esc(i) + '</td><td class="n">' + by[i].length + '</td>'
+        + '<td><input class="mbG" type="number" inputmode="decimal" min="0.1" step="0.1" value="' + esc(m.g) + '"></td>'
+        + '<td><input class="mbMl" type="number" inputmode="decimal" min="0" step="0.1" value="' + esc(m.ml) + '"></td>'
+        + '<td><select class="mbMax">' + optsHtml(SP_MAX, m.maxn) + '</select></td>'
+        + '<td><select class="mbTol">' + optsHtml(SP_TOL, m.tol) + '</select></td>'
+        + '<td class="n mbR">' + mbRate(i, by[i]) + '</td>'
+        + '<td class="muted" style="font-size:12.5px">' + (lf ? '定案 ' + esc(String(lf.confirmed_at).slice(5, 16)) : st === 'saved' ? '已存設定' : '還沒處理') + '</td></tr>';
+    }).join('') + '</tbody></table>' + (show.length ? '' : '<div class="empty">沒有符合的食材。</div>') + '</div>'
+    + '<div class="sp-ctl" style="margin-top:12px"><span id="mbN" style="font-weight:700"></span>'
+    + (editing() ? '<button class="btn" type="button" id="mbSave">💾 勾選的存成設定</button>' : '')
+    + '<button class="btn" type="button" id="mbFin">✅ 勾選的確認轉換到執行進度</button></div>'
+    + (editing() ? '' : '<div class="muted" style="margin-top:6px">要存設定或轉換，請先按右上角「🔒 進入編輯」。</div>') + '</div>';
+  $('tabBody').innerHTML = h;
+  var re = function(){ tabSpoon(p); };
+  var cnt = function(){
+    var on = ings.filter(function(i){ return S.mb[i] && S.mb[i].on; });
+    $('mbN').textContent = on.length ? '已勾 ' + on.length + ' 種：' + on.join('、') : '還沒勾選食材';
+    if ($('mbSave')) $('mbSave').disabled = !on.length;
+    $('mbFin').disabled = !on.length;
+  };
+  Array.prototype.forEach.call(document.querySelectorAll('#mbT tr[data-mb]'), function(tr){
+    var ing = tr.getAttribute('data-mb'), m = mbOf(ing), q = function(c){ return tr.querySelector(c); };
+    var upd = function(){ q('.mbR').innerHTML = mbRate(ing, by[ing]); };
+    q('.mbOn').onchange = function(){ m.on = this.checked; tr.classList.toggle('sel', m.on); cnt(); };
+    q('.mbG').oninput = function(){ m.g = this.value; upd(); };
+    q('.mbMl').oninput = function(){ m.ml = this.value; };
+    q('.mbMax').onchange = function(){ m.maxn = this.value; upd(); };
+    q('.mbTol').onchange = function(){ m.tol = this.value; upd(); };
+  });
+  var setAll = function(v){ show.forEach(function(i){ mbOf(i).on = v; }); re(); };
+  $('mbHead').onchange = function(){ setAll(this.checked); };
+  $('mbAll').onclick = function(){ setAll(true); };
+  $('mbNone').onclick = function(){ ings.forEach(function(i){ if (S.mb[i]) S.mb[i].on = false; }); re(); };
+  $('mbBack').onclick = function(){ S.multi = false; re(); window.scrollTo(0, 0); };
+  $('mbF').onchange = function(){ S.mbF = this.value; re(); };
+  $('mbApply').onclick = function(){
+    var mx = $('mbSetMax').value, tl = $('mbSetTol').value, on = ings.filter(function(i){ return S.mb[i] && S.mb[i].on; });
+    if (!on.length) { toast('先勾選食材'); return; }
+    if (mx === '' && tl === '') { toast('先選要改成多少'); return; }
+    on.forEach(function(i){ if (mx !== '') S.mb[i].maxn = mx; if (tl !== '') S.mb[i].tol = tl; });
+    re(); toast('已套用到 ' + on.length + ' 種（還沒寫入）');
+  };
+  if ($('mbSave')) $('mbSave').onclick = function(){ spoonBatch('save', by, ings); };
+  $('mbFin').onclick = function(){ spoonBatch('fin', by, ings); };
+  cnt();
+}
+function spoonBatch(kind, by, ings){
+  var fin = kind === 'fin', title = fin ? '✅ 確認轉換到執行進度' : '💾 存成設定';
+  if (!editing()) { dlg(title, '<div>這是寫入動作，請先按右上角「🔒 進入編輯」輸入專案推動密碼。</div>', [{ t: '知道了' }]); return; }
+  var bad = [], jobs = [];
+  ings.filter(function(i){ return S.mb[i] && S.mb[i].on; }).forEach(function(i){
+    var m = S.mb[i], g = Number(m.g), lines = by[i];
+    if (!(g > 0)) { bad.push(i + '：沒填一平匙克數'); return; }
+    if (fin && lines.some(function(l){ return !l.recipe_id; })) { bad.push(i + '：食譜用量還沒記到後台編號（先按「🔄 更新食譜用量」）'); return; }
+    var j = { ing: i, g: g, ml: m.ml, maxn: Number(m.maxn) || 0, tol: Number(m.tol) || 0, lines: lines, chg: [], man: 0 };
+    j.ok = lines.filter(function(l){ return judge(Number(l.grams), g, j.maxn, j.tol).ok; }).length;
+    if (fin) {
+      var lf = finLast(i), keys = {};
+      if (lf) {   /* 跟上次定案不同的地方標紅字（同單一食材） */
+        if (Number(lf.g_per_spoon) !== g) j.chg.push('一平匙 ' + lf.g_per_spoon + '→' + num(g, 2) + ' g');
+        if ((Number(lf.max_spoons) || 0) !== j.maxn) j.chg.push('最多 ' + (Number(lf.max_spoons) || '不限') + '→' + (j.maxn || '不限'));
+        if ((Number(lf.tol_pct) || 0) !== j.tol) j.chg.push('誤差 ' + (Number(lf.tol_pct) || 0) + '%→' + j.tol + '%');
+        if (String(lf.spoon_ml || '') !== String(j.ml || '') && j.ml !== '') j.chg.push('量匙 ' + (lf.spoon_ml || '未填') + '→' + j.ml + ' ml');
+      }
+      lines.forEach(function(l){ keys[lineKey(l)] = 1; });
+      j.man = (S.spoon.final || []).filter(function(x){ return x.ingredient === i && keys[x.line_key] && x.manual_spoons !== ''; }).length;
+    }
+    jobs.push(j);
+  });
+  var badHtml = bad.length ? '<div class="fe-warn">這幾種不會處理：' + esc(bad.join('；')) + '</div>' : '';
+  if (!jobs.length) { dlg(title, badHtml || '<div>先勾選食材。</div>', [{ t: '知道了' }]); return; }
+  var spec = function(j){ return num(j.g, 2) + ' g｜' + (j.ml !== '' ? esc(mlTxt(j.ml)) : '量匙未填') + '｜最多 ' + (j.maxn || '不限') + '｜誤差 ' + j.tol + '%'; };
+  var tbl = '<div class="tw"><table class="t"><thead><tr><th>食材</th><th>規格</th>' + (fin ? '<th style="text-align:right">處數</th><th style="text-align:right">換平匙</th><th style="text-align:right">維持秤重</th>' : '<th style="text-align:right">可更換</th>') + '</tr></thead><tbody>'
+    + jobs.map(function(j){
+      return '<tr><td>' + esc(j.ing) + '</td><td>' + spec(j) + (j.chg.length ? '<div class="fe-warn" style="margin:2px 0 0">⚠ 跟上次定案不同：' + esc(j.chg.join('；')) + '</div>' : '') + (j.man ? '<div class="muted">手動改過的 ' + j.man + ' 處保留</div>' : '') + '</td>'
+        + (fin ? '<td class="n">' + j.lines.length + '</td><td class="n">' + j.ok + '</td><td class="n">' + (j.lines.length - j.ok) + '</td>' : '<td class="n">' + j.ok + '/' + j.lines.length + '</td>') + '</tr>';
+    }).join('') + '</tbody></table></div>';
+  var body = '<div class="fm"><div>共 <b>' + jobs.length + ' 種</b>，每種用自己那一列的規格：</div>' + tbl + badHtml
+    + (fin ? '<div class="muted">每種都會：快照裡的每一處照規格重算、手動改過的保留、已改完後台的不動，規格同時存回平匙規格表（跟單一食材的「確認轉換」一樣）。</div>'
+      : '<label>備註（每種都寫這句；例：量匙品牌、誰實測）<input id="spNote" value=""></label>') + '</div>';
+  dlg(title + '：' + jobs.length + ' 種', body, [
+    { t: '取消', ghost: 1 },
+    { t: '下一步：確認', fn: function(){
+      var note = fin ? '' : (($('spNote').value || '').trim() || '專案推動頁存檔（多選）');
+      dlg(fin ? '確定要轉換？' : '確定要儲存？', '<div>' + jobs.length + ' 種：' + esc(jobs.map(function(j){ return j.ing; }).join('、')) + '</div><div class="muted" style="margin-top:6px">會一種一種依序寫入' + (fin ? '（每種約 5～20 秒）' : '') + '，跑完前請不要關掉頁面。</div>', [
+        { t: '取消', ghost: 1 },
+        { t: fin ? '確定轉換' : '確定儲存', fn: function(){ spoonBatchRun(kind, jobs, note); } }
+      ]);
+    } }
+  ]);
+}
+function spoonBatchRun(kind, jobs, note){
+  var fin = kind === 'fin', st = jobs.map(function(){ return '⏳ 等待中'; }), okN = 0, snap = S.spoon.snap_date;
+  var paint = function(){ $('dlgB').innerHTML = '<div class="fm">' + jobs.map(function(j, k){ return '<div><b>' + esc(j.ing) + '</b>：' + esc(st[k]) + '</div>'; }).join('') + '</div>'; };
+  $('dlgT').textContent = (fin ? '轉換中…' : '儲存中…') + '（0/' + jobs.length + '）'; $('dlgA').innerHTML = ''; $('dlgE').textContent = ''; paint();
+  var one = function(j){
+    if (!fin) return post({ action: 'spoonSave', ingredient: j.ing, g_per_spoon: j.g, spoon_ml: j.ml, max_spoons: j.maxn, tol_pct: j.tol, note: note }).then(function(r){
+      var arr = S.spoon.set, i = arr.findIndex(function(x){ return x.ingredient === r.data.ingredient; }); if (i >= 0) arr[i] = r.data; else arr.push(r.data);
+      if (S.spoon.spec_log) S.spoon.spec_log.push({ ingredient: r.data.ingredient, version: '換算頁存檔', eff_date: today(), spoon_ml: r.data.spoon_ml || '', recipe_g: r.data.g_per_spoon, real_g: r.data.real_g || '', note: r.data.note, saved_at: r.data.saved_at });
+      S.mb[j.ing].on = false;
+      return '✅ 已存（一平匙 ' + num(j.g, 2) + ' g）';
+    });
+    var uses = {}; if (S.sales && !S.sales.loading && !S.sales.err) j.lines.forEach(function(l){ var r = salesOf(l.recipe); if (r) uses[lineKey(l)] = r.q; });
+    return post({ action: 'finalConfirm', ingredient: j.ing, g_per_spoon: j.g, spoon_ml: j.ml, max_spoons: j.maxn, tol_pct: j.tol, snap_date: snap, uses: uses }).then(function(r){
+      var d = r.data;
+      return '✅ ' + d.total + ' 處：換平匙 ' + d.ok + '、維持秤重 ' + d.keep + (d.manual_kept ? '、手動保留 ' + d.manual_kept : '') + (d.untouched ? '、原樣保留 ' + d.untouched : '') + '（批號 ' + d.batch + '）';
+    });
+  };
+  jobs.reduce(function(pr, j, k){
+    return pr.then(function(){
+      st[k] = '🔄 寫入中…'; paint();
+      return one(j).then(function(msg){ okN++; st[k] = msg; }, function(e){ st[k] = '❌ 失敗：' + (e.message || e); }).then(function(){ $('dlgT').textContent = (fin ? '轉換中…' : '儲存中…') + '（' + (k + 1) + '/' + jobs.length + '）'; paint(); });
+    });
+  }, Promise.resolve()).then(function(){
+    if (fin) { S.spoon = null; S.pg = null; S.slLines = null; S.g = ''; S.mb = null; }
+    var html = $('dlgB').innerHTML + (okN < jobs.length ? '<div class="fe-warn">有 ' + (jobs.length - okN) + ' 種沒寫進去，可以再勾起來重按一次（寫成功的不受影響）。</div>' : '');
+    dlg((okN === jobs.length ? '✅ 全部完成' : '⚠ 部分完成') + '：' + okN + '/' + jobs.length + ' 種', html, fin ? [
+      { t: '留在這頁', ghost: 1, fn: function(){ close(); if (route().tab === 'spoon') tabSpoon(); } },
+      { t: '去看執行進度', fn: function(){ close(); S.pgSub = 'ing'; S.pgf = { ing: '', ok: '', q: '', rec: 'left' }; go(route().pid, 'spoonprog'); } }
+    ] : [{ t: '知道了', fn: function(){ close(); if (route().tab === 'spoon') tabSpoon(); } }]);
+  });
 }
 
 /* ----- ✅ 確認轉換到執行進度（2026-10-29 經營者：「平匙換算頁加確認鍵，把當下決定的食材資料全部轉到執行進度；正式食譜依已定案明細調整」）
