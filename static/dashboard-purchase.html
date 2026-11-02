@@ -4634,13 +4634,17 @@ function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
   if(seg==="待處理"||seg==="備貨中")h+=dcoMergeBar(list);   /* 2026-10-05 經營者 1005 #3：同一店多張訂單先合併再列印 */
   h+=slipBatchBar(seg);   /* cw 批：🖨 列印全部出貨單 */
   ST.dcoCardOpen=ST.dcoCardOpen||{};var nOpen=list.filter(function(o){return ST.dcoCardOpen[o.id];}).length;   /* 2026-11-02 經營者：訂單卡片預設收合，點店名才展開明細 */
-  h+='<div style="display:flex;gap:8px;align-items:center;margin:4px 0 6px"><span class="muted" style="font-size:13px">點店名展開明細</span><span style="flex:1"></span><button class="btn sm ghost" data-dccall="'+(nOpen===list.length?'0':'1')+'">'+(nOpen===list.length?'▴ 全部收合':'▾ 全部展開')+'</button></div>';
+  var selN=hctOn()?hctSelIds().length:0,selAble=hctOn()?list.filter(hctSelOK):[];
+  h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 6px">'
+    +(selAble.length?'<label style="font-size:13px;display:flex;gap:4px;align-items:center"><input type="checkbox" data-dccselall="1"'+(selAble.every(function(o){return ST.dcoSel[o.id];})?' checked':'')+'> 全選</label>'
+      +'<button class="btn sm" data-hctbatch="1"'+(selN&&!DCO.busy?'':' disabled')+'>🚚 勾選的 '+selN+' 張產生托運單</button><span class="muted" style="font-size:12px">要寄新竹的才勾；不用託運的不要勾</span>':'')
+    +'<span class="muted" style="font-size:13px">點店名展開明細</span><span style="flex:1"></span><button class="btn sm ghost" data-dccall="'+(nOpen===list.length?'0':'1')+'">'+(nOpen===list.length?'▴ 全部收合':'▾ 全部展開')+'</button></div>';
   list.forEach(function(o){h+=dcoCard(o);});
   if(ST.dcoEdit&&list.some(function(o){return ST.dcoEdit[o.id];}))h+=dcoEditDatalist();   /* 2026-10-05：編輯模式的「加品項」清單（整頁一份） */
   return h;}
 function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 2026-10-05 經營者 1005 #2：編輯模式 */
   var open=(o.status==="待處理"||o.status==="備貨中"),q=(ST.dcoShipQ||{})[o.id]||{},tot=0,ex=!!(ST.dcoCardOpen||{})[o.id],hl=HCT.byId&&HCT.byId[o.id];
-  var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span data-dccexp="'+escA(o.id)+'" title="'+(ex?'收合明細':'展開明細')+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer;flex:1;min-width:240px"><span class="muted" style="width:12px">'+(ex?'▾':'▸')+'</span>'+dcoStBadgeO(o)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
+  var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+(hctSelOK(o)?'<input type="checkbox" title="勾選＝要寄新竹物流（一次產生托運單）" style="width:18px;height:18px" data-dccsel="'+escA(o.id)+'"'+((ST.dcoSel||{})[o.id]?' checked':'')+'>':'')+'<span data-dccexp="'+escA(o.id)+'" title="'+(ex?'收合明細':'展開明細')+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer;flex:1;min-width:240px"><span class="muted" style="width:12px">'+(ex?'▾':'▸')+'</span>'+dcoStBadgeO(o)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
     +(o.status==="已出貨"?'<span class="muted">出貨 '+dcoTime(o.shipTime)+'</span>':'')+(!ex&&o.note?'<span title="'+escA(o.note)+'">📝</span>':'')+(!ex&&hl&&hl.length?'<span class="muted" style="font-size:12px">🚚 '+hl.map(function(l){return escH(hctDash(l.edelno));}).join('、')+'</span>':'')+'</span><span>'+o.lines.length+' 項</span>'
     +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoedit="'+escA(o.id)+'"'+(DCO.busy?' disabled':'')+' title="改這張訂單的門市、品項、數量、單價、實出、備註、新竹貨號">✏️ 編輯</button>':'')   /* 2026-10-05 */
     +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoslip="'+escA(o.id)+'" title="印 A4 出貨單，放進箱子給門市收貨核對">🖨 出貨單</button>':'')+'</div>';   /* cw 批 */
@@ -4988,18 +4992,22 @@ function hctPrintIds(ids,only){ids=ids.filter(Boolean);if(!ids.length){toast("�
   hctFetchImgs(ids).then(function(m){var all=[];ids.forEach(function(id){(m[id]||[]).forEach(function(l){if(!only||only[l.edelno])all.push(l);});});HCTP.on="";render();hctPrintLabels(all);})
     .catch(function(e){HCTP.on="";render();toast("⚠️ "+e.message,5000);});}
 /* 產生（或同日更正）托運單 → 直接開標籤列印 */
-function hctCreate(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o||DCO.busy)return;
+/* 組一張訂單的托運單資料（單張「產生」與勾選批次共用）；錯誤回 {err}。2026-11-02 拆出 */
+function hctBody(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o)return {err:"找不到訂單"};
   var L=HCT.byId[id]||[],E=hctIn(id),cs=hctCsOf(E.cs!=null?E.cs:(L[0]?L[0].cs:hctCsList()[0].code)),S=cs.mode==="S";
   var b=Math.floor(num(E.b!=null?E.b:(L.length?(S?L.length:L[0].boxes):1))),body={action:"hctCreate",id:id,cs:cs.code},desc;
-  if(S){if(!(b>=1&&b<=20)){toast("按尺寸計費一次 1～20 箱");return;}
+  if(S){if(!(b>=1&&b<=20))return {err:"按尺寸計費一次 1～20 箱"};
     var sz=[];for(var i=0;i<b;i++){var v=num((E.sz&&E.sz[i]!=null)?E.sz[i]:(L[i]&&L[i].mode==="S"?L[i].weight:60));
-      if(!(HCT_SZ.indexOf(v)>=0||(v>=151&&v<=999))){toast("第 "+(i+1)+" 箱尺寸要是 60、90、120、150 或 151～999 公分");return;}sz.push(v);}
+      if(!(HCT_SZ.indexOf(v)>=0||(v>=151&&v<=999)))return {err:"第 "+(i+1)+" 箱尺寸要是 60、90、120、150 或 151～999 公分"};sz.push(v);}
     body.sizes=sz;desc=b+" 箱，每箱一張托運單（"+sz.map(function(s){return s+"";}).join("、")+" 公分）";}
   else{var wt=num(E.w!=null?E.w:(L[0]&&L[0].mode!=="S"?L[0].weight:""));
-    if(!(b>=1&&b<=999)){toast("件數要填 1～999 箱");return;}
-    if(!(wt>0)){toast("請填總重量（公斤）");return;}
+    if(!(b>=1&&b<=999))return {err:"件數要填 1～999 箱"};
+    if(!(wt>0))return {err:"請填總重量（公斤）"};
     body.boxes=b;body.weight=wt;desc=b+" 箱　總重量 "+Math.ceil(wt)+" 公斤（小數進位）";}
-  var rcv=hctRcv(o.store);if(!rcv){toast("這家店沒有收件地址");return;}body.rcv=rcv;
+  var rcv=hctRcv(o.store);if(!rcv)return {err:"這家店沒有收件地址"};body.rcv=rcv;
+  return {o:o,L:L,cs:cs,body:body,desc:desc,rcv:rcv};}
+function hctCreate(id){if(DCO.busy)return;var B=hctBody(id);if(B.err){toast(B.err);return;}
+  var L=B.L,cs=B.cs,body=B.body,desc=B.desc,rcv=B.rcv;
   var fix=L.length&&L.every(function(l){return l.status==="已建單"&&l.date===hctToday()&&l.cs===cs.code;});
   if(typeof confirm==="function"&&!confirm((fix?"更正":"產生")+"新竹托運單？\n\n收件："+rcv.name+"\n電話："+rcv.tel+"\n地址："+rcv.addr+"\n計費："+cs.name+"\n"+desc+"\n訂單："+id
     +(fix?"\n\n原來的貨號不變，請丟掉舊標籤、改貼新印的。":(L.length?"\n\n舊的托運單（"+L[0].date+"）會作廢。":""))+(HCT.env==="test"?"\n\n🧪 目前是測試帳號，標籤不能真的寄。":"")))return;
@@ -5010,6 +5018,26 @@ function hctCreate(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;}
       if(r.env)HCT.env=r.env;
       hctPrintLabels(labs);toast("✅ 新竹貨號 "+labs.map(function(l){return hctDash(l.edelno);}).join("、")+(r.fix?"（已更正）":""));dcoRefresh();render();})
     .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ 托運單沒有完整產生："+e.message,6000);});}
+/* 2026-11-02 經營者：訂單卡片前面勾選要寄新竹的（預設不勾；出貨但不用託運就不勾）→ 一次產生托運單。
+   件數尺寸／重量照各張卡片填的，沒填＝1 箱 60 公分（按尺寸）；按重量沒填重量的會略過。已有托運單的不能勾（到卡片補印或更正）。
+   一張一張向新竹取號（不並行），全部好了一次跳出標籤列印；失敗的列出來，其他照常。 */
+function hctSelOK(o){return hctOn()&&o.status!=="已取消"&&!(HCT.byId[o.id]&&HCT.byId[o.id].length)&&!!hctRcv(o.store);}
+function hctSelIds(){ST.dcoSel=ST.dcoSel||{};var ok={};(DCO.all||[]).forEach(function(o){if(hctSelOK(o))ok[o.id]=1;});
+  Object.keys(ST.dcoSel).forEach(function(k){if(!ok[k])delete ST.dcoSel[k];});return Object.keys(ST.dcoSel);}
+function hctBatch(){if(DCO.busy||HCT.rows===null)return;var ids=hctSelIds();if(!ids.length){toast("請先在訂單前面勾選要寄新竹的");return;}
+  var go=[],bad=[];ids.forEach(function(id){var B=hctBody(id);if(B.err)bad.push(id+"："+B.err);else go.push(B);});
+  if(!go.length){alert("勾選的訂單都不能產生托運單：\n"+bad.join("\n"));return;}
+  if(typeof confirm==="function"&&!confirm("一次產生 "+go.length+" 張訂單的新竹托運單？\n\n"+go.map(function(B){return "・"+storeName(B.o.store)+" "+B.o.id+"："+B.cs.name+" "+B.desc;}).join("\n")
+    +(bad.length?"\n\n⚠️ 這幾張不會產生：\n"+bad.join("\n"):"")+"\n\n件數或尺寸不對的，先按取消、到訂單卡片的「🚚 新竹托運單」改好再勾。"+(HCT.env==="test"?"\n\n🧪 目前是測試帳號，標籤不能真的寄。":"")))return;
+  DCO.busy=true;render();var all=[],fail=[],done=[],i=0;
+  (function next(){if(i>=go.length){DCO.busy=false;done.forEach(function(id){delete ST.dcoSel[id];if(ST.hctIn)delete ST.hctIn[id];});
+      if(all.length)hctPrintLabels(all);
+      if(fail.length)alert("⚠️ 有 "+fail.length+" 張沒有產生托運單：\n"+fail.join("\n")+"\n\n請按「🔄 重新整理」看狀態，再到那張訂單卡片單獨產生。");
+      toast("✅ 已產生 "+done.length+" 張訂單的托運單"+(fail.length?"，"+fail.length+" 張失敗":""),5000);dcoRefresh();render();return;}
+    var B=go[i++],id=B.o.id,t0=Date.now();toast("⏳ 向新竹物流取貨號中…第 "+i+"／"+go.length+" 張（"+storeName(B.o.store)+"）",15000);
+    dcoWrite(B.body,function(){return hctFetchImgs([id]).then(function(m){var x=m[id]||[];return (x.length&&x.every(function(l){return l.img&&new Date(String(l.updated).replace(" ","T")+"+08:00").getTime()>=t0-60000;}))?{ok:true,labels:x}:null;});})
+      .then(function(r){if(r.env)HCT.env=r.env;(r.labels||(r.label?[r.label]:[])).forEach(function(l){all.push(l);});done.push(id);},function(e){fail.push(storeName(B.o.store)+" "+id+"："+e.message);})
+      .then(next);})();}
 function hctVoid(id){var L=HCT.byId[id];if(!L||!L.length||DCO.busy)return;
   if(typeof confirm==="function"&&!confirm("作廢新竹托運單 "+L.map(function(l){return hctDash(l.edelno);}).join("、")+"（訂單 "+id+"）？\n\n作廢後這些貨號不會交給新竹，貼好的標籤請撕掉。"))return;
   DCO.busy=true;render();
@@ -5115,6 +5143,7 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
   if((b=t.closest("[data-hctprintday]"))){ev.preventDefault();var dy=b.getAttribute("data-hctprintday"),pk=hctPick(dy),ids=[];pk.rows.forEach(function(l){if(ids.indexOf(l.id)<0)ids.push(l.id);});hctPrintIds(ids,pk.sel);return;}   /* 有勾＝只印勾選的 */
   if((b=t.closest("[data-hctselnone]"))){ev.preventDefault();ST.hctSel=ST.hctSel||{};ST.hctSel[b.getAttribute("data-hctselnone")]={};render();return;}
   if((b=t.closest("[data-hctreport]"))){ev.preventDefault();hctReport();return;}
+  if((b=t.closest("[data-hctbatch]"))){ev.preventDefault();hctBatch();return;}
   if((b=t.closest("[data-hcttotal]"))){ev.preventDefault();var dt=b.getAttribute("data-hcttotal"),pt=hctPick(dt),un=pt.rows.filter(function(l){return l.status!=="已交寄";}).length;
     if(pt.n&&un)toast("勾選的 "+un+" 張還沒確認出貨（新竹還沒收到），不印在總表",5000);
     hctPrintTotal(pt.rows.filter(function(l){return l.status==="已交寄";}),dt);return;}
@@ -5127,6 +5156,8 @@ document.addEventListener("change",function(ev){var t=ev.target,a;if(!t||!t.getA
   if(t.id==="hctDay"&&t.value){ST.hctDay=t.value;render();return;}
   if((a=t.getAttribute("data-hctsel"))!=null){var q=a.split("|"),S=hctSelOf(q[0]);if(t.checked)S[q[1]]=true;else delete S[q[1]];render();return;}   /* 2026-11-02 勾選托運單 */
   if((a=t.getAttribute("data-hctselall"))!=null){var S2=hctSelOf(a),on=t.checked;(HCT.day[a]||[]).filter(hctAct).forEach(function(l){if(on)S2[l.edelno]=true;else delete S2[l.edelno];});render();return;}
+  if((a=t.getAttribute("data-dccsel"))!=null){ST.dcoSel=ST.dcoSel||{};if(t.checked)ST.dcoSel[a]=true;else delete ST.dcoSel[a];render();return;}   /* 2026-11-02 勾選要寄新竹的訂單 */
+  if(t.getAttribute("data-dccselall")!=null){ST.dcoSel=ST.dcoSel||{};var sg2=ST.dcoSeg||"待處理",on2=t.checked;(DCO.all||[]).forEach(function(o){if(o.status===sg2&&hctSelOK(o)){if(on2)ST.dcoSel[o.id]=true;else delete ST.dcoSel[o.id];}});render();return;}
   if(t.getAttribute("data-hctcopies")!=null){lsSet("hctTotCopies",t.value);render();return;}
   if((a=t.getAttribute("data-hctcs"))!=null){var E=hctIn(a);E.cs=t.value;E.sz=null;render();return;}   /* 換計費方式：重畫填寫區（下拉選單，不影響打字） */
   if((a=t.getAttribute("data-hctsz"))!=null){var p=a.split("|"),E2=hctIn(p[0]);E2.sz=E2.sz||[];E2.sz[+p[1]]=t.value==="x"?151:num(t.value);render();return;}
