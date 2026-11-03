@@ -532,13 +532,30 @@ function apSheet_(name, head) {
   }
   return sh;
 }
+/* 2026-11-03 線上實測踩到：試算表會把 "2026-11"、"2026-11-15" 這種字串自動當日期存 → 讀回來變 Date、期別比對不到、額度擋不住。
+   讀回時把 period／deadline 的 Date 轉回原本的字串；apply 分頁的 G（period）、I（deadline）欄一次性設成純文字格式（之後寫入不再被轉） */
+function apCell_(h, v) {
+  if (v instanceof Date) {
+    if (h === 'period') return Utilities.formatDate(v, TZ, 'yyyy-MM');
+    if (h === 'deadline') return Utilities.formatDate(v, TZ, 'yyyy-MM-dd');
+  }
+  return apStr_(v);
+}
 function apLoad_(name, head, tailN) {
   var sh = apSheet_(name, head), last = sh.getLastRow(), rows = [];
+  if (name === 'apply') applyFmt_(sh);
   if (last > 1) {
     var from = tailN ? Math.max(2, last - tailN + 1) : 2, v = sh.getRange(from, 1, last - from + 1, head.length).getValues();
-    v.forEach(function (r, i) { var o = { _row: from + i }; head.forEach(function (h, j) { o[h] = apStr_(r[j]); }); rows.push(o); });
+    v.forEach(function (r, i) { var o = { _row: from + i }; head.forEach(function (h, j) { o[h] = apCell_(h, r[j]); }); rows.push(o); });
   }
   return { sh: sh, rows: rows };
+}
+function applyFmt_(sh) {
+  var P = PropertiesService.getScriptProperties();
+  if (P.getProperty('APPLY_FMT') === 'v1') return;
+  var gP = AP_HEAD.indexOf('period') + 1, gD = AP_HEAD.indexOf('deadline') + 1, n = Math.max(2, sh.getMaxRows());
+  sh.getRange(2, gP, n - 1, 1).setNumberFormat('@'); sh.getRange(2, gD, n - 1, 1).setNumberFormat('@');
+  P.setProperty('APPLY_FMT', 'v1');
 }
 function apPutCols_(sh, head, row, obj) {
   Object.keys(obj).forEach(function (k) { var j = head.indexOf(k); if (j >= 0) sh.getRange(row, j + 1).setValue(obj[k]); });
