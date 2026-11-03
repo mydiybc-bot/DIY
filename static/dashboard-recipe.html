@@ -257,6 +257,10 @@ window.SpoonHint=(function(){
   #tab-apply .ap-unpin{font-size:12px;padding:0 4px;color:#C0392B;white-space:nowrap;display:block}
   #tab-apply .ap-items th:first-child,#tab-apply .ap-items td:first-child{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 #E3ECE9}
   #tab-apply .ap-items th:first-child{z-index:4;background:#EEF6F4}
+  /* 2026-11-03 新增食材/器模具表：限高（表格裡自己上下捲，表頭、品項欄固定）＋表格上方同步的左右拉條 */
+  #tab-apply .ap-items.ap-t2box{max-height:calc(100vh - 140px)}
+  #tab-apply .ap-t2top{overflow-x:auto;overflow-y:hidden;margin:0 0 4px;border:1px solid #E3ECE9;border-radius:6px;background:#F3FAF8}
+  #tab-apply .ap-t2top>div{height:1px}
   #tab-apply .ap-items td.ap-rocell{background:#FBF8F6;color:#2E2320;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
   #tab-apply .ap-items td.ap-rocell small{display:block;font-weight:400;color:#6F4E45;font-size:12px;white-space:normal}
   #tab-apply .ap-r{text-align:right}
@@ -3445,6 +3449,13 @@ function table1HTML(c){
     G[''].forEach(function(i){h+=t1RowHTML(AP.lines[i],i,c)});h+='</tbody>'}
   h+='</table></div>'+optSumHTML(c)+'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝用主檔的單位；填「匙」「滴」這類單位，系統會照單位換算表換算（換不到會請你估「1 匙≈幾 g」）。器具／模具只列清單、不算成本。🆕 品項的每份成本，照下方「🆕 新增食材/器模具」表填的原包裝成本和規格估算。</span></div></div></div>';
   return h}
+/* 2026-11-03 經營者：新增食材/器模具表 22 欄很寬，左右拉條只在最下面 → 表格限高（表頭、品項欄本來就設了 sticky，限高後才固定得住）
+   ＋表格上方一條同步的左右拉條（.ap-t2top，寬度讓兩條可拉的距離一樣；表格不夠寬時自動藏起來；ResizeObserver 跟著表格寬度變） */
+var _t2RO=null;
+function t2BarWire(root){var box=root.querySelector('.ap-t2box'),bar=root.querySelector('.ap-t2top');if(_t2RO){_t2RO.disconnect();_t2RO=null}if(!box||!bar)return;var inn=bar.firstElementChild;
+  function size(){var over=box.scrollWidth-box.clientWidth;bar.style.display=over>1?'':'none';inn.style.width=(bar.clientWidth+Math.max(0,over))+'px';bar.scrollLeft=box.scrollLeft}
+  size();bar.addEventListener('scroll',function(){if(box.scrollLeft!==bar.scrollLeft)box.scrollLeft=bar.scrollLeft});box.addEventListener('scroll',function(){if(bar.scrollLeft!==box.scrollLeft)bar.scrollLeft=box.scrollLeft});   /* 用 addEventListener：.ap-items 的 onscroll 另有 hideSug */
+  if(window.ResizeObserver){_t2RO=new ResizeObserver(size);_t2RO.observe(box);var t=box.querySelector('table');if(t)_t2RO.observe(t)}}
 /* 表二：只列 isNewItem 的列，Excel 第 17 列 17 欄；品項／每份使用量／單位 唯讀鏡像表一；無刪除鍵 */
 var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,108,84,62,190];   /* 2026-11-03：採購量單位後多「秤重換算」108 */   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
 function t2HeadHTML(){var H=['品項','類別','每店要幾個','廠商品名','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','整檔採購量','單位','秤重換算 <span style="font-weight:400;font-size:11px" title="用料寫支或包，但採購是秤重買：填 1 支大約幾 g，整檔採購量會多顯示約幾 g">（秤重買才填）</span>','第一單處理','備註','保存期限 <span style="font-weight:400;font-size:11px" title="D+7＝7 天內用完；依原包裝＝看包裝上印的有效期限；沒有分裝就空著">（D+7＝7天內用完）</span>'];
@@ -3486,7 +3497,7 @@ function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}
    +'<b>↺ 帶入上次填的</b>：這個品項在這台電腦的其他申請單填過，按一下把空白的欄位帶進來（已經填的不會蓋掉），帶入的那一列會閃一下黃色，請再看一眼。'
    +'</div></details>';
   if(!NL.length&&!SL.length)h+='<div class="ap-muted ap-empty" style="padding:6px 12px 12px;color:#9A8F88">目前用料都在主檔內，沒有新增品項。（要手動列進來的，在「🧾 用料」表按「↓ 加到新增表」）</div>';
-  else{h+='<div style="padding:4px 10px 10px"><div class="ap-items"><table>'+t2HeadHTML()+'<tbody>';NL.forEach(function(i){h+=t2RowHTML(AP.lines[i],i)});SL.forEach(function(x){h+=t2RowHTML(x.o,x.key)});h+='</tbody></table></div></div>'}
+  else{h+='<div style="padding:4px 10px 10px"><div class="ap-t2top" title="左右拉動看其他欄位"><div></div></div><div class="ap-items ap-t2box"><table>'+t2HeadHTML()+'<tbody>';NL.forEach(function(i){h+=t2RowHTML(AP.lines[i],i)});SL.forEach(function(x){h+=t2RowHTML(x.o,x.key)});h+='</tbody></table></div></div>'}
   h+='<datalist id="apShelfDL"><option value="依原包裝"><option value="當天用完"><option value="D+1"><option value="D+3"><option value="D+7"><option value="D+14"><option value="D+30"><option value="D+90"><option value="D+180"><option value="D+365"></datalist>';
   return h+'</div>'}
 /* ＋新增品項：跳出輸入品名 → 在表一新增一列（主檔查得到就是普通列；查不到即 🆕 自動出現在表二） */
@@ -5320,6 +5331,7 @@ function wire(){var root=document.getElementById('apRoot');
   var sa=document.getElementById('apSemiAdd');if(sa)sa.onclick=function(){AP.semis.push(newSemi());_smLast=AP.semis.length-1;OUT=null;saveDraft();render();
     var boxes=root.querySelectorAll('.ap-semi');var last=boxes[boxes.length-1];if(last){var inp=last.querySelector('[data-sh="name"]');if(inp)inp.focus()}};
   /* 表一：品項／數量／單位／刪除；改品項 blur 後整頁重繪（表二依 isNewItem 自動出現／消失，l.* 欄位保留） */
+  t2BarWire(root);   /* 2026-11-03 新增食材/器模具表上方拉條 */
   root.querySelectorAll('[data-smh]').forEach(function(h){h.onclick=function(e){if(e.target.closest('button'))return;var si=+h.dataset.smh,sm=AP.semis[si];if(!sm)return;smFold(si,!SMFOLD[smKey(sm,si)])}});   /* 2026-11-03 半成品伸縮 */
   root.querySelectorAll('[data-t1gh]').forEach(function(tr){tr.onclick=function(){var g=tr.dataset.t1gh;t1Fold(g,!T1FOLD[g])}});   /* 2026-11-03 用料表分類伸縮 */
   root.querySelectorAll('tr[data-ln]').forEach(function(tr){var i=+tr.dataset.ln;
