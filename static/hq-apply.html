@@ -559,7 +559,7 @@ function renderList() {
   tb.innerHTML = me.apps.map(function (a) {
     var st = '<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="note">' + esc(a.reviewer ? a.reviewer + '：' : '') + esc(a.reviewNote) + '</div>' : '');
     return '<tr><td>' + esc(a.created) + '</td><td>' + esc(a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '<br><span class="muted">截止 ' + esc(a.deadline) + '</span></td><td>' + esc(a.who) + '</td><td class="r">$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆</span></td><td>' + st + '</td>' +
-      '<td class="act"><button class="btn ghost sm" type="button" data-dl="' + esc(a.id) + '">⬇ 重新下載</button> ' + (a.canDel ? '<button class="btn warn sm" type="button" data-del="' + esc(a.id) + '">🗑 刪除</button>' : '') + '</td></tr>';
+      '<td class="act"><button class="btn ghost sm" type="button" data-dl="' + esc(a.id) + '">⬇ 重新下載</button> ' + (a.canEdit ? '<button class="btn ghost sm" type="button" data-edit="' + esc(a.id) + '">✏️ 修改</button> ' : '') + (a.canDel ? '<button class="btn warn sm" type="button" data-del="' + esc(a.id) + '">🗑 刪除</button>' : '') + '</td></tr>';
   }).join('');
   $('myEmpty').textContent = '這個單位還沒有申請。'; $('myEmpty').style.display = me.apps.length ? 'none' : '';
 }
@@ -573,8 +573,9 @@ function initHome() {
     api({ action: 'staff_add', name: n }).then(function (r) { if (S.me) S.me.staff = r.staff; renderWho(r.staff, n); lsSet(WHO_KEY + ':' + S.unit, n); $('hUnitMsg').textContent = ''; renderCards(); toast('已加入：' + n); }).catch(function (e) { toast('新增失敗：' + (e.message || e)); });
   });
   document.addEventListener('click', function (e) {
-    var t = e.target.closest ? e.target.closest('[data-open],[data-dl],[data-del]') : null; if (!t) return;
+    var t = e.target.closest ? e.target.closest('[data-open],[data-dl],[data-del],[data-edit]') : null; if (!t) return;
     if (t.dataset.open) openForm(t.dataset.open);
+    else if (t.dataset.edit) editApp(t.dataset.edit, t);
     else if (t.dataset.dl) redownload(t.dataset.dl, t);
     else if (t.dataset.del) delApp(t.dataset.del, t);
   });
@@ -583,6 +584,12 @@ function redownload(id, btn) {
   busyBtn(btn, true, '⬇ 重新下載');
   api({ action: 'get', id: id }).then(function (r) { var a = r.app, m = a.payload; m.type = a.type; m.unit = a.unit; m.who = a.who; m.period = a.periodLabel; m.sub = a.sub; return buildXlsx(a.type, m).then(function (blob) { saveBlob(blob, fileName(a.type, m) + '.xlsx'); toast('已下載'); }); })
     .catch(function (e) { toast('下載失敗：' + (e.message || e)); }).finally(function () { busyBtn(btn, false, '⬇ 重新下載'); });
+}
+/* 2026-11-03 晚：審核中／已退回的申請可以修改（審核通過前隨時）→ 把原本的明細帶回表單，儲存走 update、同一筆編號同一期 */
+function editApp(id, btn) {
+  busyBtn(btn, true, '✏️ 修改');
+  api({ action: 'get', id: id }).then(function (r) { var a = r.app; if (a.who && a.who !== S.who) { S.who = a.who; var sel = $('hWho'); if ([...sel.options].some(function (o) { return o.value === a.who; })) sel.value = a.who; } openForm(a.type, a); })
+    .catch(function (e) { toast('讀不到這筆申請：' + (e.message || e)); }).finally(function () { busyBtn(btn, false, '✏️ 修改'); });
 }
 function delApp(id, btn) {
   var me = S.me, a = me ? (me.apps || []).filter(function (x) { return x.id === id; })[0] : null; if (!a) return;
@@ -603,6 +610,10 @@ function renderWho(staff, cur) {
 function paintQuota() {
   var t = TYPES[S.type], box = $('periodBox'), p0 = S.periods && S.periods[S.type]; if (!t) return;
   var head = p0 ? '這筆算 <b>' + esc(p0.label) + '</b> 的申請（截止 ' + esc(p0.deadline) + '）。' + (AP_REVIEW[S.type] ? '送出後由專人審核，結果在首頁「我的申請」看。' : '不用審核，送出就完成。') : '';
+  if (S.edit) {   /* 修改模式：同一筆、同一期，不算額度；新拍的照片會加在原有照片後面 */
+    box.innerHTML = '修改 <b>' + esc(S.edit.periodLabel) + '</b> 的這筆申請（編號 ' + esc(S.edit.id) + '，目前狀態 ' + esc(S.edit.statusLabel) + (S.edit.reviewNote ? '：' + esc(S.edit.reviewNote) : '') + '）。儲存後狀態回到「審核中」，專人會重新審。' + (S.edit.nPhotos ? '<br><span class="muted">原本的 ' + S.edit.nPhotos + ' 張照片會保留，新拍的加在後面。</span>' : '');
+    $('sendBtn').disabled = false; return;
+  }
   if (!S.unit) { box.innerHTML = head + '<br>請先選單位。'; $('sendBtn').disabled = true; return; }
   if (!S.me) { box.innerHTML = head; $('sendBtn').disabled = true; return; }
   var p = S.me.periods[S.type], who = curWho(), sub = S.type === 'vendor' ? S.sub : '', q = p.quota[sub || '_'];
@@ -614,17 +625,19 @@ function paintQuota() {
   $('sendBtn').disabled = !(ok && who);
   if (!who && ok) box.innerHTML += '<br><span class="muted">請選申請人才能送出。</span>';
 }
-function openForm(type) {
+function openForm(type, app) {
   var t = TYPES[type]; if (!t) return;
   if (!S.unit || !S.me) { toast('請先選單位'); $('hUnit').focus(); return; }
   if (!S.who) { toast('請先選申請人'); $('hWho').focus(); return; }
-  S.type = type; S.sub = '常態'; S.photos = []; S.rows = []; S.busy = 0;
-  $('photos').innerHTML = ''; $('rowsBody').innerHTML = ''; $('fNote').value = ''; $('fSubReason').value = ''; $('sendMsg').textContent = ''; $('camFab').hidden = true;
-  $('formTitle').textContent = t.emoji + ' ' + t.label;
+  var pl = app ? (app.payload || {}) : null;
+  S.edit = app || null; S.type = type; S.sub = (pl && pl.sub) || '常態'; S.photos = []; S.rows = []; S.busy = 0;
+  $('photos').innerHTML = ''; $('rowsBody').innerHTML = ''; $('fNote').value = pl ? (pl.note || '') : ''; $('fSubReason').value = pl ? (pl.subReason || '') : ''; $('sendMsg').textContent = ''; $('camFab').hidden = true;
+  $('formTitle').textContent = (app ? '✏️ 修改 ' : '') + t.emoji + ' ' + t.label + (app ? '（' + app.periodLabel + '，編號 ' + app.id + '）' : '');
   $('fWhoLine').textContent = S.unit + '｜申請人 ' + S.who;
+  $('sendBtn').textContent = app ? '📤 儲存修改並下載 Excel' : '📤 送出申請並下載 Excel';
   $('subCard').hidden = type !== 'vendor';
-  $('subCard').querySelectorAll('[data-sub]').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === '常態'); });
-  $('subReasonWrap').hidden = true;
+  $('subCard').querySelectorAll('[data-sub]').forEach(function (b) { b.classList.toggle('on', b.dataset.sub === S.sub); });
+  $('subReasonWrap').hidden = S.sub !== '非常態';
   $('photoCard').hidden = !t.photos;
   var n = type === 'vendor' ? 3 : 2;
   $('stepPhoto').textContent = n; $('stepRows').textContent = t.photos ? n + 1 : n; $('stepSend').textContent = t.photos ? n + 2 : n + 1;
@@ -634,10 +647,11 @@ function openForm(type) {
   $('rowsFoot').innerHTML = '<tr><td colspan="' + (amtIdx + 1) + '" style="text-align:right">合計</td><td id="sumCell" style="text-align:right">0</td><td colspan="' + (t.cols.length - amtIdx + (t.photos ? 1 : 0)) + '" id="cntCell"></td></tr>';
   $('addRowBtn').textContent = t.photos ? '＋ 手動加一筆' : '＋ 加一列';
   show('vForm'); refreshTotals(); paintQuota();
-  if (!t.photos) addRow({});
+  if (app) { (pl.rows || []).forEach(function (r) { addRow(r); }); }
+  else if (!t.photos) addRow({});
 }
 function initForm() {
-  $('backBtn').addEventListener('click', function () { if (S.rows.length && !confirm('還沒送出，明細會消失，確定回首頁？')) return; S.rows = []; S.photos = []; show('vHome'); loadUnit(); });
+  $('backBtn').addEventListener('click', function () { if (S.rows.length && !confirm(S.edit ? '修改還沒儲存，確定回首頁？' : '還沒送出，明細會消失，確定回首頁？')) return; S.rows = []; S.photos = []; S.edit = null; show('vHome'); loadUnit(); });
   $('subCard').addEventListener('click', function (e) {
     var b = e.target.closest ? e.target.closest('[data-sub]') : null; if (!b) return;
     S.sub = b.dataset.sub; $('subCard').querySelectorAll('[data-sub]').forEach(function (x) { x.classList.toggle('on', x === b); });
@@ -971,14 +985,15 @@ function submit() {
   var ps = S.type === 'petty' ? [] : S.photos.filter(function (p) { return p.full; });
   Promise.all(ps.map(function (p) { return shrinkUrl(p.full, 1600, 0.8).then(function (u) { return { img: u.split(',')[1], mt: 'image/jpeg' }; }); })).then(function (photos) {
     $('sendMsg').textContent = '送出中…';
+    if (S.edit) return api({ action: 'update', id: S.edit.id, sub: m.sub, who: m.who, payload: m, photos: photos }, 180000);
     return api({ action: 'submit', type: S.type, sub: m.sub, who: m.who, payload: m, photos: photos }, 180000);
   }).then(function (r) {
     m.period = r.period.label;
-    $('sendMsg').textContent = '✓ 已送出（' + r.period.label + '，' + r.statusLabel + '）' + (r.photosWanted && r.photosSaved < r.photosWanted ? '；照片只存到 ' + r.photosSaved + '／' + r.photosWanted + ' 張' : '');
+    $('sendMsg').textContent = '✓ ' + (S.edit ? '已儲存修改' : '已送出') + '（' + r.period.label + '，' + r.statusLabel + '）' + (r.photosWanted && r.photosSaved < r.photosWanted ? '；照片只存到 ' + r.photosSaved + '／' + r.photosWanted + ' 張' : '');
     return buildXlsx(S.type, m).then(function (blob) { saveBlob(blob, fileName(S.type, m) + '.xlsx'); }).catch(function (e) { toast('申請已送出，但 Excel 產生失敗：' + (e.message || e) + '。可到「我的申請」重新下載'); });
   }).then(function () {
     S.rows = []; S.photos = []; $('photos').innerHTML = ''; $('rowsBody').innerHTML = '';
-    toast('申請已送出，Excel 已下載'); show('vHome'); return loadUnit();
+    toast(S.edit ? '修改已儲存，Excel 已下載' : '申請已送出，Excel 已下載'); S.edit = null; show('vHome'); return loadUnit();
   }).catch(function (e) {
     var msg = e.message || String(e);
     $('sendMsg').textContent = '';
