@@ -843,6 +843,49 @@ function applyAuthSetup_() {
   sh.appendRow([REVIEW_DASH, '會計後台審核', '', 12, 'Y', new Date(), '2026-11-03 Claude 新增（費用申請審核後台）；密碼空白＝還不能用，請在權限後台設定']);
   return '新增 ' + REVIEW_DASH + '（' + before + ' → ' + sh.getLastRow() + ' 列，備份分頁 ' + bk.getName() + '）';
 }
+/* 2026-11-03 經營者要看畫面：清掉 apply／apply_log／dim_staff 全部資料，放進「1店 台中精明」橫跨 10 月、11 月（訓練費跨第 3、4 季）的假申請。
+   只在編輯器執行（不用重新部署）。正式上線後不要再跑（會清掉真資料）。 */
+function seedDemo_20261103() {
+  var ss = logSheet_().getParent(), U = '1店 台中精明';
+  ['apply', 'apply_log', 'dim_staff'].forEach(function (n) { var sh = ss.getSheetByName(n); if (sh && sh.getLastRow() > 1) sh.deleteRows(2, sh.getLastRow() - 1); });
+  var st = apSheet_('dim_staff', STAFF_HEAD);
+  st.appendRow([U, '王小明', 'Y', new Date(), 'demo']); st.appendRow([U, '李小華', 'Y', new Date(), 'demo']);
+  var sh = apSheet_('apply', AP_HEAD);
+  function d(s) { var p = s.split(/[- :]/).map(Number); return new Date(p[0], p[1] - 1, p[2], p[3] || 9, p[4] || 0, 0); }
+  function row(o) {
+    var pl = { type: o.type, unit: U, who: o.who, date: o.created.slice(0, 10), rows: o.rows, sum: o.amount, sub: o.sub || '', subReason: o.subReason || '', note: o.note || '', summary: o.summary };
+    sh.appendRow([o.id, d(o.created), o.type, o.sub || '', U, o.who, o.period, o.label, o.deadline, o.status, o.amount, o.rows.length, o.summary, JSON.stringify(pl), '[]',
+      o.reviewer || '', o.reviewNote || '', o.reviewedAt || '', '', '', d(o.created), o.notice || '']);
+  }
+  var P = { items: '', category: '', amount: 0, invoice_no: '', note: '', grp: '' };
+  row({ id: 'DEMO1010A', created: '2026-10-10 10:12', type: 'petty', who: '王小明', period: '2026-10-A', label: '2026 年 10 月上半期', deadline: '2026-10-15', status: 'done', amount: 1250, summary: '3 筆 $1,250：雞蛋-全聯、洗碗精-全聯、郵資-郵局',
+    rows: [{ grp: 'a', items: '雞蛋-全聯', category: '5201 進貨食材', amount: 816, invoice_no: 'AB-10233456', note: '' }, { grp: 'a', items: '洗碗精-全聯', category: '6240 雜費', amount: 139, invoice_no: 'AB-10233456', note: '' }, { grp: 'b', items: '郵資-郵局', category: '6206 郵電費', amount: 295, invoice_no: '', note: '掛號 5 件' }] });
+  row({ id: 'DEMO1022A', created: '2026-10-22 15:40', type: 'petty', who: '王小明', period: '2026-10-B', label: '2026 年 10 月下半期', deadline: '2026-10-25', status: 'done', amount: 680, summary: '2 筆 $680：水果-繁昌青果、桶裝瓦斯-大台中瓦斯',
+    rows: [{ grp: 'a', items: '水果-繁昌青果', category: '5201 進貨食材', amount: 380, invoice_no: '', note: '' }, { grp: 'b', items: '桶裝瓦斯-大台中瓦斯', category: '6209 水電費', amount: 300, invoice_no: 'CD-55667788', note: '' }] });
+  row({ id: 'DEMO1102A', created: '2026-11-02 09:05', type: 'petty', who: '王小明', period: '2026-11-A', label: '2026 年 11 月上半期', deadline: '2026-11-15', status: 'done', amount: 452, summary: '1 筆 $452：麵粉/砂糖-全聯',
+    rows: [{ grp: 'a', items: '麵粉/砂糖-全聯', category: '5201 進貨食材', amount: 452, invoice_no: 'AB-11002233', note: '' }] });
+  row({ id: 'DEMO1009B', created: '2026-10-09 11:20', type: 'advance', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-15', status: 'approved', amount: 1740, summary: '3 筆 $1,740：停車費-嘟嘟房、高鐵-台中台北、文具-九乘九', reviewer: '許琇婷', reviewedAt: '2026-10-13 14:02:00', reviewNote: '',
+    rows: [{ items: '停車費-嘟嘟房', invoice_no: '', amount: 120, payee: '王小明', note: '', category: '6204 差旅交通費' }, { items: '高鐵-台中台北來回', invoice_no: '', amount: 1400, payee: '王小明', note: '10/6 體驗中心會議', category: '6204 差旅交通費' }, { items: '文具-九乘九', invoice_no: 'EF-20991122', amount: 220, payee: '王小明', note: '', category: '6240 雜費' }] });
+  row({ id: 'DEMO1103B', created: '2026-11-03 10:30', type: 'advance', who: '李小華', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-15', status: 'rejected', amount: 560, summary: '1 筆 $560：聚餐-鼎泰豐', reviewer: '許琇婷', reviewedAt: '2026-11-03 16:10:00', reviewNote: '聚餐收據請附參加人員名單，並改報職工福利', notice: 'task:DEMO',
+    rows: [{ items: '聚餐-鼎泰豐', invoice_no: 'GH-33445566', amount: 560, payee: '李小華', note: '', category: '6219 職工福利' }] });
+  row({ id: 'DEMO1020C', created: '2026-10-20 16:00', type: 'transfer', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-25', status: 'approved', amount: 1335, summary: '2 筆 $1,335：細砂糖、無鹽奶油', reviewer: '許琇婷', reviewedAt: '2026-10-27 09:30:00',
+    rows: [{ date: '2026-10-12', from: U, to: '3店 台北南京', items: '細砂糖', qty: 1500, price: 0.09, amount: 135 }, { date: '2026-10-18', from: U, to: '2店 台中草悟道', items: '無鹽奶油', qty: 4, price: 300, amount: 1200 }] });
+  row({ id: 'DEMO1103C', created: '2026-11-03 11:15', type: 'transfer', who: '王小明', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-25', status: 'pending', amount: 540, summary: '1 筆 $540：動物性鮮奶油',
+    rows: [{ date: '2026-11-01', from: U, to: '2店 台中草悟道', items: '動物性鮮奶油', qty: 3, price: 180, amount: 540 }] });
+  row({ id: 'DEMO1011D', created: '2026-10-11 14:45', type: 'vendor', sub: '常態', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-15', status: 'approved', amount: 15880, summary: '1 筆 $15,880：永紐｜對帳單 9月', reviewer: '許琇婷', reviewedAt: '2026-10-14 10:00:00',
+    rows: [{ vendor: '永紐', items: '對帳單 9月', invoice_no: '', amount: 15880, note: '', category: '5201 進貨食材' }] });
+  row({ id: 'DEMO1103D', created: '2026-11-03 13:20', type: 'vendor', sub: '非常態', who: '李小華', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-15', status: 'pending', amount: 3200, summary: '1 筆 $3,200：明昕｜送貨單 No.20261102-7', subReason: '萬聖節活動臨時追加包材',
+    rows: [{ vendor: '明昕', items: '送貨單 No.20261102-7', invoice_no: 'JK-77889900', amount: 3200, note: '請 11/15 前匯款', category: '6240 雜費' }] });
+  row({ id: 'DEMO0920E', created: '2026-09-20 17:00', type: 'training', who: '王小明', period: '2026-Q3', label: '2026 年第 3 季（7～9 月）', deadline: '2026-10-15', status: 'approved', amount: 3600, summary: '1 筆 $3,600：翻糖進階班-台北烘焙學苑', reviewer: '許琇婷', reviewedAt: '2026-10-02 11:30:00',
+    rows: [{ items: '翻糖進階班', vendor: '台北烘焙學苑', date: '2026-09-14', payee: '王小明', amount: 3600, invoice_no: 'AB-11223344', note: '', category: '6240 雜費' }] });
+  row({ id: 'DEMO1103E', created: '2026-11-03 14:00', type: 'training', who: '李小華', period: '2026-Q4', label: '2026 年第 4 季（10～12 月）', deadline: '2027-01-15', status: 'pending', amount: 2800, summary: '1 筆 $2,800：咖啡拉花初階-台中咖啡學院',
+    rows: [{ items: '咖啡拉花初階', vendor: '台中咖啡學院', date: '2026-10-28', payee: '李小華', amount: 2800, invoice_no: '', note: '', category: '6240 雜費' }] });
+  var n = sh.getLastRow(), gP = AP_HEAD.indexOf('period') + 1, gD = AP_HEAD.indexOf('deadline') + 1;
+  sh.getRange(2, gP, n - 1, 1).setNumberFormat('@'); sh.getRange(2, gD, n - 1, 1).setNumberFormat('@');
+  try { CacheService.getScriptCache().remove('ap:limits:v1'); } catch (e) { }
+  Logger.log('demo 寫入 %s 筆申請、2 位姓名（1店 台中精明）', n - 1);
+}
+
 /* 第二次授權用（2026-11-03）：在編輯器選這個函式按「執行」→ 允許 Drive（存單據照片）、建四個分頁、補權限中心一列 */
 function authorizeApply() {
   var sh = apSheet_('apply', AP_HEAD); apSheet_('dim_limit', LIMIT_HEAD); apSheet_('dim_staff', STAFF_HEAD); apSheet_('apply_log', APLOG_HEAD);
