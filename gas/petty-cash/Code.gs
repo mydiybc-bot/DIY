@@ -438,7 +438,7 @@ var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API（門市今日交辦） */
 var TZ = 'Asia/Taipei', AUTH_SEC = 600, REVIEW_DASH = 'apply_review', HQ_DASH = 'task_hq';
 var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
-  '9店 桃園中壢', '10店 桃園藝文', '11店 台北遠百信義A13', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
+  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
 var UNIT_DASH = { '出貨中心': 'purchase_dc', '體驗中心': HQ_DASH };
 /* 申請項目：period＝期別規則、scope＝額度算單位還是人、max＝每期幾次（0＝不限）、review＝要不要專人審核、subs＝子類 */
 var AP_TYPES = {
