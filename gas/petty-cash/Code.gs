@@ -456,7 +456,7 @@ var APLOG_HEAD = ['time', 'action', 'id', 'type', 'unit', 'who', 'msg'];
 var AP_STATUS = { pending: '審核中', approved: '已完成', rejected: '已退回', done: '已完成' };   /* 2026-11-03 經營者：零用金「已送出」與審核「已通過」統一顯示「已完成」（代碼不變） */
 var PAYLOAD_MAX = 45000, PHOTO_MAX = 12, ROWS_MAX = 80, NOTE_MAX = 300, WHO_MAX = 20;
 var AP_ACTIONS = {
-  login: apLogin_, me: apMe_, submit: apSubmit_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
+  login: apLogin_, me: apMe_, submit: apSubmit_, update: apUpdate_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
   rv_login: rvLogin_, rv_list: rvList_, rv_get: rvGet_, rv_photo: rvPhoto_, rv_set: rvSet_, rv_staff: rvStaff_, rv_staff_set: rvStaffSet_, rv_export: rvExport_, rv_limits: rvLimits_
 };
 
@@ -605,7 +605,7 @@ function apView_(r, full) {
   var o = { id: r.id, created: r.created.slice(0, 16), type: r.type, typeLabel: (AP_TYPES[r.type] || {}).label || r.type, sub: r.sub, unit: r.unit, who: r.who,
     period: r.period, periodLabel: r.period_label, deadline: r.deadline, status: r.status, statusLabel: AP_STATUS[r.status] || r.status,
     amount: Number(r.amount) || 0, n: Number(r.n) || 0, summary: r.summary, reviewer: r.reviewer, reviewNote: r.review_note, reviewedAt: r.reviewed_at.slice(0, 16),
-    nPhotos: photoIds_(r).length, canDel: canDel_(r) };
+    nPhotos: photoIds_(r).length, canDel: canDel_(r), canEdit: r.deleted !== 'Y' && (r.status === 'pending' || r.status === 'rejected') };
   if (full) { try { o.payload = JSON.parse(r.payload || '{}'); } catch (e) { o.payload = {}; } }
   return o;
 }
@@ -694,6 +694,29 @@ function apSubmit_(b) {
     apLog_('submit', id, type, unit, who, pr.label + ' $' + amount + ' ' + n + ' 筆' + (fids.length ? ' 照片 ' + fids.length : ''));
     return { id: id, period: pr, status: status, statusLabel: AP_STATUS[status], photosSaved: fids.length, photosWanted: photos.length };
   } finally { lock.releaseLock(); }
+}
+/* 2026-11-03 晚經營者：審核中／已退回的申請可以隨時「修改」（審核通過前）。同一筆編號、同一期；改完狀態回到審核中、審核意見清掉；新照片加在原有照片後面 */
+function apUpdate_(b) {
+  var unit = unitAuth_(b), tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
+  if (!r || r.unit !== unit) throw fail_('找不到這筆申請', 'gone');
+  if (r.status !== 'pending' && r.status !== 'rejected') throw fail_(r.status === 'approved' ? '這筆已經審核通過，不能修改' : '這筆不能修改', 'deny');
+  var t = AP_TYPES[r.type], who = apClean_(b.who, WHO_MAX).replace(/\s+/g, '').trim() || r.who;
+  var sub = t.subs ? String(b.sub || r.sub) : '';
+  if (t.subs && t.subs.indexOf(sub) < 0) throw fail_('請選常態或非常態', 'input');
+  var pl = b.payload && typeof b.payload === 'object' ? b.payload : null;
+  if (!pl || !Array.isArray(pl.rows) || !pl.rows.length) throw fail_('還沒有明細', 'input');
+  if (pl.rows.length > ROWS_MAX) throw fail_('明細最多 ' + ROWS_MAX + ' 列', 'input');
+  if (sub === '非常態' && !apClean_(pl.subReason, NOTE_MAX).trim()) throw fail_('非常態請款請填原因', 'input');
+  var payloadStr = JSON.stringify(pl);
+  if (payloadStr.length > PAYLOAD_MAX) throw fail_('明細太長，請分兩次申請', 'input');
+  var photos = Array.isArray(b.photos) ? b.photos.slice(0, PHOTO_MAX) : [], fids = photoIds_(r);
+  if (photos.length) { try { fids = fids.concat(savePhotos_(r.id, r.period, photos)).slice(0, PHOTO_MAX); } catch (e) { apLog_('photo_fail', r.id, r.type, unit, who, errMsg_(e)); } }
+  var amount = Math.round(Number(pl.sum) || 0), summary = apClean_(pl.summary, 120).trim();
+  apPutCols_(tb.sh, AP_HEAD, r._row, { sub: sub, who: who, amount: amount, n: pl.rows.length, summary: summary, payload: payloadStr, photos: JSON.stringify(fids),
+    status: 'pending', reviewer: '', review_note: '', reviewed_at: '', updated: new Date(), notice: '' });
+  SpreadsheetApp.flush();
+  apLog_('update', r.id, r.type, unit, who, r.period_label + ' $' + amount + ' ' + pl.rows.length + ' 筆（原狀態 ' + r.status + '）');
+  return { id: r.id, period: { key: r.period, label: r.period_label, deadline: r.deadline }, status: 'pending', statusLabel: AP_STATUS.pending, photosSaved: fids.length };
 }
 function apDel_(b) {
   var unit = unitAuth_(b), tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
