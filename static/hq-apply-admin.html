@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<!-- 2026-11-03 新建「🗂 申請審核」（總部申請作業的審核後台；經營者交辦）：審核專人用權限中心 apply_review 密碼登入
+     → 待審核／已通過／已退回／全部 分頁，依項目、單位、期別篩選 → 展開看明細與單據照片 → ✅ 通過／↩ 退回（必填原因；退回會交辦到該店「門市今日」）
+     → ⬇ 下載該筆 Excel、📊 匯出某項目某一期所有通過的申請（給會計）；👥 名單：各單位申請人姓名（合併打錯的、停用離職的）；⚙️ 額度：dim_limit 內容與試算表連結。
+     後端＝GAS「零用金報銷_資料庫」rv_* 動作（密碼在後端驗，快取 10 分鐘）。本頁只放 hub 體驗中心區。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>申請審核｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#F7F6F3;color:#2A2320;font-size:14px;line-height:1.55}
+  a{color:#8B3A2A}
+  .mt-header{background:linear-gradient(100deg,#4A3228,#8B5A44);color:#fff;padding:14px 22px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mt-header .mt-wrap{max-width:1180px;margin:0 auto;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mt-header h1{margin:0;font-size:21px;font-weight:800}
+  .mt-header .mt-sub{font-size:13px;opacity:.92}
+  .mt-header .mt-home{font-size:13px;color:#fff;text-decoration:none;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-unit{margin-left:auto;font-size:13px;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:8px;white-space:nowrap}
+  .mt-header .mt-unit button{font-family:inherit;font-size:12px;border:none;background:none;color:#fff;text-decoration:underline;cursor:pointer;padding:0 0 0 6px}
+  .mt-main{max-width:1180px;margin:0 auto;padding:18px 22px 60px}
+  @media(max-width:860px){.mt-main{padding:14px}}
+  .dsb{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 14px;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.55;border:1px solid}
+  .dsb b{font-weight:800;white-space:nowrap}
+  .dsb-auto{background:#F6EFEA;border-color:#E0CCBF;color:#4A3228}
+  .dsb-info{margin-left:auto;border:none;background:none;color:inherit;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-decoration:underline;white-space:nowrap}
+  .dsb-sop{display:none;flex-basis:100%;background:rgba(255,255,255,.78);border-radius:8px;padding:10px 14px;margin-top:4px;color:#3A3A40;font-size:13px}
+  .dsb-sop.open{display:block}
+  .dsb-sop ol,.dsb-sop ul{margin:0;padding-left:20px}
+  @media(max-width:600px){.dsb-info{margin-left:0}}
+  .card{background:#fff;border:1px solid #E1DCD6;border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .card h2{margin:0 0 10px;font-size:17px;color:#4A3228}
+  .fld label{display:block;font-size:13px;color:#6F4E45;font-weight:700;margin-bottom:4px}
+  .fld input,.fld select,.fld textarea{width:100%;font-family:inherit;font-size:15px;padding:8px 10px;border:1px solid #CFC6BF;border-radius:8px;background:#fff}
+  .btn{font-family:inherit;font-size:14px;font-weight:700;border:none;border-radius:8px;padding:9px 16px;cursor:pointer;background:#7B4B36;color:#fff}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:#fff;color:#7B4B36;border:1px solid #C9A99A}
+  .btn.ok{background:#2F5D50}
+  .btn.warn{background:#fff;color:#A3321F;border:1px solid #E3B3A8}
+  .btn.big{font-size:17px;padding:14px 22px}
+  .btn.sm{font-size:12px;padding:4px 10px}
+  .login{max-width:420px;margin:30px auto;text-align:center}
+  .login .fld{text-align:left;margin-bottom:12px}
+  .login .err{color:#C43030;font-size:13px;min-height:18px;margin:6px 0}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .tabs button{font-family:inherit;font-size:14px;font-weight:700;border:1px solid #C9A99A;background:#fff;color:#7B4B36;border-radius:20px;padding:6px 14px;cursor:pointer}
+  .tabs button.on{background:#7B4B36;color:#fff}
+  .tabs button .n{display:inline-block;background:rgba(0,0,0,.12);border-radius:10px;padding:0 7px;margin-left:4px;font-size:12px}
+  .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .filters select{font-family:inherit;font-size:14px;padding:6px 8px;border:1px solid #CFC6BF;border-radius:8px;background:#fff}
+  table.list{width:100%;border-collapse:collapse;font-size:14px}
+  table.list th{background:#F6EFEA;color:#4A3228;text-align:left;padding:7px 8px;font-size:13px;border-bottom:1px solid #E0CCBF;white-space:nowrap}
+  table.list td{padding:7px 8px;border-bottom:1px solid #F0ECE8;vertical-align:top}
+  table.list td.r{text-align:right;white-space:nowrap}
+  table.list tr.sel td{background:#FBF4EE}
+  table.list tr.row{cursor:pointer}
+  .chip{display:inline-block;border-radius:10px;padding:1px 8px;font-size:12px;white-space:nowrap}
+  .chip.pending{background:#FFF4D6;color:#8A5A00}.chip.approved{background:#E3F2EA;color:#2F5D50}.chip.rejected{background:#FDECEA;color:#A3321F}.chip.done{background:#EEF3FA;color:#2F4A6D}
+  .tbl-wrap{overflow-x:auto}
+  @media(max-width:700px){table.list{min-width:720px}}
+  .detail{border:2px solid #C9A99A;border-radius:12px;padding:14px;background:#FFFDFB;margin-top:12px}
+  .detail h3{margin:0 0 8px;font-size:16px;color:#4A3228}
+  .detail .meta{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;color:#6F4E45;margin-bottom:8px}
+  table.det{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px}
+  table.det th{background:#F6EFEA;text-align:left;padding:5px 6px;border-bottom:1px solid #E0CCBF;white-space:nowrap}
+  table.det td{padding:5px 6px;border-bottom:1px solid #F0ECE8}
+  table.det td.r{text-align:right;white-space:nowrap}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .thumbs button{border:1px solid #DDD;background:#fff;border-radius:8px;padding:6px 10px;font-family:inherit;font-size:13px;cursor:pointer}
+  .thumbs img{max-width:100%;max-height:70vh;border:1px solid #DDD;border-radius:8px;display:block;margin-top:6px}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .muted{color:#77706A;font-size:13px}
+  .empty{padding:18px;text-align:center;color:#77706A}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#4A3228;color:#fff;padding:9px 16px;border-radius:10px;font-size:14px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+  .toast[hidden]{display:none}
+  .view[hidden]{display:none}
+  .staff{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+  .staff .u{border:1px solid #E1DCD6;border-radius:10px;padding:10px;background:#fff}
+  .staff .u b{display:block;margin-bottom:6px;color:#4A3228}
+  .staff .p{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:3px 0;border-bottom:1px dashed #EEE;font-size:13px}
+  .staff .p.off{color:#A08E87;text-decoration:line-through}
+  .staff .p span button{font-family:inherit;font-size:11px;border:1px solid #C9A99A;background:#fff;color:#7B4B36;border-radius:8px;padding:1px 6px;cursor:pointer;margin-left:3px}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<script>
+/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
+   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+})();
+/* ===== AUTH-CORE v2 END ===== */
+</script>
+<!-- 2026-10-08 使用說明收合（經營者：更新方式＋頁面說明合併成一個「📖 使用說明」，預設收起，點了才展開）
+     全站共用、本段一字不差：#uhelp 打開時 body 加 uhelp-on，各分頁的說明（.tabhelp）才顯示；收起就全部藏起來 -->
+<style id="uhelpCss">
+details.uhelp{margin:0 0 14px;background:#fff;border:1px solid #E6D8CF;border-radius:10px;font-size:13px}
+details.uhelp>summary{cursor:pointer;list-style:none;padding:8px 14px;font-weight:800;color:#8B3A2A;user-select:none;-webkit-user-select:none}
+details.uhelp>summary::-webkit-details-marker{display:none}
+details.uhelp .uh-tip{font-weight:600;color:#9A8A80;font-size:12px;margin-left:6px}
+details.uhelp .uh-tip::after{content:'▾ 點開看更新方式和怎麼看'}
+details.uhelp[open] .uh-tip::after{content:'▴ 收起'}
+details.uhelp>.uhelp-body{padding:0 12px 12px}
+details.uhelp>.uhelp-body>.dsb,details.uhelp>.uhelp-body>.dsb-wrap,details.uhelp>.uhelp-body>.pg-guide{margin:0 0 8px}
+details.uhelp>.uhelp-body>:last-child{margin-bottom:0}
+body:not(.uhelp-on) .tabhelp{display:none!important}
+@media print{body .tabhelp,details.uhelp{display:none!important}}
+</style>
+<script>
+(function(){
+  document.addEventListener('toggle',function(e){var d=e.target;if(d&&d.id==='uhelp'&&document.body)document.body.classList.toggle('uhelp-on',!!d.open);},true);
+  /* 「最後更新」那一行（#dsbFresh 由各頁檔尾小程式產生；訂位頁是 #dsbTimes）搬到「📖 使用說明」那一列，收起時也看得到（1006 #7：每頁都要看得到最後更新） */
+  function pull(){var u=document.getElementById('uhelp');if(!u)return;var sm=u.querySelector('summary');if(!sm)return;
+    ['dsbFresh','dsbTimes'].forEach(function(id){var el=document.getElementById(id);if(el&&el.parentNode!==sm){el.style.display='inline';el.style.flexBasis='auto';el.style.marginLeft='10px';el.style.fontSize='12px';sm.appendChild(el);}});}
+  function boot(){var u=document.getElementById('uhelp');if(!u)return;pull();try{new MutationObserver(pull).observe(u,{childList:true,subtree:true});}catch(_){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();
+</script>
+
+</head>
+<body>
+<div class="mt-header"><div class="mt-wrap">
+  <a href="hub.html" class="mt-home">⬅ 回首頁</a>
+  <h1>🗂 申請審核</h1>
+  <span class="mt-sub">總部申請作業：代墊款・調撥・廠商款・專業訓練費</span>
+  <span class="mt-unit" id="unitBadge" hidden>審核：<span id="rvName"></span><button type="button" id="logoutBtn">登出</button></span>
+</div></div>
+
+<div class="mt-main">
+  <details class="uhelp" id="uhelp"><summary>📖 使用說明<span class="uh-tip"></span></summary><div class="uhelp-body">
+  <div class="dsb dsb-auto" id="dsb">
+    <b>🟢 即時</b>
+    <span>各單位送出就出現在「待審核」；通過／退回後店長在總部申請作業首頁馬上看得到</span>
+    <button class="dsb-info" type="button" onclick="document.getElementById('dsbSop').classList.toggle('open')">ⓘ 怎麼用</button>
+    <div class="dsb-sop" id="dsbSop">
+      <ol>
+        <li>點一筆展開：看明細、單據照片（點「照片 #1」才載入）、申請人的話。</li>
+        <li>按「✅ 通過」或「↩ 退回」。退回一定要寫原因；1～12 店的退回會自動交辦到那家店的「門市今日・今天要做」，店長修正後可以在截止前重送（退回的不佔額度）。</li>
+        <li>「⬇ Excel」下載這一筆的申請表；「📊 匯出一期總表」把某項目某一期所有通過的申請合成一份給會計。</li>
+        <li>「👥 名單」：各單位申請人姓名（店長在表單上自己加的）。打錯名字用「改名」（申請紀錄會一起改，額度才算得準），離職用「停用」。</li>
+        <li>「⚙️ 額度」：每期次數規則在試算表 dim_limit 分頁，改了 2 分鐘內生效。零用金不用審核，只看得到紀錄。</li>
+      </ol>
+    </div>
+  </div>
+  </div></details>
+
+  <div class="view" id="vLogin" hidden>
+    <div class="card login">
+      <h2>🔐 審核人員密碼</h2>
+      <div class="fld"><label for="lgPw">密碼（權限中心「總部申請作業 審核」）</label><input id="lgPw" type="password" autocomplete="new-password" name="pw-hqreview" data-lpignore="true" data-1p-ignore></div>
+      <div class="fld"><label for="lgName">你的名字（寫在審核紀錄上）</label><input id="lgName" type="text" maxlength="20" placeholder="例：許琇婷"></div>
+      <div class="err" id="lgErr"></div>
+      <button class="btn big" id="lgBtn" type="button" style="width:100%">進入</button>
+    </div>
+  </div>
+
+  <div class="view" id="vMain" hidden>
+    <div class="tabs" id="tabs">
+      <button type="button" data-tab="pending" class="on">⏳ 待審核<span class="n" id="nPending">–</span></button>
+      <button type="button" data-tab="approved">✅ 已通過<span class="n" id="nApproved">–</span></button>
+      <button type="button" data-tab="rejected">↩ 已退回<span class="n" id="nRejected">–</span></button>
+      <button type="button" data-tab="all">全部（含零用金）</button>
+      <button type="button" data-tab="staff">👥 名單</button>
+      <button type="button" data-tab="limits">⚙️ 額度</button>
+    </div>
+    <div class="card" id="listCard">
+      <div class="filters">
+        <select id="fType"><option value="">全部項目</option></select>
+        <select id="fUnit"><option value="">全部單位</option></select>
+        <select id="fPeriod"><option value="">全部期別</option></select>
+        <button class="btn ghost sm" id="reloadBtn" type="button">🔄 重新整理</button>
+        <button class="btn ghost sm" id="exportBtn" type="button">📊 匯出一期總表</button>
+      </div>
+      <div class="tbl-wrap"><table class="list" id="list"><thead><tr><th>送出</th><th>單位</th><th>項目</th><th>期別</th><th>申請人</th><th style="text-align:right">金額</th><th>狀態</th></tr></thead><tbody></tbody></table></div>
+      <div class="empty" id="listEmpty">沒有資料。</div>
+      <div id="detail"></div>
+    </div>
+    <div class="card" id="staffCard" hidden><h2>👥 各單位申請人名單</h2><div class="muted" style="margin-bottom:8px">店長在表單上按「＋ 新增姓名」會加進來。打錯的用「改名」（會把那個人的申請紀錄一起改過來），離職的「停用」。</div><div class="staff" id="staffBox"></div></div>
+    <div class="card" id="limitsCard" hidden><h2>⚙️ 每期額度（試算表 dim_limit）</h2><div id="limitsBox"></div></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+var PC_API = 'https://script.google.com/macros/s/AKfycbwYrgdECSzqFNKp2gQvW9GPVaFcHcU6eFB2cQ6jxZE6gKfqtmtmnMwdLEA6JeSAvcTR/exec';
+var REVIEW_DASH = 'apply_review', AUTH_KEY = 'hqreview_auth';
+var UNITS = ['1 店 精明', '2 店 草悟道', '3 店 南京', '4 店 士林', '5 店 台南 Focus', '6 店 新竹文化', '7 店 新北板橋', '8 店 新北新店',
+  '9 店 中壢', '10 店 藝文', '11 店 吳寶春信義 A13', '12 店 吳寶春高雄 SKM', '出貨中心', '體驗中心'];
+var TYPES = { petty: { label: '零用金', emoji: '🧾' }, advance: { label: '代墊款報銷', emoji: '💳' }, transfer: { label: '調撥申請', emoji: '🔄' }, vendor: { label: '廠商款報銷', emoji: '🏭' }, training: { label: '專業訓練費報銷', emoji: '🎓' } };
+var ORDER = ['petty', 'advance', 'transfer', 'vendor', 'training'];
+var COLS = {
+  petty: [['items', '品項／用途'], ['category', '會計科目'], ['amount', '金額'], ['invoice_no', '發票號碼'], ['note', '備註']],
+  advance: [['items', '付款內容摘要'], ['invoice_no', '發票號碼'], ['amount', '金額'], ['payee', '付款對象'], ['note', '備註']],
+  transfer: [['date', '調撥日期'], ['from', '轉出'], ['to', '轉入'], ['items', '品名'], ['qty', '數量'], ['price', '單價'], ['amount', '小計']],
+  vendor: [['vendor', '廠商'], ['items', '單據種類／單號'], ['invoice_no', '發票號碼'], ['amount', '金額'], ['note', '備註']],
+  training: [['items', '課程／活動'], ['vendor', '主辦單位'], ['date', '上課日期'], ['payee', '參加人'], ['amount', '金額'], ['invoice_no', '發票號碼'], ['note', '備註']]
+};
+var A = { pw: '', name: '', exp: 0 }, S = { tab: 'pending', rows: [], counts: {}, periods: {}, sel: '', app: null };
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { } }
+function toast(t) { var el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(function () { el.hidden = true; }, 2800); }
+function money(n) { return (Number(n) || 0).toLocaleString('en-US'); }
+function unitShort(u) { var m = String(u).match(/^(\d+) 店/); return m ? m[1] + '店' : u; }
+function acctName(c) { return String(c || '').replace(/^[\d-]+\s+/, ''); }
+function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function pcBytes(s) { var n = 0; Array.from(String(s || '')).forEach(function (ch) { n += ch.codePointAt(0) <= 0x7E ? 1 : 2; }); return n; }
+function loadScript(src) { return new Promise(function (ok, no) { if (document.querySelector('script[src="' + src + '"]')) return ok(); var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { no(new Error('程式庫載入失敗')); }; document.head.appendChild(s); }); }
+function show(v) { ['vLogin', 'vMain'].forEach(function (x) { $(x).hidden = x !== v; }); }
+function postApi(body, ms) {
+  var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function () { ctl.abort(); }, ms || 120000) : 0;
+  return fetch(PC_API, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, signal: ctl ? ctl.signal : undefined }).then(function (r) { return r.json(); }).finally(function () { clearTimeout(tm); });
+}
+function api(body, ms) {
+  body.pw = A.pw; body.who = A.name;
+  return postApi(body, ms).then(function (r) {
+    if (r && !r.ok && r.code === 'auth') { logout('密碼已失效，請重新登入'); throw new Error(r.msg); }
+    if (!r || !r.ok) throw new Error((r && r.msg) || '連線失敗');
+    return r;
+  });
+}
+function loadAuth() { try { var o = JSON.parse(lsGet(AUTH_KEY) || 'null'); if (o && o.pw && o.exp > Date.now()) { A = o; return true; } } catch (e) { } return false; }
+function initLogin() {
+  var inp = $('lgPw'); inp.value = ''; setTimeout(function () { inp.value = ''; }, 60); setTimeout(function () { inp.value = ''; }, 300);
+  $('lgName').value = lsGet('hqreview_name');
+  var busy = false;
+  function go() {
+    var v = inp.value.trim(), nm = $('lgName').value.trim(), err = $('lgErr'), btn = $('lgBtn');
+    if (!nm) { err.textContent = '請填名字'; return; }
+    if (!v || busy) return;
+    busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = ''; err.style.color = '#C43030';
+    window.__dashAuth.verify(REVIEW_DASH, v, function (r) {
+      busy = false; btn.disabled = false; btn.textContent = '進入';
+      if (r && r.ok) { A = { pw: v, name: nm, exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }; lsSet(AUTH_KEY, JSON.stringify(A)); lsSet('hqreview_name', nm); inp.value = ''; enter(); }
+      else { var m = (r && r.error) || '驗證失敗'; if (m.indexOf('密碼錯誤') > -1) { m = '審核密碼不對'; inp.value = ''; } if (m.indexOf('查無') > -1) m = '權限中心還沒有「apply_review」這一列：請先在 GAS 執行 authorizeApply，再到權限後台設密碼'; err.textContent = m; inp.focus(); }
+    }, function (t) { err.style.color = '#6F4E45'; err.textContent = t; });
+  }
+  $('lgBtn').addEventListener('click', go);
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+  $('logoutBtn').addEventListener('click', function () { logout(); });
+}
+function logout(msg) { A = { pw: '', name: '', exp: 0 }; lsDel(AUTH_KEY); $('unitBadge').hidden = true; show('vLogin'); if (msg) $('lgErr').textContent = msg; }
+function enter() {
+  $('rvName').textContent = A.name; $('unitBadge').hidden = false; show('vMain');
+  $('fType').innerHTML = '<option value="">全部項目</option>' + ORDER.map(function (k) { return '<option value="' + k + '">' + TYPES[k].emoji + ' ' + TYPES[k].label + '</option>'; }).join('');
+  $('fUnit').innerHTML = '<option value="">全部單位</option>' + UNITS.map(function (u) { return '<option>' + esc(u) + '</option>'; }).join('');
+  setTab('pending');
+}
+function setTab(tab) {
+  S.tab = tab; S.sel = ''; $('detail').innerHTML = '';
+  $('tabs').querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === tab); });
+  $('listCard').hidden = tab === 'staff' || tab === 'limits'; $('staffCard').hidden = tab !== 'staff'; $('limitsCard').hidden = tab !== 'limits';
+  if (tab === 'staff') loadStaff(); else if (tab === 'limits') loadLimits(); else loadList();
+}
+function loadList() {
+  var tb = $('list').querySelector('tbody'); tb.innerHTML = '<tr><td colspan="7" class="muted">讀取中…</td></tr>'; $('listEmpty').style.display = 'none';
+  return api({ action: 'rv_list', status: S.tab === 'all' ? 'all' : S.tab, type: $('fType').value, unit: $('fUnit').value, period: $('fPeriod').value }).then(function (r) {
+    S.rows = r.rows; S.counts = r.counts; S.periods = r.periods;
+    $('nPending').textContent = r.counts.pending; $('nApproved').textContent = r.counts.approved; $('nRejected').textContent = r.counts.rejected;
+    var cur = $('fPeriod').value, keys = Object.keys(r.periods).sort().reverse();
+    $('fPeriod').innerHTML = '<option value="">全部期別</option>' + keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(r.periods[k]) + '</option>'; }).join('');
+    renderList();
+  }).catch(function (e) { tb.innerHTML = ''; $('listEmpty').textContent = '讀不到：' + (e.message || e); $('listEmpty').style.display = ''; });
+}
+function renderList() {
+  var tb = $('list').querySelector('tbody');
+  tb.innerHTML = S.rows.map(function (a) {
+    return '<tr class="row' + (a.id === S.sel ? ' sel' : '') + '" data-id="' + esc(a.id) + '"><td>' + esc(a.created) + '</td><td>' + esc(a.unit) + '</td><td>' + TYPES[a.type].emoji + ' ' + esc(a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '</td><td>' + esc(a.who) + '</td><td class="r">$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆' + (a.nPhotos ? '・📷' + a.nPhotos : '') + '</span></td><td><span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="muted">' + esc(a.reviewNote) + '</div>' : '') + '</td></tr>';
+  }).join('');
+  $('listEmpty').textContent = '沒有資料。'; $('listEmpty').style.display = S.rows.length ? 'none' : '';
+}
+function openDetail(id) {
+  S.sel = id; renderList(); var box = $('detail'); box.innerHTML = '<div class="detail muted">讀取中…</div>';
+  api({ action: 'rv_get', id: id }).then(function (r) { S.app = r.app; renderDetail(); box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }).catch(function (e) { box.innerHTML = '<div class="detail">讀不到：' + esc(e.message || e) + '</div>'; });
+}
+function renderDetail() {
+  var a = S.app, pl = a.payload || {}, cols = COLS[a.type] || [], rows = pl.rows || [];
+  var th = '<tr><th>#</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
+  var trs = rows.map(function (r, k) { return '<tr><td>' + (k + 1) + '</td>' + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>'; }).join('');
+  var photos = (a.photos || []).map(function (_, k) { return '<button type="button" data-photo="' + k + '">📷 照片 #' + (k + 1) + '</button>'; }).join('');
+  var canReview = a.type !== 'petty';
+  $('detail').innerHTML = '<div class="detail"><h3>' + TYPES[a.type].emoji + ' ' + esc(a.typeLabel) + (a.sub ? '（' + esc(a.sub) + '）' : '') + '｜' + esc(a.unit) + '｜' + esc(a.who) + '　<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span></h3>' +
+    '<div class="meta"><span>編號 ' + esc(a.id) + '</span><span>送出 ' + esc(a.created) + '</span><span>算 <b>' + esc(a.periodLabel) + '</b>（截止 ' + esc(a.deadline) + '）</span><span>合計 <b>$' + money(a.amount) + '</b>・' + a.n + ' 筆</span>' + (a.reviewer ? '<span>審核 ' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</div>' +
+    (pl.note ? '<div style="margin-bottom:8px">💬 申請人：' + esc(pl.note) + '</div>' : '') + (pl.subReason ? '<div style="margin-bottom:8px">非常態原因：' + esc(pl.subReason) + '</div>' : '') +
+    (a.reviewNote ? '<div style="margin-bottom:8px;color:#A3321F">審核意見：' + esc(a.reviewNote) + '</div>' : '') +
+    '<div class="tbl-wrap"><table class="det"><thead>' + th + '</thead><tbody>' + trs + '</tbody></table></div>' +
+    (photos ? '<div class="thumbs" id="thumbs">' + photos + '</div><div id="photoBox"></div>' : '<div class="muted" style="margin-bottom:8px">（沒有照片）</div>') +
+    '<div class="actions">' + (canReview ? '<button class="btn ok" type="button" data-set="approved"' + (a.status === 'approved' ? ' disabled' : '') + '>✅ 通過</button><button class="btn warn" type="button" data-set="rejected"' + (a.status === 'rejected' ? ' disabled' : '') + '>↩ 退回</button>' + (a.status !== 'pending' ? '<button class="btn ghost" type="button" data-set="pending">改回審核中</button>' : '') : '<span class="muted">零用金不審核</span>') +
+    '<button class="btn ghost" type="button" id="dlBtn">⬇ Excel</button><span class="muted" id="detMsg"></span></div></div>';
+}
+function setStatus(st, btn) {
+  var a = S.app, note = '';
+  if (st === 'rejected') { note = prompt('退回原因（會寫給店長看，並交辦到門市今日）：'); if (note == null) return; note = note.trim(); if (!note) { toast('退回一定要寫原因'); return; } }
+  else if (st === 'approved') { if (!confirm('通過這筆「' + a.typeLabel + '｜' + a.unit + '｜$' + money(a.amount) + '」？通過後店長就不能刪除。')) return; note = prompt('給店長的話（可空白）：') || ''; }
+  else { note = prompt('改回審核中的原因（可空白）：') || ''; }
+  btn.disabled = true; $('detMsg').textContent = '儲存中…';
+  api({ action: 'rv_set', id: a.id, status: st, note: note }).then(function (r) {
+    var n = r.notice || '';
+    toast(r.statusLabel + (st === 'rejected' ? (n.indexOf('task:') === 0 ? '，已交辦到門市今日' : n === 'nostore' ? '（' + a.unit + ' 沒有門市今日，只在申請頁看得到）' : n.indexOf('fail:') === 0 ? '，但交辦失敗：' + n.slice(5) : '') : ''));
+    return loadList();
+  }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
+}
+document.addEventListener('click', function (e) {
+  var t = e.target.closest ? e.target.closest('[data-tab],[data-id],[data-photo],[data-set],#dlBtn') : null; if (!t) return;
+  if (t.dataset.tab) setTab(t.dataset.tab);
+  else if (t.dataset.id) openDetail(t.dataset.id);
+  else if (t.dataset.photo != null) showPhoto(+t.dataset.photo, t);
+  else if (t.dataset.set) setStatus(t.dataset.set, t);
+  else if (t.id === 'dlBtn') dlOne(t);
+});
+function showPhoto(k, btn) {
+  var box = $('photoBox'); box.innerHTML = '<div class="muted">載入照片…</div>'; btn.disabled = true;
+  api({ action: 'rv_photo', id: S.app.id, k: k }).then(function (r) { box.innerHTML = '<img src="data:' + r.mt + ';base64,' + r.img + '" alt="照片 ' + (k + 1) + '">'; }).catch(function (e) { box.innerHTML = '<div class="muted">載入失敗：' + esc(e.message || e) + '</div>'; }).finally(function () { btn.disabled = false; });
+}
+function dlOne(btn) {
+  var a = S.app, m = a.payload; m.type = a.type; m.unit = a.unit; m.who = a.who; m.period = a.periodLabel; m.sub = a.sub;
+  btn.disabled = true;
+  buildXlsx(a.type, m).then(function (blob) { saveBlob(blob, fileName(a.type, m) + '.xlsx'); }).catch(function (e) { toast('Excel 失敗：' + (e.message || e)); }).finally(function () { btn.disabled = false; });
+}
+$('reloadBtn').addEventListener('click', loadList);
+['fType', 'fUnit', 'fPeriod'].forEach(function (id) { $(id).addEventListener('change', loadList); });
+$('exportBtn').addEventListener('click', function () {
+  var type = $('fType').value, pe = $('fPeriod').value;
+  if (!type || !pe) { toast('請先在上面選「項目」和「期別」再匯出'); return; }
+  var btn = this; btn.disabled = true;
+  api({ action: 'rv_export', type: type, period: pe }).then(function (r) {
+    if (!r.apps.length) { toast('這一期沒有' + (type === 'petty' ? '已送出' : '已通過') + '的' + TYPES[type].label); return; }
+    return buildSummary(type, r).then(function (blob) { saveBlob(blob, TYPES[type].label + '總表_' + r.label.replace(/\s/g, '') + '.xlsx'); toast('已匯出 ' + r.apps.length + ' 筆申請'); });
+  }).catch(function (e) { toast('匯出失敗：' + (e.message || e)); }).finally(function () { btn.disabled = false; });
+});
+/* 名單 */
+function loadStaff() {
+  $('staffBox').innerHTML = '<div class="muted">讀取中…</div>';
+  api({ action: 'rv_staff' }).then(function (r) {
+    var by = {}; r.staff.forEach(function (s) { (by[s.unit] = by[s.unit] || []).push(s); });
+    $('staffBox').innerHTML = UNITS.map(function (u) {
+      var ps = by[u] || [];
+      return '<div class="u"><b>' + esc(u) + '</b>' + (ps.length ? ps.map(function (p) { return '<div class="p' + (p.active ? '' : ' off') + '"><span>' + esc(p.name) + '</span><span>' + (p.active ? '<button type="button" data-rename="' + esc(u) + '|' + esc(p.name) + '">改名</button><button type="button" data-off="' + esc(u) + '|' + esc(p.name) + '">停用</button>' : '<button type="button" data-on="' + esc(u) + '|' + esc(p.name) + '">啟用</button>') + '</span></div>'; }).join('') : '<div class="muted">還沒有人</div>') + '</div>';
+    }).join('');
+  }).catch(function (e) { $('staffBox').innerHTML = '<div class="muted">讀不到：' + esc(e.message || e) + '</div>'; });
+}
+$('staffBox').addEventListener('click', function (e) {
+  var t = e.target; if (!t.dataset) return;
+  var v = t.dataset.rename || t.dataset.off || t.dataset.on; if (!v) return;
+  var p = v.split('|'), body = { action: 'rv_staff_set', unit: p[0], name: p[1] };
+  if (t.dataset.rename) { var to = prompt('「' + p[1] + '」改成：', p[1]); if (!to || to.trim() === p[1]) return; body.rename = to.trim(); }
+  else body.active = !!t.dataset.on;
+  t.disabled = true;
+  api(body).then(function () { toast('已更新'); loadStaff(); }).catch(function (e2) { toast('失敗：' + (e2.message || e2)); t.disabled = false; });
+});
+function loadLimits() {
+  $('limitsBox').innerHTML = '<div class="muted">讀取中…</div>';
+  api({ action: 'rv_limits' }).then(function (r) {
+    $('limitsBox').innerHTML = '<div class="tbl-wrap"><table class="list"><thead><tr><th>項目</th><th>子類</th><th>單位</th><th>算誰</th><th>每期次數</th><th>說明</th></tr></thead><tbody>' +
+      r.limits.map(function (l) { return '<tr><td>' + esc((TYPES[l.type] || {}).label || l.type) + '</td><td>' + esc(l.sub || '—') + '</td><td>' + esc(l.unit === '*' ? '全部單位' : l.unit) + '</td><td>' + (l.scope === 'person' ? '每人' : '每單位') + '</td><td>' + (Number(l.max) === 0 ? '不限' : l.max) + '</td><td>' + esc(l.note) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+      '<div class="muted" style="margin-top:8px">期別規則（零用金 15／25、代墊款與廠商款 15、調撥 25、訓練費每季下月 15）寫在程式裡；次數在 <a href="' + esc(r.url) + '" target="_blank" rel="noopener">試算表 dim_limit 分頁</a> 改，2 分鐘內生效。</div>';
+  }).catch(function (e) { $('limitsBox').innerHTML = '<div class="muted">讀不到：' + esc(e.message || e) + '</div>'; });
+}
+function saveBlob(blob, name) { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
+function rocDate(d) { var p = String(d).split('-'); return (+p[0] - 1911) + '/' + p[1] + '/' + p[2]; }
+function fileName(type, m) {
+  var u = String(m.unit || '').replace(/\s+/g, ''), d = String(m.date || today()).replace(/-/g, '');
+  if (type === 'transfer') return d.slice(0, 6) + '-' + unitShort(m.unit) + '調撥單';
+  return { petty: '零用金申請表', advance: '代墊款申請表', vendor: '廠商款報銷申請表' + (m.sub ? '_' + m.sub : ''), training: '專業訓練費申請表' }[type] + '_' + u + '_' + (m.who || '') + '_' + d;
+}
+/* Excel：單筆＝跟 hq-apply.html 相同版型（複製自該頁 2026-11-03）；總表＝一期所有申請合成一張清單 */
+var XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+function xlHelpers(ws, FN) {
+  var F = { name: FN, size: 12 }, B = { name: FN, size: 12, bold: true }, thin = { style: 'thin' }, box = { top: thin, left: thin, bottom: thin, right: thin };
+  return { F: F, B: B, box: box,
+    cell: function (r, c, v, font, align, border) { var x = ws.getCell(r, c); x.value = v; x.font = font || F; x.alignment = Object.assign({ vertical: 'middle' }, align || {}); if (border !== false) x.border = box; return x; },
+    bd: function (r, c) { ws.getCell(r, c).border = box; } };
+}
+window.buildXlsx = function (type, m) {
+  return loadScript(XLSX_URL).then(function () {
+    var wb = new ExcelJS.Workbook();
+    if (type === 'petty') buildPetty(wb, m); else if (type === 'transfer') buildTransfer(wb, m); else buildExpense(wb, m, type);
+    return wb.xlsx.writeBuffer();
+  }).then(function (buf) { return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); });
+};
+function buildPetty(wb, m) {
+  var ws = wb.addWorksheet('零用金申請表', { pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } } });
+  var catW = Math.max.apply(null, [pcBytes('會計科目')].concat(m.rows.map(function (r) { return pcBytes(acctName(r.category)); })));
+  ws.columns = [{ width: 8 }, { width: 40 }, { width: Math.ceil(catW * 1.1) + 2 }, { width: 11 }, { width: 15 }, { width: 30 }];
+  var FN = '新細明體', h = xlHelpers(ws, FN), cell = h.cell, bd = h.bd, F = h.F, B = h.B, HEAD_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF6F1' } };
+  ws.mergeCells('A1:F1'); cell(1, 1, '自己做各店零用金申請表', { name: FN, size: 18, bold: true }, { horizontal: 'center' }, false); ws.getRow(1).height = 32;
+  cell(3, 1, '請款\n單位', B, { horizontal: 'center', wrapText: true }); ws.mergeCells('B3:C3'); cell(3, 2, m.unit + '　' + m.who); bd(3, 3);
+  cell(3, 4, '申請日期', B, { horizontal: 'center' }); ws.mergeCells('E3:F3'); cell(3, 5, rocDate(m.date)); bd(3, 6);
+  ws.getRow(3).height = 36;
+  ['編碼', '品項／用途', '會計科目', '金額', '發票號碼', '備註'].forEach(function (x, i) { var c = cell(5, i + 1, x, B, { horizontal: 'center' }); c.fill = HEAD_FILL; });
+  ws.getRow(5).height = 24;
+  var r0 = 6, no = 0;
+  m.rows.forEach(function (r, k) {
+    var row = r0 + k, first = !k || m.rows[k - 1].grp !== r.grp;
+    if (first) { no++; cell(row, 1, no, F, { horizontal: 'center' }); var n = 1; while (k + n < m.rows.length && m.rows[k + n].grp === r.grp) n++; if (n > 1) ws.mergeCells(row, 1, row + n - 1, 1); } else bd(row, 1);
+    cell(row, 2, r.items, F, { wrapText: true });
+    cell(row, 3, acctName(r.category));
+    var a = cell(row, 4, Number(r.amount) || 0, F, { horizontal: 'right' }); a.numFmt = '#,##0';
+    cell(row, 5, r.invoice_no || null, F, { horizontal: 'center' });
+    cell(row, 6, r.note || null, { name: FN, size: 10 }, { wrapText: true });
+    ws.getRow(row).height = 22;
+  });
+  var last = r0 + m.rows.length - 1, tr = last + 1;
+  ws.mergeCells(tr, 1, tr, 3); cell(tr, 1, '合　　計', B, { horizontal: 'center' }); for (var i = 2; i <= 3; i++) bd(tr, i);
+  var t = cell(tr, 4, { formula: 'SUM(D' + r0 + ':D' + last + ')', result: m.sum }, { name: FN, size: 13, bold: true }, { horizontal: 'right' }); t.numFmt = '#,##0';
+  cell(tr, 5, m.rows.length + ' 筆', F, { horizontal: 'center' }); bd(tr, 6);
+  ws.getRow(tr).height = 26;
+  ws.pageSetup.printArea = 'A1:F' + tr;
+}
+function buildExpense(wb, m, type) {
+  var ws = wb.addWorksheet('A4格式', { pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true } });
+  ws.columns = [{ width: 24 }, { width: 8 }, { width: 15 }, { width: 11 }, { width: 11 }, { width: 24 }];
+  var FN = '標楷體', h = xlHelpers(ws, FN), cell = h.cell, bd = h.bd, F = h.F, B = h.B;
+  var title = { advance: '自己做代墊款及其他費用申請表', vendor: '自己做廠商款報銷申請表' + (m.sub ? '（' + m.sub + '）' : ''), training: '自己做專業訓練費報銷申請表' }[type];
+  var d = String(m.date || today()).split('-');
+  ws.mergeCells('A1:F1'); cell(1, 1, title, { name: FN, size: 20, bold: true }, { horizontal: 'center' }, false); ws.getRow(1).height = 30;
+  cell(2, 1, '請款單位'); ws.mergeCells('B2:E2'); cell(2, 2, m.unit + '　' + m.who + (m.period ? '　（' + m.period + '）' : ''), B); for (var i = 3; i <= 5; i++) bd(2, i);
+  cell(2, 6, d[0] + ' 年  ' + Number(d[1]) + ' 月  ' + Number(d[2]) + ' 日', F, { horizontal: 'right' });
+  var heads = type === 'vendor' ? ['廠商／單據', '編碼', '發票號碼', '金額', '付款對象', '備註'] : type === 'training' ? ['課程／活動', '編碼', '發票號碼', '金額', '參加人', '備註'] : ['付款內容摘要', '編碼', '發票號碼', '金額', '付款對象', '備註'];
+  heads.forEach(function (x, i) { cell(3, i + 1, x, B, { horizontal: 'center' }); });
+  var row = 4, total = 0, isAdv = type === 'advance';
+  m.rows.forEach(function (r, k) {
+    var desc = type === 'vendor' ? (r.vendor + '｜' + r.items) : type === 'training' ? (r.items + (r.vendor ? '-' + r.vendor : '') + (r.date ? '（' + r.date + '）' : '')) : r.items;
+    var payee = type === 'vendor' ? r.vendor : (r.payee || m.who);
+    cell(row, 1, desc, F, { wrapText: true }); cell(row, 2, k + 1, F, { horizontal: 'center' }); cell(row, 3, r.invoice_no || null, F, { horizontal: 'center' });
+    var a = cell(row, 4, Number(r.amount) || 0, F, { horizontal: 'right' }); a.numFmt = '#,##0';
+    cell(row, 5, payee, F, { horizontal: 'center' }); cell(row, 6, r.note || null, { name: FN, size: 10 }, { wrapText: true });
+    total += Number(r.amount) || 0; row++;
+  });
+  var minRow = isAdv ? 22 : Math.max(row, 15);
+  while (row <= minRow) { for (var c = 1; c <= 6; c++) bd(row, c); if (isAdv) cell(row, 5, m.who, F, { horizontal: 'center' }); row++; }
+  if (isAdv) {
+    ws.mergeCells('A23:F23'); cell(23, 1, '廠商款請統一填寫在下方，上方為員工代墊款及旅費填寫使用', B, { horizontal: 'center' }); for (var c2 = 2; c2 <= 6; c2++) bd(23, c2);
+    for (var vr = 24; vr <= 26; vr++) for (var c3 = 1; c3 <= 6; c3++) bd(vr, c3);
+    cell(27, 1, '個人代墊款', B, { horizontal: 'center' }); ws.mergeCells('B27:C27'); var tt = cell(27, 2, { formula: 'SUM(D4:D22)', result: total }, B, { horizontal: 'center' }); tt.numFmt = '#,##0'; bd(27, 3);
+    ws.mergeCells('D27:E27'); cell(27, 4, '廠商款', B, { horizontal: 'center' }); bd(27, 5); var vt = cell(27, 6, { formula: 'SUM(D24:D26)', result: 0 }, B, { horizontal: 'center' }); vt.numFmt = '#,##0';
+    ws.mergeCells('A28:F28'); cell(28, 1, '註: 1.發票及收據請務必於右上角編碼（從 1 開始），以利辨識', F, {}, false);
+    ws.mergeCells('A29:F29'); cell(29, 1, '      2.個人請款於每月25日統一發放；不需填寫付款時間。', F, {}, false);
+    ws.mergeCells('A30:F30'); cell(30, 1, '      3.廠商款於每月15日統一發放；如果有其他需要付款的日期，可以在備註中提出。', F, {}, false);
+    if (m.note) { ws.mergeCells('A31:F31'); cell(31, 1, '申請人附註：' + m.note, F, { wrapText: true }, false); }
+    ws.pageSetup.printArea = 'A1:F31';
+  } else {
+    ws.mergeCells(row, 1, row, 3); cell(row, 1, '合　　計', B, { horizontal: 'center' }); bd(row, 2); bd(row, 3);
+    var t2 = cell(row, 4, { formula: 'SUM(D4:D' + (row - 1) + ')', result: total }, { name: FN, size: 13, bold: true }, { horizontal: 'right' }); t2.numFmt = '#,##0';
+    cell(row, 5, m.rows.length + ' 筆', F, { horizontal: 'center' }); bd(row, 6);
+    var n1 = row + 1;
+    ws.mergeCells(n1, 1, n1, 6); cell(n1, 1, '註: 1.單據請務必於右上角編碼（從 1 開始），以利辨識', F, {}, false);
+    ws.mergeCells(n1 + 1, 1, n1 + 1, 6); cell(n1 + 1, 1, type === 'vendor' ? '      2.廠商款於每月15日統一發放；需要其他付款日期請寫在備註。' + (m.subReason ? '　非常態原因：' + m.subReason : '') : '      2.專業訓練費每季每人申請一次，下一季第一個月 15 日前送出。', F, {}, false);
+    if (m.note) { ws.mergeCells(n1 + 2, 1, n1 + 2, 6); cell(n1 + 2, 1, '申請人附註：' + m.note, F, { wrapText: true }, false); }
+    ws.pageSetup.printArea = 'A1:F' + (n1 + 2);
+  }
+}
+function buildTransfer(wb, m) {
+  var ws = wb.addWorksheet('工作表1');
+  ws.columns = [{ width: 12 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 24 }, { width: 8 }, { width: 10 }, { width: 10 }];
+  var FN = '新細明體', h = xlHelpers(ws, FN), cell = h.cell, F = h.F, B = h.B;
+  ['調撥日期', '申請人', '轉出門市', '轉入門市', '品名', '數量', '單價', '小計'].forEach(function (x, i) { cell(1, i + 1, x, B, { horizontal: 'center' }); });
+  m.rows.forEach(function (r, k) {
+    var row = k + 2, p = String(r.date || '').split('-');
+    var dc = cell(row, 1, p.length === 3 ? new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])) : null); dc.numFmt = 'yyyy/m/d';
+    cell(row, 2, m.who); cell(row, 3, unitShort(r.from)); cell(row, 4, unitShort(r.to)); cell(row, 5, r.items);
+    cell(row, 6, Number(r.qty) || 0, F, { horizontal: 'right' }); cell(row, 7, Number(r.price) || 0, F, { horizontal: 'right' });
+    var s = cell(row, 8, { formula: 'F' + row + '*G' + row, result: Number(r.amount) || 0 }, F, { horizontal: 'right' }); s.numFmt = '#,##0.0';
+  });
+  var last = m.rows.length + 1, tr = last + 1;
+  ws.mergeCells(tr, 1, tr, 7); cell(tr, 1, '合計', B, { horizontal: 'right' });
+  var t = cell(tr, 8, { formula: 'SUM(H2:H' + last + ')', result: m.sum }, B, { horizontal: 'right' }); t.numFmt = '#,##0.0';
+  if (m.note) cell(tr + 1, 1, '附註：' + m.note, F, {}, false);
+}
+/* 一期總表：第一張「清單」（每筆申請一列）＋第二張「明細」（每列一筆明細，帶單位、申請人）；調撥另加第三張＝各店調撥單合併（8 欄，給月底 build.py） */
+function buildSummary(type, r) {
+  return loadScript(XLSX_URL).then(function () {
+    var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('清單'), FN = '新細明體', h = xlHelpers(ws, FN), cell = h.cell, F = h.F, B = h.B;
+    ws.columns = [{ width: 18 }, { width: 12 }, { width: 12 }, { width: 8 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 40 }];
+    ws.mergeCells('A1:H1'); cell(1, 1, TYPES[type].label + '總表｜' + r.label, { name: FN, size: 16, bold: true }, { horizontal: 'center' }, false);
+    ['送出', '單位', '申請人', '筆數', '金額', '狀態', '編號', '摘要'].forEach(function (x, i) { cell(3, i + 1, x, B, { horizontal: 'center' }); });
+    var total = 0;
+    r.apps.forEach(function (a, k) {
+      var row = 4 + k; cell(row, 1, a.created); cell(row, 2, unitShort(a.unit)); cell(row, 3, a.who); cell(row, 4, a.n, F, { horizontal: 'center' });
+      var c = cell(row, 5, a.amount, F, { horizontal: 'right' }); c.numFmt = '#,##0'; cell(row, 6, a.statusLabel + (a.sub ? '（' + a.sub + '）' : '')); cell(row, 7, a.id); cell(row, 8, a.summary, { name: FN, size: 10 }, { wrapText: true });
+      total += a.amount;
+    });
+    var tr = 4 + r.apps.length; ws.mergeCells(tr, 1, tr, 4); cell(tr, 1, '合計', B, { horizontal: 'center' }); var t = cell(tr, 5, { formula: 'SUM(E4:E' + (tr - 1) + ')', result: total }, B, { horizontal: 'right' }); t.numFmt = '#,##0';
+    var cols = COLS[type], wd = wb.addWorksheet('明細'), h2 = xlHelpers(wd, FN);
+    wd.columns = [{ width: 12 }, { width: 10 }].concat(cols.map(function (c) { return { width: c[0] === 'items' ? 36 : c[0] === 'note' ? 24 : 12 }; }));
+    ['單位', '申請人'].concat(cols.map(function (c) { return c[1]; })).forEach(function (x, i) { h2.cell(1, i + 1, x, h2.B, { horizontal: 'center' }); });
+    var ri = 2;
+    r.apps.forEach(function (a) { (a.payload.rows || []).forEach(function (x) { h2.cell(ri, 1, unitShort(a.unit)); h2.cell(ri, 2, a.who); cols.forEach(function (c, j) { var v = x[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; var cc = h2.cell(ri, j + 3, num ? (Number(v) || 0) : (v || null), h2.F, num ? { horizontal: 'right' } : { wrapText: true }); if (c[0] === 'amount') cc.numFmt = '#,##0.0'; }); ri++; }); });
+    if (type === 'transfer') {
+      var wt = wb.addWorksheet('調撥單合併'), h3 = xlHelpers(wt, FN);
+      wt.columns = [{ width: 12 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 24 }, { width: 8 }, { width: 10 }, { width: 10 }];
+      ['調撥日期', '申請人', '轉出門市', '轉入門市', '品名', '數量', '單價', '小計'].forEach(function (x, i) { h3.cell(1, i + 1, x, h3.B, { horizontal: 'center' }); });
+      var rw = 2;
+      r.apps.forEach(function (a) { (a.payload.rows || []).forEach(function (x) { var p = String(x.date || '').split('-'); var dc = h3.cell(rw, 1, p.length === 3 ? new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])) : null); dc.numFmt = 'yyyy/m/d'; h3.cell(rw, 2, a.who); h3.cell(rw, 3, unitShort(x.from)); h3.cell(rw, 4, unitShort(x.to)); h3.cell(rw, 5, x.items); h3.cell(rw, 6, Number(x.qty) || 0); h3.cell(rw, 7, Number(x.price) || 0); var s = h3.cell(rw, 8, { formula: 'F' + rw + '*G' + rw, result: Number(x.amount) || 0 }); s.numFmt = '#,##0.0'; rw++; }); });
+    }
+    return wb.xlsx.writeBuffer();
+  }).then(function (buf) { return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); });
+}
+function startApp() { initLogin(); if (loadAuth()) enter(); else { show('vLogin'); window.__dashAuth.warm(); setTimeout(function () { $('lgPw').focus(); }, 150); } }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startApp); else startApp();
+</script>
+</body>
+</html>
