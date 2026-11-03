@@ -223,6 +223,11 @@ window.SpoonHint=(function(){
   #tab-apply .ap-semi table{min-width:560px}
   #tab-apply .ap-semi td input[data-sf=q]{min-width:78px}
   #tab-apply .ap-semi td input[data-sf=u]{min-width:58px}
+  /* 2026-11-03 半成品點標題伸縮（比照用料表） */
+  #tab-apply .ap-semi-h{cursor:pointer;user-select:none}
+  #tab-apply .ap-semi-h:hover{background:#E6F2EF}
+  #tab-apply .ap-semi-h .ap-muted{font-weight:400}
+  #tab-apply .ap-semi.ap-fold .ap-semi-b{display:none}
   #tab-apply .ap-tier{font-variant-numeric:tabular-nums;white-space:nowrap;color:#2E2320;font-size:13px;padding-top:9px}
   /* 新增食材/器模具（19 欄，橫向捲動、表頭凍結、品項欄凍結） */
   #tab-apply table{width:100%;border-collapse:collapse;font-size:13px}
@@ -2592,7 +2597,7 @@ function ckBoxHTML(l,i){return '<div data-ckbox="'+i+'">'+ckBoxInner(l,i)+'</div
 function ckGo(go){var m,el=null;
   if((m=go.match(/^n(\d+)$/)))el=document.querySelector('#apRoot tr[data-n2="'+m[1]+'"]');
   if(!el&&(m=go.match(/^[ln](\d+)$/)))el=t1Show(m[1]);
-  if(!el&&(m=go.match(/^s(\d+)$/)))el=document.querySelector('#apRoot .ap-semi[data-semi="'+m[1]+'"]');
+  if(!el&&(m=go.match(/^s(\d+)$/)))el=smShow(m[1]);
   if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='3px solid #F0AD4E';setTimeout(function(){el.style.outline=''},2500)}
 function ckLineOf(k){var x=_ckL[k];if(!x)return null;var m=x.go.match(/^[ln](\d+)$/);return m?AP.lines[+m[1]]:null}
 function ckDone(){OUT=null;saveDraft();render()}
@@ -2638,7 +2643,7 @@ function targetOf(key){var m;
   return null}
 function pick(key,o){var l=targetOf(key);if(!l)return;
   l.m=o.name;l.u=o.useUnit||'g';
-  if(key.charAt(0)==='l'){l.id=o.id;l.cat=o.cat||'';l.zone=defaultZone(o.name,o.cat);_t1Last=+key.slice(1)}   /* 2026-11-03 選好品名 → 那一類收著就打開 */
+  if(key.charAt(0)==='l'){l.id=o.id;l.cat=o.cat||'';l.zone=defaultZone(o.name,o.cat);_t1Last=+key.slice(1)}else{var smm=key.match(/^s(\d+)-/);if(smm)_smLast=+smm[1]}   /* 2026-11-03 選好品名 → 那一類／那個半成品收著就打開 */
   _sugKey='';_sugList=[];OUT=null;saveDraft();
   /* 2026-09-28：選好品項 → 等這次點擊做完再更新畫面，游標直接跳到這一列的數量（不必再點一次） */
   var go=function(){render();var q=qtyInputOf(key);if(q){try{q.focus({preventScroll:true});q.select()}catch(e){}}};
@@ -3363,8 +3368,17 @@ function semiItemRowHTML(si,k,it){var key='s'+si+'-'+k,s=skuOf(it.m),q=num(it.q)
   h+='<td style="width:80px"><input type="text" data-sf="u" value="'+u+'" placeholder="'+esc(s?(s.useUnit||'g'):'單位')+'"></td>';
   h+='<td><button class="ap-x" data-sdel="'+si+'-'+k+'" title="刪除此列">✕</button></td></tr>';
   return h}
-function semiHTML(s,si){
-  var h='<div class="ap-semi" data-semi="'+si+'"><div class="ap-semi-h">🧪 半成品 '+(si+1)+'<button class="ap-x" data-semidel="'+si+'" title="刪除此半成品">✕ 刪除此半成品</button></div>';
+/* 2026-11-03 經營者：申請表的半成品比照「🧾 用料」表，點標題伸縮。收合狀態記在這台電腦（rcp:smfold，以半成品名稱為鍵，沒名稱用 #序號）；
+   收合只切 .ap-fold class、不重畫輸入框（中文輸入安全）。正在填的半成品（焦點在裡面、剛選好品名、剛按＋加一列、剛新增）收著會自動打開；
+   跳到半成品的某一列（↑ 帶我過去、內容檢查）一律先走 smShow 打開。 */
+var SMFOLD={},_smLast=-1;
+try{SMFOLD=JSON.parse(localStorage.getItem('rcp:smfold')||'{}')||{}}catch(e){SMFOLD={}}
+function smKey(s,si){var n=String(s.name||s.link||'').trim();return n||('#'+si)}
+function smFoldSave(k,on){if(on)SMFOLD[k]=true;else delete SMFOLD[k];try{localStorage.setItem('rcp:smfold',JSON.stringify(SMFOLD))}catch(e){}}
+function smFold(si,on){var s=AP.semis[si];if(!s)return;smFoldSave(smKey(s,si),on);var box=document.querySelector('#apRoot .ap-semi[data-semi="'+si+'"]');if(!box)return;box.classList.toggle('ap-fold',!!on);var a=box.querySelector('.ap-smarr');if(a)a.textContent=on?'▸':'▾'}
+function smShow(si){var box=document.querySelector('#apRoot .ap-semi[data-semi="'+si+'"]');if(box&&box.classList.contains('ap-fold'))smFold(+si,false);return box}
+function semiHTML(s,si){var nIt=s.items.filter(function(it){return String(it.m||'').trim()}).length,nm=String(s.name||'').trim(),f=!!SMFOLD[smKey(s,si)];
+  var h='<div class="ap-semi'+(f?' ap-fold':'')+'" data-semi="'+si+'"><div class="ap-semi-h" data-smh="'+si+'" title="點一下收合／展開"><span class="ap-smarr">'+(f?'▸':'▾')+'</span>🧪 半成品 '+(si+1)+(nm?'：'+esc(nm):'')+'<span class="ap-muted">（'+nIt+' 樣用料）</span><button class="ap-x" data-semidel="'+si+'" title="刪除此半成品">✕ 刪除此半成品</button></div><div class="ap-semi-b">';
   h+='<div class="ap-row ap-row-3">'+cell('半成品名稱','<input type="text" data-sh="name" value="'+esc(s.name)+'">')+cell('存放方式','<select data-sh="store">'+opts(STOREWAYS,s.store)+'</select>')+cell('拿取方式','<select data-sh="take">'+opts(TAKES,s.take)+'</select>')+'</div>';
   h+='<div class="ap-row ap-row-3">'+cell('對應用料','<input type="text" data-sh="link" list="apLinkDL" value="'+esc(s.link)+'" placeholder="選下方用料的品項名" autocomplete="off">')
     +cell('類型','<select data-sh="kind">'+opts(SEMI_KINDS,s.kind)+'</select>')+cell('製作單位','<select data-sh="maker">'+opts(SEMI_MAKERS,s.maker)+'</select>')+'</div>';
@@ -3377,7 +3391,7 @@ function semiHTML(s,si){
   h+='<div class="ap-row ap-row-1"><div class="ap-lbl">用料</div><div class="ap-fld" style="display:block"><div class="ap-semi-items" style="padding:0"><div style="overflow-x:auto"><table><tr><th>品項（可填本單其他半成品，例：材料包裡的油皮）</th><th>每批用量</th><th>單位</th><th></th></tr>';
   s.items.forEach(function(it,k){h+=semiItemRowHTML(si,k,it)});
   h+='</table></div><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" data-sadd="'+si+'">＋ 加一列用料</button><span class="ap-muted">填「一批」用多少原料（上面填一批做出多少）。每支甜點用多少由 BOM 表決定，系統自動換算。「🧾 用料」表有一列是這個半成品（主檔還沒有）時，成本卡會把用料加總算進那一列。</span></div>'+semiUseLine(s,si)+'</div></div></div>';
-  h+='</div>';
+  h+='</div></div>';
   return h}
 /* 新增食材/器模具：19 欄（①品項 ②🆕 ③貼紙 ④成本 ⑤規格 ⑥每份使用量 ⑦單位 ⑧存放 ⑨拿取 ⑩區域 ⑪提供 ⑫廠商 ⑬包裝類型 ⑭分裝 ⑮採購量 ⑯單位 ⑰第一單 ⑱備註 ⑲刪） */
 /* ===== 階段 1c：用料拆成表一「用料（全部，成本計算用）」＋表二「新增食材/器模具（Excel 全欄）」——同一份 AP.lines 的兩個視圖 ===== */
@@ -5192,6 +5206,8 @@ function paint(){var root=document.getElementById('apRoot');
   s+=linkListHTML()+'<datalist id="apBomDL"></datalist>';
   s+='<div class="ap-sheet"><div class="ap-sheet-title">🧪 半成品/材料包製作 <span class="ap-muted">這支新品要店員先做好的半成品、材料包、分裝包（沒有就留空）</span><span class="ap-btns"><button class="ap-btn2" id="apSemiAdd" title="手動新增一個半成品">＋ 新增一個</button><button class="ap-btn2" id="apSemiDoc" title="主廚寫好的半成品 Word 檔（.docx；可一次選好幾個）：自動帶入名稱、存放、一批做出、製作步驟，用料和數量自動分析">📄 匯入 Word 檔</button><button class="ap-btn2" id="apSemiImport" title="用 Excel 標準格式一次帶進很多個">📥 從 Excel 載入</button></span><input type="file" id="apSemiFile" accept=".xlsx,.xls" style="display:none"><input type="file" id="apSemiDocFile" accept=".docx,.doc,.html,.htm,.txt" multiple style="display:none"></div>';
   s+='<div class="ap-muted" style="padding:6px 12px">① 按「＋ 新增一個」手動填，或「📄 匯入 Word 檔」（主廚寫好的半成品 .docx，可一次選好幾個）、「📥 從 Excel 載入」一次帶進來（沒有範本？<a href="javascript:void 0" id="apSemiTpl">下載空白範本</a>）　② 一律以「一批」為單位：一批用多少原料、做出多少　③ 填好就好，不用另外存：簽核通過後按 ②「📦 簽核通過，上傳更新採購系統」，會一起寫進採購系統（出貨中心製作的不寫）　④ <b>製作步驟寫了材料和數量</b>（例：黑白小熊各3隻、圈圈軟糖2個、陽傘1組 裝一包），離開步驟欄時系統會<b>自動帶入下方用料</b>，請看一眼標 🤖 的列</div>';
+  var sae=document.activeElement,sbx=sae&&sae.closest?sae.closest('#apRoot .ap-semi[data-semi]'):null;   /* 正在填的半成品收著 → 打開 */
+  [_smLast,sbx?+sbx.dataset.semi:-1].forEach(function(k){var sm=AP.semis[k];if(sm&&SMFOLD[smKey(sm,k)])smFoldSave(smKey(sm,k),false)});_smLast=-1;
   AP.semis.forEach(function(sm,si){s+=semiHTML(sm,si)});
   if(!AP.semis.length)s+='<div class="ap-muted" style="padding:8px 12px">目前沒有半成品；沒有就留空。</div>';
   /* 2026-10-08 經營者：半成品配方跟著申請表一起存，簽核通過後由 ②「上傳更新採購系統」一起寫進採購系統 → 拿掉「送到半成品分頁」按鈕 */
@@ -5281,7 +5297,7 @@ function wire(){var root=document.getElementById('apRoot');
         else if(f==='q'){el.oninput=function(){it.q=el.value;OUT=null;saveDraft();var q=num(it.q),u=String(it.u||'').trim();var tds=tr.querySelectorAll('.ap-tier');if(tds[0])tds[0].textContent=q>0?r1(q*2)+' '+u:'—';if(tds[1])tds[1].textContent=q>0?r1(q*5)+' '+u:'—';refreshCost()}}   /* 2026-11-03 表一有對到這個半成品時成本卡跟著算 */
         else{el.oninput=function(){it.u=el.value;OUT=null;saveDraft()};el.onchange=function(){renderSoon()}}})})});
   root.querySelectorAll('[data-sdel]').forEach(function(b){b.onclick=function(){var p=b.dataset.sdel.split('-'),sm=AP.semis[+p[0]];if(!sm)return;sm.items.splice(+p[1],1);if(!sm.items.length)sm.items=[newSemiItem()];OUT=null;saveDraft();render()}});
-  root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
+  root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;_smLast=+b.dataset.sadd;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
     var box=root.querySelector('.ap-semi[data-semi="'+b.dataset.sadd+'"]');if(box){var rows=box.querySelectorAll('tr[data-sk]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-sf="m"]');if(inp)inp.focus()}}}});
   root.querySelectorAll('[data-semidel]').forEach(function(b){b.onclick=function(){if(!confirm('刪除半成品 '+(+b.dataset.semidel+1)+'？'))return;AP.semis.splice(+b.dataset.semidel,1);OUT=null;saveDraft();render()}});
   var sd1=document.getElementById('apSemiDoc'),sdf=document.getElementById('apSemiDocFile');   /* 2026-10-18 匯入半成品 Word 檔 */
@@ -5301,9 +5317,10 @@ function wire(){var root=document.getElementById('apRoot');
   var sall=document.getElementById('apSemiAll');if(sall)sall.onclick=function(){if(!window.SemiMod){alert('半成品/材料包模組尚未載入，請重新整理');return}
     var list=AP.semis.filter(function(s){return semiName(s)&&s.maker!=='出貨中心'});if(!list.length){alert('這張單沒有門市製作的半成品可以送。');return}
     SemiMod.queueFromApply(AP.semis,semiDessert())};
-  var sa=document.getElementById('apSemiAdd');if(sa)sa.onclick=function(){AP.semis.push(newSemi());OUT=null;saveDraft();render();
+  var sa=document.getElementById('apSemiAdd');if(sa)sa.onclick=function(){AP.semis.push(newSemi());_smLast=AP.semis.length-1;OUT=null;saveDraft();render();
     var boxes=root.querySelectorAll('.ap-semi');var last=boxes[boxes.length-1];if(last){var inp=last.querySelector('[data-sh="name"]');if(inp)inp.focus()}};
   /* 表一：品項／數量／單位／刪除；改品項 blur 後整頁重繪（表二依 isNewItem 自動出現／消失，l.* 欄位保留） */
+  root.querySelectorAll('[data-smh]').forEach(function(h){h.onclick=function(e){if(e.target.closest('button'))return;var si=+h.dataset.smh,sm=AP.semis[si];if(!sm)return;smFold(si,!SMFOLD[smKey(sm,si)])}});   /* 2026-11-03 半成品伸縮 */
   root.querySelectorAll('[data-t1gh]').forEach(function(tr){tr.onclick=function(){var g=tr.dataset.t1gh;t1Fold(g,!T1FOLD[g])}});   /* 2026-11-03 用料表分類伸縮 */
   root.querySelectorAll('tr[data-ln]').forEach(function(tr){var i=+tr.dataset.ln;
     tr.querySelectorAll('[data-lf]').forEach(function(el){var f=el.dataset.lf;
@@ -5334,7 +5351,7 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-nmh]').forEach(function(b){b.onclick=function(){openNameHelp(+b.dataset.nmh)}});   /* 2026-10-22 🏷 取名小幫手 */
   root.querySelectorAll('[data-simundo]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.simundo);if(!l)return;l.simok='';OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-simgo]').forEach(function(b){b.onclick=function(){var k=String(b.dataset.simgo),m=k.match(/^s(\d+)\.(\d+)$/);   /* 2026-11-03 ↑ 帶我過去 */
-    var tr=m?root.querySelector('.ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"]'):t1Show(k);if(!tr)return;
+    var tr=m?(smShow(m[1]),root.querySelector('.ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"]')):t1Show(k);if(!tr)return;
     tr.scrollIntoView({behavior:'smooth',block:'center'});var bx=tr.querySelector('.ap-sim');if(bx){bx.classList.remove('ap-simhit');void bx.offsetWidth;bx.classList.add('ap-simhit')}}});
   root.querySelectorAll('[data-unpin]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.unpin);if(!l)return;l.pin=false;l.nopin=true;OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-goto]').forEach(function(b){b.onclick=function(){var tr=document.querySelector('tr[data-n2="'+b.dataset.goto+'"]');if(tr){tr.scrollIntoView({behavior:'smooth',block:'center'});var inp=tr.querySelector('[data-nf="sticker"]');if(inp)inp.focus()}}});
