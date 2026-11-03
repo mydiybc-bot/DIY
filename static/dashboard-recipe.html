@@ -2615,7 +2615,7 @@ function qtyInputOf(key){var m;
   if((m=key.match(/^s(\d+)-(\d+)$/)))return document.querySelector('#apRoot .ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"] [data-sf="q"]');
   return null}
 
-/* ---- 成本卡：非 🆕 列走同一套 costLines 引擎；🆕 列由本表推算（原包裝成本 ÷ 規格數字 × 每份使用量）；半成品用料不進成本卡 ---- */
+/* ---- 成本卡：非 🆕 列走同一套 costLines 引擎；🆕 列由本表推算（原包裝成本 ÷ 規格數字 × 每份使用量）；半成品用料只在表一有一列對到它、且那列是主檔沒有又沒填原包裝成本時，才加總進那一列（semiCostRow） ---- */
 function validLines(){return AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0})}
 function newCostOf(l){var pc=num(l.pkgCost),pn=packOf(l),q=num(l.q),cv=convOf(l);
   if(unitMis(l))return {cost:null,s:'估？（原包裝規格和每份用量的單位對不上，請看品項下方紅框）'};   /* 2026-10-28 單位防呆 */
@@ -2623,9 +2623,27 @@ function newCostOf(l){var pc=num(l.pkgCost),pn=packOf(l),q=num(l.q),cv=convOf(l)
   var qe=cv?q*cv.v:q;
   if(pc>0&&pn&&q>0)return {cost:pc/pn*qe,s:'🆕 原包裝成本 '+pc+' ÷ 規格 '+pn+' × 每份 '+(cv?q+' '+String(l.u||'').trim()+'（≈'+r2(qe)+' '+cv.base+'）':q)};
   return {cost:null,s:'估？（🆕 需填原包裝成本與含數字的規格才能推算）'}}
+/* 2026-11-03 經營者：表一某列是本單的半成品（例：雪花肉桂捲每份配 1 份無酒精熱紅酒）、主檔沒有、也沒填原包裝成本
+   → 這列成本＝半成品各用料（每批用量 ÷ 一批做出 × 這列用量）加總：主檔品項走 costOf 引擎、🆕 用料照原包裝成本推算；有一樣算不出來＝整列算不出來（說明列出缺哪樣） */
+function semiCostRow(l){var s=lineSemi(l),yq=s?num(s.yq):0;if(!s||!isNewItem(l)||num(l.pkgCost)>0||!(yq>0))return null;
+  var k=num(l.q)/yq,parts=[],mast=[];
+  semiItemsOf(s).forEach(function(it){var q=num(it.q)*k;if(!(q>0)||isToolLine(it))return;
+    if(isNewItem(it)){parts.push({m:String(it.m).trim(),q:q,u:it.u,cost:newCostOf(Object.assign({},it,{q:q})).cost});return}
+    var cv=convOf(it);if(cv&&!cv.v){var p0={m:String(it.m).trim(),q:q,u:it.u,cost:null};docEst(p0,it);parts.push(p0);return}
+    mast.push({m:String(it.m).trim(),q:q,u:String(it.u||'').trim()||'g',it:it})});
+  function docEst(p,it){var pn=it?packNum(it.pkgSpec):null;if(it&&num(it.pkgCost)>0&&pn>0){p.cost=num(it.pkgCost)/pn*p.q;p.est='食譜報價'}}   /* 主檔算不出來（缺價、單位對不上）→ 用食譜寫的報價估 */
+  if(mast.length)R.costOf(mast.map(function(x){return {m:x.m,q:x.q,u:x.u}})).rows.forEach(function(x){var p={m:x.m,q:x.q,u:x.u,cost:x.cost};
+    if(p.cost===null){var mi=mast.filter(function(y){return y.m===x.m})[0];if(mi){p.q=mi.q;p.u=mi.u;docEst(p,mi.it)}}
+    parts.push(p)});
+  if(!parts.length)return null;
+  var miss=parts.filter(function(p){return p.cost===null}),sum=0;parts.forEach(function(p){if(p.cost!==null)sum+=p.cost});
+  var s1='🧪 半成品「'+String(s.name||'').trim()+'」材料加總（一批做出 '+yq+' '+String(s.yu||'').trim()+'）：'+parts.map(function(p){return p.m+' '+r3(p.q)+' '+String(p.u||'')+' '+(p.cost===null?'?':r2(p.cost)+' 元'+(p.est?'（'+p.est+'）':''))}).join('、');
+  return {m:String(l.m).trim(),q:num(l.q),u:l.u,cat:'食材',cost:miss.length?null:sum,t:miss.length?'X':'C',
+    s:miss.length?s1+'（算不出來：'+miss.map(function(p){return p.m}).join('、')+'，請到半成品區補原包裝成本與規格）':s1,warn:'',isNew:true,li:l,semi:true}}
 function computeCost(){
   var L=validLines(),toCost=[],tools=[],newRows=[],newNames={};
   L.forEach(function(l){var nm=String(l.m).trim();
+    var sr=semiCostRow(l);if(sr){newRows.push(sr);return}
     if(isNewItem(l)){newNames[nm]=1;
       if(isToolLine(l)){tools.push({m:nm,q:num(l.q),u:l.u});return}
       var nc=newCostOf(l);newRows.push({m:nm,q:num(l.q),u:l.u,cat:(l.cat==='耗材'?'耗材':'食材'),cost:nc.cost,t:nc.cost===null?'X':'C',s:nc.s,warn:'',isNew:true,li:l});return}
@@ -2803,6 +2821,36 @@ function readRecipeFile(f){
       var h=docxToHtml(z['word/document.xml'],z['word/_rels/document.xml.rels']);
       return h?{html:h,docx:true}:{err:'是 .docx，但看不到公司食譜格式的步驟（黃底「步驟標題：」）'}},
       function(){return {err:'是壓縮檔但打不開：請'+DOCX_TIP}})})}
+/* 2026-11-03 經營者（雪花肉桂捲配 1 杯無酒精熱紅酒）：食譜裡標題「半成品(名稱)」（或 材料包／分裝包）的步驟，內容一行一樣材料：
+   「每日C 葡萄汁 $109/1300ml - 175ml /人」「柳橙 $12/個 - 1/4個/人」「肉桂棒 $100/50g - 2g/人(出貨中心)」
+   → 匯入時自動建一個半成品（一批做出 1 份＝1 人用量；用料帶入用量、原包裝成本、規格、廠商），表一加一列「名稱 1 份」，成本卡把它的材料加總算進每份成本。
+   品名：主檔對得到就用主檔名；對不到且前面有品牌字（每日C、Tree Top）→ 品名取最後一段、整串記在廠商品名。看不懂的行列在匯入提示。 */
+var RC_SEMI_RE=/^\s*(半成品|材料包|分裝包)\s*[（(]\s*(.+?)\s*[）)]\s*$/;
+var RC_SEMI_LN=/^(.+?)\s*[$＄]\s*(\d+(?:\.\d+)?)\s*[\/／]\s*(\d+(?:\.\d+)?)?\s*([^\s\-－–—~～\d][^\s\-－–—~～]*)?\s*[-－–—~～]\s*(\d+(?:\.\d+)?)(?:\s*[\/／]\s*(\d+(?:\.\d+)?))?\s*([^\s\/／(（\d]+)\s*[\/／]\s*每?\s*(人|份|杯|個)\s*(?:[（(]\s*(.+?)\s*[）)])?\s*$/;
+function rcSemiSteps(rcs){var out=[];
+  rcs.forEach(function(rc){(rc.steps||[]).forEach(function(st){var m=String(st.t||'').match(RC_SEMI_RE);if(!m)return;
+    var items=[],bad=[],txt=txPlain(st.h);
+    txt.split('\n').forEach(function(ln){ln=ln.replace(/\s+/g,' ').trim();if(!ln)return;var x=ln.match(RC_SEMI_LN);if(!x){bad.push(ln);return}
+      var full=x[1].trim(),tk=full.split(' '),s=skuOf(full)||(tk.length>1?skuOf(tk[tk.length-1]):null);
+      var q=parseFloat(x[5])/(x[6]?parseFloat(x[6]):1),U=semiUnit(x[7]);if(!(q>0)){bad.push(ln);return}
+      var it=newSemiItem();NI_KEYS.forEach(function(k){it[k]=''});
+      it.m=s?s.name:(tk.length>1?tk[tk.length-1]:full);it.q=String(r4(q*U.k));it.u=U.u;it.auto=true;it.src=ln;
+      it.pkgCost=x[2];it.pkgSpec=(x[3]||'1')+(x[4]||x[7]);   /* 主檔品項也留著：主檔算不出成本時用食譜報價估（semiCostRow） */
+      if(!s){if(x[9])it.vendor=x[9];if(tk.length>1)it.vname=full}
+      items.push(it)});
+    if(items.length)out.push({kind:m[1],name:m[2],items:items,bad:bad,txt:txt})})});
+  return out}
+function rcSemiApply(list){var msg=[];
+  if(AP.semis.length===1&&!semiName(AP.semis[0])&&!semiItemsOf(AP.semis[0]).length&&!String(AP.semis[0].steps||'').trim())AP.semis=[];
+  list.forEach(function(b){var sm=AP.semis.filter(function(s){return String(s.name||'').trim()===b.name})[0];
+    if(!sm){sm=newSemi();AP.semis.push(sm)}
+    sm.name=b.name;sm.link=b.name;sm.kind=b.kind;if(!sm.maker)sm.maker='門市';sm.yq='1';sm.yu='份';sm.items=b.items;
+    if(!String(sm.usage||'').trim())sm.usage='一份＝食譜寫的每人用量；這支甜點每份配 1 份（表一）';
+    sm.note='食譜原文：\n'+String(b.txt||'').replace(/^\s+|\s+$/g,'');
+    if(!AP.lines.some(function(l){return String(l.m||'').trim()===b.name})){var o=newLine();o.m=b.name;o.q=1;o.u='份';o.cat='食材';AP.lines.push(o)}
+    msg.push('🧪 半成品「'+b.name+'」讀到 '+b.items.length+' 樣材料，表一加一列「'+b.name+' 1 份」（成本＝材料加總）');
+    b.bad.forEach(function(x){msg.push('（半成品「'+b.name+'」這行看不懂、沒帶入：'+x+'）')})});
+  return msg}
 function importFiles(fs){if(!fs||!fs.length)return;
   var got=[],names=[],warns=[],text='',done=0,rcs=[],bad='';
   Array.prototype.forEach.call(fs,function(f){readRecipeFile(f).then(function(res){
@@ -2819,7 +2867,8 @@ function importFiles(fs){if(!fs||!fs.length)return;
         AP.lines=got.map(function(l){var s=skuOf(l.m);var cat=s?s.cat:(R.isTool(l.m)?'器具':'食材');
           var z=mapZone(l.zone)||defaultZone(l.m,cat);
           var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';spConv(o,l.par);return o});   /* 2026-10-29 平匙→克數 */
-        var tu=rcs.length?stepUse(rcs,got):null;   /* 2026-10-19：步驟內文寫了用量、清單沒列的品項自動加進表一 */
+        var sms=rcSemiSteps(rcs);AP.semiMsg=sms.length?rcSemiApply(sms):[];   /* 2026-11-03：「半成品(…)」步驟 → 半成品＋表一一列 */
+        var tu=rcs.length?stepUse(rcs.map(function(rc){return Object.assign({},rc,{steps:(rc.steps||[]).filter(function(st){return !RC_SEMI_RE.test(String(st.t||''))})})}),got):null;   /* 2026-10-19：步驟內文寫了用量、清單沒列的品項自動加進表一（半成品那步不算） */
         if(tu)tu.add.forEach(function(x){AP.lines.push(txLine(x))});
         if(!AP.lines.length)AP.lines=[newLine()];
         AP.warn=warns;AP.txt=tu;AP.miss=tu?[]:(text?R.proseMiss(text,got):[]);AP.srcName=names.join(' + ');
@@ -3291,7 +3340,7 @@ function semiHTML(s,si){
   h+='<div class="ap-row ap-row-1">'+cell('備註說明','<textarea data-sh="note">'+esc(s.note)+'</textarea>')+'</div>';
   h+='<div class="ap-row ap-row-1"><div class="ap-lbl">用料</div><div class="ap-fld" style="display:block"><div class="ap-semi-items" style="padding:0"><div style="overflow-x:auto"><table><tr><th>品項（可填本單其他半成品，例：材料包裡的油皮）</th><th>每批用量</th><th>單位</th><th></th></tr>';
   s.items.forEach(function(it,k){h+=semiItemRowHTML(si,k,it)});
-  h+='</table></div><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" data-sadd="'+si+'">＋ 加一列用料</button><span class="ap-muted">填「一批」用多少原料（上面填一批做出多少）。每支甜點用多少由 BOM 表決定，系統自動換算。半成品用料不進成本卡。</span></div>'+semiUseLine(s,si)+'</div></div></div>';
+  h+='</table></div><div class="ap-actions" style="padding:6px 0 0"><button class="ap-btn2" data-sadd="'+si+'">＋ 加一列用料</button><span class="ap-muted">填「一批」用多少原料（上面填一批做出多少）。每支甜點用多少由 BOM 表決定，系統自動換算。表一有一列是這個半成品（主檔還沒有）時，成本卡會把用料加總算進那一列。</span></div>'+semiUseLine(s,si)+'</div></div></div>';
   h+='</div>';
   return h}
 /* 新增食材/器模具：19 欄（①品項 ②🆕 ③貼紙 ④成本 ⑤規格 ⑥每份使用量 ⑦單位 ⑧存放 ⑨拿取 ⑩區域 ⑪提供 ⑫廠商 ⑬包裝類型 ⑭分裝 ⑮採購量 ⑯單位 ⑰第一單 ⑱備註 ⑲刪） */
@@ -3309,7 +3358,8 @@ function costClass(row){return row?(row.cost===null?'ap-tX':'ap-t'+row.t):''}
 /* 表一「每份成本」格（2026-10-18：同品項好幾列時註明合計，避免以為重複算） */
 function cost1HTML(l,row){return '<b class="'+costClass(row)+'">'+esc(costText(l,row))+'</b>'
   +(row&&row.part?'<div class="ap-muted" style="font-size:11px;white-space:normal" title="同一品項在用料表有好幾列；成本卡只算一次合計">同品項合計 '+r2(row.part.q)+' '+esc(row.part.u||'')+'＝'+fm(row.part.cost)+'</div>':'')
-  +(row&&row.warn?'<div class="ap-bad" style="white-space:normal">⚠ '+esc(row.warn)+'</div>':'')}
+  +(row&&row.warn?'<div class="ap-bad" style="white-space:normal">⚠ '+esc(row.warn)+'</div>':'')
+  +(row&&row.semi?'<div class="ap-muted" style="font-size:11px;white-space:normal">'+esc(row.s)+'</div>':'')}   /* 2026-11-03 半成品材料加總明細 */
 function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=unitOK(l),key='l'+i,row=rowOf(c,l);
   var h='<tr data-ln="'+i+'">';
   h+='<td><div class="ap-sc"><input type="text" data-lf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
@@ -5077,6 +5127,7 @@ function paint(){var root=document.getElementById('apRoot');
    +'門市平板上的食譜請用「📤 新食譜上傳」上傳試做版，核准後在最下方 ③「🔗 接上試做版」。'
    +'</div></details></div>';
   if(AP.warn.length)s+='<div class="ap-note"><b>匯入時有 '+AP.warn.length+' 行看不懂，沒有算進來：</b><div class="ap-muted">'+esc(AP.warn.slice(0,12).join('｜'))+(AP.warn.length>12?' …':'')+'</div></div>';
+  if(AP.semiMsg&&AP.semiMsg.length)s+='<div class="ap-note"><b>🧪 食譜裡的半成品（已自動帶入，請到下方半成品區確認用料與原包裝成本）</b><div class="ap-muted">'+AP.semiMsg.map(esc).join('<br>')+'</div></div>';   /* 2026-11-03 */
   if(AP.txt)s+=txNoteHTML();
   if(AP.miss.length)s+='<div class="ap-note"><b>⚠ 食譜內文提到、但「食材工具」清單沒列的品項（'+AP.miss.length+' 項）</b><div class="ap-muted">這些沒被計入成本，門市備料與週用量推算也會漏。請主廚補進食材清單，或手動加到表一。</div><div style="margin-top:4px"><b>'+esc(AP.miss.join('、'))+'</b></div></div>';
   /* 半成品製作 */
@@ -5169,7 +5220,7 @@ function wire(){var root=document.getElementById('apRoot');
     box.querySelectorAll('tr[data-sk]').forEach(function(tr){var k=+tr.dataset.sk,it=sm.items[k];if(!it)return;var key='s'+si+'-'+k;
       tr.querySelectorAll('[data-sf]').forEach(function(el){var f=el.dataset.sf;el.addEventListener('input',function(){if(it.auto){it.auto=false;it.miss=false;it.fuzzy=false}});
         if(f==='m')wireSearch(el,key,function(){var s=skuOf(it.m);if(s&&!it.u)it.u=s.useUnit||'g'});
-        else if(f==='q'){el.oninput=function(){it.q=el.value;OUT=null;saveDraft();var q=num(it.q),u=String(it.u||'').trim();var tds=tr.querySelectorAll('.ap-tier');if(tds[0])tds[0].textContent=q>0?r1(q*2)+' '+u:'—';if(tds[1])tds[1].textContent=q>0?r1(q*5)+' '+u:'—'}}
+        else if(f==='q'){el.oninput=function(){it.q=el.value;OUT=null;saveDraft();var q=num(it.q),u=String(it.u||'').trim();var tds=tr.querySelectorAll('.ap-tier');if(tds[0])tds[0].textContent=q>0?r1(q*2)+' '+u:'—';if(tds[1])tds[1].textContent=q>0?r1(q*5)+' '+u:'—';refreshCost()}}   /* 2026-11-03 表一有對到這個半成品時成本卡跟著算 */
         else{el.oninput=function(){it.u=el.value;OUT=null;saveDraft()};el.onchange=function(){renderSoon()}}})})});
   root.querySelectorAll('[data-sdel]').forEach(function(b){b.onclick=function(){var p=b.dataset.sdel.split('-'),sm=AP.semis[+p[0]];if(!sm)return;sm.items.splice(+p[1],1);if(!sm.items.length)sm.items=[newSemiItem()];OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-sadd]').forEach(function(b){b.onclick=function(){var sm=AP.semis[+b.dataset.sadd];if(!sm)return;sm.items.push(newSemiItem());OUT=null;saveDraft();render();
