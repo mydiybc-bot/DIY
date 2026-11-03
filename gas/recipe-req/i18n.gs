@@ -767,8 +767,38 @@ function i18nBuild_(src, tr, D, lang, row) {
     });
     return { t: t.t || s.t, video: s.video, img: s.img, h: h, ings: ings };
   });
+  i18nVSwap_(slides, lang);
   return { id: src.id, lang: lang, name: tr.name || src.name, en: src.name, cover: src.cover, pres: tr.pres || src.pres, areas: areas, slides: slides,
     status: row.status, check: row.check, at: row.at, model: row.model };
+}
+
+/* 共用影片換成各語言版（2026-11-03）：外語食譜第一頁的「熊主廚」開場動畫只有英文 → 認檔案指紋（Azure Content-MD5，每支食譜網址不同但檔案同一支）換成該語言版。
+   成品與製作工具：DIY repo media/tablet-intro/、tools/tablet_intro_video/；網址用 jsDelivr 固定 commit（支援影片分段讀取）。 */
+var I18N_VSWAP = {
+  'zxY7HTTs9Oub93tFKzn3aw==': { base: 'https://cdn.jsdelivr.net/gh/mydiybc-bot/DIY@f9e57f9cf05bd011524e2b4f21c6b40f284cfab4/media/tablet-intro/chef-bear-', langs: ['ja', 'ko', 'vi', 'id', 'th'] }
+};
+function i18nVSwap_(slides, lang) {
+  var c = CacheService.getScriptCache(), need = [], md5 = {};
+  slides.forEach(function (s) {
+    if (!s.video) return;
+    var k = 'i18n:vmd5:' + i18nHash_(s.video), hit = c.get(k);
+    if (hit != null) md5[s.video] = hit; else if (need.indexOf(s.video) < 0) need.push(s.video);
+  });
+  if (need.length) {
+    var rs = [];
+    try { rs = UrlFetchApp.fetchAll(need.map(function (u) { return { url: u, headers: { Range: 'bytes=0-0' }, muteHttpExceptions: true }; })); } catch (e) { rs = []; }
+    need.forEach(function (u, i) {
+      var r = rs[i]; if (!r) return;
+      var code = r.getResponseCode(), h = r.getHeaders(), m = '';
+      Object.keys(h).forEach(function (k) { var lk = k.toLowerCase(); if (lk === 'x-ms-blob-content-md5' || lk === 'content-md5') m = m || String(h[k]); });
+      md5[u] = m;
+      if (code === 200 || code === 206) c.put('i18n:vmd5:' + i18nHash_(u), m, 21600);   /* 6 小時；讀不到就下次再問 */
+    });
+  }
+  slides.forEach(function (s) {
+    var v = s.video && I18N_VSWAP[md5[s.video]];
+    if (v && v.langs.indexOf(lang) >= 0) { s.video_orig = s.video; s.video = v.base + lang + '.mp4'; }
+  });
 }
 
 /* 一次性：權限中心 dim_auth 補「tablet_i18n」列（只補沒有的；先整張複製成備份分頁；密碼空白＝還不能用，經營者在權限管理後台設定） */
