@@ -437,8 +437,8 @@ function authSetup_() {
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API（門市今日交辦） */
 var TZ = 'Asia/Taipei', AUTH_SEC = 600, REVIEW_DASH = 'apply_review', HQ_DASH = 'task_hq';
-var UNITS = ['1 店 精明', '2 店 草悟道', '3 店 南京', '4 店 士林', '5 店 台南 Focus', '6 店 新竹文化', '7 店 新北板橋', '8 店 新北新店',
-  '9 店 中壢', '10 店 藝文', '11 店 吳寶春信義 A13', '12 店 吳寶春高雄 SKM', '出貨中心', '體驗中心'];   /* 前端 UNITS 要一致 */
+var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
+  '9店 桃園中壢', '10店 桃園藝文', '11店 台北遠百信義A13', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
 var UNIT_DASH = { '出貨中心': 'purchase_dc', '體驗中心': HQ_DASH };
 /* 申請項目：period＝期別規則、scope＝額度算單位還是人、max＝每期幾次（0＝不限）、review＝要不要專人審核、subs＝子類 */
 var AP_TYPES = {
@@ -467,10 +467,10 @@ function apHash_(s) { return Utilities.base64Encode(Utilities.computeDigest(Util
 function apClean_(s, max) { return String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
 function unitDash_(unit) {
   if (UNITS.indexOf(unit) < 0) throw fail_('請選單位', 'input');
-  var m = unit.match(/^(\d+) 店/);
+  var m = unit.match(/^(\d+)店/);
   return m ? 'store_' + m[1] : UNIT_DASH[unit];
 }
-function unitStoreId_(unit) { var m = String(unit || '').match(/^(\d+) 店/); return m ? Number(m[1]) : 0; }
+function unitStoreId_(unit) { var m = String(unit || '').match(/^(\d+)店/); return m ? Number(m[1]) : 0; }
 
 /* ---------- 密碼：向權限中心驗，結果快取 10 分鐘（只存雜湊） ---------- */
 function apAuth_(pw, dash, what) {
