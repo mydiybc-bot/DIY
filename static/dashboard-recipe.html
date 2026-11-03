@@ -2112,6 +2112,50 @@ var SENDMSG='',_jpSeq=0,_busy=false;
 var BRANDS=['自己做','吳寶春自己做','自己做＆吳寶春自己做'];
 var BRAND_DEFAULT='自己做＆吳寶春自己做';   /* 2026-09-24 經營者：品牌別預設兩個品牌都有 */
 var DIETS=['葷','素','蛋奶素','蛋奶素含酒','葷含酒'];
+/* 2026-11-03 經營者「葷素自動判斷並預選」：規則照《門市資訊頁規格與檢查標準 2026》§3-1 葷素、§3-2 含酒，選項照申請表 5 種。
+   看「🧾 用料」＋「🧪 半成品」每批用料的品名（器具／模具不看；本單的半成品看它的用料、不看半成品名稱）：
+   ①有吉利丁／明膠／肉類等動物體成分 → 葷（有酒 → 葷含酒）
+   ②有品名看不出來會不會藏明膠、豬油的（糖珠、翻糖、酥油、市售餅乾、○○凍…）→ 無法判斷，留空讓主廚選
+   ③有蛋或有奶 → 蛋奶素（有酒 → 蛋奶素含酒）；申請表沒有奶素／蛋素，一律算蛋奶素
+   ④看不出有沒有蛋奶的（巧克力、焦糖、塔皮…）→ 無法判斷；沒蛋沒奶 → 素；素又含酒（選單沒有這項）→ 留空
+   主廚自己選過（head.dietMan）就不再動；系統選的（head.dietAuto）用料改了會跟著重判。 */
+function dietNames(){var semi={},out=[],seen={};
+  AP.semis.forEach(function(s){if(!semiItemsOf(s).length)return;[s.link,s.name].forEach(function(x){x=String(x||'').trim();if(x)semi[x]=1})});
+  function add(n){n=String(n||'').trim();if(!n||semi[n]||seen[n])return;seen[n]=1;out.push(n)}
+  AP.lines.forEach(function(l){if(String(l.m||'').trim()&&!isToolLine(l)&&lineCat(l)!=='耗材')add(l.m)});
+  AP.semis.forEach(function(s){semiItemsOf(s).forEach(function(it){if(!R.isTool(it.m))add(it.m)})});
+  return out}
+var DT_ALC=/酒|rum|liqueur|whisk|brandy|kahlua|baileys|cointreau|marnier|amaretto|甘露|君度|白蘭地|威士忌|香檳|啤酒/i,
+  DT_MEAT=/吉利丁|明膠|gelatin|魚膠|棉花糖|蟲膠|肉鬆|肉燥|肉乾|肉脯|肉絲|肉片|絞肉|豬肉|豬油|豬皮|牛肉|雞肉|雞胸|雞腿|鴨肉|羊肉|魚肉|魚鬆|魚露|鮪魚|鮭魚|柴魚|鰹魚|蝦|蟹|干貝|蠔油|培根|火腿|香腸|臘腸|叉燒|葷/i,
+  DT_MEAT_Q=/糖珠|糖片|糖粒|糖花|彩色米|彩米|翻糖|脆球|組合包|軟糖|qq糖|酥油|白油|起酥|牛油|冰皮粉|塔皮|派皮|酥皮|鏡面|淋面|慕斯粉|布丁粉|果凍粉|凍|oreo|奧利奧|蓮花|lotus|餅乾|消化餅/i,
+  DT_EGG=/蛋|卡士達|克林姆|custard|美乃滋|馬卡龍殼|達克瓦茲|egg/i,
+  DT_MILK=/奶|乳酪|起司|芝士|cheese|乳清|乳粉|煉乳|優格|優酪|馬斯卡彭|mascarpone|白巧克力|牛奶巧克力|卡士達|克林姆|消化餅|冰淇淋|butter|cream|milk/i,
+  DT_EM_Q=/巧克力|焦糖|餅乾|塔皮|派皮|酥皮|預拌|專用粉|鬆餅粉|麵包|吐司|糖珠|糖片|翻糖|脆球|組合包|彩色米|鏡面|抹醬/i;
+function dietJudge(){var N=dietNames(),f={alc:[],meat:[],mq:[],egg:[],milk:[],emq:[]};
+  N.forEach(function(n0){var n=n0.replace(/\s+/g,'');
+    var a=n.replace(/無酒精|去酒精|酒石/g,'');if(DT_ALC.test(a))f.alc.push(n0);
+    var m=n.replace(/肉桂|肉豆蔻|雞蛋|雞尾酒/g,'');if(DT_MEAT.test(m))f.meat.push(n0);
+    var q=n.replace(/吉利丁凍|寒天|蒟蒻|冷凍|凍乾|凍頂/g,'');if(DT_MEAT_Q.test(q))f.mq.push(n0);
+    var e=n.replace(/蛋糕(盒|紙|袋|刀|卡|底|托|圍|插|轉|叉|模|架|板|墊|杯)/g,'');if(DT_EGG.test(e))f.egg.push(n0);
+    var k=n.replace(/豆漿|豆奶|豆乳|椰奶|椰漿|椰子奶|杏仁奶|燕麥奶/g,'');if(DT_MILK.test(k))f.milk.push(n0);
+    if(DT_EM_Q.test(n))f.emq.push(n0)});
+  function L(a){return a.slice(0,3).join('、')+(a.length>3?' 等 '+a.length+' 樣':'')}
+  var alc=f.alc.length?'；有酒：'+L(f.alc):'';
+  if(!N.length)return {v:'',why:''};
+  if(f.meat.length)return {v:f.alc.length?'葷含酒':'葷',why:'有 '+L(f.meat)+alc};
+  if(f.mq.length)return {v:'',why:L(f.mq)+' 看不出有沒有明膠、豬油等葷的成分'};
+  if(f.egg.length||f.milk.length)return {v:f.alc.length?'蛋奶素含酒':'蛋奶素',why:'有'+(f.egg.length?'蛋：'+L(f.egg):'')+(f.egg.length&&f.milk.length?'；':'')+(f.milk.length?'奶：'+L(f.milk):'')+alc};
+  if(f.emq.length)return {v:'',why:L(f.emq)+' 看不出有沒有蛋、奶'};
+  if(f.alc.length)return {v:'',why:'沒有蛋奶但含酒（'+L(f.alc)+'），選單沒有「素含酒」'};
+  return {v:'素',why:'用料沒有葷、蛋、奶、酒'}}
+var _dj=null;
+function dietAuto(){_dj=null;if(lockedReq()||unitMode()||!canDo('P:head.diet'))return;var h=AP.head;_dj=dietJudge();
+  if(h.dietMan)return;var cur=String(h.diet||'');if(cur&&cur!==String(h.dietAuto||''))return;
+  if(cur!==_dj.v||String(h.dietAuto||'')!==_dj.v){h.diet=_dj.v;h.dietAuto=_dj.v;saveDraft()}}
+function dietHintHTML(){var h=AP.head,j=_dj;if(!j||!j.why)return '';var t;
+  if(h.dietMan){if(!j.v||j.v===h.diet)return '';t='系統判斷是「'+j.v+'」（'+j.why+'），目前是你自己選的「'+(h.diet||'空白')+'」'}
+  else t=j.v?'系統判斷：'+j.why:'無法判斷，請自己選：'+j.why;
+  return '<div class="ap-muted" style="width:100%;font-size:12px;margin-top:2px">🤖 '+esc(t)+'</div>'}
 var KEEPS=['1小時內冷藏','2小時內冷藏','常溫','冷凍'];
 var PACKS=['2號包裝盒','4號包裝盒','6號包裝盒','7號包裝盒','8號包裝盒','9號包裝盒','中秋禮盒'];
 var TIMES=['2hr','2.5hr','3hr','4hr'];
@@ -3348,7 +3392,7 @@ function headHTML(c){var rate=rateOf(c),col=rateColor(rate);
    +'</div>'   /* 2026-10-08 經營者：拿掉「💾 存成檔案／📂 開啟檔案」（主廚一次填完、產出連結；之後大家都用連結開） */
    +'<div class="ap-row ap-row-3">'+cell('品牌別',sel('brand',BRANDS))+cell('申請日期',inp('date','date'))+cell('檔期',campSelectHTML())+'</div>'
    +'<div class="ap-row ap-row-1 ap-dim">'+cell('檔期資訊','<div id="apCampInfo" style="width:100%">'+campInfoHTML()+'</div>')+'</div>'
-   +'<div class="ap-row ap-row-3">'+cell('商品暫定名稱',inp('name').replace('<input ','<input autocomplete="off" '))+cell('葷素',sel('diet',DIETS))+cell('保存方式',sel('keep',KEEPS))+'</div>'
+   +'<div class="ap-row ap-row-3">'+cell('商品暫定名稱',inp('name').replace('<input ','<input autocomplete="off" '))+cell('葷素','<div style="width:100%;min-width:0;display:flex;flex-direction:column">'+sel('diet',DIETS)+dietHintHTML()+'</div>')+cell('保存方式',sel('keep',KEEPS))+'</div>'
    +'<div class="ap-row ap-row-1">'+cell('商品正式名稱',inp('fname','text','新品上架要用的正式名稱（核准後系統會用這個名稱建 BOM 表與 POS 對照）').replace('<input ','<input autocomplete="off" ')+'<div id="apRevise" style="width:100%">'+reviseHTML()+'</div>')+'</div>'
    +'<div class="ap-row ap-row-7">'+cell('產品成本','<div class="ap-ro" id="apCostRO" title="唯讀＝成本卡每份材料成本">'+fm(c.total)+' 元</div>')
      +cell('產品定價',inp('price','number','元'))
@@ -5196,6 +5240,7 @@ function render(){var root=document.getElementById('apRoot');if(!_ready||!root)r
 function paint(){var root=document.getElementById('apRoot');
   if(LM&&!LM.ready){root.innerHTML='<div class="'+(LM.err?'ap-bad':'ap-muted')+'" style="padding:20px 0">'+(LM.err?'✕ '+esc(LM.err):'⏳ 讀取申請表中…（Google 慢的時候要 10～30 秒）')+'</div>';return}
   semiPrepass();   /* 2026-10-18 半成品：製作步驟自動帶入用料、猜對應用料 */
+  dietAuto();   /* 2026-11-03 葷素自動預選 */
   var c=computeCost();
   var s='<div class="ap-grid"><div class="ap-area-head">'
     +(lockedReq()?'<div class="ap-lockbar">🔒 這張單目前是「'+esc(AP.sub.status)+'」，只能查看、複製與下載，不能修改或再送件。要開新的一張請按最下方「清空整張」。</div>':'')
@@ -5290,8 +5335,8 @@ function wireSearch(el,key,onBlur){
 function wire(){var root=document.getElementById('apRoot');
   /* 表頭＋頁尾 */
   root.querySelectorAll('[data-hf]').forEach(function(el){var k=el.dataset.hf;
-    el.oninput=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='price'||k==='qty')refreshCost()};
-    el.onchange=function(){AP.head[k]=el.value;OUT=null;saveDraft();if(k==='cat')renderSoon();else if(k==='name'||k==='fname'){updateSemiCard();refreshRevise()}else if(k==='brand')refreshCost();var td=document.getElementById('apTodo');if(td)td.innerHTML=todoHTML()}});
+    el.oninput=function(){AP.head[k]=el.value;if(k==='diet')AP.head.dietMan=1;OUT=null;saveDraft();if(k==='price'||k==='qty')refreshCost()};
+    el.onchange=function(){AP.head[k]=el.value;if(k==='diet')AP.head.dietMan=1;OUT=null;saveDraft();if(k==='cat')renderSoon();else if(k==='name'||k==='fname'){updateSemiCard();refreshRevise()}else if(k==='brand')refreshCost();var td=document.getElementById('apTodo');if(td)td.innerHTML=todoHTML()}});
   /* 半成品 */
   root.querySelectorAll('.ap-semi').forEach(function(box){var si=+box.dataset.semi,sm=AP.semis[si];if(!sm)return;
     box.querySelectorAll('[data-sh]').forEach(function(el){var k=el.dataset.sh;el.oninput=function(){sm[k]=el.value;OUT=null;saveDraft()};
