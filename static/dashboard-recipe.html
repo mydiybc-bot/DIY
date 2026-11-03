@@ -2506,7 +2506,12 @@ function packOf(l){var n=num(l.pkgN);if(n>0)return n;var g=gPerOf(l),sp;if(g>0&&
    同日經營者裁定：目前只有用料單位是「支」「包」的食材才出現（公分等長度不用換算；之後遇到其他單位再加進 GPER_UNITS） */
 var GPER_UNITS=/^(支|包)$/;
 function cntUnit(l){if(isToolLine(l)||!String(l.m||'').trim())return '';var t=ckTok(String(l.u||'').trim()||(skuOf(l.m)||{}).useUnit);return GPER_UNITS.test(t)?t:''}
-function gPerOf(l){return cntUnit(l)?num(l.gPer):0}
+/* 2026-11-03 深夜 經營者（「我只希望規格不同時自動連動，不需要手動更改」→ 選「在採購系統單位對照改」）：
+   主檔品項的「1 支約幾 g」只讀採購系統「單位對照」（dim_unitconv：適用品項＝主檔品名、單位＝支／包、基準＝主檔使用單位 g），申請表不再各填各的；
+   主檔照實記克數（例：迷迭香 1 包＝50 g、70 元），改單位對照那一個數字 → 成本（costLines 的 conv）、採購量 ≈ g 都跟著變。🆕 品項（主檔還沒有）照舊在表二填 l.gPer */
+function skuGPer(l){var s=skuOf(l.m),u=cntUnit(l);if(!s||!u||!/^(g|ml)$/i.test(String(s.useUnit||'').trim()))return 0;
+  var C=R.convs();for(var i=0;i<C.length;i++){var c=C[i];if(String(c.unit||'').trim()===u&&(c.item===s.name||c.item===l.m))return num(c.amt)}return 0}
+function gPerOf(l){if(!cntUnit(l))return 0;return skuOf(l.m)?skuGPer(l):num(l.gPer)}
 function gTxt(g){g=Math.round(g);return g>=1000?fm(g)+' g（'+r1(g/1000)+' kg）':g+' g'}
 function unitParen(l){return isNewItem(l)&&!isToolLine(l)&&/[（(][^）)]*[）)]/.test(String(l.u||''))}
 function unitBare(u){return String(u||'').replace(/[（(][^）)]*[）)]/g,'').trim()}
@@ -3428,7 +3433,10 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   h+='<td>'+d('supply',SUPPLYS)+'</td>'+(nw?('<td>'+t('vendor')+'</td>'):ro(skuVendor(l),''))+'<td>'+d('pkgType',PKGTYPES)+'</td><td>'+t('split')+'</td>';
   h+='<td class="ap-rocell" data-buyqty="'+i+'">'+buyCellHTML(l)+'</td><td class="ap-rocell" data-buyunit="'+i+'">'+esc(u||'—')+'</td>';
   var cu=cntUnit(l);   /* 2026-11-03 秤重換算：只有用料單位是個數的食材才填 */
-  h+=cu?('<td><span style="white-space:nowrap">1 '+esc(cu)+'約 <input type="number" step="any" min="0" data-nf="gPer" value="'+esc(l.gPer)+'" placeholder="?" style="width:52px" title="例：迷迭香剪 8cm，1 支約 1 g"> g</span></td>'):'<td class="ap-rocell" title="只有用料單位是「支」「包」的食材才要填">—</td>';
+  if(cu&&skuOf(l.m)){var sg=skuGPer(l);   /* 2026-11-03 深夜：主檔品項唯讀，數字在採購系統「單位對照」改 */
+    h+=sg>0?'<td class="ap-rocell" title="採購系統「單位對照」的換算；要改請到那裡改，成本與採購量會自動跟著算">1 '+esc(cu)+'＝'+esc(String(sg))+' g<div class="ap-hint" style="color:#2E6B8A">採購系統「單位對照」</div></td>'
+      :'<td class="ap-rocell" title="主檔品項的換算在採購系統「單位對照」設定（主檔使用單位要是 g）；這裡不填">—</td>'}
+  else h+=cu?('<td><span style="white-space:nowrap">1 '+esc(cu)+'約 <input type="number" step="any" min="0" data-nf="gPer" value="'+esc(l.gPer)+'" placeholder="?" style="width:52px" title="例：迷迭香剪 8cm，1 支約 1 g"> g</span></td>'):'<td class="ap-rocell" title="只有用料單位是「支」「包」的食材才要填">—</td>';
   h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td><td>'+shelfCellHTML(l,i)+'</td></tr>';   /* 09-24 十三：保存期限 */
   return h}
 function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}).filter(function(i){return i>=0}),SL=semiT2List();
