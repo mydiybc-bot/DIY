@@ -239,6 +239,12 @@ window.SpoonHint=(function(){
   #tab-apply .ap-t1 table{width:100%;table-layout:fixed}
   #tab-apply .ap-t1 td input{padding:5px 6px;font-size:13px}
   #tab-apply .ap-t1 td.ap-money{padding-top:9px}
+  /* 2026-11-03 用料表分三大類（食材／器模具／耗材），點標題伸縮 */
+  #tab-apply .ap-t1 tr.ap-t1gh td{background:#E6F2EF;color:#00695C;font-weight:800;font-size:13px;padding:7px 10px;cursor:pointer;user-select:none;border-top:2px solid #B9DDD5}
+  #tab-apply .ap-t1 tr.ap-t1gh:hover td{background:#D6EBE6}
+  #tab-apply .ap-t1 tr.ap-t1gh .ap-muted{font-weight:400;margin-left:8px}
+  #tab-apply .ap-t1 tr.ap-t1gh.ap-t1new td{cursor:default;background:#F7F4EF;color:#6F4E45}
+  #tab-apply .ap-t1 tbody.ap-fold tr[data-ln]{display:none}
   #tab-apply .ap-goto{border:1px solid #F0DFC0;background:#FFF2CC;color:#8A5A00;border-radius:9px;padding:1px 6px;font-size:12px;cursor:pointer;font-family:inherit}
   #tab-apply .ap-items td.ap-t2name{font-weight:700;color:#00695C}
   #tab-apply .ap-pin{padding:3px 8px;font-size:12px;white-space:nowrap}
@@ -2273,7 +2279,7 @@ function semiSimOn(it,si){var n=String(it.m||'').trim();return !!n&&isNewItem(it
 function simGate(){var bad=[];AP.lines.forEach(function(l,i){if(isNewItem(l)&&simPending(l).length)bad.push({i:i,l:l})});if(!bad.length)return true;
   alert('⚠ 下面這些新品項，主檔有類似的品項，主廚還沒確認：\n\n'+bad.map(function(b){return '・'+b.l.m+'　→ 主檔：'+simPending(b.l).map(function(x){return x.o.id+' '+x.o.name+simTag(x.o)}).join('、')}).join('\n')
     +'\n\n請到「🧾 用料（全部，成本計算用）」表找到這幾樣，在品名下面的紅框按「改用這個」（同一樣）或「都不是，確認是新品項」，再送出。');
-  var tr=document.querySelector('tr[data-ln="'+bad[0].i+'"]');if(tr)tr.scrollIntoView({behavior:'smooth',block:'center'});return false}
+  var tr=t1Show(bad[0].i);if(tr)tr.scrollIntoView({behavior:'smooth',block:'center'});return false}
 /* 2026-10-17 經營者「改版既有甜點」：正式名稱（沒填用暫定名稱）在採購系統 BOM 表已經有配方 → 主廚要勾「改版既有甜點」（核准時整份換掉舊配方，寫前備份、可還原），
    或換一個名字；兩個都沒做 → 不能產出連結／送件（不然核准時配方不會寫進去） */
 function dessName(){return String(AP.head.fname||'').trim()||String(AP.head.name||'').trim()}
@@ -2585,7 +2591,7 @@ function ckBoxInner(l,i){if(!isNewItem(l)||isToolLine(l)||!String(l.m||'').trim(
 function ckBoxHTML(l,i){return '<div data-ckbox="'+i+'">'+ckBoxInner(l,i)+'</div>'}
 function ckGo(go){var m,el=null;
   if((m=go.match(/^n(\d+)$/)))el=document.querySelector('#apRoot tr[data-n2="'+m[1]+'"]');
-  if(!el&&(m=go.match(/^[ln](\d+)$/)))el=document.querySelector('#apRoot tr[data-ln="'+m[1]+'"]');
+  if(!el&&(m=go.match(/^[ln](\d+)$/)))el=t1Show(m[1]);
   if(!el&&(m=go.match(/^s(\d+)$/)))el=document.querySelector('#apRoot .ap-semi[data-semi="'+m[1]+'"]');
   if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='3px solid #F0AD4E';setTimeout(function(){el.style.outline=''},2500)}
 function ckLineOf(k){var x=_ckL[k];if(!x)return null;var m=x.go.match(/^[ln](\d+)$/);return m?AP.lines[+m[1]]:null}
@@ -2632,7 +2638,7 @@ function targetOf(key){var m;
   return null}
 function pick(key,o){var l=targetOf(key);if(!l)return;
   l.m=o.name;l.u=o.useUnit||'g';
-  if(key.charAt(0)==='l'){l.id=o.id;l.cat=o.cat||'';l.zone=defaultZone(o.name,o.cat)}
+  if(key.charAt(0)==='l'){l.id=o.id;l.cat=o.cat||'';l.zone=defaultZone(o.name,o.cat);_t1Last=+key.slice(1)}   /* 2026-11-03 選好品名 → 那一類收著就打開 */
   _sugKey='';_sugList=[];OUT=null;saveDraft();
   /* 2026-09-28：選好品項 → 等這次點擊做完再更新畫面，游標直接跳到這一列的數量（不必再點一次） */
   var go=function(){render();var q=qtyInputOf(key);if(q){try{q.focus({preventScroll:true});q.select()}catch(e){}}};
@@ -3390,6 +3396,15 @@ function cost1HTML(l,row){return '<b class="'+costClass(row)+'">'+esc(costText(l
   +(row&&row.part?'<div class="ap-muted" style="font-size:11px;white-space:normal" title="同一品項在用料表有好幾列；成本卡只算一次合計">同品項合計 '+r2(row.part.q)+' '+esc(row.part.u||'')+'＝'+fm(row.part.cost)+'</div>':'')
   +(row&&row.warn?'<div class="ap-bad" style="white-space:normal">⚠ '+esc(row.warn)+'</div>':'')
   +(row&&row.semi?'<div class="ap-muted" style="font-size:11px;white-space:normal">'+esc(row.s)+'</div>':'')}   /* 2026-11-03 半成品材料加總明細 */
+/* 2026-11-03 經營者：「用料（全部，成本計算用）」分「食材」「器模具」「耗材」三大類，點標題伸縮。
+   類別照 lineCat（主檔品類別；器具＋模具＝器模具）；還沒填品名的列放最下面、不收合。收合狀態記在這台電腦（rcp:t1fold）；
+   收合只切換 tbody 的 class，不重畫輸入框（中文輸入安全）。跳到某一列（類似品項、送件檢查、新增品項…）一律先走 t1Show 打開那一類。 */
+var T1G=[['食材','🥚 食材',''],['器模具','🥄 器模具','只列清單、不算成本'],['耗材','📦 耗材','']],T1FOLD={},_t1Last=-1;
+try{T1FOLD=JSON.parse(localStorage.getItem('rcp:t1fold')||'{}')||{}}catch(e){T1FOLD={}}
+function t1Grp(l){if(!String(l.m||'').trim())return '';var c=lineCat(l);return (c==='器具'||c==='模具')?'器模具':(c==='耗材'?'耗材':'食材')}
+function t1FoldSave(g,on){T1FOLD[g]=!!on;try{localStorage.setItem('rcp:t1fold',JSON.stringify(T1FOLD))}catch(e){}}
+function t1Fold(g,on){t1FoldSave(g,on);var tb=document.querySelector('#apRoot tbody[data-t1g="'+g+'"]');if(!tb)return;tb.classList.toggle('ap-fold',!!on);var a=tb.querySelector('.ap-t1arr');if(a)a.textContent=on?'▸':'▾'}
+function t1Show(i){var tr=document.querySelector('#apRoot tr[data-ln="'+i+'"]'),tb=tr&&tr.closest('tbody[data-t1g]');if(tb&&tb.classList.contains('ap-fold'))t1Fold(tb.dataset.t1g,false);return tr}
 function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=unitOK(l),key='l'+i,row=rowOf(c,l);
   var h='<tr data-ln="'+i+'">';
   h+='<td><div class="ap-sc"><input type="text" data-lf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
@@ -3405,9 +3420,16 @@ function table1HTML(c){
   var h='<div class="ap-sheet"><div class="ap-sheet-title">🧾 用料（全部，成本計算用）</div>'
    +'<div class="ap-muted" style="padding:8px 12px 4px">把這支甜點用到的東西全部列進來（食材、耗材、器具、模具），右邊成本卡照這裡算。採購系統主檔沒有的品項會標 🆕，並自動列到下方「新增食材/器模具」補資料。</div>'
    +'<div style="padding:4px 10px 10px"><div class="ap-t1"><table><colgroup><col style="width:38%"><col style="width:12%"><col style="width:10%"><col style="width:16%"><col style="width:19%"><col style="width:5%"></colgroup>'
-   +'<thead><tr><th>品項</th><th>數量</th><th>單位</th><th class="ap-r">每份成本</th><th style="text-align:center">新增表</th><th></th></tr></thead><tbody>';
-  AP.lines.forEach(function(l,i){h+=t1RowHTML(l,i,c)});
-  h+='</tbody></table></div>'+optSumHTML(c)+'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝用主檔的單位；填「匙」「滴」這類單位，系統會照單位換算表換算（換不到會請你估「1 匙≈幾 g」）。器具／模具只列清單、不算成本。🆕 品項的每份成本，照下方「🆕 新增食材/器模具」表填的原包裝成本和規格估算。</span></div></div></div>';
+   +'<thead><tr><th>品項</th><th>數量</th><th>單位</th><th class="ap-r">每份成本</th><th style="text-align:center">新增表</th><th></th></tr></thead>';
+  var G={'食材':[],'器模具':[],'耗材':[],'':[]};AP.lines.forEach(function(l,i){G[t1Grp(l)].push(i)});
+  var ae=document.activeElement,atr=ae&&ae.closest?ae.closest('#apRoot tr[data-ln]'):null;   /* 正在填的那一列（或剛選好品名的列）所在的類別收著 → 自動打開 */
+  [_t1Last,atr?+atr.dataset.ln:-1].forEach(function(k){var l=AP.lines[k],g=l?t1Grp(l):'';if(g&&T1FOLD[g])t1FoldSave(g,false)});_t1Last=-1;
+  T1G.forEach(function(g){var ids=G[g[0]];if(!ids.length)return;var f=!!T1FOLD[g[0]];
+    h+='<tbody data-t1g="'+g[0]+'"'+(f?' class="ap-fold"':'')+'><tr class="ap-t1gh" data-t1gh="'+g[0]+'" title="點一下收合／展開"><td colspan="6"><span class="ap-t1arr">'+(f?'▸':'▾')+'</span> '+g[1]+'（'+ids.length+' 項）<span class="ap-muted">'+g[2]+'</span></td></tr>';
+    ids.forEach(function(i){h+=t1RowHTML(AP.lines[i],i,c)});h+='</tbody>'});
+  if(G[''].length){h+='<tbody data-t1g="new"><tr class="ap-t1gh ap-t1new"><td colspan="6">✏️ 還沒填品名（'+G[''].length+' 列）<span class="ap-muted">填好品名會自動歸到上面的分類</span></td></tr>';
+    G[''].forEach(function(i){h+=t1RowHTML(AP.lines[i],i,c)});h+='</tbody>'}
+  h+='</table></div>'+optSumHTML(c)+'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝用主檔的單位；填「匙」「滴」這類單位，系統會照單位換算表換算（換不到會請你估「1 匙≈幾 g」）。器具／模具只列清單、不算成本。🆕 品項的每份成本，照下方「🆕 新增食材/器模具」表填的原包裝成本和規格估算。</span></div></div></div>';
   return h}
 /* 表二：只列 isNewItem 的列，Excel 第 17 列 17 欄；品項／每份使用量／單位 唯讀鏡像表一；無刪除鍵 */
 var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,108,84,62,190];   /* 2026-11-03：採購量單位後多「秤重換算」108 */   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
@@ -3458,7 +3480,7 @@ function addNewItem(){var nm=prompt('輸入新增品項的品名（會加到「�
   var o=newLine();o.m=nm;var s=skuOf(nm);if(s){o.id=s.id;o.cat=s.cat||'';o.u=s.useUnit||'g';o.zone=defaultZone(s.name,s.cat)}else{o.zone=defaultZone(nm,'')}
   if(AP.lines.length===1&&!String(AP.lines[0].m||'').trim())AP.lines[0]=o;else AP.lines.push(o);
   OUT=null;saveDraft();render();
-  var i=AP.lines.indexOf(o);var tr=document.querySelector('tr[data-n2="'+i+'"]')||document.querySelector('tr[data-ln="'+i+'"]');if(tr)tr.scrollIntoView({behavior:'smooth',block:'center'});
+  var i=AP.lines.indexOf(o);var tr=document.querySelector('tr[data-n2="'+i+'"]')||t1Show(i);if(tr)tr.scrollIntoView({behavior:'smooth',block:'center'});
   if(!s){var q=document.querySelector('tr[data-ln="'+i+'"] [data-lf="q"]');if(q)q.focus();simAlert(i)}}
 /* ---- 店製配方 → 採購系統 ---- */
 function semiName(s){return String(s.link||s.name||'').trim()}
@@ -5282,9 +5304,10 @@ function wire(){var root=document.getElementById('apRoot');
   var sa=document.getElementById('apSemiAdd');if(sa)sa.onclick=function(){AP.semis.push(newSemi());OUT=null;saveDraft();render();
     var boxes=root.querySelectorAll('.ap-semi');var last=boxes[boxes.length-1];if(last){var inp=last.querySelector('[data-sh="name"]');if(inp)inp.focus()}};
   /* 表一：品項／數量／單位／刪除；改品項 blur 後整頁重繪（表二依 isNewItem 自動出現／消失，l.* 欄位保留） */
+  root.querySelectorAll('[data-t1gh]').forEach(function(tr){tr.onclick=function(){var g=tr.dataset.t1gh;t1Fold(g,!T1FOLD[g])}});   /* 2026-11-03 用料表分類伸縮 */
   root.querySelectorAll('tr[data-ln]').forEach(function(tr){var i=+tr.dataset.ln;
     tr.querySelectorAll('[data-lf]').forEach(function(el){var f=el.dataset.lf;
-      if(f==='m'){wireSearch(el,'l'+i,function(){var l=AP.lines[i];var s=skuOf(l.m);
+      if(f==='m'){wireSearch(el,'l'+i,function(){var l=AP.lines[i];var s=skuOf(l.m);_t1Last=i;
           if(s){l.id=s.id;if(!l.u)l.u=s.useUnit||'g';if(!l.zone)l.zone=defaultZone(s.name,s.cat)}else if(l.m&&!l.zone)l.zone=defaultZone(l.m,l.cat||'');simAlert(i)})}
       else if(f==='u'){el.oninput=function(){AP.lines[i].u=el.value;OUT=null;saveDraft();refreshCost()};el.onchange=function(){renderSoon()}}
       else if(f==='mc'){el.oninput=function(){AP.lines[i].mc=el.value;OUT=null;saveDraft();refreshCost();var b=el.closest('.ap-conv');if(b)b.classList.toggle('ok',num(el.value)>0)}}   /* 2026-10-17 主廚手填成本 */
@@ -5311,12 +5334,12 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-nmh]').forEach(function(b){b.onclick=function(){openNameHelp(+b.dataset.nmh)}});   /* 2026-10-22 🏷 取名小幫手 */
   root.querySelectorAll('[data-simundo]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.simundo);if(!l)return;l.simok='';OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-simgo]').forEach(function(b){b.onclick=function(){var k=String(b.dataset.simgo),m=k.match(/^s(\d+)\.(\d+)$/);   /* 2026-11-03 ↑ 帶我過去 */
-    var tr=m?root.querySelector('.ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"]'):root.querySelector('tr[data-ln="'+k+'"]');if(!tr)return;
+    var tr=m?root.querySelector('.ap-semi[data-semi="'+m[1]+'"] tr[data-sk="'+m[2]+'"]'):t1Show(k);if(!tr)return;
     tr.scrollIntoView({behavior:'smooth',block:'center'});var bx=tr.querySelector('.ap-sim');if(bx){bx.classList.remove('ap-simhit');void bx.offsetWidth;bx.classList.add('ap-simhit')}}});
   root.querySelectorAll('[data-unpin]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.unpin);if(!l)return;l.pin=false;l.nopin=true;OUT=null;saveDraft();render()}});
   root.querySelectorAll('[data-goto]').forEach(function(b){b.onclick=function(){var tr=document.querySelector('tr[data-n2="'+b.dataset.goto+'"]');if(tr){tr.scrollIntoView({behavior:'smooth',block:'center'});var inp=tr.querySelector('[data-nf="sticker"]');if(inp)inp.focus()}}});
   var add=document.getElementById('apAdd');if(add)add.onclick=function(){AP.lines.push(newLine());OUT=null;saveDraft();render();
-    var rows=root.querySelectorAll('tr[data-ln]');var last=rows[rows.length-1];if(last){var inp=last.querySelector('[data-lf="m"]');if(inp)inp.focus()}};
+    var last=t1Show(AP.lines.length-1);if(last){var inp=last.querySelector('[data-lf="m"]');if(inp)inp.focus()}};
   /* 表二：Excel 欄位即時寫回 AP.lines（不重繪；成本／規格改了只局部更新表一每份成本） */
   root.querySelectorAll('tr[data-n2]').forEach(function(tr){var l=t2Obj(tr.dataset.n2);if(!l)return;
     tr.querySelectorAll('[data-shelf]').forEach(function(el){var fn=function(e){var o=shelfSplit(l.shelf);o[el.dataset.shelf]=el.value;l.shelf=shelfJoin(o);OUT=null;saveDraft();if(e&&e.type==='change')nimemSave(l)};el.oninput=fn;el.onchange=fn});
