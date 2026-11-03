@@ -2123,7 +2123,7 @@ var ZONE_ALIAS={'冰箱區':'冰箱','凍庫區':'冷凍庫','洞洞牆區':'洞
 var CATS=['食材','耗材','器具','模具'];
 var COLD=/奶油|鮮奶|牛奶|雞蛋|蛋白|蛋黃|優格|乳酪|起司|起士|動植鮮|鮮奶油|水果|草莓|藍莓|覆盆|蘋果|檸檬|柳橙|香蕉|冷藏|冷凍|吉利丁|卡士達|克林姆|布丁|果泥|果醬|芋泥|栗子|冰淇淋/;
 /* 🆕 列可填欄位（與 Excel 第 17 列表頭對應；一層結構） */
-var NI_KEYS=['sticker','pkgSpec','pkgCost','store','take','supply','vendor','pkgType','split','first','lnote','shelf','vname','perStore','pkgN'];   /* 2026-10-28：pkgN＝主廚填「原包裝共約幾個」（單位防呆 ②） */   /* 2026-10-07 晚：perStore＝新器具／模具每店要幾個（核准後寫成各店標配 dim_store_par） */   /* 09-29 E 階段：vname＝廠商品名（廠商那邊的叫法，例：二砂糖；品項／貼紙／BOM 仍用通俗名）*/   /* 09-24 十三：shelf＝保存期限（進主檔 dim_sku「效期」欄） */
+var NI_KEYS=['sticker','pkgSpec','pkgCost','store','take','supply','vendor','pkgType','split','first','lnote','shelf','vname','perStore','pkgN','gPer'];   /* 2026-11-03：gPer＝用料單位是個數（支／顆／片…）但秤重採購時，主廚填「1 支約幾 g」（整檔採購量多顯示約幾 g；🆕 原包裝是重量時自動算一包幾支） */   /* 2026-10-28：pkgN＝主廚填「原包裝共約幾個」（單位防呆 ②） */   /* 2026-10-07 晚：perStore＝新器具／模具每店要幾個（核准後寫成各店標配 dim_store_par） */   /* 09-29 E 階段：vname＝廠商品名（廠商那邊的叫法，例：二砂糖；品項／貼紙／BOM 仍用通俗名）*/   /* 09-24 十三：shelf＝保存期限（進主檔 dim_sku「效期」欄） */
 var EXTRA={zone:{},status:{},last:{},loaded:false};   /* 依品名 */
 var POSCAT=null;                                         /* [{main,sub}] 去重後（2026-10-01 起不再用於下拉，保留給舊單顯示） */
 var POSMAINS=null;                                       /* 2026-10-01 需求 7：POS 分類＝產品名稱對照表「主類別」（G 欄）不重複值，直讀 BOM 本 */
@@ -2492,12 +2492,17 @@ function ckSpec(s){var m=String(s||'').match(/(\d+(?:\.\d+)?)\s*([A-Za-z一-鿿]
   if(/^(kg|公斤)$/i.test(t)){n*=1000;t='g'}else if(/^(l|公升|升)$/i.test(t)){n*=1000;t='ml'}
   return {n:n,t:t,f:ckFam(t)}}
 /* 原包裝內容量：主廚填了「原包裝共約幾個」就用它，否則從規格文字抓 */
-function packOf(l){var n=num(l.pkgN);return n>0?n:packNum(l.pkgSpec)}
+function packOf(l){var n=num(l.pkgN);if(n>0)return n;var g=gPerOf(l),sp;if(g>0&&isNewItem(l)&&(sp=ckSpec(l.pkgSpec))&&sp.f==='w')return r2(sp.n/g);return packNum(l.pkgSpec)}
+/* 2026-11-03 經營者「食譜用支、採購秤重買，採購人員怎麼知道要買多少」：用料單位是個數（支／顆／片…，不含 g／ml／匙／包）的食材 → 表二可填「1 支約幾 g」 */
+function cntUnit(l){if(isToolLine(l)||!String(l.m||'').trim())return '';var t=ckTok(String(l.u||'').trim()||(skuOf(l.m)||{}).useUnit);return ckFam(t)==='c'?t:''}
+function gPerOf(l){return cntUnit(l)?num(l.gPer):0}
+function gTxt(g){g=Math.round(g);return g>=1000?fm(g)+' g（'+r1(g/1000)+' kg）':g+' g'}
 function unitParen(l){return isNewItem(l)&&!isToolLine(l)&&/[（(][^）)]*[）)]/.test(String(l.u||''))}
 function unitBare(u){return String(u||'').replace(/[（(][^）)]*[）)]/g,'').trim()}
 function unitMis(l){if(!isNewItem(l)||isToolLine(l)||!String(l.m||'').trim()||num(l.pkgN)>0)return null;
   var sp=ckSpec(l.pkgSpec),ut=ckTok(l.u),uf=ckFam(ut);if(!sp||!sp.f||sp.f==='p'||!uf)return null;
   if(ckWV(sp.f)&&ckWV(uf))return null;
+  if(sp.f==='w'&&gPerOf(l)>0)return null;   /* 2026-11-03：填了「1 支約幾 g」→ 一包幾支＝規格克數 ÷ 它（packOf） */
   if(!ckWV(sp.f)&&!ckWV(uf)&&sp.t===ut)return null;
   return {sp:sp,ut:ut,uf:uf,su:sp.f==='w'?'g':sp.f==='v'?'ml':sp.t}}
 var CK_PLAT=[['1688','1688',/1688/i,/1688\.com/i],['淘寶','淘寶',/淘寶|淘宝|taobao|天貓|tmall/i,/taobao\.com|tmall\.com/i],['蝦皮','蝦皮',/蝦皮|shopee/i,/shopee\./i],
@@ -2554,10 +2559,13 @@ function ckHTML(){var L=ckList();_ckL=L;if(!L.length)return '';var ok=ckAcked(),
 function ckBoxInner(l,i){if(!isNewItem(l)||isToolLine(l)||!String(l.m||'').trim())return '';var h='',lk=lockedReq()||unitMode(),u=String(l.u||'').trim();
   if(unitParen(l))h+='<div class="ap-sim">⚠ 單位「'+esc(u)+'」有括號說明：單位只寫「'+esc(unitBare(u))+'」，括號裡的放備註'+(lk?'':' <button class="ap-btn2" data-ckpar="'+i+'">幫我移到備註</button>')+'</div>';
   if(num(l.pkgN)>0)return h+'<div class="ap-sim ok">✓ 原包裝（'+esc(l.pkgSpec||'—')+'）共約 '+esc(String(num(l.pkgN)))+' '+esc(ckTok(u)||u)+'：成本、採購量照這個算'+(lk?'':' <button class="ap-btn2" data-ckclr="'+i+'">改</button>')+'</div>';
+  var gp=gPerOf(l),sp0=ckSpec(l.pkgSpec);
+  if(gp>0&&sp0&&sp0.f==='w')return h+'<div class="ap-sim ok">✓ 原包裝（'+esc(l.pkgSpec)+'）÷ 1 '+esc(cntUnit(l))+'約 '+esc(String(gp))+' g ＝ 共約 '+esc(String(packOf(l)))+' '+esc(cntUnit(l))+'：成本、採購量照這個算（在下方新增表「1 '+esc(cntUnit(l))+'約幾 g」改）</div>';   /* 2026-11-03 */
   var um=unitMis(l);if(!um)return h;
   return h+'<div class="ap-sim">⚠ <b>單位對不上</b>：原包裝規格「'+esc(l.pkgSpec)+'」是'+esc(ckFamName(um.sp.f,um.sp.t))+'，每份用量「'+esc(num(l.q)+' '+u)+'」是'+esc(ckFamName(um.uf,um.ut))+'。不改的話成本、採購量都會算錯，請選一個：'
     +(lk?'':'<div class="ap-simrow">① 用量改用「'+esc(um.su)+'」：每份 <input type="number" step="any" min="0" data-ckq="'+i+'" placeholder="?" style="width:72px"> '+esc(um.su)+' <button class="ap-btn2" data-ckqgo="'+i+'">套用</button></div>'
-      +'<div class="ap-simrow">② 原包裝（'+esc(l.pkgSpec)+'）共約 <input type="number" step="any" min="0" data-ckn="'+i+'" placeholder="?" style="width:72px"> '+esc(um.ut)+' <button class="ap-btn2" data-cknok="'+i+'">套用</button></div>')+'</div>'}
+      +'<div class="ap-simrow">② 原包裝（'+esc(l.pkgSpec)+'）共約 <input type="number" step="any" min="0" data-ckn="'+i+'" placeholder="?" style="width:72px"> '+esc(um.ut)+' <button class="ap-btn2" data-cknok="'+i+'">套用</button></div>'
+      +(um.sp.f==='w'&&um.uf==='c'?'<div class="ap-simrow">③ 1 '+esc(um.ut)+'約 <input type="number" step="any" min="0" data-ckg="'+i+'" placeholder="?" style="width:72px"> g（系統用規格克數 ÷ 它算一包幾'+esc(um.ut)+'，採購量也會顯示約幾 g） <button class="ap-btn2" data-ckgok="'+i+'">套用</button></div>':''))+'</div>'}
 function ckBoxHTML(l,i){return '<div data-ckbox="'+i+'">'+ckBoxInner(l,i)+'</div>'}
 function ckGo(go){var m,el=null;
   if((m=go.match(/^n(\d+)$/)))el=document.querySelector('#apRoot tr[data-n2="'+m[1]+'"]');
@@ -2580,6 +2588,9 @@ function wireChk(root){root=root||document;
   root.querySelectorAll('[data-cknok]').forEach(function(b){b.onclick=function(){var i=+b.dataset.cknok,l=AP.lines[i];if(!l)return;var inp=root.querySelector('[data-ckn="'+i+'"]'),v=num(inp&&inp.value);
     if(!(v>0)){alert('請填原包裝共約幾'+(ckTok(l.u)||'個')+'。');if(inp)inp.focus();return}
     l.pkgN=String(v);ckDone()}});
+  root.querySelectorAll('[data-ckgok]').forEach(function(b){b.onclick=function(){var i=+b.dataset.ckgok,l=AP.lines[i];if(!l)return;var inp=root.querySelector('[data-ckg="'+i+'"]'),v=num(inp&&inp.value);   /* 2026-11-03 */
+    if(!(v>0)){alert('請填 1 '+(ckTok(l.u)||'個')+'大約幾 g。');if(inp)inp.focus();return}
+    l.gPer=String(v);l.pkgN='';ckDone()}});
   root.querySelectorAll('[data-ckclr]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.ckclr];if(!l)return;l.pkgN='';ckDone()}});
   root.querySelectorAll('[data-ckpar]').forEach(function(b){b.onclick=function(){var l=AP.lines[+b.dataset.ckpar];if(!l)return;var old=String(l.u||'').trim();
     l.lnote=ckApp(l.lnote,'單位原寫「'+old+'」');l.u=unitBare(old);ckDone()}})}
@@ -2994,7 +3005,9 @@ function qtyHint(){var n=num(AP.head.qty),k=storeN();if(!(n>0))return '整個檔
 function lossOf(l){if(!isNewItem(l)||isToolLine(l)||unitMis(l))return null;var bq=buyQty(l),pn=packOf(l),pc=num(l.pkgCost);if(!(bq>0)||!(pn>0))return null;
   var k=storeN(),per=bq/k,packs=Math.ceil(per/pn-1e-9),left=packs*pn-per,pct=packs>0?left/(packs*pn):0;
   return {k:k,per:per,packs:packs,left:left,pct:pct,servings:num(l.q)>0?pn/num(l.q):0,cost:pc>0?k*left/pn*pc:null,hot:pct>=0.5&&(pc<=0||k*left/pn*pc>=200)}}
-function buyCellHTML(l){var bq=buyQty(l);if(!bq)return '—';var u=String(l.u||'').trim(),o=esc(String(bq));var L=lossOf(l);
+function buyCellHTML(l){var bq=buyQty(l);if(!bq)return '—';var u=String(l.u||'').trim(),o=esc(String(bq)),gp=gPerOf(l);
+  if(gp>0)o+='<div class="ap-hint" style="color:#2E6B8A" title="'+esc(bq+' '+(u||cntUnit(l))+' × 1 '+cntUnit(l)+'約 '+gp+' g')+'">≈ '+esc(gTxt(bq*gp))+'</div>';   /* 2026-11-03 秤重採購 */
+  var L=lossOf(l);
   if(!L)return o;var t='一包可做 '+(Math.round(L.servings*10)/10)+' 份；平均每店用 '+(Math.round(L.per*10)/10)+' '+u+'，每店至少叫 1 包 → 要叫 '+L.packs+' 包，用完剩 '+Math.round(L.pct*100)+'%';
   return o+'<div class="ap-hint'+(L.hot?' ap-bad':'')+'" title="'+esc(t+(L.cost!=null?'；全部門市合計約剩 '+Math.round(L.cost)+' 元的料':''))+'">'+(L.hot?'⚠ ':'')+'每店 '+L.packs+' 包・剩 '+Math.round(L.pct*100)+'%'+(L.hot&&L.cost!=null?'（全店剩約 $'+Math.round(L.cost)+'）':'')+'</div>'}
 function lossNameTxt(l){var L=lossOf(l);return (L&&L.hot)?'⚠ 每店剩 '+Math.round(L.pct*100)+'%，包裝太大（細節看右邊「整檔採購量」）':''}
@@ -3201,7 +3214,7 @@ function summaryText(c){var h=AP.head,rid=reqNo(),p=num(h.price),rate=rateOf(c),
     L.push((i+1)+'. '+l.m+'　'+(nw?'🆕':'[手動加入]')+'　類別：'+lineCat(l)+(nw&&isToolLine(l)?'　每店要幾個：'+dash(l.perStore):'')+'　廠商品名：'+dash(l.vname)+'　貼紙名稱：'+dash(l.sticker)+'　成本(原包裝)：'+(nw?(num(l.pkgCost)>0?num(l.pkgCost)+' 元':'—'):(skuCost(l)?skuCost(l)+' 元':'—'))+'　原包裝規格：'+dash(nw?l.pkgSpec:skuSpec(l)),
       '   每份使用量：'+l.q+' '+(l.u||'')+'　存放方式：'+dash(l.store)+'　拿取方式：'+dash(l.take)+'　區域：'+dash(l.zone),
       '   提供方式：'+dash(l.supply)+'　進貨廠商：'+dash(nw?l.vendor:skuVendor(l))+'　包裝類型：'+dash(l.pkgType)+'　分裝方式：'+dash(l.split),
-      '   採購量(100%)：'+(bq?bq+' '+(l.u||''):'—')+'　第一單處理：'+dash(l.first)+'　備註：'+dash(l.lnote)+'　保存期限：'+dash(l.shelf)
+      '   採購量(100%)：'+(bq?bq+' '+(l.u||'')+(gPerOf(l)>0?'（1 '+cntUnit(l)+'約 '+gPerOf(l)+' g，≈ '+gTxt(bq*gPerOf(l))+'）':''):'—')+'　第一單處理：'+dash(l.first)+'　備註：'+dash(l.lnote)+'　保存期限：'+dash(l.shelf)
       +(isToolLine(l)?'　（器具／模具不計價）':'　每份成本：'+(row?(row.cost===null?(nw?'估？':'缺'):fm(row.cost)+' 元'+(row.t==='C'?'(估)':'')):'—')))});
   /* 用料（全部，成本卡依據）：品項／數量／單位／每份成本，無區域 */
   L.push('','── 用料（全部，成本卡依據）──');
@@ -3233,11 +3246,11 @@ function jsonObj(c){var d=new Date(),p=num(AP.head.price),rate=rateOf(c);
     semis:AP.semis.map(function(s,i){return {seq:i+1,name:s.name,link:s.link,shared:!!s.shared,kind:s.kind,maker:s.maker,yield_qty:num(s.yq)||null,yield_unit:s.yu,store:s.store,take:s.take,usage:s.usage,steps:s.steps,note:s.note,base:'一批',batches_preview:num(s.nb)||2,
       items:semiItemsOf(s).map(function(it,k){var q=num(it.q);var yq=num(s.yq);return {seq:k+1,name:String(it.m).trim(),unit:it.u||'',qty_batch:q,per_unit:yq>0?r3(q/yq):null,qty4:q,in_master:!!skuOf(it.m),src:it.src||''}})}}),
     semi_items_new:semiT2List().map(function(x){var l=x.o,nw=isNewItem(l),sm=AP.semis[x.si];   /* 2026-10-18：半成品用到、要建主檔／停售改回在用的材料（不進 BOM） */
-      return {name:String(l.m).trim(),semi:String(sm.name||sm.link||'').trim(),is_new:nw,pinned:!nw,cat:lineCat(l),unit:l.u||'',qty_batch:num(l.q),sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packOf(l):null,pkg_n:(nw&&num(l.pkgN)>0)?num(l.pkgN):null,
+      return {name:String(l.m).trim(),semi:String(sm.name||sm.link||'').trim(),is_new:nw,pinned:!nw,cat:lineCat(l),unit:l.u||'',qty_batch:num(l.q),sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packOf(l):null,pkg_n:(nw&&num(l.pkgN)>0)?num(l.pkgN):null,g_per:gPerOf(l)||null,
         store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
         per_store:(nw&&isToolLine(l)&&num(l.perStore)>0)?Math.round(num(l.perStore)):null}}),
     lines:AP.lines.filter(function(l){return String(l.m||'').trim()}).map(function(l,i){var row=rowOf(c,l);var nw=isNewItem(l);
-      return {seq:i+1,sku_id:l.id||'',name:String(l.m).trim(),is_new:nw,pinned:!nw&&inTable2(l),nopin:!!l.nopin,sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packOf(l):null,pkg_n:(nw&&num(l.pkgN)>0)?num(l.pkgN):null,
+      return {seq:i+1,sku_id:l.id||'',name:String(l.m).trim(),is_new:nw,pinned:!nw&&inTable2(l),nopin:!!l.nopin,sticker:l.sticker,pkg_cost:nw?(num(l.pkgCost)||null):(num(skuCost(l))||null),pkg_spec:nw?l.pkgSpec:skuSpec(l),pack:nw?packOf(l):null,pkg_n:(nw&&num(l.pkgN)>0)?num(l.pkgN):null,g_per:gPerOf(l)||null,
         qty:num(l.q),unit:l.u||'',conv:null,conv_base:'',store:l.store,take:l.take,zone:l.zone||'',supply:l.supply,vendor:nw?l.vendor:skuVendor(l),pkg_type:l.pkgType,split:l.split,buy_qty:buyQty(l)||null,first:l.first,note:l.lnote,shelf:l.shelf||'',vname:String(l.vname||'').trim(),
         per_store:(nw&&isToolLine(l)&&num(l.perStore)>0)?Math.round(num(l.perStore)):null,
         sim_ok:nw?String(l.simok||''):'',
@@ -3264,7 +3277,7 @@ function fromJson(j,quiet){if(!j||typeof j!=='object')throw new Error('不是申
   var lines=(j.lines||[]).map(function(x){x=x||{};if(isDraft)return normLine(x);
     var o=newLine();o.m=String(x.name||x.m||'');o.q=x.qty!==undefined?x.qty:(x.q||'');o.u=x.unit||x.u||'';o.conv=x.conv!=null?String(x.conv):'';o.zone=x.zone||'';o.id=x.sku_id||x.id||'';o.cat=x.cat||'';o.pin=!!x.pinned;o.nopin=!!x.nopin;
     var nw=x.is_new!==undefined?!!x.is_new:(x.in_master===false);
-    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';o.sp=x.sp_orig||'';o.shelf=x.shelf||'';o.vname=x.vname||'';o.perStore=x.per_store!=null?String(x.per_store):'';o.simok=x.sim_ok||'';o.pkgN=x.pkg_n!=null?String(x.pkg_n):'';o.mc=x.manual_cost!=null?String(x.manual_cost):'';o.og=x.opt_group||'';o.oo=x.opt_name||'';o.op=x.opt_pct!=null?String(x.opt_pct):'';
+    o.sticker=x.sticker||'';o.store=x.store||'';o.take=x.take||'';o.supply=x.supply||'';o.pkgType=x.pkg_type||x.pkgType||'';o.split=x.split||'';o.first=x.first||'';o.lnote=x.note||x.lnote||'';o.sp=x.sp_orig||'';o.shelf=x.shelf||'';o.vname=x.vname||'';o.perStore=x.per_store!=null?String(x.per_store):'';o.simok=x.sim_ok||'';o.pkgN=x.pkg_n!=null?String(x.pkg_n):'';o.gPer=x.g_per!=null?String(x.g_per):'';o.mc=x.manual_cost!=null?String(x.manual_cost):'';o.og=x.opt_group||'';o.oo=x.opt_name||'';o.op=x.opt_pct!=null?String(x.opt_pct):'';
     if(nw){o.pkgCost=x.pkg_cost!=null?x.pkg_cost:(x.pkgCost||'');o.pkgSpec=x.pkg_spec||x.pkgSpec||'';o.vendor=x.vendor||''}
     if(x.new_item){var n=x.new_item;o.sticker=o.sticker||n.sticker||'';o.pkgCost=o.pkgCost||n.pkg_cost||'';o.pkgSpec=o.pkgSpec||n.pkg_spec||'';o.store=o.store||n.store||'';o.take=o.take||n.take||'';o.supply=o.supply||n.supply||'';o.vendor=o.vendor||n.vendor||'';o.pkgType=o.pkgType||n.pkg_type||'';o.split=o.split||n.split||'';o.first=o.first||n.first||'';o.lnote=o.lnote||n.note||''}
     return normLine(o)});
@@ -3272,7 +3285,7 @@ function fromJson(j,quiet){if(!j||typeof j!=='object')throw new Error('不是申
     o.shared=!!x.shared;o.yq=x.yield_qty!=null?String(x.yield_qty):(x.yq!=null?String(x.yq):'');o.yu=String(x.yield_unit||x.yu||'');if(x.batches_preview!=null)o.nb=String(x.batches_preview);
     o.items=(x.items||[]).map(function(it){it=it||{};return {m:String(it.name||it.m||''),q:it.qty_batch!==undefined?it.qty_batch:(it.qty4!==undefined?it.qty4:(it.q||'')),u:it.unit||it.u||'',src:it.src||''}});if(!o.items.length)o.items=[newSemiItem()];return o});
   (j.semi_items_new||[]).forEach(function(x){x=x||{};var nm=String(x.name||'').trim();if(!nm)return;   /* 2026-10-18：表二欄位放回半成品用料 */
-    semis.forEach(function(sm){sm.items.forEach(function(it){if(String(it.m||'').trim()!==nm)return;it.cat=x.cat||'';it.sticker=x.sticker||'';it.store=x.store||'';it.take=x.take||'';it.zone=x.zone||'';it.supply=x.supply||'';it.pkgType=x.pkg_type||'';it.split=x.split||'';it.first=x.first||'';it.lnote=x.note||'';it.shelf=x.shelf||'';it.vname=x.vname||'';it.perStore=x.per_store!=null?String(x.per_store):'';
+    semis.forEach(function(sm){sm.items.forEach(function(it){if(String(it.m||'').trim()!==nm)return;it.cat=x.cat||'';it.sticker=x.sticker||'';it.store=x.store||'';it.take=x.take||'';it.zone=x.zone||'';it.supply=x.supply||'';it.pkgType=x.pkg_type||'';it.split=x.split||'';it.first=x.first||'';it.lnote=x.note||'';it.shelf=x.shelf||'';it.vname=x.vname||'';it.perStore=x.per_store!=null?String(x.per_store):'';it.gPer=x.g_per!=null?String(x.g_per):'';
       if(x.is_new){it.pkgCost=x.pkg_cost!=null?x.pkg_cost:'';it.pkgSpec=x.pkg_spec||'';it.vendor=x.vendor||''}})})});
   if(!h.brand)h.brand=BRAND_DEFAULT;AP=blank();AP.head=h;AP.semis=semis;AP.lines=lines.length?lines:[newLine()];AP.srcName=j.source_file||j.srcName||'';
   AP.recipe=rcOk(j.recipe)?j.recipe:null;
@@ -3380,8 +3393,8 @@ function table1HTML(c){
   h+='</tbody></table></div>'+optSumHTML(c)+'<div class="ap-actions" style="padding:8px 0 0"><button class="ap-btn2" id="apAdd">＋ 加一列</button><span class="ap-muted">單位留白＝用主檔的單位；填「匙」「滴」這類單位，系統會照單位換算表換算（換不到會請你估「1 匙≈幾 g」）。器具／模具只列清單、不算成本。🆕 品項的每份成本，照表二填的原包裝成本和規格估算。</span></div></div></div>';
   return h}
 /* 表二：只列 isNewItem 的列，Excel 第 17 列 17 欄；品項／每份使用量／單位 唯讀鏡像表一；無刪除鍵 */
-var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,84,62,190];   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
-function t2HeadHTML(){var H=['品項','類別','每店要幾個','廠商品名','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','整檔採購量','單位','第一單處理','備註','保存期限 <span style="font-weight:400;font-size:11px" title="D+7＝7 天內用完；依原包裝＝看包裝上印的有效期限；沒有分裝就空著">（D+7＝7天內用完）</span>'];
+var COLW2=[130,74,84,100,84,66,80,64,44,70,84,100,84,78,74,78,64,44,108,84,62,190];   /* 2026-11-03：採購量單位後多「秤重換算」108 */   /* 2026-10-07 晚：品項後多「類別」74、「每店要幾個」84 */   /* 09-29 E 階段：品項後多「廠商品名」100 */   /* 合計 1290px；表格 width:100% 撐滿視窗時等比放大 */
+function t2HeadHTML(){var H=['品項','類別','每店要幾個','廠商品名','食譜/貼紙名稱','成本(元,原包裝)','原包裝規格','每份使用量','單位','存放方式','拿取方式','區域','提供方式','進貨廠商','包裝類型','分裝方式','整檔採購量','單位','秤重換算 <span style="font-weight:400;font-size:11px" title="用料寫支／顆／片，但採購是秤重買：填 1 支大約幾 g，整檔採購量會多顯示約幾 g">（秤重買才填）</span>','第一單處理','備註','保存期限 <span style="font-weight:400;font-size:11px" title="D+7＝7 天內用完；依原包裝＝看包裝上印的有效期限；沒有分裝就空著">（D+7＝7天內用完）</span>'];
   return '<colgroup>'+COLW2.map(function(w){return '<col style="width:'+w+'px">'}).join('')+'</colgroup><thead><tr>'+H.map(function(x){return '<th>'+x+'</th>'}).join('')+'</tr></thead>'}
 function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l);
   function t(k,ph){return '<input type="text" data-nf="'+k+'" value="'+esc(l[k])+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'}
@@ -3402,6 +3415,8 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   h+='<td>'+d('zone',ZONES,'— 請選 —')+'</td>';
   h+='<td>'+d('supply',SUPPLYS)+'</td>'+(nw?('<td>'+t('vendor')+'</td>'):ro(skuVendor(l),''))+'<td>'+d('pkgType',PKGTYPES)+'</td><td>'+t('split')+'</td>';
   h+='<td class="ap-rocell" data-buyqty="'+i+'">'+buyCellHTML(l)+'</td><td class="ap-rocell" data-buyunit="'+i+'">'+esc(u||'—')+'</td>';
+  var cu=cntUnit(l);   /* 2026-11-03 秤重換算：只有用料單位是個數的食材才填 */
+  h+=cu?('<td><span style="white-space:nowrap">1 '+esc(cu)+'約 <input type="number" step="any" min="0" data-nf="gPer" value="'+esc(l.gPer)+'" placeholder="?" style="width:52px" title="例：迷迭香剪 8cm，1 支約 1 g"> g</span></td>'):'<td class="ap-rocell" title="用料單位是 g／ml／匙／包，或器具模具：不用填">—</td>';
   h+='<td>'+d('first',FIRSTS)+'</td><td>'+t('lnote')+'</td><td>'+shelfCellHTML(l,i)+'</td></tr>';   /* 09-24 十三：保存期限 */
   return h}
 function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}).filter(function(i){return i>=0}),SL=semiT2List();
@@ -3409,6 +3424,7 @@ function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}
    +'<div class="ap-muted" style="padding:8px 12px 4px">表一裡主檔沒有的品項（🆕）會自動列在這裡，請把右邊欄位補齊；品項和用量回表一改。主檔<b>停售</b>或<b>過季</b>的品項（不含不盤點）也會自動列進來，提醒門市備料；其他主檔有、但想提醒門市備料的（例如少用的），在表一按「↓ 加到新增表」。上方<b>半成品</b>填好用料的（例：組合包），這裡不列半成品本身，改列它用到的🆕、停售、過季材料。</div>'
    +'<details class="xhelp" style="margin:0 12px 4px"><summary>ⓘ 整檔採購量、⚠ 包裝太大、↺ 帶入上次填的</summary><div>'
    +'<b>整檔採購量</b>＝每份用量 × 表頭的「預估銷售數」（整個檔期、全部門市合計）。<br>'
+   +'<b>秤重換算</b>：用料寫「支／顆／片」但採購是秤重買的（例：迷迭香剪 8cm 1 支約 1 g），填「1 支約幾 g」→ 整檔採購量下面多一行「≈ 幾 g」；🆕 品項原包裝寫重量（例：50g/包）也會自動算出一包約幾支。用個數買的（例：雞蛋）不用填。<br>'
    +'<b>每店 N 包・剩 X%</b>：把整檔用量平均分到各店（自己做 10 家、吳寶春自己做 2 家、兩個品牌 12 家），每家店至少要叫 1 包，算出每店要叫幾包、用完還剩幾成。滑鼠移到數字上可以看細節。<br>'
    +'<b>⚠ 包裝太大</b>：每店用完還剩一半以上（有填成本的話，全部門市合計剩的料還要約 200 元以上），會浪費；可以考慮換小包裝或改分裝。<br>'
    +'<b>↺ 帶入上次填的</b>：這個品項在這台電腦的其他申請單填過，按一下把空白的欄位帶進來（已經填的不會蓋掉），帶入的那一列會閃一下黃色，請再看一眼。'
@@ -5282,7 +5298,7 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('tr[data-n2]').forEach(function(tr){var l=t2Obj(tr.dataset.n2);if(!l)return;
     tr.querySelectorAll('[data-shelf]').forEach(function(el){var fn=function(e){var o=shelfSplit(l.shelf);o[el.dataset.shelf]=el.value;l.shelf=shelfJoin(o);OUT=null;saveDraft();if(e&&e.type==='change')nimemSave(l)};el.oninput=fn;el.onchange=fn});
     tr.querySelectorAll('[data-nf]').forEach(function(el){var k=el.dataset.nf;
-      var fn=function(e){l[k]=el.value;OUT=null;saveDraft();if(e&&e.type==='change'){nimemSave(l);updChk()}if(k==='pkgCost'||k==='pkgSpec')refreshCost();if(k==='cat'&&e&&e.type==='change')render()};el.oninput=fn;el.onchange=fn})});
+      var fn=function(e){l[k]=el.value;OUT=null;saveDraft();if(e&&e.type==='change'){nimemSave(l);updChk()}if(k==='pkgCost'||k==='pkgSpec'||k==='gPer')refreshCost();if(k==='cat'&&e&&e.type==='change')render()};el.oninput=fn;el.onchange=fn})});
   root.querySelectorAll('[data-nimem]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.nimem);if(!l)return;var m=nimemFor(l);if(!m)return;var n=0;
     Object.keys(m).forEach(function(k){if(k==='at')return;if(!String(l[k]==null?'':l[k]).trim()){l[k]=m[k];n++}});OUT=null;saveDraft();render();var tr=document.querySelector('tr[data-n2="'+b.dataset.nimem+'"]');if(tr){tr.scrollIntoView({block:'center'});tr.style.background='#FFF6D6';setTimeout(function(){tr.style.background=''},2500)}}});   /* 帶入後該列閃一下黃底，請主廚確認 */   /* 類別改了：成本（器具不計價）、「每店要幾個」欄要重畫 */
   var an=document.getElementById('apAddNew');if(an)an.onclick=addNewItem;
