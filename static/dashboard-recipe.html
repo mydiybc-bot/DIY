@@ -2224,6 +2224,27 @@ function newSemi(){return {name:'',link:'',shared:false,kind:'',maker:'',yq:'',y
 function blank(){return {head:blankHead(),semis:[],lines:[],warn:[],miss:[],txt:null,srcName:'',sub:{},base:'',ext:null,recipe:null,recipeMsg:''}}   /* B 階段：base＝從檔期載入時的內容（各單位只送改過的欄位）；ext＝品項補充／檔期作業／已填／簽核紀錄 */   /* sub＝送件狀態（seq／status／savedAt／by／createdAt／campId），存草稿、不進 .json */
 function mapZone(z){z=String(z||'').trim();if(!z)return '';if(ZONES.indexOf(z)>=0)return z;return ZONE_ALIAS[z]||''}
 function opts(list,cur,ph){return '<option value="">'+esc(ph||'— 請選 —')+'</option>'+list.map(function(x){return '<option value="'+esc(x)+'"'+(cur===x?' selected':'')+'>'+esc(x)+'</option>'}).join('')}
+/* 2026-11-03 存放方式 × 區域（經營者）：常溫不放冰箱／冷凍庫；冷藏、冷凍不放洞洞牆區（含小白盒、大白盒、長筒玻璃罐）。回傳衝突的存放方式，沒衝突回 '' */
+function zoneBan(store,zone){zone=String(zone||'');if(!zone)return '';
+  if(store==='常溫'&&(zone==='冰箱'||zone==='冷凍庫'))return '常溫';
+  if((store==='冷藏'||store==='冷凍')&&zone.indexOf('洞洞牆區')===0)return store;
+  return ''}
+function zoneBanWhy(zb){return zb==='常溫'?'常溫品不可放冰箱、冷凍庫':'冷藏、冷凍品不可放洞洞牆區'}
+var _zClr=[];   /* 改存放方式時被清空區域的列（只在畫面提示，不存進草稿） */
+function zoneOptsHTML(l){return '<option value="">— 請選 —</option>'+ZONES.map(function(z){var b=zoneBan(l.store,z),cur=l.zone===z;
+  return '<option value="'+esc(z)+'"'+(cur?' selected':'')+(b&&!cur?' disabled':'')+'>'+esc(z)+(b?'（'+esc(b)+'不可放）':'')+'</option>'}).join('')}
+function zoneHintHTML(l){var zb=zoneBan(l.store,l.zone);
+  if(zb)return '<div class="ap-hint" style="color:#B3261E">⚠ '+esc(zoneBanWhy(zb))+'，請改選</div>';
+  if(_zClr.indexOf(l)>=0&&!l.zone)return '<div class="ap-hint" style="color:#8A5A00">存放方式改了，原本的區域不能放，已清空，請重選</div>';
+  return ''}
+function zoneCellHTML(l){return '<select data-nf="zone">'+zoneOptsHTML(l)+'</select><div data-zhint>'+zoneHintHTML(l)+'</div>'}
+/* 表二存放方式／區域改了：衝突就清空區域、選單重排灰色項、更新提示（只動這一格，不整塊重畫） */
+function zoneSync(tr,l,k){var i=_zClr.indexOf(l);
+  if(k==='store'&&zoneBan(l.store,l.zone)){l.zone='';if(i<0)_zClr.push(l)}
+  else if(k==='zone'&&i>=0)_zClr.splice(i,1);
+  var sel=tr.querySelector('select[data-nf="zone"]'),hn=tr.querySelector('[data-zhint]');
+  if(sel&&k==='store'){sel.innerHTML=zoneOptsHTML(l);sel.value=l.zone||''}
+  if(hn)hn.innerHTML=zoneHintHTML(l)}
 /* 原包裝規格 → 換算成使用單位的數字：取第一個數字；數字後面的單位含 kg／公斤／L／公升（非 ml）×1000；
    數字後面接的是包裝單位（包／袋／箱／盒／罐／瓶／桶／組／件／套／盤／打／入）或抽不到數字 → 回 null（畫面顯示「估？」） */
 var PKG_UNIT=/^(包|袋|箱|盒|罐|瓶|桶|組|件|套|盤|打|入|pack|box|bag)/i;
@@ -2594,6 +2615,7 @@ function ckList(){var out=[],U=(AP.ext&&AP.ext.units)||{};
     if(unitParen(l))add('must','paren|'+nm,'「'+nm+'」單位「'+u+'」有括號：單位只寫「'+unitBare(u)+'」，括號裡的說明放備註（不然採購系統對不到單位）',g1);
     var um=unitMis(l);if(um)add('must','unit|'+nm,'「'+nm+'」原包裝規格「'+l.pkgSpec+'」是'+ckFamName(um.sp.f,um.sp.t)+'，每份用量「'+num(l.q)+' '+u+'」是'+ckFamName(um.uf,um.ut)+'：單位對不上，成本和採購量會算錯',g1);
     if(inTable2(l)&&l.take==='自取'&&!String(l.zone||'').trim())add('must','zone|'+nm,'「'+nm+'」拿取方式是自取，但沒選區域：客人不知道去哪裡拿',g2);
+    var zb=inTable2(l)?zoneBan(l.store,l.zone):'';if(zb)add('must','zonebad|'+nm,'「'+nm+'」存放方式是'+zb+'，區域卻選「'+l.zone+'」：'+zoneBanWhy(zb)+'，請改選區域',g2);
     if(tool)return;
     var sp=ckSpec(l.split),ut=ckTok(u),uf=ckFam(ut);
     if(sp&&sp.f&&sp.f!=='p'&&uf&&uf!=='p'&&ckWV(sp.f)!==ckWV(uf))
@@ -2606,6 +2628,8 @@ function ckList(){var out=[],U=(AP.ext&&AP.ext.units)||{};
         if(v>0&&Math.abs(v-bq)>0.5&&Math.abs(v-num(l.q))>1e-9){add('ask','noteqty|'+nm+'|'+v+'|'+bq,'「'+nm+'」備註寫「'+mm[0]+'」，整檔採購量是 '+bq+' '+ut+'：數量不一樣，請確認以哪個為準',g2);break}}}
     var lk=String((U[nm]||{})['購買連結']||'').trim(),vd=String((U[nm]||{})['供應商覆寫']||'').trim()||String((nw?l.vendor:skuVendor(l))||'').trim(),pl=ckPlat(lk,true),pv=ckPlat(vd,false);
     if(lk&&pl&&pv&&pl!==pv)add('ask','link|'+nm+'|'+vd+'|'+lk.slice(0,60),'「'+nm+'」進貨廠商是「'+vd+'」，購買連結卻是'+pl+'的網址：請確認是哪一家',g2)});
+  semiT2List().forEach(function(x){var l=x.o,nm=String(l.m||'').trim(),zb=zoneBan(l.store,l.zone);   /* 2026-11-03 半成品材料列在表二也要擋 */
+    if(zb)add('must','zonebad|'+nm,'「'+nm+'」存放方式是'+zb+'，區域卻選「'+l.zone+'」：'+zoneBanWhy(zb)+'，請改選區域','n'+x.key)});
   AP.semis.forEach(function(s,si){var nm=semiName(s);if(!nm)return;var l=lineByName(s.link),g='s'+si;
     if(l&&s.store&&l.store&&s.store!==l.store)add('ask','sstore|'+nm+'|'+s.store+'|'+l.store,'半成品「'+nm+'」存放方式是「'+s.store+'」，「🆕 新增食材/器模具」表的「'+l.m+'」的存放方式卻是「'+l.store+'」：請統一',g);
     var txt=[s.usage,s.steps,s.note,l?l.shelf:'',l?l.lnote:''].join('\n'),D={},mm,re=/(冷藏|冷凍|常溫)[^0-9\n，,。；;]{0,6}?(\d+)\s*天/g;
@@ -2644,6 +2668,7 @@ function ckBoxInner(l,i){if(!isNewItem(l)||isToolLine(l)||!String(l.m||'').trim(
 function ckBoxHTML(l,i){return '<div data-ckbox="'+i+'">'+ckBoxInner(l,i)+'</div>'}
 function ckGo(go){var m,el=null;
   if((m=go.match(/^n(\d+)$/)))el=document.querySelector('#apRoot tr[data-n2="'+m[1]+'"]');
+  if(!el&&(m=go.match(/^n(s\d+\.\d+)$/)))el=document.querySelector('#apRoot tr[data-n2="'+m[1]+'"]');   /* 表二的半成品材料列 */
   if(!el&&(m=go.match(/^[ln](\d+)$/)))el=t1Show(m[1]);
   if(!el&&(m=go.match(/^s(\d+)$/)))el=smShow(m[1]);
   if(!el)return;el.scrollIntoView({behavior:'smooth',block:'center'});el.style.outline='3px solid #F0AD4E';setTimeout(function(){el.style.outline=''},2500)}
@@ -3520,7 +3545,7 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   else{h+=ro(skuCost(l),'')+ro(skuSpec(l),'')}   /* 主檔有的：成本／規格帶主檔值唯讀 */
   h+=ro(sem?(String(l.q||'')?'每批 '+l.q:''):String(l.q||''),'')+ro(u,'');   /* 每份使用量／單位（唯讀鏡像；半成品材料＝每批） */
   h+='<td>'+d('store',STOREWAYS)+'</td><td>'+d('take',TAKES_NI)+'</td>';
-  h+='<td>'+d('zone',ZONES,'— 請選 —')+'</td>';
+  h+='<td>'+zoneCellHTML(l)+'</td>';   /* 2026-11-03 依存放方式擋區域 */
   h+='<td>'+d('supply',SUPPLYS)+'</td>'+(nw?('<td>'+t('vendor')+'</td>'):ro(skuVendor(l),''))+'<td>'+d('pkgType',PKGTYPES)+'</td><td>'+t('split')+'</td>';
   h+='<td class="ap-rocell" data-buyqty="'+i+'">'+buyCellHTML(l)+'</td><td class="ap-rocell" data-buyunit="'+i+'">'+esc(u||'—')+'</td>';
   var cu=cntUnit(l);   /* 2026-11-03 秤重換算：只有用料單位是個數的食材才填 */
@@ -5418,7 +5443,7 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('tr[data-n2]').forEach(function(tr){var l=t2Obj(tr.dataset.n2);if(!l)return;
     tr.querySelectorAll('[data-shelf]').forEach(function(el){var fn=function(e){var o=shelfSplit(l.shelf);o[el.dataset.shelf]=el.value;l.shelf=shelfJoin(o);OUT=null;saveDraft();if(e&&e.type==='change')nimemSave(l)};el.oninput=fn;el.onchange=fn});
     tr.querySelectorAll('[data-nf]').forEach(function(el){var k=el.dataset.nf;
-      var fn=function(e){l[k]=el.value;OUT=null;saveDraft();if(e&&e.type==='change'){nimemSave(l);updChk()}if(k==='pkgCost'||k==='pkgSpec'||k==='gPer')refreshCost();if(k==='cat'&&e&&e.type==='change')render()};el.oninput=fn;el.onchange=fn})});
+      var fn=function(e){l[k]=el.value;if(k==='store'||k==='zone')zoneSync(tr,l,k);OUT=null;saveDraft();if(e&&e.type==='change'){nimemSave(l);updChk()}if(k==='pkgCost'||k==='pkgSpec'||k==='gPer')refreshCost();if(k==='cat'&&e&&e.type==='change')render()};el.oninput=fn;el.onchange=fn})});
   root.querySelectorAll('[data-nimem]').forEach(function(b){b.onclick=function(){var l=t2Obj(b.dataset.nimem);if(!l)return;var m=nimemFor(l);if(!m)return;var n=0;
     Object.keys(m).forEach(function(k){if(k==='at')return;if(!String(l[k]==null?'':l[k]).trim()){l[k]=m[k];n++}});OUT=null;saveDraft();render();var tr=document.querySelector('tr[data-n2="'+b.dataset.nimem+'"]');if(tr){tr.scrollIntoView({block:'center'});tr.style.background='#FFF6D6';setTimeout(function(){tr.style.background=''},2500)}}});   /* 帶入後該列閃一下黃底，請主廚確認 */   /* 類別改了：成本（器具不計價）、「每店要幾個」欄要重畫 */
   var an=document.getElementById('apAddNew');if(an)an.onclick=addNewItem;
