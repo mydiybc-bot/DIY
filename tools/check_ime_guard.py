@@ -38,6 +38,7 @@ REQUIRED = [
     'survey.html', 'dashboard-survey.html',   # 顧客問卷（2026-10-28 新建；留言題／留言搜尋要能打中文）
     'poll.html', 'dashboard-poll.html',   # 門市內部調查＋門市問卷管理（2026-10-30 新建；填寫、編輯題目要能打中文）
     'store-notes.html',   # 門市雜記（2026-10-30 新建；決策中心 📝 分頁，記事、搜尋要能打中文）
+    'hq-apply.html', 'hq-apply-admin.html',   # 總部申請作業＋申請審核（2026-11-03 新建；明細、姓名、退回原因要能打中文）
 ]
 
 # 不加的頁面與原因
