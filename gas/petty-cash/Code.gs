@@ -415,7 +415,7 @@ function authSetup_() {
 }
 
 /* =====================================================================
-   🏢 總部申請作業（2026-11-03 經營者交辦）
+   🏢 費用申請（2026-11-03 經營者交辦；原名總部申請作業，同日晚改名、改免密碼）
    前端 static/hq-apply.html（各單位）、static/hq-apply-admin.html（審核專人）
    單位（14 個）：1～12 店＋出貨中心＋體驗中心。身分＝權限中心密碼：1～N 店＝store_N、出貨中心＝purchase_dc、體驗中心＝task_hq
      （經營者 2026-11-03 裁定 A：分店共用門市組密碼＋自己選單位；要改成每單位一組，只要改 unitDash_）。
@@ -487,9 +487,11 @@ function apAuth_(pw, dash, what) {
   try { c.put(key, '1', AUTH_SEC); } catch (e) { }
   return true;
 }
+/* 2026-11-03 晚經營者：各單位密碼實際上通用、意義不大 → 費用申請頁免密碼，單位動作只檢查單位名稱。要加回去把 UNIT_PW_REQUIRED 改 true（前端也要加回登入） */
+var UNIT_PW_REQUIRED = false;
 function unitAuth_(b) {
-  var unit = String(b.unit || '').trim();
-  apAuth_(b.pw, unitDash_(unit), unit === '體驗中心' ? '體驗中心' : unit === '出貨中心' ? '出貨中心' : '門市');
+  var unit = String(b.unit || '').trim(), dash = unitDash_(unit);
+  if (UNIT_PW_REQUIRED) apAuth_(b.pw, dash, unit === '體驗中心' ? '體驗中心' : unit === '出貨中心' ? '出貨中心' : '門市');
   return unit;
 }
 function rvAuth_(b) { apAuth_(b.pw, REVIEW_DASH, '審核'); return true; }
@@ -779,7 +781,7 @@ function rejectNotice_(r, note, who) {
   var sid = unitStoreId_(r.unit);
   if (!sid) return 'nostore';
   var t = AP_TYPES[r.type], title = apClean_('↩ ' + t.label + '被退回，請修正重送', 40);
-  var body = apClean_('【總部申請作業】' + r.period_label + ' ' + t.label + (r.sub ? '（' + r.sub + '）' : '') + '，申請人 ' + r.who + '，$' + (Number(r.amount) || 0).toLocaleString('en-US') + '。\n退回原因：' + note + '\n請到「總部申請作業」刪掉這筆、修正後重送（截止日 ' + r.deadline + '）。', 300);
+  var body = apClean_('【費用申請】' + r.period_label + ' ' + t.label + (r.sub ? '（' + r.sub + '）' : '') + '，申請人 ' + r.who + '，$' + (Number(r.amount) || 0).toLocaleString('en-US') + '。\n退回原因：' + note + '\n請到「費用申請」刪掉這筆、修正後重送（截止日 ' + r.deadline + '）。', 300);
   try {
     var hp = hqPw_();
     var resp = UrlFetchApp.fetch(ANN_API, { method: 'post', contentType: 'text/plain;charset=utf-8', muteHttpExceptions: true, followRedirects: true,
@@ -838,7 +840,7 @@ function applyAuthSetup_() {
   var v = sh.getDataRange().getValues(), before = v.length;
   for (var i = 1; i < v.length; i++) if (String(v[i][0]) === REVIEW_DASH) return '已有 ' + REVIEW_DASH + ' 列（第 ' + (i + 1) + ' 列），沒動';
   var bk = sh.copyTo(ss); bk.setName('dim_auth_備份_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmm'));
-  sh.appendRow([REVIEW_DASH, '總部申請作業 審核', '', 12, 'Y', new Date(), '2026-11-03 Claude 新增（總部申請作業審核後台）；密碼空白＝還不能用，請在權限後台設定']);
+  sh.appendRow([REVIEW_DASH, '會計後台審核', '', 12, 'Y', new Date(), '2026-11-03 Claude 新增（費用申請審核後台）；密碼空白＝還不能用，請在權限後台設定']);
   return '新增 ' + REVIEW_DASH + '（' + before + ' → ' + sh.getLastRow() + ' 列，備份分頁 ' + bk.getName() + '）';
 }
 /* 第二次授權用（2026-11-03）：在編輯器選這個函式按「執行」→ 允許 Drive（存單據照片）、建四個分頁、補權限中心一列 */
