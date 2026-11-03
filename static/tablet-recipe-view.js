@@ -44,10 +44,10 @@
   };
   var HTML_LANG = { ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th' };
 
-  var CSS = '.trv{position:fixed;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
+  var CSS = '.trv{position:fixed;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;overflow:clip;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
     + '.trv *{box-sizing:border-box}'
-    + '.trv-track{position:absolute;left:0;top:0;bottom:calc(var(--u)*9.6);display:flex;transition:transform .32s ease;will-change:transform}'
-    + '.trv-slide{flex:0 0 100vw;width:100vw;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;position:relative;background:#fff}'
+    + '.trv-track{position:absolute;left:0;right:0;top:0;bottom:calc(var(--u)*9.6);display:flex;flex-wrap:nowrap;transition:transform .32s ease;will-change:transform}'
+    + '.trv-slide{flex:0 0 100%;width:100%;min-width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;position:relative;background:#fff}'
     + '.trv-bar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--u)*9.6);display:flex;background:#efefef;border-top:2px solid #fff;z-index:5}'
     + '.trv-arrow{flex:0 0 calc(var(--u)*10);display:flex;align-items:center;justify-content:center;font-size:calc(var(--u)*4.5);font-weight:800;color:#40210f;background:#efefef;border:none;cursor:pointer}'
     + '.trv-arrow[disabled]{color:#ccc;cursor:default}'
@@ -167,12 +167,17 @@
         else if (v.getAttribute('src')) { try { v.pause(); } catch (e) { } v.removeAttribute('src'); v.load(); }   /* 釋放解碼器（後台也是這樣做，避免黑畫面） */
       });
     }
+    /* 2026-11-04：頁碼置中只捲頁碼列自己。原本用 scrollIntoView，窄螢幕（手機、8 吋 Android 平板）會連帶把整個食譜畫面往旁邊推，左邊被切、右邊露出隔壁頁 */
+    function centerNum(b) {
+      var bar = b.parentNode, br = b.getBoundingClientRect(), rr = bar.getBoundingClientRect(), x = bar.scrollLeft + (br.left - rr.left) - (bar.clientWidth - br.width) / 2;
+      bar.scrollLeft = Math.max(0, x);
+    }
     function go(to) {
       to = Math.max(0, Math.min(slides.length - 1, to));
       if (blocked(to)) { to = Math.min(to, 2); if (cur === 2) toast(L.agreeFirst); }
       cur = to;
-      track.style.transform = 'translateX(' + (-100 * cur) + 'vw)';
-      root.querySelectorAll('.trv-num').forEach(function (b) { var on = Number(b.getAttribute('data-to')) === cur; b.classList.toggle('on', on); if (on) b.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); });
+      track.style.transform = 'translateX(' + (-100 * cur) + '%)';   /* 2026-11-04：用食譜畫面自己的寬度（%），不用 vw；部分 Android 平板 vw 跟畫面寬不同會露出隔壁頁 */
+      root.querySelectorAll('.trv-num').forEach(function (b) { var on = Number(b.getAttribute('data-to')) === cur; b.classList.toggle('on', on); if (on) centerNum(b); });
       root.querySelector('[data-go="-1"]').disabled = cur === 0;
       root.querySelector('[data-go="1"]').disabled = cur === slides.length - 1;
       closeList(); videos();
@@ -185,7 +190,7 @@
       listEl = document.createElement('div'); listEl.className = 'trv-list';
       listEl.innerHTML = '<h3>' + esc(data.name) + '</h3>' + slides.map(function (s, i) { return s.kind === 'step' ? '<button type="button" data-to="' + i + '"' + (i === cur ? ' class="on"' : '') + '><span class="n">' + ('0' + (s.n + 1)).slice(-2) + '</span><span>' + esc(data.slides[s.n].t) + '</span></button>' : ''; }).join('');
       root.appendChild(listEl);
-      var on = listEl.querySelector('.on'); if (on) on.scrollIntoView({ block: 'center' });
+      var on = listEl.querySelector('.on'); if (on) listEl.scrollTop = Math.max(0, on.offsetTop - (listEl.clientHeight - on.offsetHeight) / 2);
     }
     function zoom(src) {
       var d = document.createElement('div'); d.className = 'trv-lb';
@@ -204,6 +209,8 @@
       else if (t.hasAttribute('data-zoom')) zoom(t.getAttribute('data-zoom'));
     });
     root.querySelector('.trv-agcb').addEventListener('change', function () { agreed = this.checked; if (agreed) go(3); });
+    /* 2026-11-04：整個食譜畫面永遠不可被捲動（舊版 Android／iOS 不支援 overflow:clip 時的保險） */
+    root.addEventListener('scroll', function () { if (root.scrollLeft || root.scrollTop) { root.scrollLeft = 0; root.scrollTop = 0; } });
     /* 左右滑動（水平明顯大於垂直才算；在影片上也可以滑） */
     var sx = 0, sy = 0, st = 0;
     root.addEventListener('touchstart', function (e) { var p = e.touches[0]; sx = p.clientX; sy = p.clientY; st = Date.now(); }, { passive: true });
