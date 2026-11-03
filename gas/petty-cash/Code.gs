@@ -453,7 +453,7 @@ var AP_HEAD = ['id', 'created', 'type', 'sub', 'unit', 'who', 'period', 'period_
 var LIMIT_HEAD = ['type', 'sub', 'unit', 'scope', 'max', 'note'];
 var STAFF_HEAD = ['unit', 'name', 'active', 'added_at', 'added_by'];
 var APLOG_HEAD = ['time', 'action', 'id', 'type', 'unit', 'who', 'msg'];
-var AP_STATUS = { pending: '審核中', approved: '已通過', rejected: '已退回', done: '已送出' };
+var AP_STATUS = { pending: '審核中', approved: '已完成', rejected: '已退回', done: '已完成' };   /* 2026-11-03 經營者：零用金「已送出」與審核「已通過」統一顯示「已完成」（代碼不變） */
 var PAYLOAD_MAX = 45000, PHOTO_MAX = 12, ROWS_MAX = 80, NOTE_MAX = 300, WHO_MAX = 20;
 var AP_ACTIONS = {
   login: apLogin_, me: apMe_, submit: apSubmit_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
