@@ -377,6 +377,14 @@ function shrink(file){
   });
 }
 function b64(file){ return new Promise(function(res, rej){ var fr = new FileReader(); fr.onload = function(){ res(String(fr.result).split(',')[1] || ''); }; fr.onerror = function(){ rej(new Error('讀不到檔案')); }; fr.readAsDataURL(file); }); }
+/* 2026-11-04 加／移除附件時後台會更新「最後修改時間」→ 讀回這個活動的新時間，之後按儲存才不會被誤判「剛被別人改過」；讀完前不能按儲存（S.busy） */
+function syncEdit(okMsg){
+  var id = S.edit && S.edit.promo_id;
+  return load().then(function(){
+    var r = (S.rows || []).filter(function(x){ return x.promo_id === id; })[0];
+    if (r && S.edit && S.edit.promo_id === id) S.edit.updated_at = r.updated_at;
+  }).then(function(){ S.busy = false; if (okMsg) msg(okMsg, 'ok'); });
+}
 function upload(files){
   files = Array.prototype.slice.call(files || []);
   if (!files.length || !S.edit || !S.edit.promo_id || S.busy) return;
@@ -385,7 +393,7 @@ function upload(files){
   S.busy = true;
   var i = 0;
   (function next(){
-    if (i >= files.length) { S.busy = false; msg('✅ 附件已加上', 'ok'); drawAtt(); load(); return; }
+    if (i >= files.length) { msg('附件已加上，更新中…'); drawAtt(); syncEdit('✅ 附件已加上'); return; }
     var f = files[i++]; msg('上傳中（' + i + '／' + files.length + '）' + f.name + '…');
     shrink(f).then(function(g){
       if (g.size > 10 * 1024 * 1024) throw new Error('「' + f.name + '」超過 10MB');
@@ -393,7 +401,7 @@ function upload(files){
     }).then(function(r){
       if (!r || !r.ok) throw new Error((r && r.msg) || '上傳失敗');
       S.edit.att = (S.edit.att || []).concat([r.data.att]); drawAtt(); next();
-    }).catch(function(e){ S.busy = false; msg(e.message, 'bad'); drawAtt(); load(); });
+    }).catch(function(e){ var m = e.message; drawAtt(); syncEdit().then(function(){ msg(m, 'bad'); }); });
   })();
 }
 function attDel(aid){
@@ -401,9 +409,8 @@ function attDel(aid){
   var a = (S.edit.att || []).filter(function(x){ return x.aid === aid; })[0]; if (!a || !confirm('移除附件「' + a.name + '」？')) return;
   S.busy = true; msg('移除中…');
   post(hqBody({ action: 'promoAttDel', rq: rq(), promo_id: S.edit.promo_id, aid: aid }), 60000, true).then(function(r){
-    S.busy = false;
-    if (!r || !r.ok) return msg((r && r.msg) || '移除失敗', 'bad');
-    S.edit.att = S.edit.att.filter(function(x){ return x.aid !== aid; }); drawAtt(); msg('已移除', 'ok'); load();
+    if (!r || !r.ok) { S.busy = false; return msg((r && r.msg) || '移除失敗', 'bad'); }
+    S.edit.att = S.edit.att.filter(function(x){ return x.aid !== aid; }); drawAtt(); msg('已移除，更新中…'); syncEdit('已移除');
   }, function(e){ S.busy = false; msg(e.message, 'bad'); });
 }
 

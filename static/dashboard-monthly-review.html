@@ -841,7 +841,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
 <div class="foot">
   <details class="xhelp" id="monCalcHelp"><summary>ⓘ 各欄數字怎麼算</summary><div>
-  毛利率＝(營收−食材成本)÷營收｜人事費率＝人事成本÷營收（同 P&L 頁，排除 C008/C009）｜店損益＝P&L 本期淨利（含營業外淨額）<br>
+  毛利率＝(營收−食材成本)÷營收｜人事費率＝人事成本÷營收（同 P&L 頁，排除 C005～C009）｜店損益＝P&L 本期淨利（含營業外淨額）<br>
   營收達成率：實際數以 P&L 營收為準，預算取自 2026 預算表｜來客、客單價＝POS 的算法（客單價＝淨營收÷來客，已扣折扣，與 POS 儀表板一致）<br>
   rev/h＝每 1 小時工時做到多少營收：排班的週資料依「週的第一天」歸到月份，淨營收÷總工時<br>
   新增會員月目標＝2026 年度目標÷12｜回頭客％看的是最近 365 天（不是當月）｜負評率＝當月 4 星以下（含）評論的比例（同評論頁）<br>
@@ -1154,7 +1154,7 @@ function compute(wYm, year, lyYm){
       o.rev=p.rev; RESULT.company.rev+=p.rev; RESULT.company.net+=p.net;
       o.net={v:p.net/1000, tip:'本期淨利 '+wan(p.net)+(pl?'｜去年同月 '+wan(pl.net):'')};
       o.gm ={v:p.rev>0?(p.rev-p.food)/p.rev*100:null, tip:'營收 '+wan(p.rev)+'｜食材成本 '+wan(p.food)};
-      o.hr ={v:p.rev>0?p.hr/p.rev*100:null, tip:'人事成本 '+wan(p.hr)+'（排除 C008/C009）'};
+      o.hr ={v:p.rev>0?p.hr/p.rev*100:null, tip:'人事成本 '+wan(p.hr)+'（排除 C005～C009）'};
       o.yoy={v:(pl&&pl.rev>0)?(p.rev-pl.rev)/pl.rev*100:null, tip:'本月營收 '+wan(p.rev)+(pl?'｜去年同月 '+wan(pl.rev):'｜去年同月無資料')};
       /* 達成率＋YTD */
       const mBud=(bud[sid]&&bud[sid][wYm])?bud[sid][wYm]:0;
@@ -2079,13 +2079,20 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     root.querySelectorAll('.tk').forEach(function(card){
       var a = findAlert(card.dataset.k); if (!a) return;
       card.querySelectorAll('.tk-b button').forEach(function(b){
-        b.onclick = function(){ openForm(card, a, b.dataset.act); };
+        b.onclick = function(){ openForm(card, a, b.dataset.act, null, root.id); };
       });
     });
+    /* 2026-11-04 回報表單寫到一半、背景資料讀回來整塊重畫 → 把剛剛打開的表單（含已打的字、游標）放回同一張卡 */
+    if (FORM && FORM.root === root.id) {
+      var c = null; root.querySelectorAll('.tk').forEach(function(x){ if (!c && x.dataset.k === FORM.k) c = x; });
+      var fa = c && findAlert(FORM.k);
+      if (fa) openForm(c, fa, FORM.act, FORM, root.id); else FORM = null;
+    }
   }
   /* 回報表單（2026-10-06 改）：不用密碼。處理中＝只填名字；已處理＝名字＋寫一句做了什麼（必填）。名字記在這台裝置 */
-  function openForm(card, a, act){
-    var f = card.querySelector('.tk-f'), who = lsGet(WLS), msg = card.querySelector('.tk-msg'), done = act === 'done';
+  var FORM = null;   /* 目前打開的回報表單 {k, act, root, note, who, foc, s0, s1}；重畫後由 wireTasks 放回 */
+  function openForm(card, a, act, keep, rid){
+    var f = card.querySelector('.tk-f'), who = keep ? keep.who : lsGet(WLS), msg = card.querySelector('.tk-msg'), done = act === 'done';
     msg.style.display = 'none';
     f.style.display = '';
     f.innerHTML = '<div class="tk-ft">' + (done ? '✅ 回報「已處理」：寫一句做了什麼（必填）' : '🔧 回報「處理中」：留下你的名字就好') + '</div>'
@@ -2093,8 +2100,19 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       + '<div class="tk-fr"><label>你的名字<input class="i-who" value="' + esc(who) + '" maxlength="20" placeholder="例：小美"></label><span class="tk-hint">不用密碼・名字這台裝置會記住</span></div>'
       + '<div class="tk-fb"><button class="go">送出</button><button class="cc">取消</button><span class="tk-fe"></span></div>';
     var ta = f.querySelector('textarea'), wi = f.querySelector('.i-who');
-    (ta || (who ? f.querySelector('.go') : wi)).focus();
-    f.querySelector('.cc').onclick = function(){ f.style.display = 'none'; f.innerHTML = ''; };
+    var st = FORM = { k: card.dataset.k, act: act, root: rid || (keep && keep.root) || '', note: keep ? keep.note : '', who: who, foc: keep ? keep.foc : '', s0: keep ? keep.s0 : 0, s1: keep ? keep.s1 : 0 };
+    if (ta) ta.value = st.note;
+    function track(el, nm){
+      function sv(){ if (FORM !== st) return; st.foc = nm; st.s0 = el.selectionStart; st.s1 = el.selectionEnd; if (nm === 'ta') st.note = el.value; else st.who = el.value; }
+      el.addEventListener('input', sv); el.addEventListener('focus', sv); el.addEventListener('keyup', sv); el.addEventListener('click', sv);
+      el.addEventListener('blur', function(){ setTimeout(function(){ var ae = document.activeElement; if (FORM === st && st.foc === nm && ae && ae !== document.body && ae !== el) st.foc = ''; }, 0); });
+    }
+    if (ta) track(ta, 'ta'); track(wi, 'wi');
+    if (keep) {   /* 重畫後放回：只有剛剛游標在表單裡才把游標放回去，不搶別的地方的焦點 */
+      var fe0 = keep.foc === 'ta' ? ta : keep.foc === 'wi' ? wi : null;
+      if (fe0) { try { fe0.focus({preventScroll: true}); fe0.setSelectionRange(keep.s0, keep.s1); } catch(_){ } }
+    } else (ta || (who ? f.querySelector('.go') : wi)).focus();
+    f.querySelector('.cc').onclick = function(){ if (FORM === st) FORM = null; f.style.display = 'none'; f.innerHTML = ''; };
     f.querySelector('.go').onclick = function(){
       var note = ta ? ta.value.trim() : '', w = wi.value.trim(), fe = f.querySelector('.tk-fe');
       if (done && !note) { fe.textContent = '請寫一句做了什麼'; ta.focus(); return; }
@@ -2107,6 +2125,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
         if (!d.item || d.item.key !== tkey(a) || d.item.status !== act) throw new Error('系統沒有回覆「已存好」，這筆回報沒有成功，請稍後再試');
         lsPut(WLS, w);
         TRK[tkey(a)] = d.item;
+        if (FORM === st) FORM = null;
         renderRoles();
       }).catch(function(e){ go.disabled = false; fe.textContent = '⚠ ' + (e.message || e); });
     };
@@ -2182,7 +2201,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   }
   function smLiveLoad(sid, force){
     if (!sid) return;
-    if (!force && LIVE.sid === sid && (LIVE.st === 'loading' || LIVE.st === 'ok')) return;
+    if (!force && LIVE.sid === sid && (LIVE.st === 'loading' || LIVE.st === 'ok' || LIVE.st === 'err')) return;   /* 2026-11-04 失敗也不自動重抓（原本失敗→重畫→重抓會無限循環），只靠「重試」「↻ 重新整理」 */
     var seq = ++LIVE.seq, cc = (LIVE.sid === sid && LIVE.d) ? null : liveCacheGet(sid);
     if (LIVE.sid !== sid) { LIVE.d = null; LIVE.at = 0; }
     LIVE.sid = sid; LIVE.st = 'loading'; LIVE.err = '';
@@ -2205,7 +2224,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     });
   }
   function annLoad(force){
-    if (!force && (ANN.st === 'loading' || ANN.st === 'ok')) return;
+    if (!force && (ANN.st === 'loading' || ANN.st === 'ok' || ANN.st === 'err')) return;
     ANN.st = 'loading'; ANN.err = '';
     annFetch().catch(function(){ return new Promise(function(r){ setTimeout(r, 1500); }).then(annFetch); }).then(function(d){
       ANN.d = d; ANN.at = Date.now(); ANN.st = 'ok';
@@ -2216,7 +2235,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   /* 2026-11-04 🎁 進行中的活動：公告 API v9 promoList（免密碼＝只回體驗中心「已確認」的活動）；這家店適用、進行中或 14 天內開始的才列 */
   var PROMO = {st:'idle', rows:[], today:'', err:'', at:0}, PROMO_AHEAD = 14;
   function promoLoad(force){
-    if (!force && (PROMO.st === 'loading' || PROMO.st === 'ok')) return;
+    if (!force && (PROMO.st === 'loading' || PROMO.st === 'ok' || PROMO.st === 'err')) return;
     PROMO.st = 'loading'; PROMO.err = '';
     var once = function(){ return fetch(ANN_API, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'promoList'}), cache:'no-store'})
       .then(function(r){ return r.json(); }).then(function(j){ if (!j || !j.ok) throw new Error((j && j.msg) || '活動讀取失敗'); return j.data || {}; }); };
@@ -2305,12 +2324,14 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   function smKpiHtml(sid){
     var g = nv(sid, 'A 同期成長%'), rph = nv(sid, 'A 本月 rev/h'), min = rule('SCH_RPH_MIN', 950), rv = nv(sid, 'D 有效評論（本月）'), rate = nv(sid, 'E 累計達成率%'), line = memLine();
     var inv = val(L[sid], 'B 最後盤點日'), invD = nv(sid, 'B 距上次盤點天數'), f = B.fresh || {};
+    /* 2026-11-04 從未盤點的店，快照寫的是文字「從未盤點」（不是日期）→ 原本切字變空白綠字；門檻改讀規則 INV_DAYS_YELLOW（跟快照警示同一個數） */
+    var invIsDate = /^\d{4}-\d{2}-\d{2}/.test(String(inv || '')), invLim = rule('INV_DAYS_YELLOW', 14), invBad = (inv && !invIsDate) || (invD !== null && invD > invLim);
     var rows = [
       ['A', '本月營收 vs 去年', sg(g), g !== null && g < 0 ? 'r' : 'g', 'NT$' + f0(nv(sid, 'A 本月到營收最後一天淨營收')) + '／去年 NT$' + f0(nv(sid, 'A 去年同期淨營收')), '到 ' + md(f.A && f.A.lastSales || B.dataTo)],
       ['A', '本月人效 rev/h', rph === null ? '—' : f0(rph), rph !== null && rph < min ? 'r' : 'g', rph === null ? '本月班表沒上傳' : '標準 ' + f0(min), '到 ' + md(f.A && f.A.lastSales || B.dataTo)],
       ['D', '有效評論', (rv === null ? '—' : rv) + '／' + REV_TARGET + ' 則', rv !== null && rv >= REV_TARGET ? 'g' : '', rv === null ? '' : (rv >= REV_TARGET ? '本月已達標 👍' : '還差 ' + (REV_TARGET - rv) + ' 則・本月剩 ' + monthLeft() + ' 天'), '到 ' + md(f.D && f.D.latest || B.dataTo)],
       ['E', '自己人累計達成率', rate === null ? '—' : rate + '%', rate !== null && line !== null && rate < line ? 'r' : 'g', '年度進度線 ' + (line === null ? '—' : line + '%'), '快照 ' + md(B.snapAt)],
-      ['B', '最後盤點', inv ? md(inv) : '—', invD !== null && invD > 14 ? 'r' : 'g', invD === null ? '' : (invD === 0 ? '今天' : invD + ' 天前'), '快照 ' + md(B.snapAt)]
+      ['B', '最後盤點', !inv ? '—' : invIsDate ? md(inv) : String(inv), invBad ? 'r' : (inv ? 'g' : ''), invD === null ? (inv && !invIsDate ? '請在採購系統盤點一次' : '') : (invD === 0 ? '今天' : invD + ' 天前') + (invD > invLim ? '（超過 ' + f0(invLim) + ' 天）' : ''), '快照 ' + md(B.snapAt)]
     ];
     return '<div class="dz-panel sm-kpi" id="smKpi"><h2>📊 本月成績<span class="upd">快照 ' + tsTxt(B.snapAt) + '</span><span class="note">點一列看明細與趨勢</span></h2>'
       + rows.map(function(r){ return '<div class="kr" data-cell="' + sid + '|' + r[0] + '|smDet" title="點我看明細"><span class="kl">' + r[1] + '</span><span class="kv ' + r[3] + '">' + esc(r[2]) + '</span><span class="ks">' + esc(r[4]) + '</span><span class="kd">' + esc(r[5]) + '</span></div>'; }).join('')
@@ -2325,7 +2346,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   var CAMP_AHEAD = 45, CAMP_TAIL = 30, CAT_ORDER = ['食材', '耗材', '器具', '模具'];
   function smRevLoad(sid, force){
     if (!sid) return;
-    if (!force && REV.sid === sid && (REV.st === 'loading' || REV.st === 'ok')) return;
+    if (!force && REV.sid === sid && (REV.st === 'loading' || REV.st === 'ok' || REV.st === 'err')) return;
     if (REV.sid !== sid) REV.d = null;
     var seq = ++REV.seq; REV.sid = sid; REV.st = 'loading'; REV.err = '';
     jph({action:'reviews', store:sid}).then(function(d){ if (seq !== REV.seq) return; REV.d = d; REV.st = 'ok'; })
@@ -2344,7 +2365,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     }).catch(function(e){ if ((k || 0) < 1) return new Promise(function(r){ setTimeout(r, 1500); }).then(function(){ return reqJsonp(action, 1); }); throw e; });
   }
   function campLoad(force){
-    if (!force && (CAMP.st === 'loading' || CAMP.st === 'ok')) return;
+    if (!force && (CAMP.st === 'loading' || CAMP.st === 'ok' || CAMP.st === 'err')) return;
     CAMP.st = 'loading'; CAMP.err = '';
     Promise.all([reqJsonp('listCampaigns'), reqJsonp('newItemsPub').catch(function(){ return {items:[], err:1}; })]).then(function(r){
       CAMP.camps = Array.isArray(r[0]) ? r[0] : []; CAMP.items = (r[1] && r[1].items) || []; CAMP.itemsErr = !!(r[1] && r[1].err); CAMP.st = 'ok'; CAMP.at = Date.now();
@@ -2500,6 +2521,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
   }
   function renderSm(){
     var el = document.getElementById('vSm'); if (!el || !B) return;
+    if (window.__ime && window.__ime.on) { clearTimeout(renderSm.t); renderSm.t = setTimeout(renderSm, 300); return; }   /* 2026-11-04 資料晚到時有人正在選字 → 選完再畫 */
     var h = [(MYSTORE && L[MYSTORE] && !PICK_SM) ? '<div class="rl-pick"><span class="rl-lab">我的店</span><button class="dzk on" data-chg="sm" title="點我換店">' + esc(sshort(MYSTORE)) + '　換店 ▾</button></div>'
       : '<div class="rl-pick"><span class="rl-lab">我的店</span>' + ZONES.map(function(z){ return '<span class="rl-zg">' + z[0].replace('區', '') + '</span>' + z[1].map(function(id){ return '<button class="dzk' + (MYSTORE === id ? ' on' : '') + '" data-ms="' + id + '">' + esc(sshort(id)) + '</button>'; }).join(''); }).join('') + '</div>'];
     if (!MYSTORE || !L[MYSTORE]) { el.innerHTML = h.join('') + '<div class="dz-panel"><div class="dd-none" style="color:#6F4E45">👆 請先選你的店，這台裝置會記住</div></div>'; wirePick(el); return; }

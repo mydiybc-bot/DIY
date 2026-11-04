@@ -278,11 +278,12 @@ function renderLogin(msg){
 }
 
 /* ---------- 讀資料 ---------- */
-var loading = false;
+var loading = false, loadAgain = false;   /* 2026-11-04 讀取中又要求重讀（剛打勾／取消）→ 讀完再讀一次，不可略過 */
 function load(skipDay){
-  if (loading) return; loading = true; S.err = {};
-  var jobs = [];
+  if (loading) { if (!skipDay) loadAgain = true; return; } loading = true; S.err = {};
+  var jobs = [], gen = S.dayGen || 0;
   if (!skipDay) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(j){
+    if (gen !== (S.dayGen || 0)) return;   /* 送出後有人打勾／取消 → 這份是舊的，不蓋畫面（讀完會再讀一次） */
     if (!j.ok){ if (j.code === 'auth'){ if (EMB){ relogin(j.msg); throw 'stop'; } ls('st_pw_' + S.sid, null); S.pw = ''; renderLogin(j.msg); throw 'stop'; } S.err.day = j.msg; return; }
     S.day = j.data; paint('todo'); paint('grp');
   }, function(e){ if (e !== 'stop'){ S.err.day = e.message; paint('todo'); paint('grp'); } }));
@@ -301,6 +302,7 @@ function load(skipDay){
   refreshRsv();
   Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){
     loading = false; S.cached = '';
+    if (loadAgain) { loadAgain = false; setTimeout(function(){ load(); }, 0); }
     if (S.pw && S.day) ls('st_cache_' + S.sid, JSON.stringify({ at: new Date().toISOString(), day: S.day, live: S.live, mini: S.mini, ann: S.ann, rev: S.rev, camp: S.camp }));
     paint('fresh');
   });
@@ -316,7 +318,8 @@ function refreshRsv(){
     S.rsv = j;
     var liveOld = !S.live || !S.live.fut || String(S.live.fut.at || '') < String(j.built || '');
     var jobs = [];
-    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(r){ if (r.ok){ S.day = r.data; paint('todo'); paint('grp'); } }));
+    var gen = S.dayGen || 0;
+    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(r){ if (r.ok && gen === (S.dayGen || 0)){ S.day = r.data; paint('todo'); paint('grp'); } }));
     if ((j.refreshed || liveOld) && j.built) jobs.push(jsonp(SNAP_API + '?action=live&store=' + S.sid + '&minFut=' + encodeURIComponent(j.built), 90000).then(function(r){ if (r && r.ok){ S.live = r; paint('week'); paint('grp'); } }));
     Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){ paint('grpAt'); paint('weekAt'); });
   }, function(){ S.rsvBusy = false; paint('grpAt'); paint('weekAt'); });
@@ -399,6 +402,7 @@ function doTask(t){
     post({ action: 'taskDone', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '', task_id: t.id, who: who, note: nt, rq: rq() }).then(function(j){
       if (!j.ok){ $b.disabled = false; $b.textContent = '✓ 做好了'; $m.className = 'msg bad'; $m.textContent = j.msg || '沒送出，再按一次'; return; }
       t.st = 'done'; t.who = (j.data && j.data.already) ? j.data.who : who; t.doneNote = (j.data && j.data.already) ? '' : nt; t.doneAt = new Date().toTimeString().slice(0,5);
+      S.dayGen = (S.dayGen || 0) + 1;
       closeSheet(); paint('todo'); setTimeout(function(){ load(); }, 400);
     }).catch(function(e){ $b.disabled = false; $b.textContent = '✓ 做好了'; $m.className = 'msg bad'; $m.textContent = e.message; });
   };
@@ -414,6 +418,7 @@ function undoTask(t){
     $b.disabled = true;
     post({ action: 'taskUndo', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '', task_id: t.id, occ: t.occ, who: who, rq: rq() }).then(function(j){
       if (!j.ok){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = j.msg; return; }
+      S.dayGen = (S.dayGen || 0) + 1;
       closeSheet(); load();
     }).catch(function(e){ $b.disabled = false; $m.className = 'msg bad'; $m.textContent = e.message; });
   };
@@ -678,7 +683,7 @@ function mgrForm(t){
     if (f.freq === 'weekly' && !rule){ $m.className = 'msg bad'; $m.textContent = '請選星期幾'; return; }
     if (!f.stores.length){ $m.className = 'msg bad'; $m.textContent = '請選店'; return; }
     $b.disabled = true; $b.textContent = '存檔中…';
-    post(mgrBody({ action: 'taskSave', id: t ? t.id : '', title: title, note: document.getElementById('fn').value.trim(), freq: f.freq, rule: rule, stores: f.stores, end: document.getElementById('fe').value, rq: rq() })).then(function(j){
+    post(mgrBody({ action: 'taskSave', id: t ? t.id : '', title: title, note: document.getElementById('fn').value.trim(), freq: f.freq, rule: rule, stores: f.stores, start: t ? String(t.start || '').slice(0, 10) : '', end: document.getElementById('fe').value, rq: rq() })).then(function(j){   /* 2026-11-04 改舊交辦要帶原本的開始日（沒帶＝後台當今天 → 這一期還沒做的會消失） */
       $b.disabled = false; $b.textContent = '存起來';
       if (!j.ok){ $m.className = 'msg bad'; $m.textContent = j.msg; return; }
       mgrList(); load();
