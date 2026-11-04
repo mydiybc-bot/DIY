@@ -785,7 +785,8 @@ function listReqs_(p, auth) {
 }
 
 /* 2026-10-08 v14：申請表連結（整檔通行碼）上，簽核的同仁只能改「📋 新品研發工作申請單」這些表頭欄；檔期、用料、新品項等只有主廚能改 */
-var FORM_HEAD_RULES = 'P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther';
+/* 2026-11-04 行銷：連結上也要能選表二「第一單處理」→ 加 P:lines.first（用料列與半成品材料列都適用；其他表二欄位仍只有主廚／各單位身分能改） */
+var FORM_HEAD_RULES = 'P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther,P:lines.first';
 function formPatch_(p, auth) {
   if (!auth || auth.kind !== 'key' || !auth.camp) throw fail_('要用申請表連結', 'perm');
   var who = str_(p.who).trim().slice(0, 20);
@@ -800,7 +801,8 @@ function formPatch_(p, auth) {
     var dnF = dupName_(t, auth.camp, nmF, rid);
     if (dnF) throw fail_(dupNameMsg_(dnF), 'dupname', { dup: dnF });
   }
-  var r = patchReq_({ req_id: rid, patch: { head: ph } }, { kind: 'role', role: '104簽核：' + who, name: who, rules: parseRules_(FORM_HEAD_RULES), fields: FORM_HEAD_RULES });
+  var pp = p.patch || {};
+  var r = patchReq_({ req_id: rid, patch: { head: ph, lines: pp.lines || [], semi_items: pp.semi_items || [] } }, { kind: 'role', role: '104簽核：' + who, name: who, rules: parseRules_(FORM_HEAD_RULES), fields: FORM_HEAD_RULES });
   var d = r.data || {};
   if (d.changed && d.changed.length && d.payload) {   /* 申請單表上的名稱、定價等欄跟著改（檔期清單、重新載入清單看得到新名稱） */
     try {
@@ -812,7 +814,7 @@ function formPatch_(p, auth) {
       if (row2) putCols_(t2, row2._row, cols, function (hh) { return cols.hasOwnProperty(hh); });
     } catch (e) { }
   }
-  return { id: rid, data: d, msg: who + ' 改表頭：' + r.msg };
+  return { id: rid, data: d, msg: who + ' 改申請表：' + r.msg };
 }
 
 function getReq_(p, auth) {
@@ -975,6 +977,19 @@ function patchReq_(p, auth) {
     Object.keys(f).forEach(function (k) {
       if (!ok('lines.' + k)) { skipped.push(nm + '.' + k); return; }
       if (!sameVal_(L[k], f[k])) { L[k] = f[k]; changed.push(nm + '.' + k); }
+    });
+  });
+  /* 2026-11-04：表二裡「半成品用到的材料」存在 semi_items_new（不在 lines），欄位權限跟用料列同一套（P:lines.*）；用品名對 */
+  var sn = j.semi_items_new || [];
+  (pt.semi_items || []).forEach(function (ps) {
+    if (!ps || typeof ps !== 'object') return;
+    var nm = str_(ps.name).trim(), S = null;
+    for (var i = 0; i < sn.length; i++) if (sn[i] && str_(sn[i].name).trim() === nm) { S = sn[i]; break; }
+    if (!S) { skipped.push('找不到半成品材料「' + nm + '」（可能被主廚改名或刪掉）'); return; }
+    var f = ps.fields || {};
+    Object.keys(f).forEach(function (k) {
+      if (!ok('lines.' + k)) { skipped.push(nm + '.' + k); return; }
+      if (!sameVal_(S[k], f[k])) { S[k] = f[k]; changed.push(nm + '.' + k); }
     });
   });
   if (!changed.length) return { id: rid, data: { changed: [], skipped: skipped, updated_at: str_(row.updated_at), updated_by: str_(row.updated_by) },

@@ -4247,6 +4247,14 @@ function rolePatch(){var base;try{base=JSON.parse(AP.base||'')}catch(e){base=nul
       var v=linePayVal(l,pk);if(!sameish(v,b[pk])){f[pk]=v;n++}});
     if(f.pkg_spec!==undefined)f.pack=linePayVal(l,'pack');
     if(n){out.lines.push({seq:seq,name:nm,fields:f});out.n+=n}});
+  /* 2026-11-04：表二的半成品材料列（存在 semi_items_new，不在 lines）也要送，不然改了存不進去 */
+  var bs=base.semi_items_new||[];out.semi_items=[];
+  semiT2List().forEach(function(x){var l=x.o,nm=String(l.m||'').trim();if(!nm)return;var nw=isNewItem(l);
+    var b=null;for(var k=0;k<bs.length;k++){if(String((bs[k]||{}).name||'').trim()===nm){b=bs[k];break}}if(!b)return;
+    var f={},n=0;Object.keys(NF2P).forEach(function(nk){var pk=NF2P[nk];if(!nw&&MASTER_RO[pk])return;if(!canDo('P:lines.'+pk))return;
+      var v=linePayVal(l,pk);if(!sameish(v,b[pk])){f[pk]=v;n++}});
+    if(f.pkg_spec!==undefined)f.pack=linePayVal(l,'pack');
+    if(n){out.semi_items.push({name:nm,fields:f});out.n+=n}});
   return out}
 function unitChanges(){if(!AP.ext)return [];var U=AP.ext.units||{},B=AP.ext.unitsBase||{},out=[];
   outLines().forEach(function(l){var nm=String(l.m||'').trim(),u=U[nm]||{},b=B[nm]||{},o={'品項':nm},n=0;
@@ -4284,7 +4292,7 @@ var LINK_KEY='rcp:camplink:';
    同仁：signOpenCamp 讀內容，表頭（FORM_HEAD_RULES）黃色框可改 →「💾 儲存修改」（formPatch，要填名字，記在 updated_by）；
    主廚：「🔒 我是主廚」輸入主廚密碼 → getReq 讀完整資料 → 全部能改＋①②③。連結模式不讀也不存這台電腦的草稿 */
 var LM=null,FORM_NAME_KEY='rcp:formname';
-var FORM_HEAD_RULES='P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther';
+var FORM_HEAD_RULES='P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther,P:lines.first';   /* 2026-11-04 行銷：連結上也能選表二「第一單處理」（伺服器 FORM_HEAD_RULES 同一串） */
 function linkStart(o){LM={cid:o.cid,k:o.k,rid:o.rid||'',data:null,ready:false,chef:false,err:'',name:''};
   try{LM.name=localStorage.getItem(FORM_NAME_KEY)||''}catch(e){}
   document.body.classList.add('form-mode');document.title='新品申請表';
@@ -4306,7 +4314,7 @@ function lmBarHTML(){if(!LM)return '';var c=(LM.data&&LM.data.campaign)||{},R=(L
   return '<div class="ap-lmbar"><div><b>📋 '+esc(c['檔期名稱']||LM.cid)+'</b>'+(c['起']||c['迄']?'　<span class="ap-muted">'+esc((c['起']||'?')+'～'+(c['迄']||(String(c['類型']||'')==='常態菜單'?'長期':'?')))+'</span>':'')+'　<span class="ap-muted">這個檔期的新甜點（點一支切換）：</span></div>'
     +'<div class="ap-lmlist">'+R.map(function(D){var q=D.req||{};return '<button type="button" class="ap-lmgo'+(q.req_id===LM.rid?' on':'')+'" data-lmgo="'+esc(q.req_id)+'">'+(q.seq?esc(q.seq)+'. ':'')+esc(lmNm(D))+'</button>'}).join('')+'</div>'
     +(LM.chef?'<div class="ap-okline" style="margin-top:6px">🔓 主廚模式：整張都可以改；改完按最下方「💾 存進檔期」存檔（連結不變）。</div>'
-      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…）；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+campSumHTML()+'</div>'}
+      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…），以及「🆕 新增食材/器模具」的<b>「第一單處理」</b>；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+campSumHTML()+'</div>'}
 /* ===== 2026-10-18 經營者：📊 檔期總覽（同一檔期多支新品一次看）=====
    ①每支：品名、定價、成本、利潤率、預估銷售數、狀態（讀整檔連結已載入的每支申請表）
    ②新增食材／耗材／器具／模具各幾項（各支用料的 🆕＋半成品材料的 🆕；同名只算一次）
@@ -4397,18 +4405,19 @@ function lmChef(){if(_busy||!LM)return;var rid=LM.rid;
 function lmSave(){if(_busy||!LM)return;var nmEl=document.getElementById('apLmName'),nm=String((nmEl&&nmEl.value)||'').trim();
   if(!nm){alert('請先填你的名字（記錄是誰改的）');if(nmEl)nmEl.focus();return}
   var pt=rolePatch();if(!pt.n){alert('沒有改到任何欄位（黃色框是你可以改的）');return}
-  if(!confirm('儲存你對「'+prodNm()+'」新品研發工作申請單的修改（'+pt.n+' 欄）？'))return;
+  if(!confirm('儲存你對「'+prodNm()+'」申請表的修改（'+pt.n+' 欄）？'))return;
   try{localStorage.setItem(FORM_NAME_KEY,nm)}catch(e){}LM.name=nm;
   _busy=true;SENDMSG='<span class="ap-muted">儲存中…（Google 慢的時候要 10～30 秒）</span>';updSendUI();
   var rid=AP.head.req_id;
-  apiPost({action:'formPatch',campaign_id:LM.cid,k:LM.k,rid:rid,who:nm,patch:{head:pt.head},rq:rqToken()},function(k){SENDMSG='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次；不會重複寫）…</span>';updSendUI()}).then(function(r){_busy=false;
+  apiPost({action:'formPatch',campaign_id:LM.cid,k:LM.k,rid:rid,who:nm,patch:{head:pt.head,lines:pt.lines,semi_items:pt.semi_items},rq:rqToken()},function(k){SENDMSG='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次；不會重複寫）…</span>';updSendUI()}).then(function(r){_busy=false;
     if(!r.ok){if(r.code==='locked'&&r.data&&r.data.status){AP.sub.status=r.data.status;render()}
       SENDMSG='<span class="ap-bad">✕ 沒有存成功：'+esc(r.msg||'未知錯誤')+'</span>';updSendUI();return}
     var d=r.data||{},D=lmD(rid);
     if(d.payload){AP.base=d.payload;if(D){D.req.payload=d.payload;D.req.updated_at=d.updated_at;D.req.updated_by=d.updated_by}}
     AP.sub.savedAt=d.updated_at||AP.sub.savedAt;AP.sub.by=d.updated_by||AP.sub.by;
     var LBL={brand:'品牌別',date:'申請日期',name:'商品暫定名稱',diet:'葷素',keep:'保存方式',fname:'商品正式名稱',price:'產品定價',spec:'產品規格',time:'製作時間',qty:'預估銷售數',cat:'POS 分類',catOther:'POS 分類'};
-    var chg=(d.changed||[]).map(function(x){var k=String(x).replace(/^表頭\./,'');return LBL[k]||k});
+    var chg=(d.changed||[]).map(function(x){x=String(x);if(/^表頭\./.test(x)){var k=x.replace(/^表頭\./,'');return LBL[k]||k}
+      var p=x.lastIndexOf('.');return p>0&&x.slice(p+1)==='first'?x.slice(0,p)+' 第一單處理':x});   /* 2026-11-04：表二「第一單處理」回「中筋麵粉.first」→ 顯示「中筋麵粉 第一單處理」 */
     SENDMSG='<span class="ap-okline">✓ 已儲存'+(chg.length?'（'+esc(chg.join('、'))+'）':'（沒有變更）')+'</span>'+((d.skipped||[]).length?'<div class="ap-muted">略過：'+esc(d.skipped.join('、'))+'</div>':'');
     render()})}
 /* 2026-10-17 經營者「一個檔期 5～6 支，填完全部一次給一個連結」：連結本來就是整檔一個；① 區列出這個檔期已存的甜點、➕ 同檔期填下一支 */
@@ -5229,7 +5238,7 @@ function roleSave(){if(_busy)return;var s=AP.sub||{},pt=rolePatch(),uu=unitChang
     var onR=function(k){SENDMSG='<span class="ap-muted">連線不穩，自動重試中（第 '+k+' 次；不會重複寫入）…</span>';updSendUI()};
     SENDMSG='<span class="ap-muted">儲存中…</span>';updSendUI();
     var ch=Promise.resolve();
-    if(pt.n)ch=ch.then(function(){return apiPost({action:'patchReq',role:cr.role,password:cr.pw,req_id:rid,patch:{head:pt.head,lines:pt.lines},rq:rqToken()},onR).then(function(r){if(!r.ok)throw r;
+    if(pt.n)ch=ch.then(function(){return apiPost({action:'patchReq',role:cr.role,password:cr.pw,req_id:rid,patch:{head:pt.head,lines:pt.lines,semi_items:pt.semi_items},rq:rqToken()},onR).then(function(r){if(!r.ok)throw r;
       done.push('申請單內容 '+((r.data&&r.data.changed)||[]).length+' 欄');skipped=skipped.concat((r.data&&r.data.skipped)||[])})});
     if(uu.length)ch=ch.then(function(){return apiPost({action:'saveUnit',role:cr.role,password:cr.pw,req_id:rid,units:uu,rq:rqToken()},onR).then(function(r){if(!r.ok)throw r;
       done.push('品項補充 '+((r.data&&r.data.saved)||0)+' 列');skipped=skipped.concat((r.data&&r.data.skipped)||[])})});
