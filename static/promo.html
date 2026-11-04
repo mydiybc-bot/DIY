@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<!-- 2026-11-04 新建「🎁 活動與優惠辦法」（經營者：「各店面對體驗中心提出的各種活動和優惠辦法，常常搞不清楚，要在決策中心儀表板中加入這個頁面，讓他們可以隨時查詢」）。
+     ・只在「自己做決策中心」入口裡用（decision-center.html#promo，iframe ?embed=1&s=店號；#id=活動編號 直接打開那張）；直接打開會轉到入口。
+     ・身分：入口登入存的 localStorage dc_auth_v1。店＝只看「已確認」且適用這家店的活動；體驗中心（task_hq）＝也看草稿、內部備註，可新增／修改／刪除／傳附件。
+     ・後端：公告及工作清單 API v9 promoList／promoSave／promoDel／promoUpload／promoAttDel（分頁 fact_promo；附件存 Drive「活動優惠/<活動編號>/」）。
+     ・進行中／即將開始／已結束：用開始日、結束日跟今天（台灣時間）比；沒填日期＝長期。
+     ・中文輸入：搜尋框、編輯表單只建一次，篩選／重新整理只重畫下面的清單（見 rules「儀表板輸入框一定要能打中文」）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>活動與優惠辦法｜自己做決策中心</title>
+<style>
+:root{--red:#C4412F;--bg:#FFF8F2;--card:#fff;--ink:#3A2A24;--mute:#8A6F66;--line:#F0DDD3;--ok:#3E9A62;--okbg:#E3F3E8;--bad:#D0402F;--badbg:#FBE4E0;--blue:#3F86B0;--bluebg:#E4F0F7;--warn:#9A6A00;--warnbg:#FFF3CF;--pos:#5B3FA8;--posbg:#EEE8FA}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:18px;line-height:1.5;-webkit-text-size-adjust:100%}
+button{font:inherit;cursor:pointer;color:inherit}
+.wrap{max-width:900px;margin:0 auto;padding:12px 16px 80px}
+.top{display:flex;align-items:center;gap:10px;padding:6px 0 4px;flex-wrap:wrap}
+.top h1{margin:0;font-size:26px;flex:1;min-width:200px}
+.top .rf{border:0;background:#fff;border-radius:14px;width:48px;height:48px;font-size:24px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.top .add{border:0;border-radius:14px;background:var(--red);color:#fff;font-weight:800;padding:10px 18px;font-size:17px}
+.sub{font-size:15px;color:var(--mute);margin:0 0 10px}
+.tool{background:var(--card);border-radius:20px;padding:12px 14px;margin:0 0 14px;box-shadow:0 1px 4px rgba(120,60,40,.08)}
+.tool input[type=text]{width:100%;font-size:18px;padding:11px 12px;border-radius:14px;border:2px solid #E3CFC6;font-family:inherit;background:#fff}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{border:2px solid #E3CFC6;background:#fff;border-radius:999px;padding:5px 14px;font-size:16px}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.chip.dr{border-color:#E8C55A}
+.chip.dr.on{background:var(--warn);border-color:var(--warn)}
+.chip i{font-style:normal;opacity:.7;font-size:14px;margin-left:4px}
+.row2{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap;font-size:15px;color:var(--mute)}
+.row2 select{font-size:16px;padding:6px 10px;border-radius:12px;border:2px solid #E3CFC6;background:#fff;font-family:inherit}
+.cnt{margin-left:auto;white-space:nowrap}
+.pc{background:#fff;border:2px solid var(--line);border-radius:18px;margin:0 0 12px;overflow:hidden}
+.pc.draft{border-color:#E8C55A;background:#FFFDF5}
+.pc.flash{box-shadow:0 0 0 4px rgba(196,65,47,.35)}
+.pc .hd{display:block;width:100%;text-align:left;border:0;background:none;padding:14px 16px}
+.pc .t{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pc .t b{font-size:20px;flex:1;min-width:180px}
+.tag{font-size:13px;border-radius:999px;padding:2px 10px;white-space:nowrap;font-weight:700}
+.tg-on{background:var(--okbg);color:var(--ok)}.tg-soon{background:var(--bluebg);color:var(--blue)}.tg-end{background:#EEE;color:#888}
+.tg-kind{background:#F6EDE8;color:var(--mute);font-weight:500}.tg-draft{background:var(--warnbg);color:var(--warn)}
+.pc .meta{font-size:15px;color:var(--mute);margin-top:4px}
+.pc .ben{font-size:17px;margin-top:6px}
+.keys{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+.key{background:var(--posbg);color:var(--pos);border-radius:8px;padding:2px 10px;font-size:15px;font-weight:700}
+.keys .lb{font-size:13px;color:var(--mute)}
+.pc .bd{display:none;padding:0 16px 14px}
+.pc.open .bd{display:block}
+.pc .arrow{font-size:14px;color:var(--mute);margin-left:4px}
+.fld{border-top:1px dashed var(--line);padding:10px 0 4px}
+.fld h4{margin:0 0 4px;font-size:15px;color:var(--mute);font-weight:700}
+.fld .v{white-space:pre-wrap;word-break:break-word;font-size:17px}
+.fld.posf{background:var(--posbg);border:0;border-radius:12px;padding:10px 12px;margin:8px 0}
+.fld.posf h4{color:var(--pos)}
+.fld.hq{background:var(--warnbg);border:0;border-radius:12px;padding:10px 12px;margin:8px 0}
+.fld.hq h4{color:var(--warn)}
+.atts{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.atts a{display:block;border-radius:12px;overflow:hidden;background:#F3ECE8;text-decoration:none;color:var(--ink);font-size:14px}
+.atts img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
+.atts .pdf{padding:18px 10px;text-align:center;aspect-ratio:1/1;display:flex;flex-direction:column;justify-content:center;gap:6px}
+.atts .pdf span{font-size:34px}
+.foot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:13px;color:var(--mute)}
+.foot .ed{margin-left:auto;border:2px solid #E3CFC6;background:#fff;border-radius:12px;padding:6px 16px;font-size:16px}
+.empty,.wait{color:var(--mute);font-size:17px;padding:14px 4px}
+.err{color:var(--bad);font-size:16px;padding:12px 4px}
+/* 編輯視窗 */
+.md{position:fixed;inset:0;background:rgba(40,25,20,.45);display:none;z-index:50;overflow:auto;padding:20px 12px}
+.md.on{display:block}
+.mb{background:#fff;border-radius:20px;max-width:760px;margin:0 auto;padding:16px 18px 20px}
+.mb h2{margin:0 0 6px;font-size:22px;display:flex;gap:10px;align-items:center}
+.mb h2 .x{margin-left:auto;border:0;background:#F3ECE8;border-radius:12px;padding:6px 14px;font-size:16px}
+.mb label{display:block;font-size:15px;color:var(--mute);margin:12px 0 4px;font-weight:700}
+.mb label small{font-weight:400}
+.mb input[type=text],.mb input[type=date],.mb input[type=number],.mb select,.mb textarea{width:100%;font-size:17px;padding:10px 12px;border-radius:12px;border:2px solid #E3CFC6;font-family:inherit;background:#fff}
+.mb textarea{min-height:84px;resize:vertical}
+.mb .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mb .sts{display:flex;gap:10px;flex-wrap:wrap}
+.mb .sts label{display:flex;gap:6px;align-items:center;margin:0;border:2px solid #E3CFC6;border-radius:12px;padding:8px 14px;color:var(--ink);font-weight:500;cursor:pointer}
+.stg{display:flex;flex-wrap:wrap;gap:6px}
+.stg label{display:flex;gap:4px;align-items:center;margin:0;border:2px solid #E3CFC6;border-radius:10px;padding:4px 10px;font-weight:500;color:var(--ink);font-size:15px;cursor:pointer}
+.stg label.all{border-color:var(--ink)}
+.mbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+.mbar .sv{border:0;border-radius:14px;background:var(--red);color:#fff;font-weight:800;padding:11px 26px;font-size:18px}
+.mbar .sv:disabled{opacity:.5}
+.mbar .dl{border:0;background:none;color:var(--bad);text-decoration:underline;font-size:15px;margin-left:auto}
+.mmsg{min-height:22px;font-size:16px;margin-top:8px}
+.mmsg.bad{color:var(--bad)}.mmsg.ok{color:var(--ok)}
+.matt{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.matt .it{display:flex;gap:6px;align-items:center;border:2px solid var(--line);border-radius:10px;padding:4px 8px;font-size:14px;max-width:100%}
+.matt .it a{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.matt .it button{border:0;background:none;color:var(--bad);font-size:14px;padding:0 2px}
+.upl{border:2px dashed #D9C3B8;background:#FFFBF8;border-radius:12px;padding:8px 14px;font-size:16px;display:inline-block;cursor:pointer;margin-top:6px}
+.hint{font-size:13px;color:var(--mute);margin-top:4px}
+@media (max-width:600px){ .top h1{font-size:22px;min-width:0} .mb .two{grid-template-columns:1fr} .pc .t b{font-size:18px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>🎁 活動與優惠辦法</h1><button class="add" id="add" type="button" style="display:none">＋ 新增活動</button><button class="rf" id="rf" title="重新整理">↻</button></div>
+  <div class="sub" id="sub">結帳前不確定能不能用、POS 要按哪個鍵，查這裡。內容由體驗中心維護。</div>
+  <div class="tool">
+    <input type="text" id="q" placeholder="🔎 找活動（例：壽星、買一送一、甜點券）" autocomplete="off">
+    <div class="chips" id="stChips"></div>
+    <div class="chips" id="kdChips"></div>
+    <div class="row2"><span id="storeBox"></span><span class="cnt" id="cnt"></span></div>
+  </div>
+  <div id="list"><div class="wait">⏳ 讀取中…</div></div>
+</div>
+
+<div class="md" id="md"><div class="mb">
+  <h2><span id="mT">新增活動</span><button class="x" id="mX" type="button">關閉 ✕</button></h2>
+  <label>狀態</label>
+  <div class="sts"><label><input type="radio" name="st" value="draft"> 📝 草稿（只有體驗中心看得到）</label><label><input type="radio" name="st" value="live"> ✅ 已確認（各店看得到）</label></div>
+  <label for="fTitle">活動名稱 *</label><input type="text" id="fTitle" maxlength="80">
+  <div class="two">
+    <div><label for="fKind">分類</label><select id="fKind"></select></div>
+    <div><label for="fSort">排序 <small>（數字大的排前面）</small></label><input type="number" id="fSort"></div>
+  </div>
+  <div class="two">
+    <div><label for="fSd">開始日 <small>（空白＝已開始）</small></label><input type="date" id="fSd"></div>
+    <div><label for="fEd">結束日 <small>（空白＝長期）</small></label><input type="date" id="fEd"></div>
+  </div>
+  <label>適用店</label><div class="stg" id="fStores"></div>
+  <label for="fAud">適用對象</label><input type="text" id="fAud" maxlength="200" placeholder="例：自己人會員（素人級以上）、當日壽星">
+  <label for="fBen">優惠內容</label><textarea id="fBen" placeholder="例：體驗價 7 折"></textarea>
+  <label for="fCond">使用條件</label><textarea id="fCond" placeholder="例：要出示自己人 QR Code；每人每月 1 次；限平日"></textarea>
+  <label for="fNo">不可併用</label><textarea id="fNo" placeholder="例：不可與其他折扣、甜點券同時使用"></textarea>
+  <label for="fPos">POS 要按的折扣鍵 <small>（多個用頓號、隔開，要跟 POS 上的名稱一字不差）</small></label><input type="text" id="fPos" maxlength="500">
+  <label for="fCo">結帳怎麼做</label><textarea id="fCo" placeholder="例：①先刷甜點 ②按「折扣」→「自己人體驗7折」③收回優惠券"></textarea>
+  <label for="fFaq">常見問答</label><textarea id="fFaq" placeholder="問：…&#10;答：…"></textarea>
+  <label for="fNote">內部備註 <small>（只有體驗中心看得到）</small></label><textarea id="fNote"></textarea>
+  <label>附件 <small>（海報、說明圖、PDF；每個活動最多 6 個、每個 10MB）</small></label>
+  <div class="matt" id="mAtt"></div>
+  <label class="upl" id="uplL" for="fFile">📎 加附件</label><input type="file" id="fFile" accept="image/*,application/pdf" multiple style="display:none">
+  <div class="hint" id="uplHint"></div>
+  <div class="mbar"><button class="sv" id="mSave" type="button">儲存</button><button class="dl" id="mDel" type="button">刪除這個活動</button></div>
+  <div class="mmsg" id="mMsg"></div>
+</div></div>
+
+<script>
+(function(){
+'use strict';
+var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API v9（promoList／promoSave／promoDel／promoUpload／promoAttDel） */
+var STORES = [[1,'精明'],[2,'草悟道'],[3,'南京'],[4,'士林'],[5,'Focus'],[6,'新竹'],[7,'板橋'],[8,'新店'],[9,'中壢'],[10,'藝文'],[11,'A13'],[12,'SKM']];
+var KINDS = ['自己人會員','生日壽星','優惠券・兌換券','加購','團體・企業','合作・異業','員工','其他'];
+var STATES = [['on','進行中'],['soon','即將開始'],['end','已結束'],['all','全部']];
+var CACHE_KEY = 'promo_cache_v1', MAX_ATT = 6, MAX_SIDE = 2000;
+var S = { sid: 0, pw: '', hq: false, rows: null, today: '', at: '', err: '', st: 'on', kind: '', q: '', store: 0, draftOnly: false, open: {}, edit: null, busy: false };
+var $ = function(id){ return document.getElementById(id); };
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function ls(k, v){ try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch(e){ return null; } }
+function shortOf(id){ for (var i = 0; i < STORES.length; i++) if (STORES[i][0] === id) return STORES[i][1]; return id + ' 號'; }
+function rq(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function dcAuth(){ try { var o = JSON.parse(ls('dc_auth_v1') || 'null'); return o && o.pw && o.exp > Date.now() ? o : null; } catch(e){ return null; } }
+function relogin(msg){ try { if (window.parent !== window && parent.DC) return parent.DC.relogin(msg || ''); } catch(e){} location.replace('decision-center.html#promo'); }
+function tpeToday(){ var d = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function md(d){ return d ? Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10)) + (d.slice(0, 4) !== S.today.slice(0, 4) ? '（' + d.slice(0, 4) + '）' : '') : ''; }
+function post(body, ms, noRetry){
+  ms = ms || 60000;
+  var once = function(){
+    var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function(){ ctl.abort(); }, ms) : 0;
+    return fetch(ANN_API, { method: 'POST', body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined, redirect: 'follow' })
+      .then(function(r){ return r.text(); })
+      .then(function(t){ clearTimeout(tm); try { return JSON.parse(t); } catch(e){ throw new Error('系統忙碌，請再按一次'); } },
+            function(e){ clearTimeout(tm); throw new Error(e && e.name === 'AbortError' ? '網路太慢，請再按一次' : '連不上，請再按一次'); });
+  };
+  return noRetry ? once() : once().catch(function(){ return new Promise(function(res){ setTimeout(res, 1500); }).then(once); });
+}
+function hqBody(o){ o.password = S.pw; o.asHq = true; return o; }
+
+/* ---------- 狀態、篩選 ---------- */
+function stateOf(r){ var t = S.today; if (r.start_date && r.start_date > t) return 'soon'; if (r.end_date && r.end_date < t) return 'end'; return 'on'; }
+function storesOf(r){ return r.stores ? String(r.stores).split(',').map(Number) : []; }
+function fitStore(r, sid){ var a = storesOf(r); return !sid || !a.length || a.indexOf(sid) >= 0; }
+function storesTxt(r){ var a = storesOf(r); return a.length ? a.map(function(n){ return n + ' ' + shortOf(n); }).join('、') : '12 家店全部'; }
+function periodTxt(r){
+  if (!r.start_date && !r.end_date) return '長期';
+  if (!r.start_date) return '到 ' + md(r.end_date);
+  if (!r.end_date) return md(r.start_date) + ' 起';
+  return md(r.start_date) + '～' + md(r.end_date);
+}
+function hay(r){ return [r.title, r.kind, r.audience, r.benefit, r.conditions, r.no_combine, r.pos_keys, r.checkout, r.faq, S.hq ? r.hq_note : ''].join('\n').toLowerCase(); }
+function base(){ return (S.rows || []).filter(function(r){ return fitStore(r, S.store); }); }
+function visible(){
+  var words = S.q.toLowerCase().split(/\s+/).filter(Boolean);
+  return base().filter(function(r){
+    if (S.draftOnly) { if (r.status === 'live') return false; }
+    else if (S.st !== 'all' && stateOf(r) !== S.st) return false;
+    if (S.kind && r.kind !== S.kind) return false;
+    if (words.length) { var h = hay(r); for (var i = 0; i < words.length; i++) if (h.indexOf(words[i]) < 0) return false; }
+    return true;
+  }).sort(function(a, b){
+    return (a.status === 'live' ? 1 : 0) - (b.status === 'live' ? 1 : 0) || (b.sort || 0) - (a.sort || 0) || String(a.title).localeCompare(String(b.title), 'zh-Hant');
+  });
+}
+
+/* ---------- 畫面（只重畫篩選鈕與清單；搜尋框不動） ---------- */
+function drawChips(){
+  var b = base(), n = {};
+  STATES.forEach(function(s){ n[s[0]] = 0; });
+  b.forEach(function(r){ n[stateOf(r)]++; n.all++; });
+  var drafts = b.filter(function(r){ return r.status !== 'live'; }).length;
+  $('stChips').innerHTML = STATES.map(function(s){ return '<button class="chip' + (!S.draftOnly && S.st === s[0] ? ' on' : '') + '" data-st="' + s[0] + '">' + s[1] + '<i>' + n[s[0]] + '</i></button>'; }).join('') +
+    (S.hq ? '<button class="chip dr' + (S.draftOnly ? ' on' : '') + '" data-dr="1">📝 待確認的草稿<i>' + drafts + '</i></button>' : '');
+  $('kdChips').innerHTML = '<button class="chip' + (!S.kind ? ' on' : '') + '" data-kd="">全部分類</button>' +
+    KINDS.filter(function(k){ return b.some(function(r){ return r.kind === k; }); }).map(function(k){ return '<button class="chip' + (S.kind === k ? ' on' : '') + '" data-kd="' + esc(k) + '">' + esc(k) + '</button>'; }).join('');
+}
+function keysHtml(r){
+  var ks = String(r.pos_keys || '').split(/[、,，\n]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  return ks.length ? '<div class="keys"><span class="lb">POS 鍵</span>' + ks.map(function(k){ return '<span class="key">' + esc(k) + '</span>'; }).join('') + '</div>' : '';
+}
+function fld(h, v, cls){ return v ? '<div class="fld' + (cls ? ' ' + cls : '') + '"><h4>' + h + '</h4><div class="v">' + esc(v) + '</div></div>' : ''; }
+function attHtml(att){
+  if (!att || !att.length) return '';
+  return '<div class="fld"><h4>📎 附件</h4><div class="atts">' + att.map(function(a){
+    var img = /^image\//.test(a.mime || '') || /\.(jpe?g|png|gif|webp)$/i.test(a.name || '');
+    return '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + (img ? '<img loading="lazy" src="https://drive.google.com/thumbnail?id=' + encodeURIComponent(a.id) + '&sz=w600" alt="' + esc(a.name) + '">' : '<div class="pdf"><span>📄</span>' + esc(a.name) + '</div>') + '</a>';
+  }).join('') + '</div></div>';
+}
+function cardHtml(r){
+  var st = stateOf(r), live = r.status === 'live', open = !!S.open[r.promo_id];
+  var stTag = st === 'on' ? '<span class="tag tg-on">進行中</span>' : st === 'soon' ? '<span class="tag tg-soon">即將開始</span>' : '<span class="tag tg-end">已結束</span>';
+  return '<div class="pc' + (live ? '' : ' draft') + (open ? ' open' : '') + '" id="c_' + esc(r.promo_id) + '">' +
+    '<button class="hd" type="button" data-tg="' + esc(r.promo_id) + '"><div class="t"><b>' + esc(r.title) + '</b>' + (live ? '' : '<span class="tag tg-draft">📝 草稿・各店看不到</span>') + stTag + '<span class="tag tg-kind">' + esc(r.kind || '其他') + '</span></div>' +
+    '<div class="meta">📅 ' + esc(periodTxt(r)) + '　🏪 ' + esc(storesTxt(r)) + (r.audience ? '　👤 ' + esc(r.audience) : '') + '</div>' +
+    (r.benefit ? '<div class="ben">🎁 ' + esc(r.benefit.split('\n')[0]) + '</div>' : '') + keysHtml(r) +
+    '<div class="meta"><span class="arrow">' + (open ? '▲ 收起' : '▼ 看完整辦法') + '</span></div></button>' +
+    '<div class="bd">' +
+      fld('🎁 優惠內容', r.benefit) + fld('✅ 使用條件', r.conditions) + fld('⛔ 不可併用', r.no_combine) +
+      fld('🧾 POS 要按的折扣鍵', r.pos_keys, 'posf') + fld('💳 結帳怎麼做', r.checkout) + fld('💬 常見問答', r.faq) + attHtml(r.att) +
+      (S.hq ? fld('🔒 內部備註（只有體驗中心看得到）', r.hq_note, 'hq') : '') +
+      (!r.conditions && !r.checkout && live ? '<div class="fld"><div class="v" style="color:var(--mute)">還沒寫使用條件或結帳步驟，有疑問請問店長或體驗中心。</div></div>' : '') +
+      '<div class="foot"><span>最後更新 ' + esc(String(r.updated_at || '').slice(0, 16)) + (S.hq && r.updated_by ? '（' + esc(r.updated_by) + '）' : '') + '</span>' +
+      (S.hq ? '<button class="ed" type="button" data-ed="' + esc(r.promo_id) + '">✏️ 編輯</button>' : '') + '</div>' +
+    '</div></div>';
+}
+function drawList(){
+  if (window.__ime && __ime.on) return;
+  drawChips();
+  var $l = $('list');
+  if (S.rows === null) { $l.innerHTML = S.err ? '<div class="err">⚠️ ' + esc(S.err) + '　<button class="chip" id="retry">再試一次</button></div>' : '<div class="wait">⏳ 讀取中…</div>'; var b = $('retry'); if (b) b.onclick = function(){ load(); }; $('cnt').textContent = ''; return; }
+  var v = visible();
+  $('cnt').textContent = '共 ' + v.length + ' 個' + (S.at ? '　更新 ' + S.at.slice(11, 16) : '') + (S.err ? '　⚠️ ' + S.err : '');
+  if (!v.length) {
+    var none = !base().length;
+    $l.innerHTML = '<div class="empty">' + (none ? (S.hq ? '還沒有活動，按右上「＋ 新增活動」。' : '體驗中心還在整理活動辦法，整理好會出現在這裡。') : (S.q ? '找不到「' + esc(S.q) + '」，換個字試試，或按「全部」。' : '這一類目前沒有活動。')) + '</div>';
+    return;
+  }
+  $l.innerHTML = v.map(cardHtml).join('');
+}
+
+/* ---------- 讀資料 ---------- */
+function load(){
+  S.err = '';
+  if (S.rows === null) drawList();
+  var body = { action: 'promoList' }; if (S.hq) hqBody(body);
+  return post(body, 45000).then(function(r){
+    if (!r || !r.ok) { if (r && r.code === 'auth') return relogin('體驗中心密碼已更換或過期，請重新輸入'); throw new Error((r && r.msg) || '讀取失敗'); }
+    S.rows = r.data.rows || []; S.today = r.data.today || tpeToday(); S.at = r.data.at || '';
+    if (r.data.kinds && r.data.kinds.length) KINDS = r.data.kinds;
+    if (!S.hq) ls(CACHE_KEY, JSON.stringify({ rows: S.rows, today: S.today, at: S.at }));
+    drawList(); jump();
+  }).catch(function(e){ S.err = (S.rows ? '更新失敗：' : '') + e.message; drawList(); });
+}
+function jump(){
+  var m = String(location.hash || '').match(/id=([A-Za-z0-9-]+)/); if (!m || !S.rows) return;
+  var r = S.rows.filter(function(x){ return x.promo_id === m[1]; })[0]; if (!r) return;
+  S.open[r.promo_id] = 1; S.st = 'all'; S.draftOnly = false; S.kind = ''; drawList();
+  var el = $('c_' + r.promo_id); if (el) { el.scrollIntoView({ block: 'start' }); el.classList.add('flash'); setTimeout(function(){ el.classList.remove('flash'); }, 1800); }
+  try { history.replaceState(null, '', location.pathname + location.search); } catch(e){}
+}
+
+/* ---------- 編輯（體驗中心） ---------- */
+function storeBoxes(sel){
+  var all = !sel.length;
+  $('fStores').innerHTML = '<label class="all"><input type="checkbox" data-all="1"' + (all ? ' checked' : '') + '> 12 家店全部</label>' +
+    STORES.map(function(s){ return '<label><input type="checkbox" data-s="' + s[0] + '"' + (all || sel.indexOf(s[0]) >= 0 ? ' checked' : '') + '> ' + s[0] + ' ' + esc(s[1]) + '</label>'; }).join('');
+  var boxes = $('fStores').querySelectorAll('[data-s]'), allB = $('fStores').querySelector('[data-all]');
+  allB.onchange = function(){ boxes.forEach(function(b){ b.checked = allB.checked; }); };
+  boxes.forEach(function(b){ b.onchange = function(){ allB.checked = Array.prototype.every.call(boxes, function(x){ return x.checked; }); }; });
+}
+function pickedStores(){ var a = []; $('fStores').querySelectorAll('[data-s]').forEach(function(b){ if (b.checked) a.push(Number(b.getAttribute('data-s'))); }); return a; }
+function drawAtt(){
+  var r = S.edit, att = (r && r.att) || [];
+  $('mAtt').innerHTML = att.length ? att.map(function(a){ return '<span class="it"><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.name) + '</a><button type="button" data-ad="' + esc(a.aid) + '" title="移除">✕</button></span>'; }).join('') : '<span class="hint">還沒有附件</span>';
+  var can = r && r.promo_id;
+  $('uplL').style.display = can && att.length < MAX_ATT ? '' : 'none';
+  $('uplHint').textContent = can ? (att.length >= MAX_ATT ? '已達 ' + MAX_ATT + ' 個上限' : '') : '先按「儲存」，再加附件';
+}
+function openEdit(id){
+  var r = id ? (S.rows || []).filter(function(x){ return x.promo_id === id; })[0] : null;
+  S.edit = r ? JSON.parse(JSON.stringify(r)) : { status: 'draft', att: [] };
+  var e = S.edit;
+  $('mT').textContent = r ? '編輯活動' : '新增活動';
+  document.querySelectorAll('input[name=st]').forEach(function(x){ x.checked = x.value === (e.status === 'live' ? 'live' : 'draft'); });
+  $('fKind').innerHTML = KINDS.map(function(k){ return '<option' + (k === (e.kind || '其他') ? ' selected' : '') + '>' + esc(k) + '</option>'; }).join('');
+  $('fTitle').value = e.title || ''; $('fSort').value = e.sort || ''; $('fSd').value = e.start_date || ''; $('fEd').value = e.end_date || '';
+  $('fAud').value = e.audience || ''; $('fBen').value = e.benefit || ''; $('fCond').value = e.conditions || ''; $('fNo').value = e.no_combine || '';
+  $('fPos').value = e.pos_keys || ''; $('fCo').value = e.checkout || ''; $('fFaq').value = e.faq || ''; $('fNote').value = e.hq_note || '';
+  storeBoxes(storesOf(e)); drawAtt();
+  $('mDel').style.display = r ? '' : 'none';
+  $('mMsg').className = 'mmsg'; $('mMsg').textContent = '';
+  $('md').classList.add('on'); $('md').scrollTop = 0; setTimeout(function(){ $('fTitle').focus(); }, 50);
+}
+function closeEdit(){ if (S.busy) return; $('md').classList.remove('on'); S.edit = null; }
+function msg(t, cls){ $('mMsg').className = 'mmsg' + (cls ? ' ' + cls : ''); $('mMsg').textContent = t; }
+function save(){
+  if (S.busy) return;
+  var st = (document.querySelector('input[name=st]:checked') || {}).value || 'draft', stores = pickedStores();
+  if (!$('fTitle').value.trim()) return msg('活動名稱要填', 'bad');
+  if (!stores.length) return msg('至少勾一家店', 'bad');
+  if ($('fSd').value && $('fEd').value && $('fSd').value > $('fEd').value) return msg('開始日不能晚於結束日', 'bad');
+  if (st === 'live' && S.edit.status !== 'live' && !confirm('改成「已確認」後，各店就看得到這個活動。確定？')) return;
+  var p = { promo_id: S.edit.promo_id || '', base_updated: S.edit.updated_at || '', status: st, title: $('fTitle').value, kind: $('fKind').value, sort: $('fSort').value,
+    start_date: $('fSd').value, end_date: $('fEd').value, stores: stores.length >= 12 ? '' : stores.join(','), audience: $('fAud').value, benefit: $('fBen').value,
+    conditions: $('fCond').value, no_combine: $('fNo').value, pos_keys: $('fPos').value, checkout: $('fCo').value, faq: $('fFaq').value, hq_note: $('fNote').value };
+  S.busy = true; $('mSave').disabled = true; msg('儲存中…');
+  post(hqBody({ action: 'promoSave', rq: rq(), promo: p }), 60000, true).then(function(r){
+    S.busy = false; $('mSave').disabled = false;
+    if (!r || !r.ok) { if (r && r.code === 'auth') return relogin('體驗中心密碼已更換或過期，請重新輸入'); return msg((r && r.msg) || '儲存失敗', 'bad'); }
+    var isNew = !S.edit.promo_id;
+    S.edit.promo_id = r.data.promo_id; S.edit.updated_at = r.data.updated_at; S.edit.status = st;
+    S.open[r.data.promo_id] = 1;
+    msg(isNew ? '✅ 已新增。要放海報或說明圖，可以在上面「📎 加附件」。' : '✅ 已儲存', 'ok');
+    $('mDel').style.display = ''; $('mT').textContent = '編輯活動'; drawAtt();
+    load();
+  }, function(e){ S.busy = false; $('mSave').disabled = false; msg(e.message + '（可能已存進去，先按 ↻ 看看再決定要不要重送）', 'bad'); });
+}
+function del(){
+  if (S.busy || !S.edit || !S.edit.promo_id) return;
+  if (!confirm('刪除「' + S.edit.title + '」？各店就看不到了（資料表裡會留紀錄）。')) return;
+  S.busy = true; msg('刪除中…');
+  post(hqBody({ action: 'promoDel', rq: rq(), promo_id: S.edit.promo_id }), 60000, true).then(function(r){
+    S.busy = false;
+    if (!r || !r.ok) return msg((r && r.msg) || '刪除失敗', 'bad');
+    closeEdit(); load();
+  }, function(e){ S.busy = false; msg(e.message, 'bad'); });
+}
+function shrink(file){
+  return new Promise(function(res){
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 3 * 1024 * 1024) return res(file);
+    var img = new Image(), url = URL.createObjectURL(file);
+    img.onload = function(){
+      var k = Math.min(1, MAX_SIDE / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      c.toBlob(function(b){ res(b ? new File([b], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file); }, 'image/jpeg', 0.88);
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); res(file); };
+    img.src = url;
+  });
+}
+function b64(file){ return new Promise(function(res, rej){ var fr = new FileReader(); fr.onload = function(){ res(String(fr.result).split(',')[1] || ''); }; fr.onerror = function(){ rej(new Error('讀不到檔案')); }; fr.readAsDataURL(file); }); }
+function upload(files){
+  files = Array.prototype.slice.call(files || []);
+  if (!files.length || !S.edit || !S.edit.promo_id || S.busy) return;
+  var room = MAX_ATT - (S.edit.att || []).length;
+  if (files.length > room) { msg('最多再加 ' + room + ' 個', 'bad'); files = files.slice(0, room); }
+  S.busy = true;
+  var i = 0;
+  (function next(){
+    if (i >= files.length) { S.busy = false; msg('✅ 附件已加上', 'ok'); drawAtt(); load(); return; }
+    var f = files[i++]; msg('上傳中（' + i + '／' + files.length + '）' + f.name + '…');
+    shrink(f).then(function(g){
+      if (g.size > 10 * 1024 * 1024) throw new Error('「' + f.name + '」超過 10MB');
+      return b64(g).then(function(s){ return post(hqBody({ action: 'promoUpload', rq: rq(), promo_id: S.edit.promo_id, name: g.name, mime: g.type, b64: s }), 120000, true); });
+    }).then(function(r){
+      if (!r || !r.ok) throw new Error((r && r.msg) || '上傳失敗');
+      S.edit.att = (S.edit.att || []).concat([r.data.att]); drawAtt(); next();
+    }).catch(function(e){ S.busy = false; msg(e.message, 'bad'); drawAtt(); load(); });
+  })();
+}
+function attDel(aid){
+  if (S.busy || !S.edit) return;
+  var a = (S.edit.att || []).filter(function(x){ return x.aid === aid; })[0]; if (!a || !confirm('移除附件「' + a.name + '」？')) return;
+  S.busy = true; msg('移除中…');
+  post(hqBody({ action: 'promoAttDel', rq: rq(), promo_id: S.edit.promo_id, aid: aid }), 60000, true).then(function(r){
+    S.busy = false;
+    if (!r || !r.ok) return msg((r && r.msg) || '移除失敗', 'bad');
+    S.edit.att = S.edit.att.filter(function(x){ return x.aid !== aid; }); drawAtt(); msg('已移除', 'ok'); load();
+  }, function(e){ S.busy = false; msg(e.message, 'bad'); });
+}
+
+/* ---------- 開始 ---------- */
+function init(){
+  var q = new URLSearchParams(location.search), s = Number(q.get('s')) || 0, a = dcAuth();
+  if (!q.get('embed')) { location.replace('decision-center.html' + (s ? '?s=' + s : '') + '#promo' + (location.hash ? '&' + location.hash.slice(1) : '')); return; }
+  if (!a || !(a.role === 'hq' || (a.role === 'store' && Number(a.sid) >= 1))) return relogin('請重新登入');
+  S.hq = a.role === 'hq'; S.pw = a.pw; S.sid = S.hq ? (s >= 1 && s <= 12 ? s : 0) : Number(a.sid);
+  S.store = S.hq ? 0 : S.sid;
+  S.today = tpeToday();
+  if (S.hq) {
+    $('add').style.display = '';
+    $('sub').textContent = '體驗中心：可新增、修改；草稿只有體驗中心看得到，改成「已確認」各店才看得到。';
+    $('storeBox').innerHTML = '看哪家店適用：<select id="stSel"><option value="0">全部店</option>' + STORES.map(function(x){ return '<option value="' + x[0] + '">' + x[0] + ' ' + esc(x[1]) + '店</option>'; }).join('') + '</select>';
+    $('stSel').onchange = function(){ S.store = Number(this.value); drawList(); };
+  } else {
+    $('storeBox').textContent = '只列 ' + S.sid + ' ' + shortOf(S.sid) + '店 可以用的活動';
+    try { var c = JSON.parse(ls(CACHE_KEY) || 'null'); if (c && c.rows) { S.rows = c.rows; S.at = c.at || ''; } } catch(e){}
+  }
+  var tq;
+  $('q').addEventListener('input', function(){ var v = this.value; clearTimeout(tq); tq = setTimeout(function(){ S.q = v.trim(); drawList(); }, 150); });
+  $('stChips').addEventListener('click', function(e){ var b = e.target.closest('button'); if (!b) return; if (b.hasAttribute('data-dr')) { S.draftOnly = !S.draftOnly; } else { S.draftOnly = false; S.st = b.getAttribute('data-st'); } drawList(); });
+  $('kdChips').addEventListener('click', function(e){ var b = e.target.closest('button'); if (!b) return; S.kind = b.getAttribute('data-kd') || ''; drawList(); });
+  $('list').addEventListener('click', function(e){
+    var ed = e.target.closest('[data-ed]'); if (ed) return openEdit(ed.getAttribute('data-ed'));
+    var tg = e.target.closest('[data-tg]'); if (!tg) return;
+    var id = tg.getAttribute('data-tg'), c = $('c_' + id); if (S.open[id]) delete S.open[id]; else S.open[id] = 1;
+    if (c) { c.classList.toggle('open', !!S.open[id]); var ar = c.querySelector('.arrow'); if (ar) ar.textContent = S.open[id] ? '▲ 收起' : '▼ 看完整辦法'; }
+  });
+  $('rf').onclick = function(){ load(); };
+  $('add').onclick = function(){ openEdit(''); };
+  $('mX').onclick = closeEdit; $('mSave').onclick = save; $('mDel').onclick = del;
+  $('md').addEventListener('click', function(e){ if (e.target === $('md')) closeEdit(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && $('md').classList.contains('on')) closeEdit(); });
+  $('fFile').onchange = function(){ upload(this.files); this.value = ''; };
+  $('mAtt').addEventListener('click', function(e){ var b = e.target.closest('[data-ad]'); if (b) attDel(b.getAttribute('data-ad')); });
+  window.addEventListener('hashchange', jump);
+  drawList(); load();
+}
+init();
+})();
+</script>
+</body>
+</html>

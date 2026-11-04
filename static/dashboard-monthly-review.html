@@ -56,6 +56,7 @@ window.__ime=(function(){
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (!a) return;
     var href = a.getAttribute('href') || '';
     if (/^dashboard-announce\.html/.test(href) && window.parent !== window && parent.DC) { e.preventDefault(); parent.DC.go('ann', href.split('#')[1] || ''); }
+    else if (/^promo\.html/.test(href) && window.parent !== window && parent.DC) { e.preventDefault(); parent.DC.go('promo', href.split('#')[1] || ''); }   /* 2026-11-04 活動優惠 → 入口「🎁 活動優惠」分頁 */
     else if (href === 'hub.html' && window.top !== window) { e.preventDefault(); top.location.href = 'hub.html'; }
   }, true);
 })();
@@ -338,6 +339,15 @@ body:not(.r-own) .dz-cnt{display:none}
 .tk-hint{font-size:12px;font-weight:700;color:#2F7D3A}
 /* 2026-10-30 店長看板左側：🆕 新品・檔期（點一列看檔期細節）、⭐ 本月 Google 評論（預設收起，點開看有效評論和負評） */
 .dz-panel.sm-camp{background:#EEF6FF;border-color:#C8DCF2}
+/* 2026-11-04 店長看板左側：🎁 進行中的活動（體驗中心確認過、這家店適用；點一列到「🎁 活動優惠」分頁看完整辦法） */
+.dz-panel.sm-promo{background:#FFF6EC;border-color:#F1D3B5}
+.sm-promo a.pm{display:block;border:1px solid #F1D3B5;background:#fff;border-radius:10px;padding:8px 10px;margin-bottom:7px;text-decoration:none;color:var(--text)}
+.sm-promo a.pm:hover{background:#FFFBF6}
+.sm-promo .pn{font-size:15px;font-weight:900;color:#8A3B12}
+.sm-promo .ps{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:0 6px;margin-left:6px;vertical-align:1px;background:#E3F3E8;color:#2F7D3A}
+.sm-promo .ps.soon{background:#E2EEFA;color:#1F4A7A}
+.sm-promo .pb{font-size:12px;color:#6F4E45;font-weight:600;margin-top:2px;line-height:1.55}
+.sm-promo .pk{display:inline-block;font-size:12px;font-weight:800;border-radius:6px;padding:0 6px;margin:3px 4px 0 0;background:#EEE8FA;color:#5B3FA8}
 .sm-camp .cp{border:1px solid #C8DCF2;background:#fff;border-radius:10px;padding:8px 10px;margin-bottom:7px;cursor:pointer}
 .sm-camp .cp:hover{background:#F6FAFF}
 .sm-camp .cn{font-size:15px;font-weight:900;color:#1F4A7A}
@@ -365,8 +375,8 @@ body:not(.r-own) .dz-cnt{display:none}
 @media (max-width:1100px){
   .smw{flex-direction:column;gap:0}
   .sm-l,.sm-r{display:contents}
-  #smTodo{order:1} #smCamp{order:2} #smCal{order:3} #smGb{order:4} #smAnn{order:5} #smKpi{order:6} #smRev{order:7}
-  #smTodo,#smCal,#smGb,#smAnn,#smKpi,#smCamp,#smRev{width:100%}
+  #smTodo{order:1} #smCamp{order:2} #smPromo{order:3} #smCal{order:4} #smGb{order:5} #smAnn{order:6} #smKpi{order:7} #smRev{order:8}
+  #smTodo,#smCal,#smGb,#smAnn,#smKpi,#smCamp,#smPromo,#smRev{width:100%}
 }
 @media (max-width:600px){
   .sm-cal .row{grid-template-columns:1fr;gap:6px}
@@ -2200,7 +2210,36 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     }).catch(function(e){ ANN.st = 'err'; ANN.err = (e && e.name === 'AbortError') ? '公告系統回應逾時' : (e.message || String(e)); })
       .then(function(){ if (B) renderSm(); });
   }
-  function smRefresh(){ smLiveLoad(MYSTORE, true); annLoad(true); smRevLoad(MYSTORE, true); campLoad(true); loadTrack(); renderSm(); }
+  function smRefresh(){ smLiveLoad(MYSTORE, true); annLoad(true); smRevLoad(MYSTORE, true); campLoad(true); promoLoad(true); loadTrack(); renderSm(); }
+  /* 2026-11-04 🎁 進行中的活動：公告 API v9 promoList（免密碼＝只回體驗中心「已確認」的活動）；這家店適用、進行中或 14 天內開始的才列 */
+  var PROMO = {st:'idle', rows:[], today:'', err:'', at:0}, PROMO_AHEAD = 14;
+  function promoLoad(force){
+    if (!force && (PROMO.st === 'loading' || PROMO.st === 'ok')) return;
+    PROMO.st = 'loading'; PROMO.err = '';
+    var once = function(){ return fetch(ANN_API, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'promoList'}), cache:'no-store'})
+      .then(function(r){ return r.json(); }).then(function(j){ if (!j || !j.ok) throw new Error((j && j.msg) || '活動讀取失敗'); return j.data || {}; }); };
+    once().catch(function(){ return new Promise(function(r){ setTimeout(r, 1500); }).then(once); }).then(function(d){
+      PROMO.rows = d.rows || []; PROMO.today = d.today || ''; PROMO.at = Date.now(); PROMO.st = 'ok';
+    }).catch(function(e){ PROMO.st = 'err'; PROMO.err = e.message || String(e); }).then(function(){ if (B) renderSm(); });
+  }
+  function smPromoHtml(sid){
+    if (PROMO.st !== 'ok') return '';   /* 讀取中或失敗：不佔版面（完整清單在「🎁 活動優惠」分頁） */
+    var today = PROMO.today || liveToday(), soon = ymdAdd(today, PROMO_AHEAD);
+    var ls = PROMO.rows.filter(function(r){
+      var st = r.stores ? String(r.stores).split(',').map(Number) : [];
+      if (st.length && st.indexOf(Number(sid)) < 0) return false;
+      if (r.end_date && r.end_date < today) return false;
+      return !r.start_date || r.start_date <= soon;
+    }).sort(function(a, b){ return (b.sort || 0) - (a.sort || 0) || String(a.title).localeCompare(String(b.title), 'zh-Hant'); });
+    if (!ls.length) return '';
+    return '<div class="dz-panel sm-promo" id="smPromo"><h2>🎁 進行中的活動（' + ls.length + '）<span class="upd live">更新 ' + hmOf(PROMO.at) + '</span><span class="note">點一個看完整辦法和結帳方式</span></h2>'
+      + ls.map(function(r){
+        var up = r.start_date && r.start_date > today, keys = String(r.pos_keys || '').split(/[、,，\n]+/).map(function(x){ return x.trim(); }).filter(Boolean);
+        return '<a class="pm" href="promo.html#id=' + encodeURIComponent(r.promo_id) + '"><div class="pn">' + esc(r.title) + '<span class="ps' + (up ? ' soon' : '') + '">' + (up ? md(r.start_date) + ' 開始' : (r.end_date ? '到 ' + md(r.end_date) : '進行中')) + '</span></div>'
+          + (r.benefit ? '<div class="pb">' + esc(String(r.benefit).split('\n')[0]) + '</div>' : '')
+          + (keys.length ? '<div>' + keys.map(function(k){ return '<span class="pk">' + esc(k) + '</span>'; }).join('') + '</div>' : '') + '</a>';
+      }).join('') + '</div>';
+  }
 
   /* 即時資料的「今天」：以後台回傳為準，沒有就用台灣時間 */
   function liveToday(){ return (LIVE.d && LIVE.d.today) || tpeNow().date; }
@@ -2460,7 +2499,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       : '<div class="rl-pick"><span class="rl-lab">我的店</span>' + ZONES.map(function(z){ return '<span class="rl-zg">' + z[0].replace('區', '') + '</span>' + z[1].map(function(id){ return '<button class="dzk' + (MYSTORE === id ? ' on' : '') + '" data-ms="' + id + '">' + esc(sshort(id)) + '</button>'; }).join(''); }).join('') + '</div>'];
     if (!MYSTORE || !L[MYSTORE]) { el.innerHTML = h.join('') + '<div class="dz-panel"><div class="dd-none" style="color:#6F4E45">👆 請先選你的店，這台裝置會記住</div></div>'; wirePick(el); return; }
     var sid = MYSTORE;
-    if (document.body.classList.contains('r-sm')) { smLiveLoad(sid, false); annLoad(false); smRevLoad(sid, false); campLoad(false); }   /* 打開店長頁（或換店）就抓最新 */
+    if (document.body.classList.contains('r-sm')) { smLiveLoad(sid, false); annLoad(false); smRevLoad(sid, false); campLoad(false); promoLoad(false); }   /* 打開店長頁（或換店）就抓最新 */
     h.push('<div class="dd-note tabhelp" style="margin:0 0 4px">店長每天上班先看這頁：今天要處理的事、未來 7 天哪個時段客人多、團體訂金和甜點好了沒。</div>'
       + '<details class="xhelp tabhelp" style="margin:0 0 10px"><summary>ⓘ 每天怎麼用</summary><div>'
       + '① 「✅ 今天先做」：一張卡是一件事。開始處理就按「🔧 處理中」（只要留名字），做完按「✅ 已處理」並寫一句做了什麼；區主管和經營者都看得到。<br>'
@@ -2470,7 +2509,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       + '每一塊右上角都有資料時間：標「快照」的是每天 11:00 算好的數字；訂位、團體、公告是打開這頁時即時抓的，按「↻ 重新整理」可以再抓一次。'
       + '</div></details>');
     h.push(smFreshHtml());
-    h.push('<div class="smw"><div class="sm-l">' + smTodoHtml(sid) + smCampHtml() + smAnnHtml() + smKpiHtml(sid) + smRevHtml(sid) + '</div><div class="sm-r">' + smCalHtml(sid) + smGbHtml(sid) + '</div></div>');
+    h.push('<div class="smw"><div class="sm-l">' + smTodoHtml(sid) + smCampHtml() + smPromoHtml(sid) + smAnnHtml() + smKpiHtml(sid) + smRevHtml(sid) + '</div><div class="sm-r">' + smCalHtml(sid) + smGbHtml(sid) + '</div></div>');
     h.push('<div class="dz-panel" id="smDet" style="display:none"></div>');
     el.innerHTML = h.join('');
     wirePick(el); wireTasks(el); wireCells(el); wireTrkBar(el);

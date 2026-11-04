@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v8';   // 2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
@@ -1027,4 +1027,104 @@ function noteDel_(p) {
   if (n.deleted === 'Y') return { id: id, data: { id: id }, msg: '已刪除過' };
   putCols_(t, n._row, { deleted: 'Y', deleted_at: now_(), deleted_by: who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'deleted_by'; });
   return { id: id, data: { id: id }, msg: '刪除門市雜記 ' + id + '：' + st.short + '｜' + who };
+}
+
+/* =====================================================================
+ * v9（2026-11-04，經營者：「各店面對體驗中心提出的各種活動和優惠辦法，常常搞不清楚，要在決策中心加入活動與優惠辦法的頁面，讓他們可以隨時查詢」）
+ *   頁面 static/promo.html（決策中心 #promo）。一個活動一列 fact_promo；欄位固定：名稱、分類、對象、適用店、期間、優惠內容、使用條件、
+ *   不可併用、POS 要按的折扣鍵、結帳怎麼做、常見問答、附件（圖片／PDF）。
+ *   狀態：draft＝草稿（只有體驗中心看得到）｜live＝已確認（各店看得到）。進行中／即將開始／已結束由期間在前端算。
+ *   讀：promoList 免密碼（只回 live、不含 hq_note）；帶發佈者密碼或體驗中心密碼（asHq）＝連草稿與內部備註一起回。
+ *   寫：promoSave／promoDel／promoUpload／promoAttDel＝發佈者密碼（announce_pub）或體驗中心密碼（asHq＋task_hq），同公告。
+ *   刪除＝標記刪除；附件存「活動優惠/<活動編號>/」（知道連結可檢視），刪附件＝搬到「_已刪除」。
+ * ===================================================================== */
+TABS.fact_promo = ['promo_id', 'status', 'title', 'kind', 'audience', 'stores', 'start_date', 'end_date', 'benefit', 'conditions', 'no_combine',
+  'pos_keys', 'checkout', 'faq', 'hq_note', 'att', 'sort', 'src', 'created_at', 'updated_at', 'updated_by', 'confirmed_at', 'confirmed_by', 'deleted', 'deleted_at'];
+NUM_COLS.sort = 1;
+var PROMO_KINDS = ['自己人會員', '生日壽星', '優惠券・兌換券', '加購', '團體・企業', '合作・異業', '員工', '其他'];
+var PROMO_TXT_MAX = 3000, PROMO_MAX_ATT = 6, PROMO_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'];
+ACTIONS.promoList = promoList_; ACTIONS.promoSave = promoSave_; ACTIONS.promoDel = promoDel_; ACTIONS.promoUpload = promoUpload_; ACTIONS.promoAttDel = promoAttDel_;
+OPEN.promoList = 1;   /* 自己判斷有沒有帶管理密碼 */
+['promoSave', 'promoDel', 'promoUpload', 'promoAttDel'].forEach(function (a) { WRITES[a] = 1; PUB_ONLY[a] = 1; });
+
+function promoTab_() { var ss = ss_(); if (!ss.getSheetByName('fact_promo')) ensureTab_(ss, 'fact_promo'); return load_('fact_promo'); }
+function promoAtt_(r) { try { return r.att ? JSON.parse(r.att) : []; } catch (e) { return []; } }
+function promoOut_(r, hq) {
+  var o = { promo_id: r.promo_id, status: r.status, title: r.title, kind: r.kind, audience: r.audience, stores: r.stores, start_date: r.start_date, end_date: r.end_date,
+    benefit: r.benefit, conditions: r.conditions, no_combine: r.no_combine, pos_keys: r.pos_keys, checkout: r.checkout, faq: r.faq, att: promoAtt_(r),
+    sort: Number(r.sort) || 0, updated_at: r.updated_at, confirmed_at: r.confirmed_at };
+  if (hq) { o.hq_note = r.hq_note; o.src = r.src; o.updated_by = r.updated_by; o.confirmed_by = r.confirmed_by; o.created_at = r.created_at; }
+  return o;
+}
+function promoList_(p) {
+  var hq = false, pw = String(p.password || '').trim();
+  if (pw) { auth_(pw, p.asHq ? DASH_HQ : DASH_PUB); hq = true; }   /* 密碼不對會丟錯（code auth） */
+  var cache = CacheService.getScriptCache(), key = 'promo:' + (hq ? 'hq' : 'pub') + ':' + (cache.get('ann:ver') || '0'), hit = cacheGetBig_(cache, key);
+  if (hit) { try { return { data: JSON.parse(hit) }; } catch (e) { } }
+  var rows = ss_().getSheetByName('fact_promo') ? load_('fact_promo').rows : [];
+  rows = rows.filter(function (r) { return r.promo_id && r.deleted !== 'Y' && (hq || r.status === 'live'); });
+  var d = { today: today_(), at: now_(), hq: hq, kinds: PROMO_KINDS, rows: rows.map(function (r) { return promoOut_(r, hq); }) };
+  try { cachePutBig_(cache, key, JSON.stringify(d), LIST_TTL); } catch (e) { }
+  return { data: d };
+}
+function promoStores_(v) {
+  var a = String(v || '').split(/[,，、\s]+/).map(Number).filter(function (n) { return n >= 1 && n <= 12; });
+  a = a.filter(function (n, i) { return a.indexOf(n) === i; }).sort(function (x, y) { return x - y; });
+  return a.length >= 12 ? '' : a.join(',');   /* 空白＝12 店全部 */
+}
+function promoSave_(p, who) {
+  var a = p.promo || {}, t = promoTab_(), id = str_(a.promo_id), row = null;
+  var title = cleanTxt_(a.title, 80).trim(); if (!title) throw fail_('活動名稱必填', 'invalid');
+  var sd = normDate_(a.start_date), ed = normDate_(a.end_date);
+  if (sd && !/^\d{4}-\d{2}-\d{2}$/.test(sd)) throw fail_('開始日格式要 YYYY-MM-DD', 'invalid');
+  if (ed && !/^\d{4}-\d{2}-\d{2}$/.test(ed)) throw fail_('結束日格式要 YYYY-MM-DD', 'invalid');
+  if (sd && ed && sd > ed) throw fail_('開始日不能晚於結束日', 'invalid');
+  var status = a.status === 'live' ? 'live' : 'draft';
+  if (id) {
+    row = t.rows.filter(function (x) { return x.promo_id === id && x.deleted !== 'Y'; })[0]; if (!row) throw fail_('找不到活動 ' + id + '（可能已刪除）', 'notfound');
+    if (a.base_updated && str_(row.updated_at) !== str_(a.base_updated)) throw fail_('這個活動剛被別人改過，請重新整理再改', 'conflict');
+  } else id = 'P' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
+  var tx = function (k, n) { return cleanTxt_(a[k], n || PROMO_TXT_MAX).replace(/\r\n?/g, '\n').trim(); };
+  var kind = PROMO_KINDS.indexOf(a.kind) >= 0 ? a.kind : '其他';
+  var becameLive = status === 'live' && (!row || row.status !== 'live');
+  var o = { promo_id: id, status: status, title: title, kind: kind, audience: tx('audience', 200), stores: promoStores_(a.stores), start_date: sd, end_date: ed,
+    benefit: tx('benefit'), conditions: tx('conditions'), no_combine: tx('no_combine'), pos_keys: tx('pos_keys', 500), checkout: tx('checkout'), faq: tx('faq'),
+    hq_note: tx('hq_note'), att: row ? row.att : '', sort: Number(a.sort) || 0, src: row ? row.src : (cleanTxt_(a.src, 50) || 'dash'),
+    created_at: row ? row.created_at : now_(), updated_at: now_(), updated_by: who,
+    confirmed_at: becameLive ? now_() : (status === 'live' && row ? row.confirmed_at : ''), confirmed_by: becameLive ? who : (status === 'live' && row ? row.confirmed_by : ''),
+    deleted: '', deleted_at: '' };
+  put_(t, row ? row._row : nextRow_(t), o);
+  return { id: id, data: { promo_id: id, updated_at: o.updated_at }, msg: (row ? '更新' : '新增') + '活動：' + title + '（' + (status === 'live' ? '已確認' : '草稿') + '）' };
+}
+function promoDel_(p, who) {
+  var id = str_(p.promo_id), t = promoTab_(), row = t.rows.filter(function (x) { return x.promo_id === id && x.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到活動 ' + id, 'notfound');
+  putCols_(t, row._row, { deleted: 'Y', deleted_at: now_(), updated_by: who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'updated_by'; });
+  return { id: id, data: { promo_id: id }, msg: '刪除（標記）活動 ' + row.title };
+}
+function promoUpload_(p, who) {
+  var id = str_(p.promo_id), t = promoTab_(), row = t.rows.filter(function (x) { return x.promo_id === id && x.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到活動 ' + id + '（請先存活動再上傳附件）', 'notfound');
+  var att = promoAtt_(row); if (att.length >= PROMO_MAX_ATT) throw fail_('每個活動最多 ' + PROMO_MAX_ATT + ' 個附件', 'invalid');
+  var name = cleanTxt_(p.name, 150).replace(/[\\\/:*?"<>|]/g, '_').trim() || 'file', m = name.match(/\.([A-Za-z0-9]{1,5})$/), ext = m ? m[1].toLowerCase() : '';
+  if (PROMO_EXT.indexOf(ext) < 0) throw fail_('附件只收圖片或 PDF（' + PROMO_EXT.join('、') + '）', 'invalid');
+  var bytes = Utilities.base64Decode(String(p.b64 || ''));
+  if (!bytes.length) throw fail_('檔案是空的', 'invalid');
+  if (bytes.length > MAX_FILE) throw fail_('檔案超過 10MB', 'invalid');
+  var f = subOf_(sub_('活動優惠'), id).createFile(Utilities.newBlob(bytes, cleanTxt_(p.mime, 100) || 'application/octet-stream', name));
+  try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (se) { }
+  var x = { aid: 'F' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + Math.floor(Math.random() * 900 + 100), name: name, size: bytes.length, mime: f.getMimeType(), id: f.getId(), url: f.getUrl() };
+  att.push(x);
+  putCols_(t, row._row, { att: JSON.stringify(att), updated_at: now_(), updated_by: who }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
+  return { id: id, data: { att: x }, msg: '活動附件 ' + name };
+}
+function promoAttDel_(p, who) {
+  var id = str_(p.promo_id), aid = str_(p.aid), t = promoTab_(), row = t.rows.filter(function (x) { return x.promo_id === id && x.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到活動 ' + id, 'notfound');
+  var att = promoAtt_(row), x = att.filter(function (a) { return a.aid === aid; })[0];
+  if (!x) throw fail_('找不到附件', 'notfound');
+  try { var f = DriveApp.getFileById(x.id); if (inRoot_(f)) f.moveTo(sub_('_已刪除')); } catch (e) { }
+  att = att.filter(function (a) { return a.aid !== aid; });
+  putCols_(t, row._row, { att: att.length ? JSON.stringify(att) : '', updated_at: now_(), updated_by: who }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
+  return { id: id, data: { aid: aid }, msg: '刪除活動附件 ' + x.name };
 }
