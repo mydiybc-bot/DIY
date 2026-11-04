@@ -16,7 +16,9 @@
      i18nPick    主廚／管理者：勾選哪幾支給外國客人用（2026-10-26 經營者：「讓哪一些食譜可以被我新增到外國人可用的食譜中，讓我可以點選」）。
                  沒勾的不翻、平板不列；取消勾譯文與核准都保留，再勾回來（原文沒改）馬上恢復。分頁 i18n_pick（id, name, on Y/N, by, at）。
                  i18n_pick 還不存在＝還沒人勾過 → 全部當作有勾（上線前 39 支已全數放行，不能讓平板突然變空）；
-                 第一次勾選時把當下所有原文先記成 Y 再改那一支；之後後台新出現的英文食譜不在表上＝沒勾，要點了才加入。
+                 第一次勾選時把當下所有原文先記成 Y 再改那一支。
+                 2026-11-04 經營者：「不需要手動勾選，只要外語食譜收入這新甜點，就自動啟用」→ 不在表上＝有勾（自動翻、放行後上平板）；
+                 只有表上記成 N（有人按過取消勾）才不翻、平板不列。
      i18nApprove 主廚／管理者：核准放行（undo:1 收回）。**沒核准的平板看不到**（經營者 10/24：「完成後還是要一一打開比對，確認沒有問題才可以放行」）；
                  原文改版重翻 → 核准自動失效（appr_fp 對不上），要重新看過
      i18nKick    做下一件待翻譯的事：沒開自動（指令碼屬性 I18N_AUTO≠1）時只做指定的 id＋lang；同一件 6 分鐘內不會兩個人同時做
@@ -557,7 +559,7 @@ function i18nPickMap_() {
   if (n > 0) sh.getRange(2, 1, n, I18N_PICK_HEAD.length).getDisplayValues().forEach(function (r) { if (r[0]) m[r[0]] = r[2] === 'Y'; });
   return m;
 }
-function i18nOn_(pm, id) { return !pm || pm[id] === true; }
+function i18nOn_(pm, id) { return !pm || pm[id] !== false; }   /* 2026-11-04：新收入的（不在表上）自動算有勾，只有取消勾（N）的才關 */
 function i18nPick_(p, auth) {
   i18nBoss_(auth); I18N_HELD = true;   /* 走一般寫入路徑（已在全系統的鎖裡） */
   var ids = (Array.isArray(p.ids) ? p.ids : [p.id]).map(function (x) { return String(x || '').trim().toLowerCase(); }).filter(String);
