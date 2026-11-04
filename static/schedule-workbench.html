@@ -307,11 +307,18 @@ $('logoutBtn').onclick=function(){clearAuth();auth=null;showLogin('')};
 function enter(){$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');formKey='';
   if(auth.as==='hq'){$('storeSel').classList.remove('hide');$('who').textContent='🏢 體驗中心'}else{$('who').textContent=auth.as+' 號店 '+STORES[auth.as]}
   prevRaw={};chg={};refresh(true)}
-$('storeSel').onchange=$('ymSel').onchange=function(){prevRaw={};chg={};formKey='';$('chatLog').innerHTML='';refresh(true)};
+$('storeSel').onchange=$('ymSel').onchange=function(){prevRaw={};chg={};formKey='';S=null;
+  if(pollT){clearInterval(pollT);pollT=null}
+  ['chatLog','markWrap','cfgForm','msetForm','tplInfo','cfgSum','msetSum'].forEach(function(id){$(id).innerHTML=''});
+  ['tblWrap','chk','bonusBox'].forEach(function(id){$(id).innerHTML='<div class="mute" style="padding:12px"><span class="spin"></span>讀取中…</div>'});
+  $('report').className='report mute';$('report').textContent='還沒有報告';$('s104').classList.add('hide');$('job').classList.add('hide');
+  $('dsb').textContent='🕒 讀取中…';refresh(true)};
 
 /* ── 讀狀態、重畫結果區（不碰輸入框） ── */
 function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
 function apply(j,first){
+  /* 2026-11-04 經營者：排 12 月卻看到 11 月的資料。切換店／月後，晚到的舊月份回應一律丟掉 */
+  if(j.ym!==$('ymSel').value||String(j.store)!==String(curStore()))return false;
   if(S&&S.schedule){for(var eid in j.schedule||{}){var row=j.schedule[eid]||{};for(var d in row){var k=eid+'|'+d;if(prevRaw[k]!==undefined&&prevRaw[k]!==row[d])chg[k]=1}}}
   prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
   S=j;
@@ -323,6 +330,7 @@ function apply(j,first){
   $('bonusBtn').disabled=!j.bonus;$('revBtn').disabled=!j.schedule;$('bonusAllBtn').classList.toggle('hide',!(auth&&auth.as==='hq'));
   if(running&&!pollT)pollT=setInterval(function(){refresh()},3000);
   if(!running&&pollT){clearInterval(pollT);pollT=null}
+  return true;
 }
 function renderFiles(){
   var f=S.settingsFiles||[];$('setList').innerHTML=f.length?f.map(function(x){return '✅ '+esc(x.name)}).join('<br>'):'（沒有上傳）';
@@ -410,7 +418,7 @@ function saveMset(){$('msetSave').disabled=true;$('msetMsg').textContent='存檔
    .catch(function(e){$('msetSave').disabled=false;$('msetMsg').textContent='⚠ '+e.message})}
 var MK={'指休':'k1','特休':'k2','可上':'k3'};
 function renderMarks(){
-  if(!S.template||!S.mset){return}
+  if(!S.template||!S.mset){$('markWrap').innerHTML='';return}
   var info=S.template.info,marks=S.mset.marks||{},emps=S.mset.emps||{};
   var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){h+='<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});h+='</tr></thead><tbody>';
   info.emps.forEach(function(e){var t=(emps[e.id]||{}).type||'正職';h+='<tr><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
@@ -422,7 +430,7 @@ $('markWrap').addEventListener('click',function(e){var td=e.target.closest('td.m
   var cyc=td.dataset.t==='兼職'?['','可上','指休']:['','指休','特休'],cur=td.textContent.trim(),nx=cyc[(cyc.indexOf(cur)+1)%cyc.length];
   td.textContent=nx;td.className='m '+(MK[nx]||'')+(isWk(+td.dataset.d)?' wk':'');
   S.mset.marks[td.dataset.e]=S.mset.marks[td.dataset.e]||{};if(nx)S.mset.marks[td.dataset.e][td.dataset.d]=nx;else delete S.mset.marks[td.dataset.e][td.dataset.d];
-  post('mark',{marks:[{emp:td.dataset.e,day:+td.dataset.d,value:nx}]}).then(function(j){var k=formKey;apply(j);formKey=k;if(j.mset)S.mset.marks=j.mset.marks;renderMarks()}).catch(function(er){alert(er.message);refresh()})});
+  post('mark',{marks:[{emp:td.dataset.e,day:+td.dataset.d,value:nx}]}).then(function(j){var k=formKey;if(!apply(j))return;formKey=k;if(j.mset)S.mset.marks=j.mset.marks;renderMarks()}).catch(function(er){alert(er.message);refresh()})});
 
 /* ── 日獎金（2026-10-28） ── */
 function money(n){return '$'+Math.round(n||0).toLocaleString()}
@@ -479,7 +487,7 @@ function short(raw){
 function revOf(d){var r=(S.ext&&S.ext.revenue)||{};if(r.special&&r.special[d])return +r.special[d];return isWk(d)?+(r.weekend||0):+(r.weekday||0)}
 function light(d,v){var wk=isWk(d)||((S.ext&&S.ext.revenue&&S.ext.revenue.special)||{})[d];var lo=wk?1200:500,hi=wk?1500:750;return v>hi?'🟢':v>=lo?'🟡':'🔴'}
 function renderTable(){
-  if(!S.schedule||!S.template){return}
+  if(!S.schedule||!S.template){$('tblWrap').innerHTML='<div class="mute" style="padding:12px">還沒有班表</div>';return}
   var info=S.template.info,h='<table class="sch"><thead><tr><th class="nm">夥伴</th>';
   info.days.forEach(function(d){h+='<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});
   var B=S.bonus,names={};info.emps.forEach(function(e){names[e.id]=e.name});
@@ -517,7 +525,7 @@ function renderTable(){
 }
 function mm(t){var nx=t.indexOf('次日')===0;t=t.replace('次日','');var p=t.split(':');return (+p[0])*60+(+p[1])+(nx?1440:0)}
 function renderCheck(){
-  var c=S.check;if(!c){return}
+  var c=S.check;if(!c){$('chk').className='mute';$('chk').textContent='還沒有班表';return}
   var h='<div>'+(c.ok?'<span class="tag ok">✅ 沒有一定要改的問題</span>':'<span class="tag bad">❌ '+c.errors.length+' 項一定要改</span>')+(c.warns.length?'<span class="tag warn">⚠ '+c.warns.length+' 項請確認</span>':'')+'</div>';
   if(c.errors.length)h+='<ul class="chk">'+c.errors.map(function(x){return '<li style="color:var(--bad)">❌ '+esc(x)+'</li>'}).join('')+'</ul>';
   if(c.warns.length)h+='<ul class="chk">'+c.warns.map(function(x){return '<li style="color:var(--warn)">⚠ '+esc(x)+'</li>'}).join('')+'</ul>';
@@ -536,12 +544,12 @@ function md(s){
     out.push(l.trim()?'<p>'+inl(l)+'</p>':'');i++}
   return out.join('');
 }
-function renderReport(){if(S.report){$('report').classList.remove('mute');$('report').innerHTML=md(S.report)}}
+function renderReport(){if(S.report){$('report').classList.remove('mute');$('report').innerHTML=md(S.report)}else{$('report').className='report mute';$('report').textContent='還沒有報告'}}
 function renderChat(){
   var log=(S.chat||[]).filter(function(m){return !m.pending});
   var running=S.job&&S.job.status==='running';
   if(!running)pendingText='';
-  if(!log.length&&!pendingText){return}
+  if(!log.length&&!pendingText){$('chatLog').innerHTML='';return}
   var el=$('chatLog');
   var h=log.map(function(m){return '<div class="msg '+(m.role==='me'?'me':'ai')+'">'+esc(m.text)+(m.changed?'<div class="meta">改了 '+m.changed+' 格</div>':'')+'</div>'}).join('');
   if(running&&pendingText)h+='<div class="msg me">'+esc(pendingText)+'</div><div class="msg ai"><span class="spin"></span>'+esc(S.job.step||'AI 正在想…')+'</div>';
@@ -564,6 +572,7 @@ function twoStep(btn,label,fn){var t=null,orig=btn.textContent;
     if(!btn.classList.contains('arm')){btn.classList.add('arm');btn.textContent=label;t=setTimeout(function(){btn.classList.remove('arm');btn.textContent=orig},3500);return}
     clearTimeout(t);btn.classList.remove('arm');btn.textContent=orig;fn()})}
 twoStep($('draftBtn'),'再按一次確認（會重排整個月）',function(){
+  if(!S)return;
   if(!S.template){alert('還沒有 104 範本（每天早上自動取得；或到「📎 備用」自己上傳）');return}
   if(!S.formReady&&!(S.settingsFiles||[]).length){alert('請先填好「店別基本設定」的班別、「本月設定」的平日／假日營收預估，按存檔（或上傳 Excel 設定表）');return}
   post('draft').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
