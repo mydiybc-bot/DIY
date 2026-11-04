@@ -1,7 +1,7 @@
 """🗓 門市排班工作台（2026-10-26）
 
 店長上傳「每月排班設定表」＋「104 匯入範本（時間排班）」→ Claude（Sonnet 5.5）排初稿 → 檢查程式（schedule_check104）把關，
-沒過自動退回 Claude 修正（兩次不過換 Opus 5.5）→ 網頁日曆可點格子改、也可在對話框用講的改 → 下載填好的 104 匯入檔。
+沒過自動退回 Claude 修正（2026-11-04 起修正一律用 Opus 5.5）→ 網頁日曆可點格子改、也可在對話框用講的改（2026-11-04 起對話用 Opus 5.5）→ 下載填好的 104 匯入檔。
 
 2026-10-28 經營者裁定：設定表改成直接在工作台填（Excel 上傳留著當備用）——
   ・店別基本設定（班別時段、每天需求人數、連上上限、晚接早、跨店夥伴、店規、挪假未補清單）：每店一份 store-<店號>.json，填一次每月自動帶入。
@@ -41,6 +41,9 @@ AUTH_API = "https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74
 AUTH_TTL = 10 * 60
 MODEL = "claude-sonnet-5-5"
 MODEL_BACKUP = "claude-opus-5-5"
+# 2026-11-04 經營者「節省店長的時間」：初稿留 Sonnet（10/26 實測 3 分鐘、0 警告；Opus 要 7 分鐘、2 警告），
+# 初稿沒過檢查第 1 次就換 Opus 修；對話改班用 Opus（實測 10/10 直接改好，Sonnet 約 8/10 會只給選項、店長要再講一次）
+CHAT_MODEL = MODEL_BACKUP
 PRICE = {MODEL: (2.00, 10.00, 2.50, 0.20), MODEL_BACKUP: (4.00, 20.00, 5.00, 0.20)}   # 美元／百萬 tokens：輸入、輸出、快取寫、快取讀
 TWD = 32
 STORES = {1: "精明", 2: "草悟道", 3: "南京", 4: "士林", 5: "Focus", 6: "新竹", 7: "板橋", 8: "新店",
@@ -952,9 +955,9 @@ def _draft_worker(store, ym):
         system = RULES + DRAFT_CONTRACT
         messages = [{"role": "user", "content": _draft_user(st)}]
         report, ext, sched, chk = "", None, None, None
-        plan = [MODEL, MODEL, MODEL, MODEL_BACKUP]
+        plan = [MODEL, MODEL_BACKUP, MODEL_BACKUP, MODEL_BACKUP]
         for i, model in enumerate(plan):
-            _job(k, status="running", step=("AI 正在排班（約 3～5 分鐘）" if i == 0 else f"檢查沒過，AI 正在修正（第 {i} 次{'，換 Opus' if model == MODEL_BACKUP else ''}）"))
+            _job(k, status="running", step=("AI 正在排班（約 3～5 分鐘）" if i == 0 else f"檢查沒過，AI 正在修正（第 {i} 次{'，用 Opus' if model == MODEL_BACKUP else ''}）"))
             msg = _stream(model, system, messages, "high")
             text = "".join(b.text for b in msg.content if b.type == "text")
             with lk:
@@ -1102,10 +1105,10 @@ def _chat_worker(store, ym, text):
             st["api_messages"] = []   # 對話太長就開新的一段（班表、檢查每句都會重新附上）
         before = copy.deepcopy(st)
         n_err = len(st["check"]["errors"])
-        reply, changed = _chat_turn(st, text, MODEL, lk)
+        reply, changed = _chat_turn(st, text, CHAT_MODEL, lk)
         if len(st["check"]["errors"]) > n_err:
-            # Sonnet 改完反而多了 ❌ → 退回這句之前，換 Opus 重做
-            _job(k, status="running", step="換更強的模型再想一次…")
+            # 改完反而多了 ❌ → 退回這句之前，再用 Opus 重做一次
+            _job(k, status="running", step="AI 再想一次…")
             usage = st["usage"]
             st = before
             st["usage"] = usage

@@ -6,6 +6,8 @@
      有效評論與每月 15 則達標的判定照舊，AI 結果只供參考與比對。
    - 呼叫路徑：GAS → 訓練站代理 /api/recipe/translate（模型白名單含 claude-haiku-5-5）→ Anthropic。
      身分密碼從「食譜系統_申請單」dim_role 的「管理者」讀，不經人手、不存進本專案。
+   - 2026-11-04 經營者：1–4 星改用 Claude Sonnet 5.5 判讀＋寫回覆草稿（回覆品質較好；一批 4 則），5 星照舊 Haiku。
+     2026-10 起已用 Haiku 判過的 1–4 星會自動用 Sonnet 重判一次（舊回覆草稿換新），更早的不動。
    - 排程：aiReviewTick 每小時一次，有待判讀才呼叫 AI；舊評論會在幾輪內補完。
    - 額度用完（Anthropic 回餘額不足）→ 本輪停下、記在指令碼屬性 AIR_LAST_ERR，下一輪再試，不會重複扣錢。
    ==================================================================== */
@@ -14,6 +16,9 @@ var AIR_SHEET = 'ai_review';
 var AIR_HEAD = ['reviewId', 'store', 'ym', 'stars', 'people', 'partners', 'praise', 'neg_type', 'reply', 'hash', 'model', 'at'];
 var AIR_AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var AIR_MODEL = 'claude-haiku-5-5';
+var AIR_MODEL_NEG = 'claude-sonnet-5-5';   // 1–4 星（要寫回覆草稿）用的模型（2026-11-04）
+var AIR_BATCH_NEG = 4;                     // 1–4 星一次送幾則（Sonnet 慢一些，批小一點避免逾時）
+var AIR_NEG_FROM = '2026-10';              // 這個月起的 1–4 星，若之前是 Haiku 判的，自動改用 Sonnet 重判
 var AIR_PVER = 'p4';         // 提示詞版本：改提示詞就 +1，舊版判過的會自動重判（model 欄記成 模型|版本）
 var AIR_REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   // 食譜系統_申請單（讀 dim_role 管理者密碼）
 var AIR_BATCH = 8;           // 一次送幾則（15 則時 AI 偶爾把結果對錯評論，2026-10-26 降到 8）
@@ -133,7 +138,7 @@ function airDone_(sh) {
   var n = sh.getLastRow(), map = {};
   if (n < 2) return map;
   var v = sh.getRange(2, 1, n - 1, AIR_HEAD.length).getValues();
-  for (var i = 0; i < v.length; i++) if (v[i][0]) map[String(v[i][0])] = { row: i + 2, hash: String(v[i][9]), ver: String(v[i][10]).split('|')[1] || '', partners: String(v[i][5] || ''), store: String(v[i][1] || '') };
+  for (var i = 0; i < v.length; i++) if (v[i][0]) map[String(v[i][0])] = { row: i + 2, hash: String(v[i][9]), ver: String(v[i][10]).split('|')[1] || '', model: String(v[i][10]).split('|')[0], partners: String(v[i][5] || ''), store: String(v[i][1] || '') };
   return map;
 }
 function airCred_() {
@@ -152,8 +157,10 @@ function airPending_(done, limit) {
     var id = String(v[i][5] || '').trim(); if (!id || seen[id]) continue; seen[id] = 1;
     var store = String(v[i][0] || ''); if (!store) continue;
     var text = airClean_(v[i][4]), stars = Number(v[i][7]) || 0, hash = airHash_(stars + '|' + text);
-    var d = done[id]; if (d && d.hash === hash && (d.ver === AIR_PVER || (!text && stars >= 5))) continue;
-    out.push({ id: id, store: store, ym: airYm_(v[i][6]), stars: stars, text: text.slice(0, 1200), hash: hash, upd: d ? d.row : 0 });
+    var ym = airYm_(v[i][6]), d = done[id];
+    var negUpgrade = d && stars <= 4 && ym >= AIR_NEG_FROM && d.model !== AIR_MODEL_NEG;
+    if (d && d.hash === hash && (d.ver === AIR_PVER || (!text && stars >= 5)) && !negUpgrade) continue;
+    out.push({ id: id, store: store, ym: ym, stars: stars, text: text.slice(0, 1200), hash: hash, upd: d ? d.row : 0 });
   }
   return out;
 }
@@ -170,6 +177,14 @@ function airKnown_(done) {
   Object.keys(by).forEach(function (st) { by[st] = by[st].sort(function (a, b) { return b[1] - a[1]; }).slice(0, 40).map(function (x) { return x[0]; }); });
   return by;
 }
+/* 1–4 星用 Sonnet、5 星用 Haiku；同一批只放同一種，1–4 星一批 AIR_BATCH_NEG 則 */
+function airModelOf_(b) { return b.stars <= 4 ? AIR_MODEL_NEG : AIR_MODEL; }
+function airBatches_(list) {
+  var neg = list.filter(function (b) { return b.stars <= 4; }), pos = list.filter(function (b) { return b.stars > 4; }), out = [];
+  for (var i = 0; i < neg.length; i += AIR_BATCH_NEG) out.push(neg.slice(i, i + AIR_BATCH_NEG));
+  for (var j = 0; j < pos.length; j += AIR_BATCH) out.push(pos.slice(j, j + AIR_BATCH));
+  return out;
+}
 function airReq_(batch, cred, known) {
   var hint = '', seen = {};
   batch.forEach(function (b) { if (seen[b.store] || !known || !known[b.store]) return; seen[b.store] = 1; hint += '・' + b.store + '：' + known[b.store].join('、') + '\n'; });
@@ -177,7 +192,8 @@ function airReq_(batch, cred, known) {
     '以下 ' + batch.length + ' 則評論（JSON 陣列）：\n' + JSON.stringify(batch.map(function (b) {
     return { id: b.id, store: b.store, stars: b.stars, text: b.text };
   }));
-  var payload = { model: AIR_MODEL, max_tokens: 8000, system: airSystem_(), messages: [{ role: 'user', content: user }],
+  var model = airModelOf_(batch[0]);
+  var payload = { model: model, max_tokens: model === AIR_MODEL ? 8000 : 16000, system: airSystem_(), messages: [{ role: 'user', content: user }],
     output_config: { effort: 'low', format: { type: 'json_schema', schema: airSchema_() } } };
   return { url: AIR_AI_URL, method: 'post', contentType: 'application/json', muteHttpExceptions: true,
     payload: JSON.stringify({ role: cred.role, password: cred.password, payload: payload }) };
@@ -203,7 +219,7 @@ function airRow_(b, it) {
   var uniq = function (a) { var s = {}, o = []; (a || []).forEach(function (x) { x = String(x || '').trim(); if (x && !s[x]) { s[x] = 1; o.push(x); } }); return o; };
   var ps = airPartnersInText_(b, uniq(it.partners));
   return [b.id, b.store, b.ym, b.stars, (it.people || ps.length) ? 'Y' : 'N', ps.join('、'), uniq(it.praise).slice(0, 3).join('、'),
-    nt, neg ? String(it.reply || '').trim() : '', b.hash, AIR_MODEL + '|' + AIR_PVER, Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd HH:mm:ss')];
+    nt, neg ? String(it.reply || '').trim() : '', b.hash, (b.stars <= 4 ? AIR_MODEL_NEG : AIR_MODEL) + '|' + AIR_PVER, Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd HH:mm:ss')];
 }
 
 /* 主程式：每小時排程呼叫；limit 給數字＝只跑這麼多則（樣本用） */
@@ -224,7 +240,7 @@ function aiReviewTick(limit) {
     airWrite_(sh, rows); var ok = rows.length, fail = 0, stop = '';
     var cred = ai.length ? airCred_() : null, batches = [], known = airKnown_(done), downWaves = 0, mism = 0, miss = {};
     try { miss = JSON.parse(props.getProperty('AIR_MISS') || '{}'); } catch (eM) { miss = {}; }
-    for (var i = 0; i < ai.length; i += AIR_BATCH) batches.push(ai.slice(i, i + AIR_BATCH));
+    batches = airBatches_(ai);
     for (var w = 0; w < batches.length && !stop; w += AIR_PAR) {
       if (Date.now() - t0 > AIR_BUDGET_MS) { stop = 'time'; break; }
       var wave = batches.slice(w, w + AIR_PAR), rs;
@@ -277,8 +293,9 @@ function airJudgeIds_(ids) {
   var all = airPending_({}, 100000).filter(function (b) { return want[b.id]; });
   all.forEach(function (b) { var d = done[b.id]; b.upd = d ? d.row : 0; });
   var cred = airCred_(), known = airKnown_(done), out = [];
-  for (var i = 0; i < all.length; i += AIR_BATCH) {
-    var bt = all.slice(i, i + AIR_BATCH), r = airRes_(UrlFetchApp.fetch(AIR_AI_URL, airReq_(bt, cred, known)));
+  var bts = airBatches_(all);
+  for (var i = 0; i < bts.length; i++) {
+    var bt = bts[i], r = airRes_(UrlFetchApp.fetch(AIR_AI_URL, airReq_(bt, cred, known)));
     if (!r.ok) continue;
     var byId = {}; r.items.forEach(function (it) { byId[String(it.id)] = it; });
     bt.forEach(function (b) { var it = byId[b.id]; if (it && airHeadOk_(b, it)) out.push({ b: b, r: airRow_(b, it) }); });
