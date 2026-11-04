@@ -520,13 +520,22 @@ def mset_view(st):
         if cur is None:
             if prev is None:
                 pp = _dir() / f"{_key(st['store'], _prev_ym(st['ym']))}.json"
-                prev = {}
+                prev, prev_std = {}, None
                 if pp.exists():
                     try:
-                        prev = (json.loads(pp.read_text(encoding="utf-8")).get("mset") or {}).get("emps") or {}
+                        pm = json.loads(pp.read_text(encoding="utf-8")).get("mset") or {}
+                        prev = pm.get("emps") or {}
+                        prev_std = (pm.get("base") or {}).get("std_hours")
                     except (OSError, json.JSONDecodeError):
                         prev = {}
+                if prev_std is None:
+                    pb = base_est(_prev_ym(st["ym"]))
+                    prev_std = pb and pb["std_hours"]
             cur = dict(prev.get(e["id"]) or {"type": "正職", "target": None, "min_hours": None, "note": ""})
+            # 2026-11-04 經營者：排 12 月卻看到 11 月的數字。正職目標時數＝上個月標準時數的，是跟著月份走的，不抄；
+            # 只有店長特別改過的（例：區主管 120h）才帶過來
+            if cur.get("type") == "正職" and prev_std is not None and cur.get("target") not in (None, "") and float(cur["target"]) == float(prev_std):
+                cur["target"] = None
             cur["_default"] = True
             ms["emps"][e["id"]] = cur
         if cur.get("type") == "正職" and not cur.get("target"):
