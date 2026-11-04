@@ -2188,8 +2188,9 @@ function calcD_(res, rule, map) {
   if (!data || !data.ok) throw new Error('評論端點回應異常');
   var tP = Date.now();
   // 欄位對應照 google-reviews.html initLoad（L444–L453）：0 門市 1 評論者 2 年月 3 星等 4 品牌 5 區域 6 標記 7 內容
+  // 2026-11-04 經營者裁定「有效評論用 AI」：8 AI people(Y/N)、9 AI 夥伴 → 跟評論儀表板、店長看板評論清單（action=reviews）同一個判斷：AI 判讀過看 revAiValid_，還沒判讀用規則版 isValidReview
   var all = (data.rows || []).map(function (c) {
-    return { store: c[0] || '', author: c[1] || '', ym: c[2] || '', stars: (c[3] === '' || c[3] === null || c[3] === undefined) ? null : Number(c[3]), brand: c[4] || '', region: c[5] || '', tag: c[6] || '', text: c[7] || '' };
+    return { store: c[0] || '', author: c[1] || '', ym: c[2] || '', stars: (c[3] === '' || c[3] === null || c[3] === undefined) ? null : Number(c[3]), brand: c[4] || '', region: c[5] || '', tag: c[6] || '', text: c[7] || '', aiP: String(c[8] || ''), aiN: String(c[9] || '') };
   }).filter(function (r) { return r.store; });
   data = null;
   logMeta_('D', 'D 步驟：整理評論資料', '', (Date.now() - tP) / 1000, all.length, '', '成功', '');   // d2 D2-4 分步耗時
@@ -2214,7 +2215,7 @@ function calcD_(res, rule, map) {
   var target = MONTHLY_REVIEW_TARGET, prog = target * passed / dim;
   var cnt = function (ym, storeName) {
     var rows = all.filter(function (r) { return r.ym === ym && (storeName === null || r.store === storeName); });
-    var valid = rows.filter(isValidReview);
+    var valid = rows.filter(function (r) { return r.aiP ? revAiValid_(r) : isValidReview(r); });   // 2026-11-04 AI 優先（同 action=reviews）
     return { total: rows.length, five: rows.filter(function (r) { return r.stars === 5; }).length, valid: valid.length,
              named: valid.filter(function (r) { return hasPersonName(validContent(r), r.store); }).length,
              low: rows.filter(function (r) { return r.stars !== null && r.stars <= 4; }).length };
@@ -2241,52 +2242,71 @@ function calcD_(res, rule, map) {
       }
     });
   });
-  logMeta_('D', 'D 步驟：判定有效評論（isValidReview／hasPersonName）', '', (Date.now() - tJ) / 1000, res.recs.length, '', '成功', '');   // d2 D2-4
+  logMeta_('D', 'D 步驟：判定有效評論（AI 優先，未判讀用 isValidReview；hasPersonName）', '', (Date.now() - tJ) / 1000, res.recs.length, '', '成功', '');   // d2 D2-4
 }
 
 // ============================================================
-// 8. E 自己人（2026 各店新增自己人 年表 ＋ TARGETS_2026 照抄）
+// 8. E 自己人（「YYYY 各店新增自己人」年表 ＋ 年度目標 MEM_TARGETS）
+//   2026-11-04：年份不再寫死 2026（原本 2027/1/1 起本月新增變空白、進度線 100%、12 店一起亮燈）。
+//   年份＝快照執行日的年；該年的年表分頁或年度目標還沒建 → E 類數字留空、不亮燈，meta 寫「年度未設定」。
+//   2026 年的算法、數字與原本逐格相同（月份索引同原 CLOSED_IDX_2026／ELAPSED_MONTHS_2026：已完結月＝本月前一個月）。
+//   新的一年：①自己人試算表建「YYYY 各店新增自己人」年表（格式同 2026）②在下面 MEM_TARGETS 加一列該年各店目標＋全公司合計。
 // ============================================================
+var MEM_TARGETS = { 2026: { stores: TARGETS_2026, total: TOTAL_TARGET_2026 } };
 function calcE_(res, rule, map) {
   timeGuard_('自己人年表');
   testSlow_('E');
-  var t0 = Date.now(), ss = SpreadsheetApp.openById(SRC.MEM_SS);
-  var v = ss.getSheetByName('2026 各店新增自己人').getDataRange().getValues();
+  var Y = Number(RUN.date.slice(0, 4)), M0 = Number(RUN.date.slice(5, 7)) - 1;   // M0＝本月（0＝1 月）
+  var TG = MEM_TARGETS[Y], TAB_Y = Y + ' 各店新增自己人';
+  var t0 = Date.now(), ss = SpreadsheetApp.openById(SRC.MEM_SS), shY = ss.getSheetByName(TAB_Y);
+  if (!TG || !shY) {
+    var why = (!shY ? '找不到分頁「' + TAB_Y + '」' : '') + (!shY && !TG ? '；' : '') + (!TG ? '程式 MEM_TARGETS 沒有 ' + Y + ' 年目標' : '');
+    logMeta_('E', TAB_Y + '（年表）', SRC.MEM_SS.slice(0, 8) + '…', (Date.now() - t0) / 1000, '', '', '年度未設定', why + '：E 類今年數字留空、不亮燈');
+    var curU = RUN.date.slice(0, 7), prvU = prevYmOf_(curU), noteU = Y + ' 年度未設定（' + why + '）';
+    map.list.concat([ALL_ROW]).forEach(function (sid) {
+      rec_(res, sid, 'E1_new', curU, '', '', noteU, '', '', 'E 本月至今新增');
+      rec_(res, sid, 'E2_target', String(Y), '', '', noteU, '', '', 'E 年度目標');
+      rec_(res, sid, 'E2_rate', Y + '-01～' + prvU, '', '', noteU, '', '', 'E 累計達成率%');
+      rec_(res, sid, 'E3_need', curU, '', '', noteU, '', '', 'E 本月需招');
+    });
+    return;
+  }
+  var v = shY.getDataRange().getValues();
   // 轉成 gviz 形狀（表頭列不進 rows），讓照抄的 parseNewMembersSheet 原封不動可用
   var gv = { table: { rows: v.slice(1).map(function (row) { return { c: row.map(function (x) { return { v: (x === '' ? null : x) }; }) }; }) } };
   var kpi = ss.getSheetByName('agg_store_kpi_365').getDataRange().getValues(), kpiUpd = '';
   for (var i = 1; i < kpi.length; i++) { var u = kpi[i][5]; if (u) { kpiUpd = (u instanceof Date) ? Utilities.formatDate(u, TZ, 'yyyy-MM-dd') : String(u).replace(/\//g, '-'); break; } }
-  logMeta_('E', '2026 各店新增自己人（年表）＋ agg_store_kpi_365 更新時間', SRC.MEM_SS.slice(0, 8) + '…', (Date.now() - t0) / 1000, v.length - 1, '年表無更新日欄；管線更新 ' + kpiUpd, '成功', '');
-  var sheet2026 = parseNewMembersSheet(gv, 2026);
-  updateElapsedMonths(new Date());
-  var curIdx = CLOSED_IDX_2026 + 1;
-  var line = Math.round(ELAPSED_MONTHS_2026 / 12 * 100);
+  logMeta_('E', TAB_Y + '（年表）＋ agg_store_kpi_365 更新時間', SRC.MEM_SS.slice(0, 8) + '…', (Date.now() - t0) / 1000, v.length - 1, '年表無更新日欄；管線更新 ' + kpiUpd, '成功', '');
+  var sheetY = parseNewMembersSheet(gv, Y);
+  var closedIdx = M0 - 1, curIdx = M0;   // 同原 CLOSED_IDX_2026＋1／ELAPSED_MONTHS_2026（都＝本月 0-index）
+  var line = Math.round(M0 / 12 * 100);
+  var sumClosedY = function (mm) { return Object.keys(mm || {}).reduce(function (sum, k) { var mo = parseInt(k.split('/')[1], 10); return (!isNaN(mo) && mo <= closedIdx) ? sum + (Number(mm[k]) || 0) : sum; }, 0); };
   var memName = {}; Object.keys(map.byCol['自己人年表']).forEach(function (nm) { memName[map.byCol['自己人年表'][nm]] = nm; });
   var today = RUN.date, cur = today.slice(0, 7), prv = prevYmOf_(cur);
   var tot = { cur: 0, prv: 0, closed: 0, target: 0, need: 0 };
   var latest = '年表（管線 ' + kpiUpd + '）';
   map.list.forEach(function (sid) {
-    var s = memName[sid], mm = sheet2026[s] || {};
-    var c = curIdx >= 0 && curIdx <= 11 ? (mm['2026/' + curIdx] || 0) : '';
-    var p = curIdx - 1 >= 0 ? (mm['2026/' + (curIdx - 1)] || 0) : '';
-    var actual = sumClosed2026(mm), target = TARGETS_2026[s] || 0;
+    var s = memName[sid], mm = sheetY[s] || {};
+    var c = curIdx >= 0 && curIdx <= 11 ? (mm[Y + '/' + curIdx] || 0) : '';
+    var p = curIdx - 1 >= 0 ? (mm[Y + '/' + (curIdx - 1)] || 0) : '';
+    var actual = sumClosedY(mm), target = TG.stores[s] || 0;
     var rate = target ? Math.round(actual / target * 100) : '';
-    var need = Math.max(0, Math.round((TARGETS_2026[s] || 0) * (curIdx + 1) / 12 - (actual || 0)));
+    var need = Math.max(0, Math.round((TG.stores[s] || 0) * (curIdx + 1) / 12 - (actual || 0)));
     var gap = rate === '' ? '' : line - rate, lt = gap === '' ? '' : (gap > rule.MEM_BEHIND_RED ? '🔴' : (gap > rule.MEM_BEHIND_ORANGE ? '🟠' : '🟢'));
     rec_(res, sid, 'E1_new', cur, c, '', '本月至今（年表當月欄＝月初～昨天）', latest, '', 'E 本月至今新增');
     rec_(res, sid, 'E1_new', prv, p, '', '', latest, '', 'E 上月新增');
-    rec_(res, sid, 'E2_closed_sum', '2026-01～' + prv, actual, target, '年度目標', latest, '', 'E 已完結月累計');
-    rec_(res, sid, 'E2_target', '2026', target, '', '', latest, '', 'E 年度目標');
-    rec_(res, sid, 'E2_rate', '2026-01～' + prv, rate, line, '年度進度線%（已完結月數÷12）', latest, lt, 'E 累計達成率%');
+    rec_(res, sid, 'E2_closed_sum', Y + '-01～' + prv, actual, target, '年度目標', latest, '', 'E 已完結月累計');
+    rec_(res, sid, 'E2_target', String(Y), target, '', '', latest, '', 'E 年度目標');
+    rec_(res, sid, 'E2_rate', Y + '-01～' + prv, rate, line, '年度進度線%（已完結月數÷12）', latest, lt, 'E 累計達成率%');
     rec_(res, sid, 'E3_need', cur, need, '', '月底回到進度線還差（照頁面算法）', latest, '', 'E 本月需招');
     if (lt === '🟠' || lt === '🔴') alert_(res, lt, sid, map.name[sid] + ' 自己人累計達成率 ' + rate + '%，低於年度進度線 ' + line + '% 共 ' + gap + ' 個百分點；本月還需招 ' + need + ' 人', rate + '%', '低於進度線 ' + rule.MEM_BEHIND_ORANGE + ' 🟠／' + rule.MEM_BEHIND_RED + ' 🔴 百分點');
     tot.cur += Number(c) || 0; tot.prv += Number(p) || 0; tot.closed += actual; tot.target += target; tot.need += need;
   });
   rec_(res, ALL_ROW, 'E1_new', cur, tot.cur, '', '本月至今', latest, '', 'E 本月至今新增');
   rec_(res, ALL_ROW, 'E1_new', prv, tot.prv, '', '', latest, '', 'E 上月新增');
-  rec_(res, ALL_ROW, 'E2_closed_sum', '2026-01～' + prv, tot.closed, TOTAL_TARGET_2026, '年度目標', latest, '', 'E 已完結月累計');
-  rec_(res, ALL_ROW, 'E2_target', '2026', TOTAL_TARGET_2026, '', '', latest, '', 'E 年度目標');
-  rec_(res, ALL_ROW, 'E2_rate', '2026-01～' + prv, Math.round(tot.closed / TOTAL_TARGET_2026 * 100), line, '年度進度線%', latest, '', 'E 累計達成率%');
+  rec_(res, ALL_ROW, 'E2_closed_sum', Y + '-01～' + prv, tot.closed, TG.total, '年度目標', latest, '', 'E 已完結月累計');
+  rec_(res, ALL_ROW, 'E2_target', String(Y), TG.total, '', '', latest, '', 'E 年度目標');
+  rec_(res, ALL_ROW, 'E2_rate', Y + '-01～' + prv, Math.round(tot.closed / TG.total * 100), line, '年度進度線%', latest, '', 'E 累計達成率%');
   rec_(res, ALL_ROW, 'E3_need', cur, tot.need, '', '各店加總', latest, '', 'E 本月需招');
 
   // 地雷 12：年表停更偵測——本月新增（全公司）與前 N 個「不同快照日」都一樣 → 🟡
@@ -2313,7 +2333,7 @@ function calcE_(res, rule, map) {
 //   例外（處理回報 2026-09-28；2026-10-06 改免密碼）：track_set 只 appendRow 到隱藏分頁 track_log。
 //   action=ping｜bundle｜history&store=N&cat=A~E&days=30｜series&store=N&days=35｜track_list｜track_set｜live&store=N（2026-10-06 店長頁即時資料）｜fresh（2026-10-06 各儀表板最後更新時間）｜equip（2026-10-06 器具／模具紅燈）
 // ============================================================
-var WEB_VER = 'e6-2026-10-13.17';   // .17：live 多 minFut（門市今日重抓訂位後強制重算）；
+var WEB_VER = 'e7-2026-11-04.18';   // .18：D 類有效評論改 AI 優先、E 類年份不寫死（2026-11-04 健檢）；.17：live 多 minFut（門市今日重抓訂位後強制重算）；
 // .16   // .16：新增 action=mini（門市今日頁：自己人本月新增／還差、有效評論）；
 // 舊：.15   // .15：經營者更正 8 人以上（含）都算團體、都要先選甜點（團體 v1.4.1 need_dessert＝團體就要），只改說明文字；.14：程式同 .13，只換版號讓 10/07 手動重算 C 類（snapC_booking）後的首頁資料重新組；.13：團體 v1.4 口徑——客服門市卡位不算團體、一般訂位散客不必先選甜點（未選甜點只算 need_dessert，live 團體多回 nd）；.12：器具紅燈個別品項上限（dim_equip_limit、eq.limits）、甜點名稱比對每剝一層括號都試（瑋瑋 (葷) 對得到了）；.11：器具紅燈的甜點資料時間 eq.at 改成 yyyy-MM-dd HH:mm:ss（原本是英文日期字串）；.10：器具／模具紅燈（live 多回 equip、新增 action=equip）；.9：action=fresh 各儀表板「最後更新」（首頁卡片與各頁狀態列讀）；.8：店長頁即時資料 action=live（訂位 7 天各時段人數＋團體 14 天訂金／甜點，暫存 5 分鐘）；處理回報免密碼（處理中只要名字）；.7：決策中心處理回報 track_list／track_set（寫 track_log）；.6：snap_history 數字不再被轉成日期（writeHistTyped_）、刪 zzBundleCacheOnlyClear；.5：首頁資料預先準備（_bundle）；.4：bundle alerts 加「狀況種類」欄；dim_rule 加 PAGE_STALE_RED_AFTER（.3：刪除 clearTestData）
 var BUNDLE_CHUNK = 90000;             // 單一快取 key 上限 100KB → 超過 90KB 切塊

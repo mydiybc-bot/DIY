@@ -856,7 +856,14 @@ function taskView_(t) {
   return { id: t.task_id, stores: String(t.stores || '').split(',').map(Number).filter(Boolean), title: t.title, note: t.note, freq: t.freq, rule: t.rule,
     when: taskWhen_(t), next: nextOcc_(t, today_()), start: t.start_date, end: t.end_date, role: t.creator_role, by: t.creator_name, at: String(t.updated_at || t.created_at || '').slice(0, 16) };
 }
-function canEdit_(a, t) { return String(t.stores || '').split(',').map(Number).every(function (s) { return a.scope.indexOf(s) >= 0; }); }
+/* 2026-11-04：除了「這件交辦的店都在你的範圍內」，還要「建立者層級不高於你」（店 < 區主管 < 總部）。
+   原本店密碼人人都有，總部只交辦給單一店的工作，那家店的夥伴也能改、刪。舊資料沒有 creator_role 的照舊（只看範圍）。 */
+var ROLE_LV = { store: 1, zone: 2, hq: 3 };
+function canEdit_(a, t) {
+  var inScope = String(t.stores || '').split(',').map(Number).every(function (s) { return a.scope.indexOf(s) >= 0; });
+  var lvT = ROLE_LV[String(t.creator_role || '')] || 0;
+  return inScope && (!lvT || lvT <= (ROLE_LV[a.role] || 0));
+}
 function taskList_(p) {
   var a = mgrAuth_(p); ensureStoreTabs_();
   var rows = load_('dim_task').rows.filter(function (t) {
@@ -1025,6 +1032,8 @@ function noteDel_(p) {
   var id = String(p.id || ''), t = loadTail_('fact_store_note', NOTE_TAIL), n = t.rows.filter(function (x) { return x.note_id === id && Number(x.store) === st.id; })[0];
   if (!id || !n) throw fail_('找不到這則（可能已刪除）', 'notfound');
   if (n.deleted === 'Y') return { id: id, data: { id: id }, msg: '已刪除過' };
+  /* 2026-11-04：只有寫的人自己（名字相同）或體驗中心（帶 hpw）可以刪 */
+  if (!String(p.hpw || '').trim() && String(n.author || '').replace(/\s+/g, ' ').trim() !== who) throw fail_('只有寫的人自己可以刪（或請體驗中心刪）', 'deny');
   putCols_(t, n._row, { deleted: 'Y', deleted_at: now_(), deleted_by: who }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'deleted_by'; });
   return { id: id, data: { id: id }, msg: '刪除門市雜記 ' + id + '：' + st.short + '｜' + who };
 }
