@@ -34,6 +34,7 @@ import warnings
 import openpyxl
 
 import schedule_check104 as c104
+import schedule_solver
 from storage_paths import atomic_write_json, data_dir
 
 warnings.filterwarnings("ignore")
@@ -1346,7 +1347,7 @@ def _job(k, **kw):
         _jobs[k] = dict(kw, ts=time.time())
 
 
-def _draft_worker(store, ym):
+def _draft_worker_ai(store, ym):
     k = _key(store, ym)
     lk = _lock(k)
     try:
@@ -1399,6 +1400,250 @@ def _draft_worker(store, ym):
 
 
 # ───────────────────────── 對話框 ─────────────────────────
+
+# ───────────────────────── 程式排初稿（2026-11-05） ─────────────────────────
+# 經營者「程式先排、AI 只做它擅長的事」：AI 先把店長寫的備註／店規翻成規則（約 10～30 秒，沒備註就不叫 AI），
+# 程式（schedule_solver.py，OR-Tools）幾秒排完，排出來就過硬規則檢查，只給店長一份結果。
+# 舊的「AI 排整月、檢查沒過再叫 Opus 修」留著當備援（_draft_worker_ai：沒裝 OR-Tools 或只有 Excel 設定表時用）。
+
+RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班程式看得懂的規則。只回 JSON：{"rules":[…],"unapplied":["原文：為什麼沒辦法翻"]}
+規則種類（days 一律是這個月的日期數字陣列；emp 是工號；shift 只能用給你的班別名稱）：
+- {"type":"off","emp":"工號","days":[…]}：那幾天不能上班
+- {"type":"work","emp":"工號","days":[…],"shift":"班別或null"}：那幾天一定要上班
+- {"type":"only_shift","emp":"工號","shifts":[…],"days":[…]或null}：只能上這些班（null＝整個月）
+- {"type":"prefer_shift","emp":"工號","shifts":[…],"days":[…]或null}：最好上這些班（「白天班最好」「盡量排早班」）
+- {"type":"apart","emps":["工號","工號"],"days":[…]或null}：兩人不要同一天上班
+- {"type":"demand","shift":"班別","days":[…],"count":人數}：這幾天這班要幾人（取代原本人數，例：週三晚班只排 1 人）
+- {"type":"extra","shift":"班別","days":[…],"count":人數}：這幾天這班多加幾人（特殊日加人）
+- {"type":"fixed_cell","emp":"工號","day":日期,"cell":"格子"}：那天固定用這個格子（上課、會議、跨店支援、包館等自訂時段）
+格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@交流會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@交流會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。
+店長用語對照：上課／南京上課／內訓→時段標籤「@台北內訓課」＋那段的崗位（例 10:20-12:00,12:30-15:00@台北內訓課#南京店）；店長會議／區會→@區會；交流會→@交流會議；事務→@事務班；經管會→@經管會；包館→@包館；到別家店支援→那幾段 #那家店＋@支援。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、彈性挪假、挪假補班、整天支援）。
+朝會、巡店、消毒這類日常筆記不用翻，也不用列進 unapplied。看不懂或沒辦法用上面規則表達的，原文放進 unapplied 並說明原因。不要自己發明規則。"""
+
+
+def _note_texts(st, cfg, ms):
+    info = st["template"]["info"]
+    L = []
+    for e in info["emps"]:
+        v = ms["emps"].get(e["id"]) or {}
+        if (v.get("note") or "").strip():
+            L.append(f"{e['id']} {e['name']}（{v.get('type', '正職')}）的個人備註：{v['note'].strip()}")
+    if (cfg.get("rules") or "").strip():
+        L.append("店規：" + cfg["rules"].strip().replace("\n", "；"))
+    if (cfg.get("support") or "").strip():
+        L.append("跨店支援夥伴：" + cfg["support"].strip().replace("\n", "；"))
+    for x in ms.get("special") or []:
+        bits = [b for b in (x.get("staff"), x.get("note")) if (b or "").strip()]
+        if bits:
+            L.append(f"{x['day']} 日特殊日：" + "；".join(bits))
+    return L
+
+
+def _note_rules(st, cfg, ms):
+    """備註／店規 → (rules, 沒套用的說明)；沒有備註就不叫 AI"""
+    texts = _note_texts(st, cfg, ms)
+    if not texts:
+        return [], []
+    info = st["template"]["info"]
+    shifts = [r["name"] for r in cfg.get("shifts") or []]
+    user = "\n".join([
+        f"月份：{st['ym'][:4]} 年 {int(st['ym'][4:])} 月；日期（星期）：" + "、".join(f"{d['d']}({d['wd']})" for d in info["days"]),
+        "員工：" + "；".join(f"{e['id']} {e['name']}" for e in info["emps"]),
+        "班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + "）" for r in cfg.get("shifts") or []),
+        "可用標籤：" + "、".join(info["tags"]), "可用崗位：" + "、".join(info["positions"]),
+        "本店是：" + info["title"], "", "店長寫的："] + texts)
+    msg = _client_().messages.create(model=MODEL, max_tokens=6000, system=RULES_SYS,
+                                     messages=[{"role": "user", "content": user}], output_config={"effort": "low"})
+    with _lock(_key(st["store"], st["ym"])):
+        s2 = _load(st["store"], st["ym"])
+        _log_usage(s2, "rules", _cost(MODEL, msg.usage))
+        _save(s2)
+    txt = "".join(getattr(b, "text", "") for b in msg.content)
+    m = re.search(r"\{.*\}", txt, re.S)
+    try:
+        d = json.loads(m.group(0)) if m else {}
+    except json.JSONDecodeError:
+        d = {}
+    ids = {e["id"] for e in info["emps"]}
+    days = {x["d"] for x in info["days"]}
+    dtypes = set(info["dayTypes"])
+    shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfg.get("shifts") or []}
+    rules, bad = [], [str(x) for x in d.get("unapplied") or []]
+    for r in d.get("rules") or []:
+        t = r.get("type")
+        try:
+            if t not in schedule_solver.RULE_TYPES:
+                raise ValueError("不認得的規則")
+            if t == "apart":
+                if len(r.get("emps") or []) < 2 or not set(r["emps"][:2]) <= ids:
+                    raise ValueError("工號不對")
+            elif t in ("demand", "extra"):
+                if r.get("shift") not in shifts:
+                    raise ValueError("班別不對")
+                r["count"] = int(r["count"])
+            elif r.get("emp") not in ids:
+                raise ValueError("工號不對")
+            if t == "fixed_cell":
+                if int(r.get("day") or 0) not in days:
+                    raise ValueError("日期不對")
+                r["day"] = int(r["day"])
+                parse_cell(r["cell"], shmap, dtypes)
+            else:
+                ds = r.get("days")
+                if ds is None and t in ("only_shift", "prefer_shift", "apart"):
+                    r["days"] = None
+                else:
+                    r["days"] = sorted({int(x) for x in ds or []} & days)
+                    if not r["days"]:
+                        raise ValueError("沒有日期")
+            if t in ("only_shift", "prefer_shift"):
+                r["shifts"] = [x for x in r.get("shifts") or [] if x in shifts]
+                if not r["shifts"]:
+                    raise ValueError("班別不對")
+            if t == "work" and r.get("shift") not in shifts:
+                r["shift"] = None
+            rules.append(r)
+        except (ValueError, TypeError, KeyError) as ex:
+            bad.append(f"{json.dumps(r, ensure_ascii=False)[:120]}：{ex}")
+    return rules, bad
+
+
+def _rule_text(r, names):
+    ds = lambda x: "整個月" if not x else _days_txt(x) + " 號"
+    t = r["type"]
+    if t == "off":
+        return f"{names.get(r['emp'])} {ds(r['days'])}不排班"
+    if t == "work":
+        return f"{names.get(r['emp'])} {ds(r['days'])}一定上班" + (f"（{r['shift']}）" if r.get("shift") else "")
+    if t == "only_shift":
+        return f"{names.get(r['emp'])} {ds(r.get('days'))}只上{'／'.join(r['shifts'])}"
+    if t == "prefer_shift":
+        return f"{names.get(r['emp'])} {ds(r.get('days'))}盡量上{'／'.join(r['shifts'])}"
+    if t == "apart":
+        return f"{names.get(r['emps'][0])}、{names.get(r['emps'][1])} {ds(r.get('days'))}不同天上班"
+    if t == "demand":
+        return f"{ds(r['days'])}{r['shift']}排 {r['count']} 人"
+    if t == "extra":
+        return f"{ds(r['days'])}{r['shift']}多加 {r['count']} 人"
+    if t == "fixed_cell":
+        return f"{names.get(r['emp'])} {r['day']} 號固定：{r['cell']}"
+    return str(r)
+
+
+def _prev_tail(store, ym):
+    """上個月最後連續上班幾天（七休一跨月用）；上個月沒班表就當 0"""
+    p = _dir() / f"{_key(store, _prev_ym(ym))}.json"
+    if not p.exists():
+        return {}
+    try:
+        st = json.loads(p.read_text(encoding="utf-8"))
+        info, sch = st["template"]["info"], st.get("schedule") or {}
+        shifts = _ext(st).get("shifts") or {}
+        dtypes = set(info["dayTypes"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return {}
+    out = {}
+    for eid, row in sch.items():
+        n = 0
+        for d in reversed(info["days"]):
+            try:
+                c = parse_cell(row.get(str(d["d"]), ""), shifts, dtypes)
+            except ValueError:
+                break
+            if not c["segs"]:
+                break
+            n += 1
+        out[eid] = n
+    return out
+
+
+def _solver_report(st, res, rules, bad, chk, secs_ai):
+    info = st["template"]["info"]
+    names = {e["id"]: e["name"] for e in info["emps"]}
+    L = [f"### 排班結果（程式排，{res['stats']['seconds'] + secs_ai:.0f} 秒）",
+         "✅ 硬規則檢查全部通過" if chk["ok"] else f"❌ 還有 {len(chk['errors'])} 項沒過（多半是人不夠，見下方缺口）"]
+    L += ["", "| 夥伴 | 正職／兼職 | 排了 | 目標 | 最低 |", "|---|---|---|---|---|"]
+    for eid, h in res["hours"].items():
+        tg = f"{h['target']:g}h" if h["target"] else "—"
+        mn = f"{h['min']:g}h" if h["min"] else "—"
+        L.append(f"| {h['name']} | {'正職' if h['ft'] else '兼職'} | {h['hours']:g}h | {tg} | {mn} |")
+    if res["gaps"]:
+        L += ["", "**缺口（人不夠，沒有硬塞）**"]
+        for g in res["gaps"]:
+            L.append(f"- {g['day']} 號 {g['shift']}：要 {g['need']} 人、只排得到 {g['got']} 人")
+        L.append("可以：請兼職多填可上日、調整指休、或在下方對話框跟 AI 說要找誰支援。")
+    if rules:
+        L += ["", "**照備註／店規套用的**"] + ["- " + _rule_text(r, names) for r in rules]
+    if bad:
+        L += ["", "**備註裡沒辦法自動套用的（請看班表確認，要改就在下方對話框跟 AI 說）**"] + ["- " + b for b in bad]
+    led = nuo_ledger(st)
+    if any(r["open_rest"] or r["open_work"] for r in led):
+        L += ["", "**挪假還沒補的（程式沒有自動補，要補哪天請跟 AI 說）**"]
+        L += [f"- {r['name']}：{NUO_REST} {r['open_rest']} 天、{NUO_WORK} {r['open_work']} 天" for r in led if r["open_rest"] or r["open_work"]]
+    return "\n".join(L)
+
+
+def _draft_worker(store, ym):
+    k = _key(store, ym)
+    lk = _lock(k)
+    with lk:
+        st = _load(store, ym)
+    cfg = cfg_load(store)
+    try:
+        import schedule_solver as _sv  # noqa: F401
+        from ortools.sat.python import cp_model  # noqa: F401
+    except ImportError:
+        return _draft_worker_ai(store, ym)
+    if not form_ready(st, cfg):          # 只有 Excel 設定表 → 走舊的 AI 排法
+        return _draft_worker_ai(store, ym)
+    try:
+        ms = mset_view(st)
+        info = st["template"]["info"]
+        t0 = time.time()
+        rules, bad = [], []
+        if _note_texts(st, cfg, ms):
+            _job(k, status="running", step="AI 正在讀備註和店規（約 10～30 秒）")
+            try:
+                rules, bad = _note_rules(st, cfg, ms)
+            except Exception as ex:   # noqa: BLE001 — AI 連不上就不套備註，照樣排
+                bad = [f"AI 讀備註失敗（{type(ex).__name__}），這次備註沒有套用"]
+        secs_ai = time.time() - t0
+        _job(k, status="running", step="程式正在排班（約 10 秒）")
+        shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfg["shifts"]}
+        dtypes = set(info["dayTypes"])
+        fixed = {}
+        for r in rules:
+            if r["type"] == "fixed_cell":
+                c = parse_cell(r["cell"], shmap, dtypes)
+                fixed[(r["emp"], r["day"])] = (r["cell"], int(round(cell_hours(c) * 60)))
+        y, mth = int(ym[:4]), int(ym[4:])
+        hol = [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))]
+        res = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=_prev_tail(store, ym),
+                                    fixed_minutes={kk: v[1] for kk, v in fixed.items()})
+        sched = res["schedule"]
+        for (eid, d), (cell, _) in fixed.items():
+            sched[eid][str(d)] = cell
+        ext = _ext_from_form(st, cfg)
+        ext["demand"] = {str(d): [n for n, c in res["need"][d].items() for _ in range(c)] for d in res["need"]}
+        ext["notes"] = [_rule_text(r, {e["id"]: e["name"] for e in info["emps"]}) for r in rules] + bad
+        ext["from_form"] = False
+        with lk:
+            st = _load(store, ym)
+            tmp = dict(st, ext=ext, schedule=sched)
+            chk = run_check(tmp)
+            report = _solver_report(st, res, rules, bad, chk, secs_ai)
+            if st.get("schedule"):
+                st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "重排前"}]
+            msg = "✅ 班表排好了（程式排，硬規則全部通過）。" if chk["ok"] else f"✅ 班表排好了，但有 {len(chk['errors'])} 項沒過（多半是人不夠），請看檢查結果。"
+            if bad:
+                msg += f"有 {len(bad)} 條備註沒辦法自動套用，列在報告裡。"
+            st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],
+                      chat=(st.get("chat") or []) + [{"role": "ai", "text": msg + "要改哪裡直接跟我說。", "ts": time.time()}])
+            _save(st)
+        _job(k, status="done", step="初稿完成")
+    except Exception as ex:   # noqa: BLE001 — 背景工作要把錯誤留給畫面看
+        _job(k, status="error", step=f"排班失敗：{type(ex).__name__}: {str(ex)[:300]}")
+
 
 CHAT_RULES = """
 ## 這次的工作：店長在對話框要你改班或問問題
@@ -2265,7 +2510,7 @@ def handle(path, body):
             return 400, {"ok": False, "error": "還沒有 104 範本（每天早上自動取得；或自己上傳）"}
         if not form_ready(st, cfg_load(store)) and not st.get("settings_files"):
             return 400, {"ok": False, "error": "請先填好「店別基本設定」的班別，和「本月設定」的平日／假日營收預估（或上傳 Excel 設定表）"}
-        _job(k, status="running", step="AI 正在排班（約 3～5 分鐘）")
+        _job(k, status="running", step="準備排班…")
         threading.Thread(target=_draft_worker, args=(store, ym), daemon=True).start()
         with lk:
             return 200, _public(_load(store, ym))
