@@ -548,6 +548,8 @@ def mset_view(st):
                     pb = base_est(_prev_ym(st["ym"]))
                     prev_std = pb and pb["std_hours"]
             cur = dict(prev.get(e["id"]) or {"type": "正職", "target": None, "min_hours": None, "note": ""})
+            for f in MARK_TXT.values():   # 日期是這個月的，不跟著抄
+                cur.pop(f, None)
             # 2026-11-04 經營者：排 12 月卻看到 11 月的數字。正職目標時數＝上個月標準時數的，是跟著月份走的，不抄；
             # 只有店長特別改過的（例：區主管 120h）才帶過來
             if cur.get("type") == "正職" and prev_std is not None and cur.get("target") not in (None, "") and float(cur["target"]) == float(prev_std):
@@ -562,6 +564,19 @@ def mset_view(st):
                 cur["target_est"] = True
     ms["emps"] = {k: v for k, v in ms["emps"].items() if any(e["id"] == k for e in info.get("emps") or [])}
     ms["marks"] = {k: v for k, v in ms["marks"].items() if any(e["id"] == k for e in info.get("emps") or [])}
+    av = ms.get("avail_shift") or {}
+    for eid, cur in ms["emps"].items():   # 還沒用文字存過的（以前點格子的）→ 換成文字顯示
+        mk = ms["marks"].get(eid) or {}
+        for k, f in MARK_TXT.items():
+            if f not in cur:
+                ds = [int(d) for d, x in mk.items() if x == k]
+                if k == "可上" and av.get(eid):
+                    by = {}
+                    for d in ds:
+                        by.setdefault((av[eid].get(str(d)) or ""), []).append(d)
+                    cur[f] = "；".join((_days_txt(v) + (" " + sh if sh else "")) for sh, v in by.items())
+                else:
+                    cur[f] = _days_txt(ds)
     return ms
 
 
@@ -581,6 +596,8 @@ def mset_clean(st, body):
         v = v or {}
         emps[eid] = {"type": ("兼職" if str(v.get("type") or "") == "兼職" else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
                      "min_hours": _num(v.get("min_hours"), None, 0, 400, "最低時數"), "note": str(v.get("note") or "").strip()[:300]}
+        for f in MARK_TXT.values():
+            emps[eid][f] = str(v.get(f) or "").strip()[:300]
     ms["emps"] = emps
     days = {d["d"] for d in ((st.get("template") or {}).get("info") or {}).get("days") or []}
     sp = []
@@ -593,12 +610,99 @@ def mset_clean(st, body):
         sp.append({"day": int(d), "revenue": _num(x.get("revenue"), None, 0, 10_000_000, "營收預估"),
                    "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200]})
     ms["special"] = sorted(sp, key=lambda x: x["day"])
-    ms.setdefault("marks", st.get("mset", {}).get("marks") or {})
+    ms["marks"], ms["avail_shift"] = marks_from_text(st, emps, cfg_load(st["store"]))
     ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
     return ms
 
 
 MARKS = ("指休", "特休", "可上")
+# 2026-11-05 經營者：日曆一格一格點太慢 → 改成每人打字（指休／特休填日期，兼職填可上日＋時段），存檔時程式換成格子
+MARK_TXT = {"指休": "off_txt", "特休": "pto_txt", "可上": "avail_txt"}
+_WD = {"一": "一", "二": "二", "三": "三", "四": "四", "五": "五", "六": "六", "日": "日", "天": "日"}
+_DAY_RE = re.compile(
+    r"(?P<rng>(?:\d{1,2}/)?(?P<a>\d{1,2})\s*[號日]?\s*[-~～到至]\s*(?:\d{1,2}/)?(?P<b>\d{1,2})\s*[號日]?)"
+    r"|(?P<wk>(?:每週|每周|週|周|星期|禮拜)(?P<wds>[一二三四五六日天]+))"
+    r"|(?P<wday>平日)|(?P<wend>假日|週末|周末)|(?P<all>每天|全月|整個月|天天)"
+    r"|(?P<one>(?:\d{1,2}/)?(?P<n>\d{1,2})\s*[號日]?)")
+_FILLER = re.compile(r"[\s、，,／/。.和及跟與]|可上班|可以上|可上|都可以|都行|上班")
+
+
+def parse_days_text(txt, info_days, shift_names=None, label=""):
+    """「4、9、17」「10-12」「每週一三五 晚班；20、21 早班」「平日」→ [(日, 班別或空字串)]；看不懂丟 ValueError"""
+    out = {}
+    wd_of = {d["d"]: d["wd"] for d in info_days}
+    names = sorted(shift_names or [], key=len, reverse=True)
+    for seg in re.split(r"[；;\n]+", str(txt or "")):
+        seg = seg.strip()
+        if not seg:
+            continue
+        sh = ""
+        for nm in names:
+            if nm and nm in seg:
+                sh, seg = nm, seg.replace(nm, " ")
+                break
+        seg = re.sub(r"全天|整天|任何班|都可以", " ", seg)
+        days, rest = [], seg
+        for m in _DAY_RE.finditer(seg):
+            if m.group("rng"):
+                a, b = int(m.group("a")), int(m.group("b"))
+                if a > b:
+                    raise ValueError(f"{label}「{m.group(0)}」前面的日期要比後面小")
+                days += list(range(a, b + 1))
+            elif m.group("wk"):
+                ws = {_WD[c] for c in m.group("wds")}
+                days += [d for d, w in wd_of.items() if w in ws]
+            elif m.group("wday"):
+                days += [d for d, w in wd_of.items() if w not in ("六", "日")]
+            elif m.group("wend"):
+                days += [d for d, w in wd_of.items() if w in ("六", "日")]
+            elif m.group("all"):
+                days += list(wd_of)
+            else:
+                days.append(int(m.group("n")))
+            rest = rest.replace(m.group(0), " ", 1)
+        left = _FILLER.sub("", rest)
+        if left:
+            hint = "；可上時段要寫店別基本設定裡的班別名稱（" + "、".join(names) + "）" if shift_names is not None and names else ""
+            raise ValueError(f"{label}看不懂「{left}」：日期寫成 4、9、17 或 10-12，也可寫 每週一三五／平日／假日{hint}")
+        for d in days:
+            if d not in wd_of:
+                raise ValueError(f"{label}這個月沒有 {d} 號")
+            out[d] = sh
+    return sorted(out.items())
+
+
+def _days_txt(ds):
+    """[3,4,5,9] → 「3-5、9」"""
+    ds, out, i = sorted(ds), [], 0
+    while i < len(ds):
+        j = i
+        while j + 1 < len(ds) and ds[j + 1] == ds[j] + 1:
+            j += 1
+        out.append(f"{ds[i]}-{ds[j]}" if j - i >= 2 else "、".join(map(str, ds[i:j + 1])))
+        i = j + 1
+    return "、".join(out)
+
+
+def marks_from_text(st, emps, cfg):
+    """本月設定存檔時：每人三格文字 → marks（取代舊格子）＋兼職可上時段 avail_shift"""
+    info = st["template"]["info"]
+    names = {e["id"]: e["name"] for e in info["emps"]}
+    shift_names = [r["name"] for r in (cfg.get("shifts") or [])]
+    marks, avail = {}, {}
+    for eid, v in emps.items():
+        mk = {}
+        for k, f in MARK_TXT.items():
+            for d, sh in parse_days_text(v.get(f), info["days"], shift_names if k == "可上" else None, f"{names.get(eid, eid)} {k}："):
+                if str(d) in mk and mk[str(d)] != k:
+                    raise ValueError(f"{names.get(eid, eid)} {d} 號同時填了{mk[str(d)]}和{k}")
+                mk[str(d)] = k
+                if k == "可上" and sh:
+                    avail.setdefault(eid, {})[str(d)] = sh
+        if mk:
+            marks[eid] = mk
+    return marks, avail
+
 
 
 def mark_set(st, eid, day, value):
@@ -655,14 +759,16 @@ def form_text(st, cfg):
         v = ms["emps"].get(e["id"]) or {}
         tgt = v.get("target") or v.get("target_hint") or ""
         L.append(f"{e['id']}\t{e['name']}\t{v.get('type', '正職')}\t{tgt}\t{v.get('min_hours') or ''}\t{v.get('note') or ''}")
-    L.append("【指休／特休／兼職可上日】（指休＝那天一定要休；可上＝兼職只有這些天能排）")
+    L.append("【指休／特休／兼職可上日】（指休＝那天一定要休；可上＝兼職只有這些天能排，括號是只能上的班別）")
+    av = ms.get("avail_shift") or {}
     for e in info["emps"]:
         mk = ms["marks"].get(e["id"]) or {}
         parts = []
         for k in MARKS:
             ds = sorted(int(d) for d, v in mk.items() if v == k)
             if ds:
-                parts.append(f"{k} " + "、".join(map(str, ds)))
+                sh = av.get(e["id"]) or {}
+                parts.append(f"{k} " + "、".join(f"{d}（{sh[str(d)]}）" if sh.get(str(d)) else str(d) for d in ds))
         if parts:
             L.append(f"{e['id']} {e['name']}：" + "；".join(parts))
     if ms["special"]:
@@ -850,6 +956,7 @@ def run_check(st, schedule=None):
             extra = f"（另有休息日／國定假日出勤 {h['ot']:g}h，104 列加班）" if h["ot"] else ""
             warns.append(f"{h['name']}：正常工時 {h['regular']:g}h，目標 {float(tgt):g}h{extra}")
     marks = ((st.get("mset") or {}).get("marks") or {})
+    avail = ((st.get("mset") or {}).get("avail_shift") or {})
     etype = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
     for eid, mk in marks.items():
         if eid not in parsed:
@@ -863,7 +970,11 @@ def run_check(st, schedule=None):
             elif v == "特休" and "特休" not in (c["type"] + c["dtag"]):
                 warns.append(f"{names[eid]} {d['label']}：本月設定要特休，班表沒有標特休")
             elif allow and etype.get(eid) == "兼職" and c["segs"] and d["d"] not in allow:
-                warns.append(f"{names[eid]} {d['label']}：兼職只有勾「可上」的日子能排，這天沒勾")
+                warns.append(f"{names[eid]} {d['label']}：兼職只有填「可上」的日子能排，這天沒填")
+            elif v == "可上" and c["segs"] and avail.get(eid, {}).get(str(d["d"])) in shifts:
+                want = avail[eid][str(d["d"])]
+                if [[x[0], x[1]] for x in c["segs"]] != [list(x) for x in shifts[want]]:
+                    warns.append(f"{names[eid]} {d['label']}：兼職這天只能上{want}，班表排的不一樣")
     limit = ext.get("late_early_limit")
     if late_starts and early_starts and limit is not None:
         for eid in parsed:
