@@ -20,7 +20,7 @@ W_CONSEC = 120000    # 超過本店連上上限（每多一天的視窗）
 W_SHORT = 100000     # 某天在店人數比設定少（每缺 1 人；檢查程式算人頭）
 W_SHIFT = 20000      # 某班沒人（人頭夠但班別對不上；檢查只提醒）
 W_FORCE = 8000       # 備註指定要上班卻沒排（每天）
-W_APART = 8000       # 備註說不能同一天上班卻排在一起（每天）
+W_APART = 60000      # 備註說不能同一天上班卻排在一起（每天）：高於正職時數、低於缺人（2026-11-05 模擬：原本 8000 輸給正職時數，店規 11 天沒守）
 W_REST11 = 6000      # 下班到隔天上班不到 11 小時（每次）
 W_LATE = 6000        # 晚接早超過本店上限（每次）
 W_PT_MIN = 60        # 兼職低於最低時數（每分鐘）
@@ -86,6 +86,11 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
     wd_of = {d["d"]: d["wd"] for d in info["days"]}
     nd = len(days)
     need = demand_of(info, shifts, rules, {int(x["day"]) for x in ms.get("special") or [] if x.get("as_holiday")})
+    caps = {}
+    for r in rules:
+        if r["type"] == "demand" and r.get("shift") in shifts:
+            for dd in r["days"]:
+                caps.setdefault(dd, {})[r["shift"]] = int(r["count"])
     base = ms.get("base") or {}
     std_min = int(round(float(base.get("std_hours") or 0) * 60))
     off_days = base.get("off_days")
@@ -186,6 +191,12 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
             miss = m.NewIntVar(0, k, f"miss_{d}_{n}")
             m.Add(sum(v) + miss >= k)
             pen.append((miss, W_SHIFT))
+        # 店長明講「某幾天某班只排 N 人」（demand 規則）＝上限，多的人不可以塞進這班
+        # 2026-11-05 模擬：店規「週三晚班只排 1 人」，正職時數要排滿，多出來的人被塞到週三晚班
+        for n, k in caps.get(d, {}).items():
+            v = [x[(e["id"], d, n)] for e in emps if (e["id"], d, n) in x]
+            if v:
+                m.Add(sum(v) <= k)
 
     for e in emps:
         eid = e["id"]
@@ -391,7 +402,20 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
         if k and got > k:
             extras.append({"day": d, "need": k, "got": got,
                            "shifts": [n for n in shifts if sum(1 for e in emps if (e["id"], d, n) in x and sv.Value(x[(e["id"], d, n)])) > need[d].get(n, 0)]})
-    return {"schedule": sched, "gaps": gaps, "extras": extras, "hours": hours, "need": need,
+    # 備註規則沒做到的（人不夠時才會破例）→ 報告要寫出來，不能只寫「已套用」
+    unmet = []
+    worked = lambda eid, d: bool(work(eid, d)[1]) or any(sv.Value(v) for v in work(eid, d)[0])
+    for r in rules:
+        if r["type"] == "apart":
+            a, b = r["emps"][:2]
+            both = [d for d in (r.get("days") or days) if worked(a, d) and worked(b, d)]
+            if both:
+                unmet.append({"rule": r, "days": both})
+        elif r["type"] == "work":
+            miss = [d for d in r["days"] if not worked(r["emp"], d)]
+            if miss:
+                unmet.append({"rule": r, "days": miss})
+    return {"schedule": sched, "gaps": gaps, "extras": extras, "hours": hours, "need": need, "unmet": unmet,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(st), "objective": sv.ObjectiveValue()}}
 
 

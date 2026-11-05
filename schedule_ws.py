@@ -294,7 +294,7 @@ SEG_RE = re.compile(r"^(\d{1,2}:\d{2})-(次日)?(\d{1,2}:\d{2})((?:@[^@#]+)?)((?
 
 def parse_cell(v, shifts, day_types):
     """格子 → {type, segs:[[起,迄,標籤,崗位]], dtag}；寫錯丟 ValueError"""
-    v = (v or "").strip()
+    v = unicodedata.normalize("NFKC", v or "").strip()   # 店長在日曆打全形「１１：００－１５：００」也收
     out = {"type": "", "segs": [], "dtag": ""}
     m = re.match(r"^\[([^\]]+)\](.*)$", v)
     if m:
@@ -356,12 +356,15 @@ TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
 
 
 def _hhmm(v):
-    v = str(v or "").strip().replace("：", ":")
+    # 全形「１０：００」先轉半形（2026-11-05 模擬：原本存成「10:００」，排班、匯入 104 都會壞）
+    v = unicodedata.normalize("NFKC", str(v or "")).strip()
     if not v:
         return ""
-    m = re.match(r"^(\d{1,2}):?(\d{2})$", v)
+    m = re.match(r"^([0-9]{1,2}):?([0-9]{2})$", v)
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         raise ValueError(f"時間「{v}」要寫成 10:20")
+    if int(m.group(2)) % 5:
+        raise ValueError(f"時間「{v}」104 只收 5 分鐘一格（例：10:20、10:25）")
     return f"{int(m.group(1)):02d}:{m.group(2)}"
 
 
@@ -405,6 +408,8 @@ def cfg_clean(body):
             if a and b:
                 if _mins(b) <= _mins(a):
                     raise ValueError(f"班別「{name}」的時段 {a}-{b} 結束要晚於開始")
+                if segs and _mins(a) < _mins(segs[-1][1]):
+                    raise ValueError(f"班別「{name}」的時段 {a}-{b} 跟上一段 {segs[-1][0]}-{segs[-1][1]} 重疊或順序顛倒（104 不收）")
                 segs.append([a, b])
             elif a or b:
                 raise ValueError(f"班別「{name}」有一段只填了一半")
@@ -609,9 +614,14 @@ def mset_clean(st, body):
             continue
         if days and d not in days:
             raise ValueError(f"這個月沒有 {d} 號")
-        sp.append({"day": int(d), "revenue": _num(x.get("revenue"), None, 0, 10_000_000, "營收預估"),
-                   "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200],
-                   "as_holiday": bool(x.get("as_holiday"))})
+        row = {"day": int(d), "revenue": _num(x.get("revenue"), None, 0, 10_000_000, "營收預估"),
+               "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200],
+               "as_holiday": bool(x.get("as_holiday"))}
+        if row["revenue"] is None and not row["staff"] and not row["note"] and not row["as_holiday"]:
+            continue   # 整列空白（按了「加一天」沒填）不存
+        if any(y["day"] == row["day"] for y in sp):
+            raise ValueError(f"特殊日 {row['day']} 號填了兩列，請合成一列")
+        sp.append(row)
     ms["special"] = sorted(sp, key=lambda x: x["day"])
     ms["marks"], ms["avail_shift"] = marks_from_text(st, emps, cfg_load(st["store"]))
     ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
@@ -642,10 +652,12 @@ def _wd_span(a, b):
     return "".join(_WD_ORDER[(a + i) % 7] for i in range((b - a) % 7 + 1))
 
 
-def _norm_days(seg, last):
+def _norm_days(seg, last, month=None):
     """口語 → 固定寫法（只換日期部分；班別另外處理）"""
     s = unicodedata.normalize("NFKC", seg)
     s = re.sub(r"\d{1,2}\s*月\s*(?=\d)", "", s)                                       # 12月4日 → 4日
+    if month:   # 12/4 → 4；4/9/17（不是本月月份）→ 4、9、17（2026-11-05 模擬：原本把 4/9 當 4 月 9 日，4 號默默不見）
+        s = re.sub(r"(\d{1,2})\s*/\s*(?=\d)", lambda m: "" if int(m.group(1)) == month else m.group(1) + "、", s)
     s = re.sub(_WK + r"([一二三四五六日天])\s*[-~到至]\s*" + _WK + r"?([一二三四五六日天])",
                lambda m: "每週" + _wd_span(m.group(1), m.group(2)), s)                 # 週一到週三 → 每週一二三
     while True:                                                                         # 週一、週三、五 → 每週一三五
@@ -704,22 +716,27 @@ def _shift_of(seg, names):
         if not cand:
             continue
 
-        def pick(d, w, cand=cand):
-            want = "假日" if w in ("六", "日") else "平日"
-            return next((n for n in cand if want in n), cand[0])
+        def pick(d, w, cand=cand, key=key):
+            # 2026-11-05 模擬：「每週一三五 下午」平日沒有中班，原本拿了假日中班塞到平日
+            want, other = ("假日", "平日") if w in ("六", "日") else ("平日", "假日")
+            hit = next((n for n in cand if want in n or other not in n), "")
+            if not hit and key in ("中", "下午"):   # 這天類型沒有中班 → 下午／中班算晚班
+                hit = next((n for n in names if "晚" in n and (want in n or other not in n)), "")
+            return hit   # 都沒有＝這天不限班別
         return seg.replace(m.group(0), " "), pick
     return seg, (lambda d, w: "")
 
 
-def _parse_seg(seg, wd_of, names, shift_mode, label):
+def _parse_seg(seg, wd_of, names, shift_mode, label, month=None):
     """一段（；之間）→ {日: 班別}"""
     last = max(wd_of)
     sh_fn = lambda d, w: ""
+    seg0 = seg
     if shift_mode:
         seg, sh_fn = _shift_of(seg, names)
-    had_shift = sh_fn("", "") != "" or bool(re.search(r"全天|整天|任何班|都可以|都行", seg))
+    had_shift = seg != seg0 or bool(re.search(r"全天|整天|任何班|都可以|都行", seg))
     seg = re.sub(r"全天|整天|任何班|都可以", " ", seg)
-    seg = _norm_days(seg, last)
+    seg = _norm_days(seg, last, month)
     neg = []
     # 「除了 5、6 號」「5 號以外」「20 號不行」→ 先拿出要排除的日子
     for pat in (r"(?:除了|除去|除)\s*(?P<x>[^，,。；]*?)\s*" + _NEG_WORDS + r"?(?=\s*$|\s*[，,。]|\s*都|\s*其他|\s*其餘|\s*其它)",
@@ -756,7 +773,7 @@ def parse_days_text(txt, info_days, shift_names=None, label=""):
     for seg in re.split(r"[；;\n]+", str(txt or "")):
         seg = seg.strip()
         if seg:
-            out.update(_parse_seg(seg, wd_of, names, shift_names is not None, label))
+            out.update(_parse_seg(seg, wd_of, names, shift_names is not None, label, (info_days[0].get("m") if info_days else None)))
     return sorted(out.items())
 
 
@@ -812,12 +829,13 @@ def parse_days_smart(st, txt, info_days, shift_names, label, kind, ai=True):
     out, used, std_parts = {}, False, []
     wd_of = {d["d"]: d["wd"] for d in info_days}
     names = sorted(shift_names or [], key=len, reverse=True)
+    mon = info_days[0].get("m") if info_days else None
     for seg in re.split(r"[；;\n]+", str(txt or "")):
         seg = seg.strip()
         if not seg:
             continue
         try:
-            r = _parse_seg(seg, wd_of, names, shift_names is not None, label)
+            r = _parse_seg(seg, wd_of, names, shift_names is not None, label, mon)
             std_parts.append(seg)
         except ValueError as ex:
             if not ai:
@@ -829,7 +847,7 @@ def parse_days_smart(st, txt, info_days, shift_names, label, kind, ai=True):
                 r = {}
                 for s2 in re.split(r"[；;\n]+", std):
                     if s2.strip():
-                        r.update(_parse_seg(s2.strip(), wd_of, names, shift_names is not None, label))
+                        r.update(_parse_seg(s2.strip(), wd_of, names, shift_names is not None, label, mon))
             except ValueError:
                 if fresh:
                     _parse_log(st, kind, seg, std, False)
@@ -859,19 +877,22 @@ def marks_from_text(st, emps, cfg):
     info = st["template"]["info"]
     names = {e["id"]: e["name"] for e in info["emps"]}
     shift_names = [r["name"] for r in (cfg.get("shifts") or [])]
-    marks, avail = {}, {}
+    marks, avail, clash = {}, {}, []
     for eid, v in emps.items():
         mk = {}
         for k, f in MARK_TXT.items():
             days, _, _ = parse_days_smart(st, v.get(f), info["days"], shift_names if k == "可上" else None, f"{names.get(eid, eid)} {k}：", k)
             for d, sh in days:
-                if str(d) in mk and mk[str(d)] != k:
-                    raise ValueError(f"{names.get(eid, eid)} {d} 號同時填了{mk[str(d)]}和{k}")
+                if str(d) in mk and mk[str(d)] != k:   # 衝突一次列完（2026-11-05 模擬：原本一次只說一天）
+                    clash.append(f"{names.get(eid, eid)} {d} 號同時填了{mk[str(d)]}和{k}")
+                    continue
                 mk[str(d)] = k
                 if k == "可上" and sh:
                     avail.setdefault(eid, {})[str(d)] = sh
         if mk:
             marks[eid] = mk
+    if clash:
+        raise ValueError("；".join(clash) + "。請改掉其中一個再存")
     return marks, avail
 
 
@@ -1103,7 +1124,8 @@ def _ext_from_form(st, cfg):
     for e in info.get("emps") or []:
         v = ms["emps"].get(e["id"]) or {}
         emps.append({"id": e["id"], "name": e["name"], "type": v.get("type", "正職"),
-                     "target_hours": v.get("target") or (v.get("target_hint") if v.get("type", "正職") == "正職" else None)})
+                     "target_hours": v.get("target") or (v.get("target_hint") if v.get("type", "正職") == "正職" else None),
+                     "min_hours": v.get("min_hours") if v.get("type") == "兼職" else None})
     return {"shifts": shifts, "demand": demand, "employees": emps, "max_consec": cfg.get("max_consec", 5),
             "late_early_limit": cfg.get("late_early_limit", 0),
             "late_shift_ends": sorted({r["segs"][-1][1] for r in cfg["shifts"] if "晚" in r["name"]}),
@@ -1291,7 +1313,9 @@ def run_check(st, schedule=None):
             cnt = lambda x: sum(1 for t, _, _ in inf if t == x)
             hours.append({"id": emp["id"], "name": emp["name"], "days": sum(1 for _, s, _ in inf if s),
                           "hours": round(tot, 2), "regular": round(tot - ot, 2), "ot": round(ot, 2),
-                          "例假": cnt("例假日"), "休息": cnt("休息日"), "國定": cnt("國定假日"), "特休": cnt("特休")})
+                          "例假": cnt("例假日"), "休息": cnt("休息日"), "國定": cnt("國定假日"),
+                          # 特休照排班＋當日標籤「特休」（104 寫法），類型欄是空的 → 也要算（2026-11-05 模擬：特休欄一直是 0）
+                          "特休": sum(1 for t, _, tg in inf if t == "特休" or "特休" in str(tg or ""))})
     # 本店規則
     e2, w2 = _coverage(info, parsed, ext, names)
     errors += e2
@@ -1301,6 +1325,8 @@ def run_check(st, schedule=None):
     for emp in ext.get("employees") or []:
         tgt = emp.get("target_hours")
         h = next((x for x in hours if x["id"] == emp.get("id")), None)
+        if h:   # 目標、最低時數直接寫在每人時數裡，AI 不用自己找設定再比大小（2026-11-05 模擬：64h 被說成沒到最低 60h）
+            h["target"], h["min"] = tgt, emp.get("min_hours")
         if tgt and h and abs(h["regular"] - float(tgt)) > 0.01:
             extra = f"（另有休息日／國定假日出勤 {h['ot']:g}h，104 列加班）" if h["ot"] else ""
             warns.append(f"{h['name']}：正常工時 {h['regular']:g}h，目標 {float(tgt):g}h{extra}")
@@ -1341,7 +1367,14 @@ def run_check(st, schedule=None):
 def check_text(chk):
     lines = ["【每人時數】"]
     for h in chk["hours"]:
-        lines.append(f"{h['id']} {h['name']}：上班 {h['days']} 天、共 {h['hours']:g}h（正常工時 {h['regular']:g}h＋休息日／國定出勤 {h['ot']:g}h）、例假 {h['例假']}、休息 {h['休息']}、國定 {h['國定']}、特休 {h['特休']}")
+        cmp = ""
+        if h.get("target"):
+            d = h["regular"] - float(h["target"])
+            cmp += f"；目標 {float(h['target']):g}h（{'剛好' if abs(d) < 0.01 else ('多 ' if d > 0 else '少 ') + f'{abs(d):g}h'}）"
+        if h.get("min"):
+            d = h["regular"] - float(h["min"])
+            cmp += f"；兼職最低 {float(h['min']):g}h（{'已達到' if d >= -0.01 else f'還差 {-d:g}h'}）"
+        lines.append(f"{h['id']} {h['name']}：上班 {h['days']} 天、共 {h['hours']:g}h（正常工時 {h['regular']:g}h＋休息日／國定出勤 {h['ot']:g}h）、例假 {h['例假']}、休息 {h['休息']}、國定 {h['國定']}、特休 {h['特休']}{cmp}")
     lines.append(f"【❌ 一定要改】{len(chk['errors'])} 項")
     lines += ["❌ " + x for x in chk["errors"][:40]]
     lines.append(f"【⚠ 請店長確認】{len(chk['warns'])} 項")
@@ -1527,6 +1560,13 @@ def _note_texts(st, cfg, ms):
     return L
 
 
+def _daytype_shift(name, holiday_type, shifts):
+    """「平日晚班」用在假日型的日子 → 「假日晚班」（有這個班才換）；反過來也是"""
+    a, b = ("平日", "假日") if holiday_type else ("假日", "平日")
+    alt = name.replace(a, b)
+    return alt if a in name and alt in shifts else name
+
+
 def _note_rules(st, cfg, ms):
     """備註／店規 → (rules, 沒套用的說明)；沒有備註就不叫 AI"""
     texts = _note_texts(st, cfg, ms)
@@ -1534,8 +1574,10 @@ def _note_rules(st, cfg, ms):
         return [], []
     info = st["template"]["info"]
     shifts = [r["name"] for r in cfg.get("shifts") or []]
+    holi = _hol_days(ms)
     user = "\n".join([
-        f"月份：{st['ym'][:4]} 年 {int(st['ym'][4:])} 月；日期（星期）：" + "、".join(f"{d['d']}({d['wd']})" for d in info["days"]),
+        f"月份：{st['ym'][:4]} 年 {int(st['ym'][4:])} 月；日期（星期）：" + "、".join(f"{d['d']}({d['wd']}{'・當假日' if d['d'] in holi else ''})" for d in info["days"]),
+        "（標「當假日」的平日，人力照假日班排，要加人就加假日的班）" if holi else "",
         "員工：" + "；".join(f"{e['id']} {e['name']}" for e in info["emps"]),
         "班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + "）" for r in cfg.get("shifts") or []),
         "可用標籤：" + "、".join(info["tags"]), "可用崗位：" + "、".join(info["positions"]),
@@ -1590,6 +1632,14 @@ def _note_rules(st, cfg, ms):
                     raise ValueError("班別不對")
             if t == "work" and r.get("shift") not in shifts:
                 r["shift"] = None
+            if t in ("demand", "extra"):   # 平日班套到假日型的日子（或反過來）→ 換成同名另一種（2026-11-05 模擬：當假日的 31 號被加「平日晚班」）
+                wkd = {x["d"] for x in info["days"] if x["wd"] in ("六", "日")} | holi
+                groups = {}
+                for dd in r["days"]:
+                    groups.setdefault(_daytype_shift(r["shift"], dd in wkd, shifts), []).append(dd)
+                for sh, dds in groups.items():
+                    rules.append(dict(r, shift=sh, days=dds))
+                continue
             rules.append(r)
         except (ValueError, TypeError, KeyError) as ex:
             bad.append(f"{json.dumps(r, ensure_ascii=False)[:120]}：{ex}")
@@ -1664,6 +1714,9 @@ def _solver_report(st, res, rules, bad, chk, secs_ai):
         n = sum(g["got"] - g["need"] for g in res["extras"])
         L += ["", f"**比設定多排的（共 {n} 人次）**：正職要排滿標準時數、兼職要排到最低時數，班不夠分才多出來。可以把這幾天改成特休、補休或事務班，或下修目標時數。"]
         L += [f"- {g['day']} 號：設定 {g['need']} 人、排了 {g['got']} 人（多在{'、'.join(g['shifts'])}）" for g in res["extras"]]
+    if res.get("unmet"):
+        L += ["", "**⚠ 備註／店規沒做到的（人手不夠才破例，請看要不要調整）**"]
+        L += [f"- {_rule_text(u['rule'], names)}：{'、'.join(str(d) for d in u['days'])} 號沒做到" for u in res["unmet"]]
     if rules:
         L += ["", "**照備註／店規套用的**"] + ["- " + _rule_text(r, names) for r in rules]
     if bad:
@@ -1731,6 +1784,8 @@ def _draft_worker(store, ym):
                 msg += f"有 {sum(g['got'] - g['need'] for g in res['extras'])} 人次比設定多（正職時數要排滿、班不夠分），列在報告裡。"
             if bad:
                 msg += f"有 {len(bad)} 條備註沒辦法自動套用，列在報告裡。"
+            if res.get("unmet"):
+                msg += f"⚠ 有 {len(res['unmet'])} 條備註／店規因為人手不夠沒完全做到，列在報告裡。"
             st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],
                       chat=(st.get("chat") or []) + [{"role": "ai", "text": msg + "要改哪裡直接跟我說。", "ts": time.time()}])
             _save(st)
@@ -2604,7 +2659,7 @@ def handle(path, body):
             label = "全店"
         else:
             stores = [store]
-            label = f"{store}{_sname(store)}店"
+            label = f"{store}{_sname(store)}" + ("" if _sname(store).endswith("店") else "店")
         out, n = bonus_xlsx(stores, ym)
         if not n:
             return 400, {"ok": False, "error": "這個月還沒有班表，沒辦法算日獎金"}
