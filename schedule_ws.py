@@ -26,6 +26,7 @@ import re
 import ssl
 import threading
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 import warnings
@@ -624,7 +625,125 @@ _DAY_RE = re.compile(
     r"|(?P<wk>(?:每週|每周|週|周|星期|禮拜)(?P<wds>[一二三四五六日天]+))"
     r"|(?P<wday>平日)|(?P<wend>假日|週末|周末)|(?P<all>每天|全月|整個月|天天)"
     r"|(?P<one>(?:\d{1,2}/)?(?P<n>\d{1,2})\s*[號日]?)")
-_FILLER = re.compile(r"[\s、，,／/。.和及跟與]|可上班|可以上|可上|都可以|都行|上班")
+_FILLER = re.compile(r"[\s、，,／/。.和及跟與]|可上班|可以上|可上|都可以|都行|都OK|都ok|上班|其他|其餘|其它|剩下的?|都")
+# 2026-11-05 經營者「提高店長自然語言的辨識率、不要給太多限制」：存檔與即時回顯前先把常見口語換成固定寫法
+_WK = r"(?:每週|每周|週|周|星期|禮拜)"
+_WD_ORDER = "一二三四五六日"
+_NEG_WORDS = r"(?:以外|之外|除外|不行|不可以|不能|不要|沒空|沒辦法|不方便|休息|不上)"
+# 班別口語：店長寫「早班／早上」→ 對到店別設定裡名稱有「早」的班（平日、假日各自對）
+_SHIFT_ALIAS = (("早", r"早班|早上|上午|白天|早場"), ("中", r"中班|中午|午班|中場"), ("晚", r"晚班|晚上|夜班|傍晚|晚場"),
+                ("下午", r"下午"))
+
+
+def _wd_span(a, b):
+    a, b = _WD_ORDER.index(_WD[a]), _WD_ORDER.index(_WD[b])
+    return "".join(_WD_ORDER[(a + i) % 7] for i in range((b - a) % 7 + 1))
+
+
+def _norm_days(seg, last):
+    """口語 → 固定寫法（只換日期部分；班別另外處理）"""
+    s = unicodedata.normalize("NFKC", seg)
+    s = re.sub(r"\d{1,2}\s*月\s*(?=\d)", "", s)                                       # 12月4日 → 4日
+    s = re.sub(_WK + r"([一二三四五六日天])\s*[-~到至]\s*" + _WK + r"?([一二三四五六日天])",
+               lambda m: "每週" + _wd_span(m.group(1), m.group(2)), s)                 # 週一到週三 → 每週一二三
+    while True:                                                                         # 週一、週三、五 → 每週一三五
+        t = re.sub("(" + _WK + r"[一二三四五六日天]+)\s*[、,/和跟及與]?\s*" + _WK + r"?([一二三四五六日天])(?![一二三四五六日天]*[號日])",
+                   lambda m: m.group(1) + m.group(2) if not m.group(0).endswith(m.group(1)) else m.group(0), s, count=1)
+        if t == s:
+            break
+        s = t
+    s = s.replace("上半月", "1-15").replace("下半月", f"16-{last}").replace("上旬", "1-10").replace("中旬", "11-20").replace("下旬", f"21-{last}")
+    s = re.sub(r"(\d{1,2})\s*[號日]?\s*(?:以後|之後|後|起|開始)", lambda m: f"{m.group(1)}-{last}", s)
+    s = re.sub(r"(\d{1,2})\s*[號日]?\s*(?:以前|之前|前)", lambda m: f"1-{int(m.group(1)) - 1}" if int(m.group(1)) > 1 else "", s)
+    return s
+
+
+def _scan_days(seg, wd_of, label):
+    """固定寫法 → (日期 list, 剩下看不懂的字)"""
+    days, rng, flt, rest = [], [], [], seg
+    for m in _DAY_RE.finditer(seg):
+        if m.group("rng"):
+            a, b = int(m.group("a")), int(m.group("b"))
+            if a > b:
+                raise ValueError(f"{label}「{m.group(0)}」前面的日期要比後面小")
+            rng += list(range(a, b + 1))
+        elif m.group("wk"):
+            ws = {_WD[c] for c in m.group("wds")}
+            flt += [d for d, w in wd_of.items() if w in ws]
+        elif m.group("wday"):
+            flt += [d for d, w in wd_of.items() if w not in ("六", "日")]
+        elif m.group("wend"):
+            flt += [d for d, w in wd_of.items() if w in ("六", "日")]
+        elif m.group("all"):
+            days += list(wd_of)
+        else:
+            days.append(int(m.group("n")))
+        rest = rest.replace(m.group(0), " ", 1)
+    # 「下半月 假日」「10-20 平日」＝區間裡的那幾天（取交集）；其他寫法全部加起來
+    if rng and flt:
+        days += [d for d in rng if d in set(flt)]
+    else:
+        days += rng + flt
+    return days, _FILLER.sub("", rest)
+
+
+def _shift_of(seg, names):
+    """這段寫了哪個班 → (把班別字拿掉的段落, 依日子挑班別的函式)；沒寫班別＝哪個班都可以"""
+    for nm in names:
+        if nm and nm in seg:
+            return seg.replace(nm, " "), (lambda d, w, nm=nm: nm)
+    for key, pat in _SHIFT_ALIAS:
+        m = re.search(pat, seg)
+        if not m:
+            continue
+        cand = [n for n in names if key in n]
+        if key == "下午" and not cand:          # 店裡沒有「下午」班 → 有中班就算中班，沒有就算晚班
+            cand = [n for n in names if "中" in n] or [n for n in names if "晚" in n]
+        if not cand:
+            continue
+
+        def pick(d, w, cand=cand):
+            want = "假日" if w in ("六", "日") else "平日"
+            return next((n for n in cand if want in n), cand[0])
+        return seg.replace(m.group(0), " "), pick
+    return seg, (lambda d, w: "")
+
+
+def _parse_seg(seg, wd_of, names, shift_mode, label):
+    """一段（；之間）→ {日: 班別}"""
+    last = max(wd_of)
+    sh_fn = lambda d, w: ""
+    if shift_mode:
+        seg, sh_fn = _shift_of(seg, names)
+    had_shift = sh_fn("", "") != "" or bool(re.search(r"全天|整天|任何班|都可以|都行", seg))
+    seg = re.sub(r"全天|整天|任何班|都可以", " ", seg)
+    seg = _norm_days(seg, last)
+    neg = []
+    # 「除了 5、6 號」「5 號以外」「20 號不行」→ 先拿出要排除的日子
+    for pat in (r"(?:除了|除去|除)\s*(?P<x>[^，,。；]*?)\s*" + _NEG_WORDS + r"?(?=\s*$|\s*[，,。]|\s*都|\s*其他|\s*其餘|\s*其它)",
+                r"(?P<x>[\d、,\s號日/\-~到至一二三四五六日天週周星期禮拜每平假末]+?)\s*" + _NEG_WORDS):
+        for m in list(re.finditer(pat, seg)):
+            d, left = _scan_days(m.group("x"), wd_of, label)
+            if not d or left:
+                continue
+            neg += d
+            seg = seg.replace(m.group(0), " ", 1)
+    days, left = _scan_days(seg, wd_of, label)
+    if left:
+        hint = "；可上時段要寫店別基本設定裡的班別名稱（" + "、".join(names) + "）" if shift_mode and names else ""
+        raise ValueError(f"{label}看不懂「{left}」：日期寫成 4、9、17 或 10-12，也可寫 每週一三五／平日／假日{hint}")
+    if not days and (neg or (shift_mode and had_shift)):   # 「20 號不行」「早班」「全天都可以」＝整個月（「平日早班」只算平日）
+        def fits(d):
+            n, we = sh_fn(d, wd_of[d]), wd_of[d] in ("六", "日")
+            return not (("平日" in n and we) or ("假日" in n and not we))
+        days = [d for d in wd_of if fits(d)]
+    out = {}
+    for d in days:
+        if d not in wd_of:
+            raise ValueError(f"{label}這個月沒有 {d} 號")
+        if d not in neg:
+            out[d] = sh_fn(d, wd_of[d])
+    return out
 
 
 def parse_days_text(txt, info_days, shift_names=None, label=""):
@@ -634,42 +753,91 @@ def parse_days_text(txt, info_days, shift_names=None, label=""):
     names = sorted(shift_names or [], key=len, reverse=True)
     for seg in re.split(r"[；;\n]+", str(txt or "")):
         seg = seg.strip()
+        if seg:
+            out.update(_parse_seg(seg, wd_of, names, shift_names is not None, label))
+    return sorted(out.items())
+
+
+class NeedAI(ValueError):
+    """規則看不懂、還沒叫 AI（店長還在打字）"""
+
+
+_ai_lock = threading.Lock()
+KIND_TXT = {"指休": "指休（夥伴指定要休假的日子）", "特休": "特休（夥伴請特休的日子）", "可上": "兼職可上日與時段"}
+
+
+def _ai_rewrite(st, seg, info_days, shift_names, kind):
+    """規則看不懂的那一段 → 請 AI 改寫成固定寫法（同月同欄同一句只問一次，記在快取）→ (固定寫法, 這次有沒有真的問 AI)；改不了回空字串"""
+    ym = st["ym"]
+    ck = "|".join([ym, kind, ",".join(shift_names or []), seg])
+    cp = _dir() / "parse_ai_cache.json"
+    with _ai_lock:
+        cache = json.loads(cp.read_text(encoding="utf-8")) if cp.exists() else {}
+    if ck in cache:
+        return cache[ck], False
+    cal = "、".join(f"{d['d']}({d['wd']})" for d in info_days)
+    sys_p = ("你把門市店長寫的排班日期，改寫成程式看得懂的固定寫法。只回 JSON：{\"std\":\"…\"}，看不出意思就回 {\"std\":\"\"}。\n"
+             "固定寫法只能用這些：日期數字用「、」分開（4、9、17）；連續日期寫 10-12；每週一三五；平日；假日"
+             + ("；這段可上的班別名稱寫在日期後面、空一格（只能用下面列的班別名稱，沒指定班別就不寫）；不同班別的段落用「；」分開" if shift_names is not None else "")
+             + "。不要加其他字、不要解釋。意思是「排除某幾天」時，直接列出剩下的日期。")
+    user = (f"月份：{ym[:4]} 年 {int(ym[4:])} 月，日期（星期）：{cal}\n欄位：{KIND_TXT.get(kind, kind)}\n"
+            + (f"班別名稱：{'、'.join(shift_names) or '（沒有設定）'}\n" if shift_names is not None else "")
+            + f"店長寫的：{seg}")
+    try:
+        msg = _client_().messages.create(model=MODEL, max_tokens=800, system=sys_p, messages=[{"role": "user", "content": user}])
+        _log_usage(st, "parse", _cost(MODEL, msg.usage))
+        txt = "".join(getattr(b, "text", "") for b in msg.content)
+        m = re.search(r"\{.*\}", txt, re.S)
+        std = str(json.loads(m.group(0)).get("std") or "").strip()[:300] if m else ""
+    except Exception:   # noqa: BLE001  AI 連不上就當看不懂，照原本的錯誤訊息
+        return "", True
+    with _ai_lock:
+        cache = json.loads(cp.read_text(encoding="utf-8")) if cp.exists() else {}
+        cache[ck] = std
+        atomic_write_json(cp, cache)
+    return std, True
+
+
+def _parse_log(st, kind, text, std, ok):
+    """規則看不懂的說法記下來，每月看一次、常見的加進規則"""
+    with _ai_lock, open(_dir() / "parse_log.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "store": st["store"], "ym": st["ym"],
+                            "kind": kind, "text": text, "ai": std, "ok": ok}, ensure_ascii=False) + "\n")
+
+
+def parse_days_smart(st, txt, info_days, shift_names, label, kind, ai=True):
+    """先用規則；看不懂的那段請 AI 改寫再用規則讀一次 → (結果, 有沒有靠 AI, 固定寫法)"""
+    out, used, std_parts = {}, False, []
+    wd_of = {d["d"]: d["wd"] for d in info_days}
+    names = sorted(shift_names or [], key=len, reverse=True)
+    for seg in re.split(r"[；;\n]+", str(txt or "")):
+        seg = seg.strip()
         if not seg:
             continue
-        sh = ""
-        for nm in names:
-            if nm and nm in seg:
-                sh, seg = nm, seg.replace(nm, " ")
-                break
-        seg = re.sub(r"全天|整天|任何班|都可以", " ", seg)
-        days, rest = [], seg
-        for m in _DAY_RE.finditer(seg):
-            if m.group("rng"):
-                a, b = int(m.group("a")), int(m.group("b"))
-                if a > b:
-                    raise ValueError(f"{label}「{m.group(0)}」前面的日期要比後面小")
-                days += list(range(a, b + 1))
-            elif m.group("wk"):
-                ws = {_WD[c] for c in m.group("wds")}
-                days += [d for d, w in wd_of.items() if w in ws]
-            elif m.group("wday"):
-                days += [d for d, w in wd_of.items() if w not in ("六", "日")]
-            elif m.group("wend"):
-                days += [d for d, w in wd_of.items() if w in ("六", "日")]
-            elif m.group("all"):
-                days += list(wd_of)
-            else:
-                days.append(int(m.group("n")))
-            rest = rest.replace(m.group(0), " ", 1)
-        left = _FILLER.sub("", rest)
-        if left:
-            hint = "；可上時段要寫店別基本設定裡的班別名稱（" + "、".join(names) + "）" if shift_names is not None and names else ""
-            raise ValueError(f"{label}看不懂「{left}」：日期寫成 4、9、17 或 10-12，也可寫 每週一三五／平日／假日{hint}")
-        for d in days:
-            if d not in wd_of:
-                raise ValueError(f"{label}這個月沒有 {d} 號")
-            out[d] = sh
-    return sorted(out.items())
+        try:
+            r = _parse_seg(seg, wd_of, names, shift_names is not None, label)
+            std_parts.append(seg)
+        except ValueError as ex:
+            if not ai:
+                raise NeedAI(str(ex)) from None
+            std, fresh = _ai_rewrite(st, seg, info_days, shift_names, kind)
+            try:
+                if not std:
+                    raise ValueError
+                r = {}
+                for s2 in re.split(r"[；;\n]+", std):
+                    if s2.strip():
+                        r.update(_parse_seg(s2.strip(), wd_of, names, shift_names is not None, label))
+            except ValueError:
+                if fresh:
+                    _parse_log(st, kind, seg, std, False)
+                raise ValueError(f"{label}看不懂「{seg}」，AI 也看不出來。請改寫成 4、9、17／10-12／每週一三五／平日／假日") from None
+            if fresh:
+                _parse_log(st, kind, seg, std, True)
+            used = True
+            std_parts.append(std)
+        out.update(r)
+    return sorted(out.items()), used, "；".join(std_parts)
 
 
 def _days_txt(ds):
@@ -693,7 +861,8 @@ def marks_from_text(st, emps, cfg):
     for eid, v in emps.items():
         mk = {}
         for k, f in MARK_TXT.items():
-            for d, sh in parse_days_text(v.get(f), info["days"], shift_names if k == "可上" else None, f"{names.get(eid, eid)} {k}："):
+            days, _, _ = parse_days_smart(st, v.get(f), info["days"], shift_names if k == "可上" else None, f"{names.get(eid, eid)} {k}：", k)
+            for d, sh in days:
                 if str(d) in mk and mk[str(d)] != k:
                     raise ValueError(f"{names.get(eid, eid)} {d} 號同時填了{mk[str(d)]}和{k}")
                 mk[str(d)] = k
@@ -1984,6 +2153,37 @@ def handle(path, body):
                 st["check"] = run_check(st)
             _save(st)
             return 200, _public(st)
+
+    if act == "parse_preview":   # 2026-11-05：指休／特休／可上 打字時即時回顯「我讀成…」；ai＝離開格子才請 AI 看規則看不懂的
+        with lk:
+            st = _load(store, ym)
+            if not st.get("template"):
+                return 400, {"ok": False, "error": "還沒有 104 範本"}
+            info, n_use = st["template"]["info"], len(st.get("usage") or [])
+            shift_names = [r["name"] for r in (cfg_load(store).get("shifts") or [])]
+            out = []
+            for it in (body.get("items") or [])[:60]:
+                k, txt = it.get("k"), str(it.get("text") or "")[:300]
+                if k not in MARK_TXT:
+                    out.append({"ok": False, "error": "欄位不對"})
+                    continue
+                try:
+                    days, used, std = parse_days_smart(st, txt, info["days"], shift_names if k == "可上" else None, "", k, ai=bool(body.get("ai")))
+                    out.append({"ok": True, "days": days, "ai": used, "std": std})
+                except NeedAI as ex:
+                    out.append({"ok": False, "needAi": True, "error": str(ex)})
+                except ValueError as ex:
+                    out.append({"ok": False, "error": str(ex)})
+            if len(st.get("usage") or []) != n_use:
+                _save(st)
+            return 200, {"ok": True, "items": out}
+
+    if act == "parse_log":   # 看不懂的說法（總部每月看一次，常見的加進規則）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以看"}
+        p = _dir() / "parse_log.jsonl"
+        rows = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
+        return 200, {"ok": True, "items": rows[-500:]}
 
     if act == "mark":
         with lk:
