@@ -731,6 +731,95 @@ def form_ready(st, cfg):
     return bool(cfg.get("shifts")) and bool(rv.get("weekday")) and bool(rv.get("weekend"))
 
 
+# ───────── 挪假累積（2026-11-05 經營者：每月要看到每人累積欠幾天、補了幾天） ─────────
+# 「彈性挪假」那天有上班＝夥伴休假日來上班 → 公司欠夥伴休假（要補休）；沒上班＝夥伴多放一天 → 夥伴欠公司上班（要補班）
+# 「挪假補班」那天沒上班＝補休給夥伴；有上班＝補上班給公司。標籤在整天或時段上都算。
+# 期初＝店別基本設定「挪假未補」（工作台以前的舊帳；日期落在工作台已有班表的月份就不重算）
+NUO_REST, NUO_WORK = "要補休給夥伴", "要補上班給公司"
+
+
+def _nuo_month(st):
+    """這個月班表 → {工號: {"rest_add","work_add","rest_paid","work_paid", "days":[(日, 說明)]}}"""
+    info = (st.get("template") or {}).get("info") or {}
+    if not st.get("schedule") or not info:
+        return {}
+    shifts = _ext(st).get("shifts") or {}
+    dtypes = set(info.get("dayTypes") or [])
+    out = {}
+    for e in info.get("emps") or []:
+        row = st["schedule"].get(e["id"]) or {}
+        for d in info.get("days") or []:
+            try:
+                c = parse_cell(row.get(str(d["d"]), ""), shifts, dtypes)
+            except ValueError:
+                continue
+            tags = c["dtag"] + "、" + "、".join(x[2] for x in c["segs"])
+            work = bool(c["segs"])
+            r = out.setdefault(e["id"], {"rest_add": 0, "work_add": 0, "rest_paid": 0, "work_paid": 0, "days": []})
+            if "彈性挪假" in tags:
+                r["rest_add" if work else "work_add"] += 1
+                r["days"].append((d["d"], "挪假（來上班，之後補休）" if work else "挪假（多放假，之後補上班）"))
+            if "挪假補班" in tags:
+                r["work_paid" if work else "rest_paid"] += 1
+                r["days"].append((d["d"], "補上班" if work else "補休"))
+    return {k: v for k, v in out.items() if v["days"]}
+
+
+def nuo_ledger(st, cfg=None):
+    """這家店到這個月為止的挪假累積：[{id, name, open_rest, open_work, ...本月..., close_rest, close_work, days}]"""
+    info = (st.get("template") or {}).get("info") or {}
+    if not info:
+        return []
+    cfg = cfg if cfg is not None else cfg_load(st["store"])
+    ym = st["ym"]
+    months = {}
+    for p in _dir().glob(f"{int(st['store'])}-20*.json"):
+        m = p.stem.split("-", 1)[1]
+        if m < ym:
+            try:
+                ost = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if ost.get("schedule"):
+                months[m] = ost
+    months[ym] = st
+    first = min(m for m, x in months.items() if x.get("schedule")) if any(x.get("schedule") for x in months.values()) else ym
+    names = {e["id"]: e["name"] for e in info.get("emps") or []}
+    by_name = {}
+    for m in sorted(months):
+        for e in ((months[m].get("template") or {}).get("info") or {}).get("emps") or []:
+            names.setdefault(e["id"], e["name"])
+            by_name[e["name"]] = e["id"]
+    acc = {}
+    for x in cfg.get("carry") or []:   # 期初舊帳
+        m = re.match(r"(\d{4})\D?(\d{1,2})", x.get("date") or "")
+        if m and f"{m.group(1)}{int(m.group(2)):02d}" >= first:
+            continue
+        eid = by_name.get(x.get("name")) or ("name:" + x.get("name", ""))
+        a = acc.setdefault(eid, [0, 0])
+        a[0 if x.get("type") != "B" else 1] += 1
+        names.setdefault(eid, x.get("name", ""))
+    out = {}
+    for m in sorted(months):
+        mm = _nuo_month(months[m]) if months[m].get("schedule") else {}
+        for eid, r in mm.items():
+            a = acc.setdefault(eid, [0, 0])
+            if m == ym:
+                out[eid] = dict(r, open_rest=a[0], open_work=a[1])
+            a[0] += r["rest_add"] - r["rest_paid"]
+            a[1] += r["work_add"] - r["work_paid"]
+    rows = []
+    for eid, a in acc.items():
+        cur = out.get(eid) or {"rest_add": 0, "work_add": 0, "rest_paid": 0, "work_paid": 0, "days": [], "open_rest": a[0], "open_work": a[1]}
+        if not (cur["open_rest"] or cur["open_work"] or cur["days"] or a[0] or a[1]):
+            continue
+        rows.append({"id": eid, "name": names.get(eid, eid), "open_rest": cur["open_rest"], "open_work": cur["open_work"],
+                     "rest_add": cur["rest_add"], "work_add": cur["work_add"], "rest_paid": cur["rest_paid"], "work_paid": cur["work_paid"],
+                     "close_rest": a[0], "close_work": a[1], "days": [f"{int(ym[4:])}/{d} {t}" for d, t in sorted(cur["days"])]})
+    order = {e["id"]: i for i, e in enumerate(info.get("emps") or [])}
+    return sorted(rows, key=lambda r: order.get(r["id"], 999))
+
+
 def form_text(st, cfg):
     """把表單組成跟 Excel 設定表同樣結構的文字給 AI"""
     info = st["template"]["info"]
@@ -782,6 +871,12 @@ def form_text(st, cfg):
             if x.get("note"):
                 bits.append(f"備註：{x['note']}")
             L.append(f"{x['day']} 日：" + "；".join(bits))
+    led = nuo_ledger(st, cfg)
+    if any(r["open_rest"] or r["open_work"] for r in led):
+        L.append("【挪假累積（上個月底還沒補的，程式從各月班表算的）】")
+        for r in led:
+            if r["open_rest"] or r["open_work"]:
+                L.append(f"{r['name']}：{NUO_REST} {r['open_rest']} 天；{NUO_WORK} {r['open_work']} 天")
     if cfg.get("carry"):
         L.append("【挪假未補清單】姓名\t類型\t挪假日期\t備註")
         for x in cfg["carry"]:
@@ -1806,7 +1901,7 @@ def _public(st):
         "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
         "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
-        "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES},
+        "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES}, "nuo": nuo_ledger(st, cfg) if tpl else [],
     }
 
 
