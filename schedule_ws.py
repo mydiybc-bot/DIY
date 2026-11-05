@@ -52,8 +52,10 @@ STORES = {1: "精明", 2: "草悟道", 3: "南京", 4: "士林", 5: "Focus", 6: 
           9: "中壢", 10: "藝文", 11: "A13", 12: "SKM"}
 # 2026-11-05 經營者：開 13 號測試店試對話改班，測完會刪。只有總部登入看得到；第一次打開某月時從 12 號店同月複製一份；
 # 104 同步、全店日獎金表、跨店支援都不算它；營業額照 12 號店讀。
-TEST_STORES = {13: "測試店"}
+TEST_STORES = {13: "測試店", 14: "測試店二"}
 TEST_SRC = 12
+# 2026-11-06 經營者「做測試區」：14 號測試店二（假名字夥伴、自己的設定），跟 13 號組成「測試區」試區域排班；只有 13 號會從 12 號店複製
+TEST_COPY = {13}
 
 
 def _sname(store):
@@ -133,7 +135,7 @@ def _load(store, ym):
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     src = _dir() / f"{_key(TEST_SRC, ym)}.json"
-    if int(store) in TEST_STORES and src.exists():
+    if int(store) in TEST_COPY and src.exists():
         st = json.loads(src.read_text(encoding="utf-8"))
         st.update(store=int(store), history=[], api_messages=[], usage=[], s104=None, s104_adopted=0,
                   chat=[{"role": "ai", "ts": time.time(), "text": f"🧪 這是測試店：班表從 {TEST_SRC} 號店 {int(ym[4:])} 月複製過來，怎麼改都不會影響正式店和 104。"}])
@@ -386,7 +388,7 @@ def _cfg_path(store):
 
 def cfg_load(store):
     p = _cfg_path(store)
-    if int(store) in TEST_STORES and not p.exists():
+    if int(store) in TEST_COPY and not p.exists():
         p = _cfg_path(TEST_SRC)
     if p.exists():
         try:
@@ -1839,9 +1841,22 @@ def _draft_worker(store, ym):
 # 魔導師在「🗺 區域排班」按排初稿（A 正職優先、B 兼職優先兩個方案，整區一起比）→ 採用一個方案（一次寫進整區每家店的班表）→
 # 店長再看自己店、微調、下載 104 匯入檔。調去別店的那天寫在夥伴自己店的班表（每段 @支援#那家店，104 規則），
 # 被支援店的檢查會把外店調來的人算進現場人力（_guest_cells）。
-REGIONS = {"台中": [1, 2], "台北": [3, 4, 7, 8, 11], "桃園": [9, 10]}
-REGION_FILE = {"台中": "tc", "台北": "tp", "桃園": "ty"}
+REGIONS = {"台中": [1, 2], "台北": [3, 4, 7, 8, 11], "桃園": [9, 10], "測試": [13, 14]}
+REGION_FILE = {"台中": "tc", "台北": "tp", "桃園": "ty", "測試": "ts"}
 STORE_POS = {v: k for k, v in POS_STORE.items()}
+# 測試區：13 號範本名稱是「高雄SKM店」、14 號是「台南測試店」，調店時崗位借用 104 清單裡的「高雄店」「台南店」（只在測試區這樣對應）
+TEST_POS = {13: "高雄店", 14: "台南店"}
+
+
+def _region_pos(rg, store):
+    return TEST_POS.get(store, "") if rg == "測試" else STORE_POS.get(store, "")
+
+
+def _pos_in_region(rg, pos):
+    """崗位 → 這一區的店號（測試區用 TEST_POS，其他照 POS_STORE）"""
+    if rg == "測試":
+        return next((s for s, p in TEST_POS.items() if p == (pos or "").strip()), None)
+    return _pos_store(pos)
 
 
 def _region_of(store):
@@ -1883,7 +1898,7 @@ def _guest_cells(store, ym, override=None):
                     c = parse_cell(v, shifts, dtypes)
                 except ValueError:
                     continue
-                here = [[a, b, t, ""] for a, b, t, pos in c["segs"] if _pos_store(pos) == int(store)]
+                here = [[a, b, t, ""] for a, b, t, pos in c["segs"] if _pos_in_region(rg, pos) == int(store)]
                 if here:
                     g = out.setdefault(f"外店:{s}:{e['id']}", {"name": f"{e['name']}（{_sname(s)}支援）", "days": {}})
                     g["days"][int(d)] = {"type": "", "segs": here, "dtag": ""}
@@ -1950,7 +1965,7 @@ def _region_worker(rg, ym):
                     c = parse_cell(r["cell"], shmap, dtypes)
                     fx[(r["emp"], r["day"])] = (r["cell"], int(round(cell_hours(c) * 60)))
             fixed[s] = fx
-            units.append({"store": s, "pos": STORE_POS.get(s, ""), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules[s],
+            units.append({"store": s, "pos": _region_pos(rg, s), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules[s],
                           "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
                           "prev_tail": _prev_tail(s, ym), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
         plans = {}
