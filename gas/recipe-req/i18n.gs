@@ -25,7 +25,8 @@
                  Claude 投遞口只翻改到的頁（i18nPull 回 keep，i18nPut partial:1 沿用沒變的頁）
      i18nKick    做下一件待翻譯的事：沒開自動（指令碼屬性 I18N_AUTO≠1）時只做指定的 id＋lang；同一件 6 分鐘內不會兩個人同時做
    排程：i18nDaily 每天 06:30（i18nKick 第一次被呼叫時自動建立，不用到編輯器按）：更新原文（後台有改才重抓、內容真的變了才重翻）；
-         I18N_AUTO＝1 時接著翻待翻譯的，做到 5 分鐘為止。
+         I18N_AUTO＝1 時接著翻待翻譯的。2026-11-05 起改成 5 個語言各自接力（i18nAuto_ja…，見 i18nAutoStart_），全部翻完為止；
+         Sonnet 翻＋AI 回讀，過了自動放行（放行人「AI 自動檢查」），Mac 不用開。
    ⚠ 只讀後台；不寫後台任何東西。 */
 
 var I18N_LANGS = ['ja', 'ko', 'vi', 'id', 'th'];
@@ -480,27 +481,59 @@ var I18N_SCHEMA = { type: 'object', properties: { name: { type: 'string' }, pres
   slides: { type: 'array', items: { type: 'object', properties: { k: { type: 'integer' }, t: { type: 'string' }, h: { type: 'string' } }, required: ['k', 't', 'h'], additionalProperties: false } } },
   required: ['name', 'pres', 'slides'], additionalProperties: false };
 
-function i18nWork_(id, lang, by, redict) {
-  var t0 = Date.now(), src = i18nSrc_(id);
+/* 翻一支食譜的一個語言。
+   opt.auto（Google 排程自動翻，2026-11-05 經營者：「改 Google，花 API」，Mac 不用開）：
+     用 Sonnet（I18N_AUTO_MODEL）；只翻改到的頁（放行過的上一版裡字沒變的頁、名稱、保存方式直接沿用）；
+     翻完 AI 回讀（i18nReview_），有嚴重問題修一輪再回讀；硬檢查＋回讀都過 → 自動放行（放行人「AI 自動檢查」）；
+     沒過 → 存成待檢查，平板照舊顯示上一版。opt.deadline：這次執行最晚做到幾點（GAS 一次最多 6 分鐘）。
+   沒有 opt.auto（核准頁「🤖 翻譯這一份」）＝照舊整份重翻、待核准。 */
+var I18N_AUTO_MODEL = 'claude-sonnet-5-5';
+function i18nWork_(id, lang, by, redict, opt) {
+  opt = opt || {};
+  var t0 = Date.now(), src = i18nSrc_(id), dl = opt.deadline || (t0 + I18N_BUDGET + 60000);
   if (!src) throw fail_('還沒有這支食譜的原文（或上次讀取失敗）', 'nosrc');
-  var cred = i18nCred_();
+  var cred = i18nCred_(); if (opt.auto) cred.model = I18N_AUTO_MODEL;
   var dict = i18nEnsureDict_(i18nTerms_(src), lang, cred, t0, redict), D = i18nDictRows_();
   var guide = i18nGuideNames_()[i18nNameKey_(src.name)] || {}, local = guide[lang] || '';
-  var tt = i18nTitles_(src, lang, cred, local);   /* 標題先整批統一翻（同一個標題每頁同一個譯法） */
-  var sys = i18nSystem_(lang, src, D, local, tt), chunks = i18nChunks_(src), out = { name: '', pres: '', slides: [] }, model = cred.model;
+  var key = id + '|' + lang, rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), prev = rm.rows.filter(function (r) { return r.key === key; })[0];
+  var base = opt.auto && prev ? i18nLiveContent_(rm.sh, prev) : null, reuse = base ? i18nAlign_(base, src, true) : [];
+  (opt.redo || []).forEach(function (k) { if (reuse[k]) reuse[k] = null; });   /* 測試用：指定的頁強制重翻 */
+  var todo = []; src.slides.forEach(function (s, i) { if (!reuse[i]) todo.push(i); });
+  var nameKeep = !!(base && base.name && base.snk === i18nHash_(String(src.name || ''))), presKeep = !!(base && base.spk === i18nHash_(String(src.pres || '')));
+  var oldAt = base && base.slides && base.slides.length === src.slides.length ? base.slides : null;   /* 頁數沒變：同頁碼的舊譯文給 AI 當底 */
+  /* 標題：上一版用過的照用，只翻新出現的 */
+  var tt = {};
+  if (base && base.titles) src.slides.forEach(function (s) { if (s.t && base.titles[s.t]) tt[s.t] = base.titles[s.t]; });
+  var needT = todo.map(function (i) { return src.slides[i]; }).filter(function (s) { return s.t && !tt[s.t]; });
+  if (needT.length) { var nt = i18nTitles_({ name: src.name, slides: needT }, lang, cred, local); Object.keys(nt).forEach(function (k) { tt[k] = nt[k]; }); }
+  var sys = i18nSystem_(lang, src, D, local, tt), model = cred.model;
+  var out = { name: nameKeep ? String(base.name || '') : '', pres: presKeep ? String(base.pres || '') : '', slides: [] };
+  reuse.forEach(function (s, i) { if (s) out.slides[i] = { t: String(s.t || ''), h: String(s.h || '') }; });
+  var chunks = [], cur = [], n = 0;   /* 只把要翻的頁分段：每段最多 4 頁、5,000 字 */
+  todo.forEach(function (i) {
+    var len = (src.slides[i].t || '').length + (src.slides[i].h || '').length;
+    if (cur.length && (cur.length >= I18N_CHUNK || n + len > I18N_CHUNK_CHARS)) { chunks.push(cur); cur = []; n = 0; }
+    cur.push(i); n += len;
+  });
+  if (cur.length) chunks.push(cur);
+  var needName = !nameKeep && !local, needPres = !presKeep && !!src.pres;
+  if (!chunks.length && (needName || needPres)) chunks.push([]);
   var reqOf = function (ix, first, note) {
-    var u = { name: first ? src.name : '', pres: first ? src.pres : '', slides: ix.map(function (i) { return { k: i, t: src.slides[i].t, h: src.slides[i].h }; }) };
-    return i18nAiReq_(sys + (note ? '\n' + note : ''), 'Translate this JSON. Return the same structure.\n' + JSON.stringify(u), I18N_SCHEMA, cred);
+    var u = { name: first && needName ? src.name : '', pres: first && needPres ? src.pres : '', slides: ix.map(function (i) {
+      var o = { k: i, t: src.slides[i].t, h: src.slides[i].h }; if (oldAt && oldAt[i]) o.prev = { t: oldAt[i].t, h: oldAt[i].h }; return o; }) };
+    var hint = oldAt ? '\nSome pages have "prev": the approved translation of an older version of that page. Use it as the base: keep its wording where the English did not change, and only change what the English changed. Do not return "prev".' : '';
+    return i18nAiReq_(sys + hint + (note ? '\n' + note : ''), 'Translate this JSON. Return the same structure.\n' + JSON.stringify(u), I18N_SCHEMA, cred);
   };
   var take = function (r, ix) {
     if (!r.ok) return false; model = r.model || model;
-    if (r.json.name) out.name = r.json.name; if (r.json.pres) out.pres = r.json.pres;
+    if (r.json.name && needName) out.name = r.json.name; if (r.json.pres && needPres) out.pres = r.json.pres;
     (r.json.slides || []).forEach(function (s) { if (ix.indexOf(s.k) >= 0) out.slides[s.k] = { t: s.t, h: s.h }; });
     return true;
   };
+  var tlimit = opt.auto ? dl - 100000 : dl;   /* 自動模式留 100 秒給回讀 */
   var run = function (jobs) {   /* jobs: [{ix, first, note}] → 並行（每波 6 個）；整波逾時就改一個一個送 */
     for (var w = 0; w < jobs.length; w += I18N_WAVE) {
-      if (Date.now() - t0 > I18N_BUDGET) return false;
+      if (Date.now() > tlimit) return false;
       var wave = jobs.slice(w, w + I18N_WAVE), rs = null;
       try { rs = UrlFetchApp.fetchAll(wave.map(function (j) { return reqOf(j.ix, j.first, j.note); })); } catch (e) { rs = null; }
       wave.forEach(function (j, q) {
@@ -514,30 +547,97 @@ function i18nWork_(id, lang, by, redict) {
     return true;
   };
   run(chunks.map(function (ix, n) { return { ix: ix, first: n === 0 }; }));
-  /* 檢查 → 有問題的頁一頁一頁重翻一次（附上問題） */
-  var probs = function () { var p = {}; src.slides.forEach(function (s, i) { var b = i18nCheckSlide_(s, out.slides[i]); if (b.length) p[i] = b; }); return p; };
+  var okx = {};   /* 詞典譯名、在地品名自帶的數字不算多（同投遞口） */
+  i18nTerms_(src).forEach(function (x) { var tr = i18nLook_(D, x.kind, x.en, lang); if (tr) i18nNums_(tr).forEach(function (q) { okx[q] = 1; }); });
+  if (local) i18nNums_(local).forEach(function (q) { okx[q] = 1; });
+  var fixT = function (ix) { ix.forEach(function (i) { var s = src.slides[i]; if (out.slides[i] && tt[s.t]) out.slides[i].t = tt[s.t]; }); };
+  fixT(todo);
+  /* 檢查（只看這次翻的頁）→ 有問題的頁一頁一頁重翻一次（附上問題） */
+  var probs = function () { var p = {}; todo.forEach(function (i) { var b = i18nCheckSlide_(src.slides[i], out.slides[i], okx); if (b.length) p[i] = b; }); return p; };
   var P = probs(), redo = Object.keys(P).map(Number);
-  if (!out.name || (src.pres && !out.pres)) redo.unshift(-1);
-  if (redo.length && Date.now() - t0 < I18N_BUDGET) {
+  if ((needName && !out.name) || (needPres && !out.pres)) redo.unshift(-1);
+  if (redo.length && Date.now() < tlimit) {
     run(redo.map(function (i) {
       if (i < 0) return { ix: [], first: true };
       return { ix: [i], first: false, note: 'IMPORTANT: a previous translation of this page had problems: ' + P[i].join('; ') + '. Keep every number and [[IMG]] placeholder exactly.' };
     }));
-    P = probs();
+    fixT(todo); P = probs();
   }
   if (local) out.name = local + '｜' + src.name.split('｜').slice(1).join('｜');
-  src.slides.forEach(function (s, i) { if (out.slides[i] && tt[s.t]) out.slides[i].t = tt[s.t]; });
-  var bad = Object.keys(P), sec = Math.round((Date.now() - t0) / 1000);
+  var bad = Object.keys(P);
   var done = src.slides.every(function (s, i) { return !!out.slides[i]; }) && !!out.name;
   var status = !done ? 'fail' : bad.length ? 'review' : 'ok';
   var check = bad.map(function (i) { return '第' + (Number(i) + 1) + '頁：' + P[i].join('、'); }).join('；');
   if (!done) check = '沒翻完（' + src.slides.filter(function (s, i) { return !out.slides[i]; }).length + ' 頁沒有回來）' + (check ? '；' + check : '');
-  var key = id + '|' + lang, prev = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === key; })[0];
+  /* AI 回讀（只看這次翻的頁＋新翻的名稱／保存方式）；有嚴重問題 → 那幾頁帶著問題重翻一次 → 再回讀一次 */
+  var rv = null, rvNote = '';
+  if (opt.auto && status === 'ok') {
+    try {
+      rv = i18nReview_(src, out, todo, needName, needPres, lang, D, local, cred);
+      if (rv.block.length && Date.now() < dl - 70000) {
+        var bp = [], why = {};
+        rv.block.forEach(function (x) { var k = Number(x.k); if (!(k >= 0 && k < src.slides.length) || todo.indexOf(k) < 0) return; if (!why[k]) { why[k] = []; bp.push(k); } why[k].push(x.what); });
+        run(bp.map(function (i) { return { ix: [i], first: false, note: 'IMPORTANT: a reviewer found these problems on this page: ' + why[i].join('; ') + '. Fix them. Keep every number and [[IMG]] placeholder exactly.' }; }));
+        fixT(bp); P = probs();
+        if (Object.keys(P).length) { status = 'review'; check = Object.keys(P).map(function (i) { return '第' + (Number(i) + 1) + '頁：' + P[i].join('、'); }).join('；'); }
+        else { var rv2 = i18nReview_(src, out, bp, false, false, lang, D, local, cred), other = rv.block.filter(function (x) { return bp.indexOf(Number(x.k)) < 0; }); rv.block = other.concat(rv2.block); rv.fixed = bp.length; }
+      }
+      if (status === 'ok' && rv.block.length) { status = 'review'; check = '回讀：' + rv.block.map(function (x) { return (Number(x.k) >= 0 ? '第' + (Number(x.k) + 1) + '頁 ' : '名稱／保存 ') + x.what; }).join('；'); }
+      rvNote = '回讀 ' + (rv.block.length ? '有 ' + rv.block.length + ' 個問題' : '通過') + (rv.fixed ? '（修過 ' + rv.fixed + ' 頁）' : '') + (rv.minor ? '、小建議 ' + rv.minor : '');
+    } catch (e) { status = 'fail'; check = '回讀沒做完：' + errMsg_(e); }
+  }
+  var sec = Math.round((Date.now() - t0) / 1000);
   var tries = prev && prev.fp === src.fp ? Number(prev.tries || 0) + 1 : 1;
+  var approved = !!opt.auto && status === 'ok';
   var json = i18nJson_(src, { id: id, lang: lang, model: model, name: out.name, pres: out.pres, slides: out.slides, titles: tt });
-  i18nLock_(function () { i18nSaveRcp_({ key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_() }, json, false, ''); });
-  i18nLog_(by, 'work', id, lang, status, (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (check || '通過') , sec);
-  return { id: id, lang: lang, name: src.name, status: status, check: check, sec: sec, slides: src.slides.length, chunks: chunks.length, dict: dict, model: model };
+  var kept = false;
+  i18nLock_(function () { var meta = { key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_() }; i18nSaveRcp_(meta, json, approved, 'AI 自動檢查'); kept = /^L:/.test(meta.appr_fp); });
+  i18nLog_(by, 'work', id, lang, status, (opt.auto ? '翻 ' + todo.length + '／' + src.slides.length + ' 頁；' : '') + (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (rvNote ? rvNote + '；' : '') + (approved ? '自動放行；' : kept ? '平板照舊顯示上一版；' : '') + (check || '通過'), sec);
+  return { id: id, lang: lang, name: src.name, status: status, check: check, sec: sec, slides: src.slides.length, translated: todo.length, chunks: chunks.length, dict: dict, model: model, approved: approved, review: rvNote };
+}
+
+/* AI 回讀（2026-11-05，取代 Claude Code 的獨立回讀員；規則同 tools/i18n_claude/REVIEW.md）：回 {block:[{k,what}], minor} ；k＝頁碼（從 0），-1＝名稱或保存方式 */
+var I18N_REVIEW_SCHEMA = { type: 'object', properties: { issues: { type: 'array', items: { type: 'object', properties: { k: { type: 'integer' }, severity: { type: 'string', enum: ['block', 'minor'] }, what: { type: 'string' } }, required: ['k', 'severity', 'what'], additionalProperties: false } } }, required: ['issues'], additionalProperties: false };
+function i18nReview_(src, out, pages, withName, withPres, lang, D, local, cred) {
+  var gl = [], seen = {};
+  i18nTerms_(src).forEach(function (x) { var tr = i18nLook_(D, x.kind, x.en, lang); if (tr && !seen[x.en]) { seen[x.en] = 1; gl.push('- ' + x.en + ' → ' + tr); } });
+  var sys = ['You are the independent second reviewer of a translated in-store tablet recipe of a DIY baking studio in Taiwan (customers bake by themselves, following the tablet page by page).',
+    'You did not translate it. Compare each page\'s English source (en_t, en_h) with the ' + I18N_LABEL[lang] + ' translation (tr_t, tr_h). This is the last check before customers see it.',
+    'Report severity "block" only for problems that would make a customer do something wrong or not understand:',
+    '* a sentence missing or added; wrong meaning (verbs like mix / whisk / fold / pipe / bake / cool / refrigerate / freeze / sift, ingredient, tool, container, direction);',
+    '* a number, weight, time, temperature, speed, count or unit that differs from the English (Thai must use Arabic numerals 0-9);',
+    '* a safety warning (hot, gloves, knife, freezer) missing; an English or Chinese sentence left untranslated, garbled text, broken HTML;',
+    '* a "$" price turned into a local currency (đồng, 円, 원, บาท, rupiah); "10-dollar coin" means a Taiwan NT$10 coin, not US dollars;',
+    '* an ingredient/tool name that contradicts the glossary or the English (whipping cream is NOT custard; electronic mixer = stand mixer, not hand mixer; pomelo is not yuzu; batter is not flour).',
+    'Everything else (slightly stiff wording, could be more natural) is "minor". Do not report differences in style that keep the meaning.',
+    'k is the page number given. Use k = -1 for problems in the dessert name or storage advice. Return an empty list if there are no problems. Write "what" briefly in Traditional Chinese.',
+    'Glossary (English → ' + I18N_LABEL[lang] + '):', gl.join('\n') || '(none)'].join('\n');
+  var groups = [], cur = [], n = 0;
+  pages.forEach(function (i) {
+    var len = (src.slides[i].h || '').length + (out.slides[i] ? out.slides[i].h.length : 0);
+    if (cur.length && (cur.length >= 8 || n + len > 12000)) { groups.push(cur); cur = []; n = 0; }
+    cur.push(i); n += len;
+  });
+  if (cur.length) groups.push(cur);
+  if (!groups.length && (withName || withPres)) groups.push([]);
+  var reqs = groups.map(function (g, gi) {
+    var u = { pages: g.map(function (i) { var t = out.slides[i] || {}; return { k: i, en_t: src.slides[i].t, en_h: src.slides[i].h, tr_t: t.t || '', tr_h: t.h || '' }; }) };
+    if (gi === 0 && withName) { u.name_en = src.name; u.name_tr = out.name; }
+    if (gi === 0 && withPres) { u.pres_en = src.pres; u.pres_tr = out.pres; }
+    return i18nAiReq_(sys, 'Review this JSON.\n' + JSON.stringify(u), I18N_REVIEW_SCHEMA, cred);
+  });
+  var res = { block: [], minor: 0 };
+  for (var w = 0; w < reqs.length; w += I18N_WAVE) {
+    var wave = reqs.slice(w, w + I18N_WAVE), rs = null;
+    try { rs = UrlFetchApp.fetchAll(wave); } catch (e) { rs = null; }
+    wave.forEach(function (rq, q) {
+      var r = rs ? i18nAiRes_(rs[q], cred) : null;
+      if (!r || !r.ok) { try { r = i18nAiRes_(UrlFetchApp.fetch(I18N_AI_URL, rq), cred); } catch (e2) { r = { ok: false, err: errMsg_(e2) }; } }
+      if (!r.ok) throw fail_('回讀失敗：' + r.err, 'ai');
+      (r.json.issues || []).forEach(function (x) { if (x.severity === 'block') res.block.push({ k: Number(x.k), what: String(x.what || '').slice(0, 200) }); else res.minor++; });
+    });
+  }
+  return res;
 }
 
 function i18nLive_(r, fp) { return !!r && r.fp === fp && r.status !== 'fail' && r.appr_fp === fp && !!r.appr_by; }   /* 這版翻譯已核准（跟現在的原文同一版） */
@@ -683,12 +783,60 @@ function i18nDaily() {
   try { ref = i18nRefresh_(false, t0 + 180000); } catch (e) { i18nLog_('排程', 'refresh', '', '', 'error', errMsg_(e)); return; }
   i18nLog_('排程', 'refresh', '', '', 'ok', '檢查 ' + ref.checked + '、重抓 ' + ref.fetched + '、內容有變 ' + ref.changed + '、下架 ' + ref.gone + (ref.errors.length ? '；' + ref.errors.join('；') : ''));
   if (i18nProp_('I18N_AUTO') !== '1') return;
-  while (Date.now() - t0 < 300000) {
-    var pend = i18nPending_(); if (!pend.length) return;
-    var x = pend[0], key = x.id + '|' + x.lang; if (!i18nClaim_(key)) return;
-    try { i18nWork_(x.id, x.lang, '排程'); } catch (e) { i18nLog_('排程', 'work', x.id, x.lang, 'error', errMsg_(e)); } finally { i18nRelease_(key); }
-  }
+  i18nAutoStart_();
 }
+/* ---------------- Google 排程自動翻（2026-11-05 經營者：「改 Google，花 API」，Mac 不用開） ----------------
+   i18nDaily（每天 06:30）更新原文後 → i18nAutoStart_ 替 5 個語言各排一個「1 分鐘後跑一次」的排程（i18nAuto_ja…）；
+   每個語言一次只做一組（詞典每語言共用），一次執行最多 6 分鐘：60 秒內才開新的一組，還有待翻就再排下一次，直到全部做完。
+   同一語言一天最多跑 I18N_AUTO_MAX 次（保險絲：API 一直失敗時不會無限重排、無限花錢）。 */
+var I18N_AUTO_MAX = 150;
+function i18nDropTrig_(h) { ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === h) ScriptApp.deleteTrigger(t); }); }
+function i18nAutoStart_() {
+  var pend = i18nPending_(), n = 0;
+  I18N_LANGS.forEach(function (l, i) {
+    if (!pend.some(function (x) { return x.lang === l; })) return;
+    var h = 'i18nAuto_' + l; i18nDropTrig_(h); ScriptApp.newTrigger(h).timeBased().after(20000 + i * 5000).create(); n++;
+  });
+  i18nLog_('排程', 'auto-start', '', '', 'ok', '待翻 ' + pend.length + ' 組；開工 ' + n + ' 個語言');
+  return { pending: pend.length, langs: n };
+}
+function i18nAutoLang_(lang) {
+  var t0 = Date.now(), h = 'i18nAuto_' + lang, day = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd'), pk = 'I18N_RUNS_' + lang;
+  i18nDropTrig_(h);
+  if (i18nProp_('I18N_AUTO') !== '1') return;
+  var runs = i18nProp_(pk).split('|'); runs = runs[0] === day ? Number(runs[1] || 0) + 1 : 1; i18nProp_(pk, day + '|' + runs);
+  if (runs > I18N_AUTO_MAX) { i18nLog_('排程', 'auto', '', lang, 'error', '今天已跑 ' + I18N_AUTO_MAX + ' 次，先停（保險絲）'); return; }
+  while (Date.now() - t0 < 60000) {
+    var pend = i18nPending_().filter(function (x) { return x.lang === lang; }), x = null;
+    for (var i = 0; i < pend.length; i++) { if (i18nClaim_(pend[i].id + '|' + lang)) { x = pend[i]; break; } }
+    if (!x) break;
+    try { i18nWork_(x.id, lang, '排程', false, { auto: true, deadline: t0 + 330000 }); }
+    catch (e) { i18nLog_('排程', 'work', x.id, lang, 'error', errMsg_(e)); }
+    finally { i18nRelease_(x.id + '|' + lang); }
+  }
+  if (i18nPending_().some(function (x) { return x.lang === lang; })) ScriptApp.newTrigger(h).timeBased().after(60000).create();
+}
+function i18nAuto_ja() { i18nAutoLang_('ja'); }
+function i18nAuto_ko() { i18nAutoLang_('ko'); }
+function i18nAuto_vi() { i18nAutoLang_('vi'); }
+function i18nAuto_id() { i18nAutoLang_('id'); }
+function i18nAuto_th() { i18nAutoLang_('th'); }
+/* 開關（投遞通行碼）：on:1 打開自動翻並立刻開工；on:0 關掉。回目前排程 */
+function i18nAutoSet_(p) {
+  i18nWriteKey_(p);
+  if (p.on != null) i18nProp_('I18N_AUTO', Number(p.on) ? '1' : '0');
+  i18nEnsureTrigger_();
+  var st = Number(p.on) && p.start ? i18nAutoStart_() : null;
+  if (p.test && p.test.id && p.test.lang) {   /* 實測一組：指定的頁強制重翻＋回讀（花一點 API）；同自動排程的流程與放行規則 */
+    var tid = String(p.test.id).toLowerCase(), tl = String(p.test.lang), tk = tid + '|' + tl;
+    if (!i18nClaim_(tk)) throw fail_('這組有人在做', 'busy');
+    try { st = i18nWork_(tid, tl, 'Claude Code 實測', false, { auto: true, deadline: Date.now() + 300000, redo: (p.test.pages || []).map(Number) }); } finally { i18nRelease_(tk); }
+  }
+  var trig = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); }).filter(function (f) { return /^i18n/.test(f); });
+  return { data: { auto: i18nProp_('I18N_AUTO') === '1', start: st, triggers: trig, pending: i18nPending_().length } };
+}
+ACTIONS.i18nAutoSet = function (p, a) { return i18nAutoSet_(p, a); };
+NOAUTH.i18nAutoSet = 1; SELFLOCK.i18nAutoSet = 1;
 function i18nStatus_() {
   var src = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows, rc = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows, cnt = {}, review = [], fail = [], wait = [];
   var nm = {}; src.forEach(function (s) { nm[s.id] = s.name; });
