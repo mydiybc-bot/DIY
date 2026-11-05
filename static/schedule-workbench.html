@@ -324,6 +324,8 @@ function apply(j,first){
   $('bonusBtn').disabled=!j.bonus;$('revBtn').disabled=!j.schedule;$('bonusAllBtn').classList.toggle('hide',!(auth&&auth.as==='hq'));
   if(running&&!pollT)pollT=setInterval(function(){refresh()},3000);
   if(!running&&pollT){clearInterval(pollT);pollT=null}
+  /* 2026-11-05 經營者：別人（別的分頁）的 AI 還在跑時送出被擋 → 這句先排隊，跑完自動送出（店長改了字就不自動送） */
+  if(!running&&queued){var q=queued;queued='';if($('chatIn').value.trim()===q){$('chatMsg').textContent='';sendChat()}else $('chatMsg').textContent=''}
   return true;
 }
 function renderFiles(){
@@ -639,9 +641,12 @@ $('expBtn').onclick=function(){
   }).catch(function(e){alert(e.message)})};
 
 /* ── 對話框：輸入框只建一次，送出後只清空字、不重建 ── */
+var queued='',queueTries=0;
 function sendChat(){var t=$('chatIn').value.trim();if(!t||$('chatBtn').disabled)return;
   $('chatBtn').disabled=true;$('chatMsg').textContent='';
-  pendingText=t;post('chat',{text:t}).then(function(j){$('chatIn').value='';apply(j)}).catch(function(e){$('chatBtn').disabled=false;$('chatMsg').textContent='⚠ '+e.message})}
+  pendingText=t;post('chat',{text:t}).then(function(j){$('chatIn').value='';queueTries=0;apply(j)}).catch(function(e){pendingText='';
+    if(/還在處理/.test(e.message)&&queueTries<5){queueTries++;queued=t;$('chatMsg').textContent='⏳ 前一個 AI 動作還沒跑完（可能是別的分頁或其他人送的），跑完會自動幫你送出這句';refresh();return}
+    queueTries=0;$('chatBtn').disabled=false;$('chatMsg').textContent='⚠ '+e.message})}
 $('chatBtn').onclick=sendChat;
 $('chatIn').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!(window.__ime&&__ime.on)){e.preventDefault();sendChat()}});
 
