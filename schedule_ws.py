@@ -1831,9 +1831,25 @@ def _chat_system(st):
             "\n- 可用崗位：" + "、".join(st["template"]["info"]["positions"]))
 
 
+def marks_text(st):
+    """每句話都附上設定表的指休／特休／可上日（2026-11-05 模擬：AI 把格子上的 [指休] 標籤當成設定表指休，之前答錯後還會照舊說法）"""
+    ms = mset_view(st)
+    out = []
+    for e in st["template"]["info"]["emps"]:
+        mk = ms["marks"].get(e["id"]) or {}
+        parts = [f"{k} " + "、".join(str(d) for d in sorted(int(d) for d, v in mk.items() if v == k))
+                 for k in MARKS if any(v == k for v in mk.values())]
+        out.append(f"{e['name']}：" + ("；".join(parts) if parts else "沒有"))
+    hol = sorted(_hol_days(ms))
+    if hol:
+        out.append("當假日的日子：" + "、".join(map(str, hol)))
+    out.append("（班表格子開頭的 [指休] 等是 104 標籤，不是設定表；之前的回覆若說法不同，以這裡為準）")
+    return "\n".join(out)
+
+
 def _chat_turn(st, text, model, k, tag=" "):
     """跑一句對話（可能多次呼叫工具）；回傳 (回覆, 改了幾格)"""
-    st["api_messages"].append({"role": "user", "content": f"（目前班表）\n{table_text(st)}\n\n（目前檢查）\n{check_text(st['check'])}\n\n店長：{text}"})
+    st["api_messages"].append({"role": "user", "content": f"（本月設定的指休／特休／可上，以這裡為準）\n{marks_text(st)}\n\n（目前班表）\n{table_text(st)}\n\n（目前檢查）\n{check_text(st['check'])}\n\n店長：{text}"})
     changed = 0
     for i in range(8):
         _job(k, status="running", step=f"AI{tag}正在想（第 {i + 1} 輪）…" if i else f"AI{tag}正在想…")
