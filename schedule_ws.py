@@ -1717,7 +1717,7 @@ def _chat_system(st):
             "\n- 可用崗位：" + "、".join(st["template"]["info"]["positions"]))
 
 
-def _chat_turn(st, text, model, k, tag=""):
+def _chat_turn(st, text, model, k, tag=" "):
     """跑一句對話（可能多次呼叫工具）；回傳 (回覆, 改了幾格)"""
     st["api_messages"].append({"role": "user", "content": f"（目前班表）\n{table_text(st)}\n\n（目前檢查）\n{check_text(st['check'])}\n\n店長：{text}"})
     changed = 0
