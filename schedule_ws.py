@@ -1136,6 +1136,53 @@ def fill(st, schedule=None):
 
 # ───────────────────────── 檢查 ─────────────────────────
 
+# 不算現場人力的時段標籤／整天標籤（schedule_rules.md：開會、內訓、事務不佔現場班；特休、補休照常排班但人不在）
+# 2026-11-05 經營者：謝雨庭 12/4、12/11 排事務班，早班沒人，檢查卻沒列出缺口
+NOFLOOR_SEG_TAGS = {"事務班", "交流會議", "區會", "台北內訓課", "經管會"}
+NOFLOOR_DAY_TAGS = {"特休", "補休"}
+
+
+def _coverage(info, parsed, ext, names):
+    """每天需要幾人／哪些班有沒有人顧（只算在本店現場的時段）。回傳 (errors, warns)"""
+    errors, warns = [], []
+    demand = ext.get("demand") or {}
+    shifts = ext.get("shifts") or {}
+    for d in info["days"]:
+        need = demand.get(str(d["d"])) or []
+        if not need:
+            continue
+        working, away = [], []
+        for eid in parsed:
+            c = parsed[eid][d["d"]]
+            here = [s for s in c["segs"] if not _elsewhere(s[3], info["title"])]
+            if not here:
+                continue
+            why = next((t for t in NOFLOOR_DAY_TAGS if t in c["dtag"]), "")
+            floor = [] if why else [s for s in here if s[2] not in NOFLOOR_SEG_TAGS]
+            if floor:
+                working.append(floor)
+            else:
+                away.append(f"{names.get(eid, eid)}{why or next((s[2] for s in here if s[2]), '')}")
+        note = f"（{'、'.join(away)}不算現場人力）" if away else ""
+        if len(working) < len(need):
+            errors.append(f"{d['label']} 需要 {len(need)} 人（{'、'.join(need)}），只排了 {len(working)} 人{note}")
+            continue
+        free = list(working)
+        miss = []
+        for nm in need:
+            sh = shifts.get(nm)
+            if not sh:
+                continue
+            hit = next((w for w in free if w[0][0] == sh[0][0]), None)
+            if hit:
+                free.remove(hit)
+            else:
+                miss.append(nm)
+        if miss:
+            warns.append(f"{d['label']} 可能缺{'、'.join(miss)}（沒有人在那個時間上班）{note}")
+    return errors, warns
+
+
 def run_check(st, schedule=None):
     """檢查程式：104 格式＋勞基法（check_104）＋本店需求人數／正職時數／晚接早。回傳 dict"""
     schedule = schedule if schedule is not None else st["schedule"]
@@ -1185,35 +1232,11 @@ def run_check(st, schedule=None):
                           "hours": round(tot, 2), "regular": round(tot - ot, 2), "ot": round(ot, 2),
                           "例假": cnt("例假日"), "休息": cnt("休息日"), "國定": cnt("國定假日"), "特休": cnt("特休")})
     # 本店規則
-    demand = ext.get("demand") or {}
+    e2, w2 = _coverage(info, parsed, ext, names)
+    errors += e2
+    warns += w2
     late_starts = set(ext.get("late_shift_ends") or [])
     early_starts = set(ext.get("early_shift_starts") or [])
-    for d in info["days"]:
-        need = demand.get(str(d["d"])) or []
-        if not need:
-            continue
-        working = []
-        for eid in parsed:
-            c = parsed[eid][d["d"]]
-            here = [s for s in c["segs"] if not _elsewhere(s[3], info["title"])]
-            if here:
-                working.append(here)
-        if len(working) < len(need):
-            errors.append(f"{d['label']} 需要 {len(need)} 人（{'、'.join(need)}），只排了 {len(working)} 人")
-            continue
-        free = list(working)
-        miss = []
-        for nm in need:
-            sh = shifts.get(nm)
-            if not sh:
-                continue
-            hit = next((w for w in free if w[0][0] == sh[0][0]), None)
-            if hit:
-                free.remove(hit)
-            else:
-                miss.append(nm)
-        if miss:
-            warns.append(f"{d['label']} 可能缺{'、'.join(miss)}（沒有人在那個時間上班）")
     for emp in ext.get("employees") or []:
         tgt = emp.get("target_hours")
         h = next((x for x in hours if x["id"] == emp.get("id")), None)
