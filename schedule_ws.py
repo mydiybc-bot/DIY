@@ -1266,8 +1266,9 @@ def _coverage(info, parsed, ext, names):
     return errors, warns
 
 
-def run_check(st, schedule=None):
-    """檢查程式：104 格式＋勞基法（check_104）＋本店需求人數／正職時數／晚接早。回傳 dict"""
+def run_check(st, schedule=None, guests=None):
+    """檢查程式：104 格式＋勞基法（check_104）＋本店需求人數／正職時數／晚接早。回傳 dict
+    guests：同區外店調來本店的夥伴（_guest_cells）；None＝讀同區各店存檔（2026-11-06 區域一起排）"""
     schedule = schedule if schedule is not None else st["schedule"]
     ext = _ext(st)
     shifts = ext.get("shifts") or {}
@@ -1316,8 +1317,14 @@ def run_check(st, schedule=None):
                           "例假": cnt("例假日"), "休息": cnt("休息日"), "國定": cnt("國定假日"),
                           # 特休照排班＋當日標籤「特休」（104 寫法），類型欄是空的 → 也要算（2026-11-05 模擬：特休欄一直是 0）
                           "特休": sum(1 for t, _, tg in inf if t == "特休" or "特休" in str(tg or ""))})
-    # 本店規則
-    e2, w2 = _coverage(info, parsed, ext, names)
+    # 本店規則（現場人力含同區外店調來支援的人）
+    if guests is None:
+        guests = _guest_cells(st["store"], st["ym"])
+    p2, n2 = dict(parsed), dict(names)
+    for gk, g in (guests or {}).items():
+        p2[gk] = {d["d"]: g["days"].get(d["d"], {"type": "", "segs": [], "dtag": ""}) for d in info["days"]}
+        n2[gk] = g["name"]
+    e2, w2 = _coverage(info, p2, ext, n2)
     errors += e2
     warns += w2
     late_starts = set(ext.get("late_shift_ends") or [])
@@ -1825,6 +1832,230 @@ def _draft_worker(store, ym):
         _job(k, status="done", step="初稿完成")
     except Exception as ex:   # noqa: BLE001 — 背景工作要把錯誤留給畫面看
         _job(k, status="error", step=f"排班失敗：{type(ex).__name__}: {str(ex)[:300]}")
+
+
+# ───────────────────────── 區域一起排（2026-11-06） ─────────────────────────
+# 經營者：魔導師把同城的店一起排，自己店優先，缺人／多人才調店。流程：20 日前各店填好「本月設定」→
+# 魔導師在「🗺 區域排班」按排初稿（A 正職優先、B 兼職優先兩個方案，整區一起比）→ 採用一個方案（一次寫進整區每家店的班表）→
+# 店長再看自己店、微調、下載 104 匯入檔。調去別店的那天寫在夥伴自己店的班表（每段 @支援#那家店，104 規則），
+# 被支援店的檢查會把外店調來的人算進現場人力（_guest_cells）。
+REGIONS = {"台中": [1, 2], "台北": [3, 4, 7, 8, 11], "桃園": [9, 10]}
+REGION_FILE = {"台中": "tc", "台北": "tp", "桃園": "ty"}
+STORE_POS = {v: k for k, v in POS_STORE.items()}
+
+
+def _region_of(store):
+    return next((r for r, ids in REGIONS.items() if int(store) in ids), None)
+
+
+def _rg_path(rg, ym):
+    return _dir() / f"rg_{REGION_FILE[rg]}_{ym}.json"
+
+
+def _guest_cells(store, ym, override=None):
+    """同區別家店調來本店的夥伴 → {"外店:店號:工號": {"name", "days": {日: 格子（只留在本店的段）}}}
+    override＝{店號: 班表}：還沒採用的區域方案用（不讀存檔）"""
+    rg = _region_of(store)
+    if not rg:
+        return {}
+    out = {}
+    for s in REGIONS[rg]:
+        if s == int(store):
+            continue
+        p = _dir() / f"{_key(s, ym)}.json"
+        if not p.exists():
+            continue
+        try:
+            st2 = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        tpl = st2.get("template")
+        sched = (override or {}).get(s) if override and s in override else st2.get("schedule")
+        if not tpl or not sched:
+            continue
+        shifts = (_ext(st2) or {}).get("shifts") or {}
+        dtypes = set(tpl["info"]["dayTypes"])
+        for e in tpl["info"]["emps"]:
+            for d, v in (sched.get(e["id"]) or {}).items():
+                if not v or "#" not in str(v):
+                    continue
+                try:
+                    c = parse_cell(v, shifts, dtypes)
+                except ValueError:
+                    continue
+                here = [[a, b, t, ""] for a, b, t, pos in c["segs"] if _pos_store(pos) == int(store)]
+                if here:
+                    g = out.setdefault(f"外店:{s}:{e['id']}", {"name": f"{e['name']}（{_sname(s)}支援）", "days": {}})
+                    g["days"][int(d)] = {"type": "", "segs": here, "dtag": ""}
+    return out
+
+
+def _region_ready(rg, ym):
+    """整區每家店能不能排：要有 104 範本、店別基本設定的班別、本月設定的營收預估"""
+    out = []
+    for s in REGIONS[rg]:
+        st = _load(s, ym)
+        cfg = cfg_load(s)
+        why = "" if st.get("template") else "還沒有 104 範本"
+        if not why and not form_ready(st, cfg):
+            why = "店別基本設定或本月設定還沒填好" if cfg.get("shifts") else "還沒填店別基本設定（班別、每天幾人）"
+        out.append({"store": s, "name": _sname(s), "ready": not why, "why": why,
+                    "emps": len(((st.get("template") or {}).get("info") or {}).get("emps") or []),
+                    "region": (st.get("region") or {}).get("at")})
+    return out
+
+
+def _region_worker(rg, ym):
+    jk = f"rg:{rg}:{ym}"
+    try:
+        stores = REGIONS[rg]
+        sts = {s: _load(s, ym) for s in stores}
+        cfgs = {s: cfg_load(s) for s in stores}
+        mss = {s: mset_view(sts[s]) for s in stores}
+        t0 = time.time()
+        _job(jk, status="running", step="AI 正在讀各店的備註和店規（約 10～30 秒）")
+        rules, bad = {}, {}
+
+        def read(s):
+            if not _note_texts(sts[s], cfgs[s], mss[s]):
+                return s, [], []
+            try:
+                r_, b_ = _note_rules(sts[s], cfgs[s], mss[s])
+            except Exception as ex:   # noqa: BLE001 — AI 連不上就不套備註，照樣排
+                r_, b_ = [], [f"AI 讀備註失敗（{type(ex).__name__}），這次備註沒有套用"]
+            return s, r_, b_
+        ths = []
+        res_ai = {}
+
+        def run(s):
+            res_ai[s] = read(s)
+        for s in stores:
+            th = threading.Thread(target=run, args=(s,), daemon=True)
+            th.start()
+            ths.append(th)
+        for th in ths:
+            th.join()
+        for s in stores:
+            _, rules[s], bad[s] = res_ai[s]
+        secs_ai = time.time() - t0
+        y, mth = int(ym[:4]), int(ym[4:])
+        units, fixed = [], {}
+        for s in stores:
+            info = sts[s]["template"]["info"]
+            shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfgs[s]["shifts"]}
+            dtypes = set(info["dayTypes"])
+            fx = {}
+            for r in rules[s]:
+                if r["type"] == "fixed_cell":
+                    c = parse_cell(r["cell"], shmap, dtypes)
+                    fx[(r["emp"], r["day"])] = (r["cell"], int(round(cell_hours(c) * 60)))
+            fixed[s] = fx
+            units.append({"store": s, "pos": STORE_POS.get(s, ""), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules[s],
+                          "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
+                          "prev_tail": _prev_tail(s, ym), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
+        plans = {}
+        for i, mode in enumerate(("ft", "pt")):
+            _job(jk, status="running", step=f"程式正在排整區（{PLAN_NAME[mode]}，{i + 1}／2，約 1～2 分鐘）")
+            r = schedule_solver.solve_multi(units, mode=mode, lend=True, time_limit=90)
+            for u in r["stores"]:
+                for (eid, d), (cell, _) in fixed[u["store"]].items():
+                    u["schedule"][eid][str(d)] = cell
+            plans[mode] = r
+        _job(jk, status="running", step="檢查各店班表")
+        out = {"region": rg, "ym": ym, "at": dt.datetime.now().isoformat(timespec="seconds"), "secs_ai": round(secs_ai, 1),
+               "stores": stores, "plans": {}, "picked": None}
+        sname = {s: _sname(s) for s in stores}
+        for mode, r in plans.items():
+            override = {u["store"]: u["schedule"] for u in r["stores"]}
+            P = {"stats": r["stats"], "moves": [dict(mv, from_name=sname[mv["store"]], to_name=sname[mv["to"]]) for mv in r["moves"]], "stores": {}}
+            for u in r["stores"]:
+                s = u["store"]
+                ext = _ext_from_form(sts[s], cfgs[s])
+                ext["demand"] = {str(d): [n for n, c in u["need"][d].items() for _ in range(c)] for d in u["need"]}
+                ext["notes"] = [_rule_text(x, {e["id"]: e["name"] for e in sts[s]["template"]["info"]["emps"]}) for x in rules[s]] + bad[s]
+                ext["from_form"] = False
+                tmp = dict(sts[s], ext=ext, schedule=u["schedule"])
+                chk = run_check(tmp, guests=_guest_cells(s, ym, override))
+                rep = _solver_report(tmp, dict(u, stats=r["stats"]), rules[s], bad[s], chk, secs_ai)
+                outs = [mv for mv in P["moves"] if mv["store"] == s]
+                ins = [mv for mv in P["moves"] if mv["to"] == s]
+                if outs or ins:
+                    rep += "\n\n**區域調店（魔導師整區一起排）**"
+                    rep += "".join(f"\n- {mv['day']} 號 {mv['name']} 去{mv['to_name']}支援（{mv['shift']}）" for mv in outs)
+                    rep += "".join(f"\n- {mv['day']} 號 {mv['from_name']}的 {mv['name']} 來本店支援（{mv['shift']}）" for mv in ins)
+                need = [sum(u["need"][d["d"]].values()) for d in sts[s]["template"]["info"]["days"]]
+                got = [0] * len(need)
+                for (eid, row) in u["schedule"].items():
+                    for i2, d in enumerate(sts[s]["template"]["info"]["days"]):
+                        v = row.get(str(d["d"])) or ""
+                        if v and "@支援#" not in v and v.split("]")[-1] not in ("例假日", "休息日", "國定假日") and not v.startswith("[特休]"):
+                            got[i2] += 1
+                for mv in ins:
+                    got[[d["d"] for d in sts[s]["template"]["info"]["days"]].index(mv["day"])] += 1
+                P["stores"][str(s)] = {"schedule": u["schedule"], "ext": ext, "check": chk, "report": rep, "need": need, "got": got,
+                                       "summary": _plan_summary(u, chk), "names": {e["id"]: e["name"] for e in sts[s]["template"]["info"]["emps"]}}
+            out["plans"][mode] = P
+        atomic_write_json(_rg_path(rg, ym), out)
+        _job(jk, status="done", step="整區初稿完成")
+    except Exception as ex:   # noqa: BLE001 — 背景工作要把錯誤留給畫面看
+        _job(jk, status="error", step=f"區域排班失敗：{type(ex).__name__}: {str(ex)[:300]}")
+
+
+def _region_public(rg, ym):
+    p = _rg_path(rg, ym)
+    data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    with _glock:
+        job = dict(_jobs.get(f"rg:{rg}:{ym}") or {})
+    if job.get("status") == "running":
+        job["secs"] = int(time.time() - job.get("t0", time.time()))
+    days = None
+    for s in REGIONS[rg]:
+        st = _load(s, ym)
+        if st.get("template"):
+            days = st["template"]["info"]["days"]
+            break
+    plans = {}
+    for mode, P in ((data or {}).get("plans") or {}).items():
+        plans[mode] = {"name": PLAN_NAME[mode], "desc": PLAN_DESC[mode], "stats": P["stats"], "moves": P["moves"],
+                       "stores": {k: {"schedule": v["schedule"], "need": v["need"], "got": v["got"], "summary": v["summary"],
+                                      "names": v["names"], "ok": v["check"]["ok"], "errors": v["check"]["errors"][:20],
+                                      "warns": len(v["check"]["warns"])} for k, v in P["stores"].items()}}
+    return {"ok": True, "region": rg, "ym": ym, "regions": REGIONS, "stores": _region_ready(rg, ym), "days": days, "job": job,
+            "plans": plans, "at": (data or {}).get("at"), "picked": (data or {}).get("picked"),
+            "storeNames": {s: _sname(s) for s in REGIONS[rg]}}
+
+
+def _region_pick(rg, ym, mode):
+    p = _rg_path(rg, ym)
+    if not p.exists():
+        return 400, {"ok": False, "error": "還沒有整區初稿，請先按「整區排初稿」"}
+    data = json.loads(p.read_text(encoding="utf-8"))
+    P = (data.get("plans") or {}).get(mode)
+    if not P:
+        return 400, {"ok": False, "error": "沒有這個方案"}
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    for s in REGIONS[rg]:          # 先把整區的班表都寫進去，再逐店重算檢查（外店支援要讀到別家新的班表）
+        x = P["stores"].get(str(s))
+        if not x:
+            continue
+        with _lock(_key(s, ym)):
+            st = _load(s, ym)
+            if st.get("schedule"):
+                st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "區域排班前"}]
+            st.update(schedule=copy.deepcopy(x["schedule"]), ext=x["ext"], report=x["report"], plans={}, plan=None,
+                      region={"name": rg, "mode": mode, "at": now})
+            st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(),
+                                                    "text": f"魔導師用「{PLAN_NAME[mode]}」排好整區（{rg}）的班表，本店班表已換成這一版（調店的格子標「支援＋店名」）。要改哪裡直接跟我說；換錯可按「復原上一步」。"}]
+            _save(st)
+    for s in REGIONS[rg]:
+        with _lock(_key(s, ym)):
+            st = _load(s, ym)
+            if st.get("template") and st.get("schedule"):
+                st["check"] = run_check(st)
+                _save(st)
+    data["picked"] = {"mode": mode, "at": now}
+    atomic_write_json(p, data)
+    return 200, _region_public(rg, ym)
 
 
 CHAT_RULES = """
@@ -2585,6 +2816,28 @@ def handle(path, body):
                         "fetched": x.get("fetched"), "diff": x.get("diff"),
                         "template": (s.get("template") or {}).get("source")})
         return 200, {"ok": True, "items": out}
+    if act in ("region_state", "region_draft", "region_pick"):   # 🗺 區域排班（2026-11-06；目前總部登入可用，魔導師登入待權限中心加）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部／魔導師可以用區域排班"}
+        rg, ym = str(body.get("region") or ""), str(body.get("ym") or "")
+        if rg not in REGIONS or not re.fullmatch(r"20\d{2}(0[1-9]|1[0-2])", ym):
+            return 400, {"ok": False, "error": "區域或月份不對"}
+        jk = f"rg:{rg}:{ym}"
+        with _glock:
+            running = (_jobs.get(jk) or {}).get("status") == "running"
+        if act == "region_state":
+            return 200, _region_public(rg, ym)
+        if running:
+            return 409, {"ok": False, "error": "整區還在排，請等它跑完"}
+        if act == "region_draft":
+            nr = [x for x in _region_ready(rg, ym) if not x["ready"]]
+            if nr:
+                return 400, {"ok": False, "error": "這幾家店還不能排：" + "；".join(f"{x['name']}（{x['why']}）" for x in nr)}
+            _job(jk, status="running", step="準備整區排班…")
+            threading.Thread(target=_region_worker, args=(rg, ym), daemon=True).start()
+            return 200, _region_public(rg, ym)
+        m = str(body.get("plan") or "")
+        return _region_pick(rg, ym, m)
     try:
         store = int(body.get("store") if str(who) == "hq" else who)
     except (TypeError, ValueError):

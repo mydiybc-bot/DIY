@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🗺 區域排班</title>
+<!-- 2026-11-06 新建（經營者：魔導師把同城的店一起排，自己店優先，缺人／多人才調店；20 日前各店填好本月設定，21 日魔導師整區排）。
+     後端 schedule_ws.py 的 region_state／region_draft／region_pick（排班程式 schedule_solver.solve_multi）。
+     登入沿用門市排班工作台（localStorage sw_auth_v1，目前只有體驗中心身分可用；魔導師各區登入待權限中心加）。
+     本頁沒有打字的輸入框（只有下拉選單與按鈕），IME-GUARD 照全站規定放著。 -->
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--ink:#2b2b2b;--mute:#6b6b6b;--line:#e3ded3;--acc:#c0622f;--acc2:#8a4a25;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828;
+  --wk:#fbf3e6;--short:#fbe3dd;--extra:#e3eefc;--fine:#f1efe9}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,"PingFang TC","Microsoft JhengHei",sans-serif}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line)}
+header a{color:var(--acc2);text-decoration:none;font-weight:600}
+header h1{font-size:18px;margin:0}
+.sp{flex:1}
+.dsb{padding:6px 16px;font-size:12px;color:var(--mute);background:#fffaf2;border-bottom:1px solid var(--line)}
+main{max-width:1400px;margin:0 auto;padding:12px 16px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0}
+h2{font-size:16px;margin:0 0 8px}
+select,.btn{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:#fff}
+.btn{background:var(--acc);color:#fff;border-color:var(--acc);cursor:pointer;font-weight:600}
+.btn.ghost{background:#fff;color:var(--acc2)}
+.btn.arm{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.mute{color:var(--mute)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.job{margin-top:10px;padding:8px 12px;border-radius:8px;background:#fff7e6;border:1px solid #f1d9a8}
+.err{color:var(--bad)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse}
+table.t th,table.t td{border-bottom:1px solid var(--line);padding:5px 10px;text-align:left;white-space:nowrap;font-size:13px}
+table.t th{color:var(--mute);font-weight:600;background:#faf7f1}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px}
+.tag.ok{background:#e6f3e7;color:var(--ok)}.tag.bad{background:#fdeaea;color:var(--bad)}.tag.warn{background:#fff3e0;color:var(--warn)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}
+.tab{padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;cursor:pointer;font:inherit}
+.tab.on{background:var(--acc2);border-color:var(--acc2);color:#fff}
+table.strip{border-collapse:separate;border-spacing:2px;font-size:12px}
+table.strip th{font-weight:400;color:var(--mute);min-width:30px;text-align:center}
+table.strip th.wk{color:var(--ink);font-weight:700}
+table.strip td{text-align:center;border-radius:4px;padding:3px 0;background:var(--fine);font-variant-numeric:tabular-nums}
+table.strip td.lb{background:none;text-align:left;color:var(--mute);padding-right:8px;white-space:nowrap}
+table.strip td.s{background:var(--short);color:var(--bad);font-weight:700}
+table.strip td.x{background:var(--extra);color:#1b4d8a;font-weight:700}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin:4px 0}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:4px}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <a href="/static/schedule-workbench.html">⬅ 回排班工作台</a>
+  <h1>🗺 區域排班</h1>
+  <span class="sp"></span>
+  <select id="rgSel"></select>
+  <select id="ymSel"></select>
+</header>
+<div class="dsb" id="dsb">🕒 尚未載入</div>
+
+<main>
+  <div class="card hide" id="needLogin">
+    <h2>請先登入</h2>
+    <div>區域排班沿用「門市排班工作台」的登入：請先到 <a href="/static/schedule-workbench.html">門市排班工作台</a> 用「🏢 體驗中心」登入，再回到這一頁。</div>
+  </div>
+
+  <div id="app" class="hide">
+    <div class="card">
+      <h2>① 各店準備好了嗎</h2>
+      <div class="mute" style="font-size:13px">每家店要先有 104 範本，並填好「店別基本設定」（班別、每天幾人）與「本月設定」（指休、特休、兼職可上日、營收預估）。全部 ✅ 才能整區一起排。</div>
+      <div class="tw"><table class="t" id="readyTbl"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>② 整區排初稿</h2>
+      <div class="mute" style="font-size:13px">同一區的夥伴放在一起排：自己店優先，只有某家店缺人、另一家剛好多人時才調店。一次排兩個方案（A 正職優先、B 兼職優先），大約 2～5 分鐘。排好後各店班表還不會變，要按下面的「採用」才會寫進去。</div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="draftBtn" type="button">🗺 整區排初稿</button><span id="draftMsg" class="err"></span></div>
+      <div id="job" class="job hide"></div>
+    </div>
+
+    <div class="card hide" id="planCard">
+      <h2>③ 兩個方案比較</h2>
+      <div class="mute" id="planInfo" style="font-size:13px"></div>
+      <div class="tabs" id="planTabs"></div>
+      <div id="planBody"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+var API='/api/schedule/',AUTH_KEY='sw_auth_v1',auth=null,S=null,cur='ft',pollT=null,lastKey='';
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function loadAuth(){try{var a=JSON.parse(localStorage.getItem(AUTH_KEY)||'null');if(a&&a.exp>Date.now())return a}catch(_){}return null}
+function post(act,data){var body=Object.assign({as:auth.as,pwd:auth.pwd,region:$('rgSel').value,ym:$('ymSel').value},data||{});
+  return fetch(API+act,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json().catch(function(){throw new Error(r.status>=500?'系統正在更新，請等 1～2 分鐘再試':'錯誤 '+r.status)}).then(function(j){if(!j.ok)throw new Error(j.error||('錯誤 '+r.status));return j})})}
+function twoStep(btn,label,fn){var t=null,orig=btn.textContent;
+  btn.addEventListener('click',function(){if(btn.disabled)return;
+    if(!btn.classList.contains('arm')){btn.classList.add('arm');btn.textContent=label;t=setTimeout(function(){btn.classList.remove('arm');btn.textContent=orig},3500);return}
+    clearTimeout(t);btn.classList.remove('arm');btn.textContent=orig;fn()})}
+(function(){
+  auth=loadAuth();
+  if(!auth||auth.as!=='hq'){$('needLogin').classList.remove('hide');$('dsb').textContent='🕒 需要先登入';return}
+  $('app').classList.remove('hide');
+  ['台中','台北','桃園'].forEach(function(r){var o=document.createElement('option');o.value=r;o.textContent=r+' 區';$('rgSel').appendChild(o)});
+  var d=new Date(),opts='';for(var i=-1;i<=2;i++){var x=new Date(d.getFullYear(),d.getMonth()+i,1);var v=x.getFullYear()+String(x.getMonth()+1).padStart(2,'0');opts+='<option value="'+v+'">'+x.getFullYear()+' 年 '+(x.getMonth()+1)+' 月</option>'}
+  $('ymSel').innerHTML=opts;var nx=new Date(d.getFullYear(),d.getMonth()+1,1);$('ymSel').value=nx.getFullYear()+String(nx.getMonth()+1).padStart(2,'0');
+  try{var r=localStorage.getItem('rg_region');if(r)$('rgSel').value=r}catch(_){}
+  $('rgSel').onchange=$('ymSel').onchange=function(){try{localStorage.setItem('rg_region',$('rgSel').value)}catch(_){}S=null;lastKey='';refresh()};
+  twoStep($('draftBtn'),'再按一次確認（整區重排，約 2～5 分鐘）',function(){$('draftMsg').textContent='';$('draftBtn').disabled=true;
+    post('region_draft').then(apply).catch(function(e){$('draftMsg').textContent='⚠ '+e.message;$('draftBtn').disabled=false})});
+  refresh();
+})();
+function refresh(){return post('region_state').then(apply).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
+function apply(j){S=j;var run=j.job&&j.job.status==='running';
+  $('dsb').textContent='🕒 '+j.region+' 區 '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月'+(j.at?'・最近一次整區初稿 '+j.at.replace('T',' '):'・還沒排過整區初稿')+(j.picked?'・已採用 '+(j.picked.mode==='ft'?'方案 A':'方案 B')+'（'+j.picked.at.replace('T',' ')+'）':'');
+  renderReady();
+  $('draftBtn').disabled=run||j.stores.some(function(s){return !s.ready});
+  var jb=$('job');if(j.job&&j.job.status){jb.classList.remove('hide');jb.className='job'+(j.job.status==='error'?' err':'');jb.textContent=(j.job.status==='running'?'⏳ ':j.job.status==='done'?'✅ ':'⚠ ')+(j.job.step||'')+(run&&j.job.secs?'（已 '+(j.job.secs>=60?Math.floor(j.job.secs/60)+' 分 ':'')+(j.job.secs%60)+' 秒）':'')}else jb.classList.add('hide');
+  renderPlans();
+  clearTimeout(pollT);if(run)pollT=setTimeout(refresh,3000);
+}
+function renderReady(){var h='<thead><tr><th>店</th><th>人數</th><th>狀態</th><th>最近一次採用區域班表</th><th></th></tr></thead><tbody>';
+  S.stores.forEach(function(s){h+='<tr><td>'+s.store+' '+esc(s.name)+'</td><td class="n">'+s.emps+'</td><td>'+(s.ready?'<span class="tag ok">✅ 可以排</span>':'<span class="tag bad">'+esc(s.why)+'</span>')+'</td><td class="mute">'+(s.region?esc(s.region.replace('T',' ')):'—')+'</td><td><a href="#" data-go="'+s.store+'">到工作台看這家店 →</a></td></tr>'});
+  $('readyTbl').innerHTML=h+'</tbody>';bindGo($('readyTbl'))}
+function bindGo(root){Array.prototype.forEach.call(root.querySelectorAll('a[data-go]'),function(a){a.onclick=function(e){e.preventDefault();try{localStorage.setItem('sw_hq_store',a.dataset.go)}catch(_){}location.href='/static/schedule-workbench.html'}})}
+function sum(a,b,f){var t=0;a.forEach(function(n,i){t+=f(n,b[i])});return t}
+function renderPlans(){
+  var P=S.plans||{},modes=['ft','pt'].filter(function(m){return P[m]});
+  if(!modes.length){$('planCard').classList.add('hide');return}
+  if(modes.indexOf(cur)<0)cur=modes[0];
+  var key=[S.region,S.ym,S.at,S.picked&&S.picked.at,cur].join('|');if(key===lastKey)return;lastKey=key;
+  $('planCard').classList.remove('hide');
+  $('planInfo').textContent='排好時間 '+(S.at||'').replace('T',' ')+'。淺紅＝缺人、淺藍＝比設定多（數字＝那天在店人數，含外店調來的）。按「採用」會把整區每家店的班表一起換成這個方案（各店可以按「復原上一步」換回原本的）。';
+  $('planTabs').innerHTML=modes.map(function(m){return '<button type="button" class="tab'+(m===cur?' on':'')+'" data-m="'+m+'">'+esc(P[m].name)+'</button>'}).join('');
+  Array.prototype.forEach.call($('planTabs').querySelectorAll('.tab'),function(b){b.onclick=function(){cur=b.dataset.m;lastKey='';renderPlans()}});
+  var p=P[cur],days=S.days||[],h='<div class="mute" style="font-size:13px;margin-bottom:6px">'+esc(p.desc)+'</div>';
+  h+='<div class="tw"><table class="t"><thead><tr><th>店</th><th>缺人（人次）</th><th>多排（人次）</th><th>調去別店</th><th>別店調來</th><th>檢查</th></tr></thead><tbody>';
+  S.stores.forEach(function(s){var x=p.stores[s.store];if(!x)return;var out=p.moves.filter(function(m){return m.store==s.store}).length,inn=p.moves.filter(function(m){return m.to==s.store}).length;
+    h+='<tr><td>'+s.store+' '+esc(s.name)+'</td><td class="n">'+sum(x.need,x.got,function(a,b){return Math.max(0,a-b)})+'</td><td class="n">'+sum(x.need,x.got,function(a,b){return Math.max(0,b-a)})+'</td><td class="n">'+out+'</td><td class="n">'+inn+'</td><td>'+(x.ok?'<span class="tag ok">✅ 通過</span>':'<span class="tag bad">❌ '+x.errors.length+' 項</span>')+(x.warns?' <span class="tag warn">⚠ '+x.warns+'</span>':'')+'</td></tr>'});
+  h+='</tbody></table></div>';
+  var picked=S.picked&&S.picked.mode===cur;
+  h+='<div class="row" style="margin:10px 0">'+(picked?'<span class="tag ok">✅ 已採用（'+esc(S.picked.at.replace('T',' '))+'）</span>':'')+'<button class="btn" id="pickBtn" type="button">'+(picked?'再採用一次（覆蓋各店目前的班表）':'採用這個方案（寫進整區 '+S.stores.length+' 家店的班表）')+'</button><span id="pickMsg" class="err"></span></div>';
+  h+='<div class="legend"><span><i class="sw" style="background:var(--short)"></i>缺人</span><span><i class="sw" style="background:var(--extra)"></i>比設定多</span><span><i class="sw" style="background:var(--fine)"></i>剛好</span><span>粗體日期＝週末</span></div>';
+  h+='<div class="tw"><table class="strip"><thead><tr><th></th>'+days.map(function(d){return '<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'}).join('')+'</tr></thead><tbody>';
+  S.stores.forEach(function(s){var x=p.stores[s.store];if(!x)return;
+    h+='<tr><td class="lb">'+s.store+' '+esc(s.name)+' 需要</td>'+x.need.map(function(n){return '<td>'+n+'</td>'}).join('')+'</tr>';
+    h+='<tr><td class="lb">　　　排到</td>'+x.got.map(function(g,i){var n=x.need[i];return '<td class="'+(g<n?'s':g>n?'x':'')+'">'+g+'</td>'}).join('')+'</tr>'});
+  h+='</tbody></table></div>';
+  if(p.moves.length){
+    var by={};p.moves.forEach(function(m){by[m.name+'|'+m.from_name]=(by[m.name+'|'+m.from_name]||0)+1});
+    h+='<h2 style="margin-top:14px">調店清單（'+p.moves.length+' 人次）</h2><div class="mute" style="font-size:13px">誰調最多：'+Object.keys(by).sort(function(a,b){return by[b]-by[a]}).map(function(k){var q=k.split('|');return esc(q[0])+'（'+esc(q[1])+'）'+by[k]+' 次'}).join('、')+'</div>';
+    h+='<div class="tw"><table class="t"><thead><tr><th>日期</th><th>夥伴</th><th>從</th><th>調去</th><th>班別</th></tr></thead><tbody>'+
+      p.moves.slice().sort(function(a,b){return a.day-b.day}).map(function(m){var d=days.find(function(x){return x.d==m.day})||{};return '<tr><td>'+m.day+' 號（'+(d.wd||'')+'）</td><td>'+esc(m.name)+'</td><td>'+esc(m.from_name)+'</td><td>'+esc(m.to_name)+'</td><td>'+esc(m.shift)+'</td></tr>'}).join('')+'</tbody></table></div>';
+  }else h+='<div class="mute" style="margin-top:10px">這個方案沒有調店。</div>';
+  var errs=[];S.stores.forEach(function(s){var x=p.stores[s.store];if(x&&x.errors.length)errs.push('<b>'+esc(s.name)+'</b>：'+x.errors.map(esc).join('；'))});
+  if(errs.length)h+='<div style="margin-top:10px"><div class="err">❌ 檢查沒過的（多半是整區都缺人，調不出來）</div><div style="font-size:13px">'+errs.join('<br>')+'</div></div>';
+  $('planBody').innerHTML=h;
+  twoStep($('pickBtn'),'再按一次確認（整區每家店的班表都會換掉）',function(){$('pickBtn').disabled=true;$('pickMsg').textContent='';
+    post('region_pick',{plan:cur}).then(function(j){lastKey='';apply(j)}).catch(function(e){$('pickBtn').disabled=false;$('pickMsg').textContent='⚠ '+e.message})});
+}
+</script>
+</body>
+</html>
