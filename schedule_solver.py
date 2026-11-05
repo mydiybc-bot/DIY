@@ -178,7 +178,9 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
         extra = m.NewIntVar(0, len(emps), f"extra_{d}")
         m.Add(sum(allv) + short >= tot_need)
         m.Add(sum(allv) - tot_need <= extra)
-        pen += [(short, W_SHORT), (extra, W_EXTRA)]
+        extra2 = m.NewIntVar(0, len(emps), f"extra2_{d}")    # 同一天多 2 人以上再加扣，讓多出來的人次分散
+        m.Add(sum(allv) - tot_need - 1 <= extra2)
+        pen += [(short, W_SHORT), (extra, W_EXTRA), (extra2, W_EXTRA)]
         for n, k in need[d].items():
             v = [x[(e["id"], d, n)] for e in emps if (e["id"], d, n) in x]
             miss = m.NewIntVar(0, k, f"miss_{d}_{n}")
