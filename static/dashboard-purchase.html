@@ -1845,7 +1845,9 @@ function nwItems(d){var rows=(NW.bom||{})[d.bom]||[],idx=anSkuIdx(),agg={},order
     if(!(g[id].parts||[]).some(function(p0){return nwWhoHas(p0.who,d.bom)&&(!ek||p0.ev===ek);}))return;have[id]=1;
     var p=pub[s.name]||null,fresh=/^自動草稿/.test(String(s.src||""))||!!(p&&p.is_new),ex=campExcl(id);
     out.push({m:s.name,u:s.useUnit,q:null,c:"",s:s,p:p,isNew:fresh||ex,fresh:fresh,excl:ex,via:true});});});});   /* 2026-10-07 晚：預覽（NEWPV）也看 */
+  out=out.filter(function(i){return !nwIsWater(i.m)&&!(i.s&&nwIsWater(i.s.name));});   /* 2026-11-05 經營者：熱水／溫水／冷水是店內飲水機直接供應，不用採購，不列 */
   return out.sort(function(a,b){return (b.excl-a.excl)||(b.isNew-a.isNew)||(a.m<b.m?-1:1);});}   /* cy 批：本檔專屬全部排最前 */
+function nwIsWater(n){var p=String(n||"").replace(/[\s（(].*$/,"").replace(/\s/g,"");return !!p&&p.split(/或|、|\/|／|及|和/).every(function(x){return /^(溫|冷|熱|開|常溫|飲用)?水$/.test(x);});}
 function nwDays(d){var dl=new Date(d.from.getTime()-NW_LEAD*864e5);return {dl:dl,left:Math.round((dl-nwToday())/864e5),sell:Math.round((d.from-nwToday())/864e5)};}
 /* 2026-10-07 各儀表板調整 1006-2 #1（經營者確認）：開賣後不再倒數「已過下單截止 N 天」——開賣當天「🎉 今天開賣」、開賣後「✅ 已開賣 N 天・之後照訂貨單每週叫貨」；開賣前照舊紅／黃／綠倒數 */
 function nwBadge(x){var L=x.left;
@@ -1857,12 +1859,13 @@ function nwBadge(x){var L=x.left;
 function nwMd(d){return d?(d.getMonth()+1)+"/"+d.getDate()+"（"+"日一二三四五六".charAt(d.getDay())+"）":"—";}
 function nwQty(s,q,u){if(!(q>0))return "0";var uu=s?s.useUnit:u,t=dec(q)+" "+escH(uu||"");
   if(s&&!isDur(s)&&num(s.packQty)>1)t+='<div class="sub muted">≈ '+Math.ceil(q/num(s.packQty)-1e-9)+" "+escH(s.buyUnit||"")+"</div>";return t;}
-function nwModeOf(st,s){if(!s)return {k:"none",t:"主檔還沒有"};if(isDC(st,s))return {k:"dc",t:"出貨中心"};var v=String(vendorOf(st,s)||"").trim();return {k:/自購/.test(v)?"self":"vendor",t:v?(/自購/.test(v)?"自購":"向 "+v+" 叫貨"):"廠商未設定"};}
+function nwIsSemi(st,s){return !!s&&String(vendorOf(st,s)||"").trim()==="半成品";}   /* 2026-11-05 經營者：「半成品」是店內把食材加工做出來的（例：微波蛋糕），不是廠商 */
+function nwModeOf(st,s){if(!s)return {k:"none",t:"主檔還沒有"};if(isDC(st,s))return {k:"dc",t:"出貨中心"};if(nwIsSemi(st,s))return {k:"semi",t:"店內自製（半成品）"};var v=String(vendorOf(st,s)||"").trim();return {k:/自購/.test(v)?"self":"vendor",t:v?(/自購/.test(v)?"自購":"向 "+v+" 叫貨"):"廠商未設定"};}
 function nwVendor(st,s,p){if(p&&p.vendor_override)return escH(p.vendor_override)+'<div class="sub muted">申請單填的</div>';if(!s)return '<span class="muted">—</span>';
-  if(isDC(st,s))return "出貨中心";return escH(vendorOf(st,s)||"—");}
+  if(isDC(st,s))return "出貨中心";if(nwIsSemi(st,s))return '店內自製<div class="sub muted">原料照原料叫</div>';return escH(vendorOf(st,s)||"—");}
 function nwLink(p){var u=p&&p.link?String(p.link).trim():"";if(!/^https?:\/\//i.test(u))return '<span class="muted">—</span>';return '<a href="'+escH(u)+'" target="_blank" rel="noopener">開啟 ↗</a>';}
 function nwOrdCell(st,it,since,x){var s=it.s;if(!s)return '<span class="muted">—</span>';var md=nwModeOf(st,s);
-  if(md.k!=="dc")return '<span class="muted">'+(md.k==="self"?"自購，系統看不到":"向廠商叫，系統看不到")+'</span>';
+  if(md.k!=="dc")return '<span class="muted">'+(md.k==="semi"?"店內自己做，不用叫貨":md.k==="self"?"自購，系統看不到":"向廠商叫，系統看不到")+'</span>';
   var o=nwOrdered(st,s,since);if(o===null)return '<span class="muted">讀取中…</span>';
   if(o.n>0)return '<span style="color:#2E7D32;font-weight:700">✓ 已下單 '+dec(o.n)+'</span><div class="sub muted">'+escH(o.last.slice(5).replace("-","/"))+" · "+escH(o.src)+'</div>';
   if(x&&x.sell<0)return '<span class="muted">已開賣，照訂貨單叫</span>';   /* 2026-10-18：開賣後首批有沒有叫已不是待辦，不再紅字 */
@@ -1981,7 +1984,7 @@ function nwDessertHTML(d,hq){var x=nwDays(d),since=ymd(new Date(d.from.getTime()
       else{var tot=0,nHas=0,dc=0,self=0,ord=0,dcNeed=0,wait=false;
         sts.forEach(function(st){var nd=nwNeed(st,s,d),md=nwModeOf(st,s);if(nd.has){tot+=nd.qty;nHas++;}if(md.k==="dc"){dc++;if(nd.qty>0){dcNeed++;var o=nwOrdered(st,s,since);if(o===null)wait=true;else if(o.n>0)ord++;}}else if(s)self++;});
         var modeT=!s?"主檔還沒有":(dc&&self?"出貨中心 "+dc+" 店／自購或廠商 "+self+" 店":dc?"出貨中心":nwModeOf(sts[0],s).t);
-        h+='<tr class="nwrow" data-nwexp="'+escH(key)+'" style="cursor:pointer"><td>'+nm+'<div class="sub muted">'+(open?"▾ 收起各店":"▸ 看各店")+'</div></td><td>'+escH(it.p&&it.p.sticker||"—")+'</td><td class="right">'+per+'</td><td>'+escH(modeT)+'</td><td>'+(it.p&&it.p.vendor_override?escH(it.p.vendor_override):(s?(dc?"出貨中心":escH(s.vendor||"—")):"—"))+'</td><td>'+nwLink(it.p)+'</td>'
+        h+='<tr class="nwrow" data-nwexp="'+escH(key)+'" style="cursor:pointer"><td>'+nm+'<div class="sub muted">'+(open?"▾ 收起各店":"▸ 看各店")+'</div></td><td>'+escH(it.p&&it.p.sticker||"—")+'</td><td class="right">'+per+'</td><td>'+escH(modeT)+'</td><td>'+(it.p&&it.p.vendor_override?escH(it.p.vendor_override):(s?(dc?"出貨中心":s.vendor==="半成品"?"店內自製":escH(s.vendor||"—")):"—"))+'</td><td>'+nwLink(it.p)+'</td>'
           +'<td class="right">'+(s&&isDur(s)?'<span class="muted" title="器具模具可重複使用，依各店標配；新品還沒設標配時請各店自行確認">不自動算（看標配）</span>':x.sell<0?'<span class="muted">已開賣，照訂貨單叫</span>':nHas?nwQty(s,tot,it.u)+'<div class="sub muted">'+nHas+' 店有數字</div>':nwPvSum(sts,s,x,it.u,function(st){return nwNeedPv(st,s,d);},nwNoQty(d,x)))+'</td>'
           +'<td>'+(!s||!dc?'<span class="muted">—</span>':(x.sell<0&&ord<dcNeed)?'<span class="muted">已開賣，照訂貨單叫</span>':wait?'<span class="muted">讀取中…</span>':(dcNeed?'<b style="color:'+(ord>=dcNeed?"#2E7D32":x.left<=3?"#B3261E":"#8A5A00")+'">'+ord+'／'+dcNeed+' 店</b><div class="sub muted">要備的出貨中心店</div>':'<span class="muted">沒有店要備</span>'))+'</td></tr>';
         if(open){h+='<tr><td colspan="8" style="background:#FAFAF7;padding:6px 8px"><table class="nwt nwin"><tr><th>門市</th><th>叫貨方式</th><th>供應商</th><th class="right">建議首批量</th><th>已下單</th></tr>';
