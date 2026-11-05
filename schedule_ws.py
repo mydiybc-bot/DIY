@@ -1344,7 +1344,11 @@ def _stream(model, system, messages, effort):
 
 def _job(k, **kw):
     with _glock:
-        _jobs[k] = dict(kw, ts=time.time())
+        old = _jobs.get(k) or {}
+        now = time.time()
+        # t0＝這次工作開始的時間（running 期間換步驟不重算），畫面用來顯示「已等幾秒」
+        t0 = old.get("t0", now) if kw.get("status") == "running" and old.get("status") == "running" else now
+        _jobs[k] = dict(kw, ts=now, t0=t0)
 
 
 def _draft_worker_ai(store, ym):
@@ -1713,11 +1717,12 @@ def _chat_system(st):
             "\n- 可用崗位：" + "、".join(st["template"]["info"]["positions"]))
 
 
-def _chat_turn(st, text, model, lk):
+def _chat_turn(st, text, model, k, tag=""):
     """跑一句對話（可能多次呼叫工具）；回傳 (回覆, 改了幾格)"""
     st["api_messages"].append({"role": "user", "content": f"（目前班表）\n{table_text(st)}\n\n（目前檢查）\n{check_text(st['check'])}\n\n店長：{text}"})
     changed = 0
-    for _ in range(8):
+    for i in range(8):
+        _job(k, status="running", step=f"AI{tag}正在想（第 {i + 1} 輪）…" if i else f"AI{tag}正在想…")
         msg = _client_().messages.create(model=model, max_tokens=16000, system=_chat_system(st), tools=TOOLS,
                                          output_config={"effort": "medium"}, cache_control={"type": "ephemeral"},
                                          messages=st["api_messages"])
@@ -1740,6 +1745,7 @@ def _chat_turn(st, text, model, lk):
             except ValueError as ex:
                 out = f"這次沒有改任何格子：{ex}"
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": out})
+        _job(k, status="running", step=f"已改 {changed} 格，AI{tag}正在看檢查結果…")
         st["api_messages"].append({"role": "user", "content": results})
     reply = "".join(b.text for b in msg.content if b.type == "text").strip()
     return reply or "（我剛剛沒有產生回覆，請再說一次。）", changed
@@ -1756,14 +1762,13 @@ def _chat_worker(store, ym, text):
             st["api_messages"] = []   # 對話太長就開新的一段（班表、檢查每句都會重新附上）
         before = copy.deepcopy(st)
         n_err = len(st["check"]["errors"])
-        reply, changed = _chat_turn(st, text, CHAT_MODEL, lk)
+        reply, changed = _chat_turn(st, text, CHAT_MODEL, k)
         if len(st["check"]["errors"]) > n_err:
             # 改完反而多了 ❌ → 退回這句之前，再用 Opus 重做一次
-            _job(k, status="running", step="AI 再想一次…")
             usage = st["usage"]
             st = before
             st["usage"] = usage
-            reply, changed = _chat_turn(st, text, MODEL_BACKUP, lk)
+            reply, changed = _chat_turn(st, text, MODEL_BACKUP, k, tag="（改完問題變多，重想一次）")
         st["chat"] = (st.get("chat") or []) + [{"role": "me", "text": text, "ts": time.time()},
                                                {"role": "ai", "text": reply, "changed": changed, "ts": time.time()}]
         with lk:
@@ -2283,6 +2288,8 @@ def _public(st):
     k = _key(st["store"], st["ym"])
     with _glock:
         job = dict(_jobs.get(k) or {})
+    if job.get("status") == "running":
+        job["secs"] = int(time.time() - job.get("t0", time.time()))
     tpl = st.get("template")
     cfg = cfg_load(st["store"])
     ext = _ext(st, cfg)
