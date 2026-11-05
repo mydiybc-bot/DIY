@@ -320,6 +320,9 @@ window.SpoonHint=(function(){
   #tab-apply .ap-modal-box .ap-actions{padding:12px 0 0}
   #tab-apply .ap-2col{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
   @media(max-width:520px){#tab-apply .ap-2col{grid-template-columns:1fr}}
+  #tab-apply .ap-stpick{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 10px;margin:4px 0 2px;font-size:13px}   /* 2026-11-05 參與門市勾選 */
+  #tab-apply .ap-stpick label{display:flex;align-items:center;gap:4px;margin:0;font-weight:400;white-space:nowrap;cursor:pointer}
+  @media(max-width:520px){#tab-apply .ap-stpick{grid-template-columns:repeat(2,1fr)}}
   #tab-apply .ap-reqtbl td{vertical-align:middle}
   /* 2026-09-28：🔑 密碼管理 */
   #tab-apply .ap-modal-box.ap-wide{max-width:860px}
@@ -2111,6 +2114,14 @@ var SENDMSG='',_jpSeq=0,_busy=false;
 /* Excel 下拉選項（照 2026-02-24 申請單） */
 var BRANDS=['自己做','吳寶春自己做','自己做＆吳寶春自己做'];
 var BRAND_DEFAULT='自己做＆吳寶春自己做';   /* 2026-09-24 經營者：品牌別預設兩個品牌都有 */
+/* 2026-11-05 經營者「有些活動不是每間店都有」：檔期「參與門市」（fact_campaign 最後一欄，存「1,3,5」；空白＝依品牌別全部門市）。
+   申請表的每店用量、採購系統拆首批量（EventLayer evPlanSplit_）、核准寫新器具標配都只算這幾家店。店名同採購系統 STORE_PLACE */
+var BRAND_STORE_LIST={'自己做':[1,2,3,4,5,6,7,8,9,10],'吳寶春自己做':[11,12],'自己做＆吳寶春自己做':[1,2,3,4,5,6,7,8,9,10,11,12]};
+var STORE_PLACE={1:'台中精明',2:'台中草悟道',3:'台北南京',4:'台北士林',5:'台南Focus',6:'新竹文化',7:'新北板橋',8:'新北新店',9:'桃園中壢',10:'桃園藝文',11:'信義A13',12:'高雄SKM'};
+function parseStores(v){var seen={},o=[];String(v==null?'':v).split(/[^0-9]+/).forEach(function(x){var n=parseInt(x,10);if(n>=1&&n<=12&&!seen[n]){seen[n]=1;o.push(n)}});return o.sort(function(a,b){return a-b})}
+function storesText(a){return a.length?a.length+' 家：'+a.map(function(n){return n+' '+(STORE_PLACE[n]||'')}).join('、'):'全部（依品牌別）'}
+function storePickHTML(sel){return '<div class="ap-stpick">'+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(n){return '<label><input type="checkbox" data-st="'+n+'"'+(sel.indexOf(n)>=0?' checked':'')+'>'+n+' '+esc(STORE_PLACE[n])+'</label>'}).join('')+'</div>'}
+function storePicked(root){var a=[];root.querySelectorAll('input[data-st]').forEach(function(el){if(el.checked)a.push(Number(el.dataset.st))});return a}
 var DIETS=['葷','素','蛋奶素','蛋奶素含酒','葷含酒'];
 /* 2026-11-03 經營者「葷素自動判斷並預選」：規則照《門市資訊頁規格與檢查標準 2026》§3-1 葷素、§3-2 含酒，選項照申請表 5 種。
    看「🧾 用料」＋「🧪 半成品」每批用料的品名（器具／模具不看；本單的半成品看它的用料、不看半成品名稱）：
@@ -3099,8 +3110,10 @@ function buyQty(l){if(isSemiItem(l))return 0;var q=num(l.q),n=num(AP.head.qty);r
    ② 舊表「原包裝分裝份數／損耗金額／高損耗」→ 表二採購量格下面算「每店叫幾包、剩多少」，剩太多標 ⚠（每家店至少要叫 1 包，包裝太大就會浪費）
    ③ 同一個新品項在別支甜點填過，按一下帶入（舊表每支甜點一個分頁，同樣的花生醬要重打兩次） */
 var BRAND_STORE_N={'自己做':10,'吳寶春自己做':2,'自己做＆吳寶春自己做':12};
-function storeN(){return BRAND_STORE_N[String(AP.head.brand||'').trim()]||12}
-function qtyHint(){var n=num(AP.head.qty),k=storeN();if(!(n>0))return '整個檔期、全部門市合計幾份';return '全部門市合計；每店約 '+(Math.round(n/k*10)/10)+' 份'}
+function campStores(){var h=AP.head,c=h.campaign_id?campById(h.campaign_id):null;return parseStores(c&&c.hasOwnProperty('參與門市')?c['參與門市']:h.campaign_stores)}   /* 2026-11-05 */
+function storeList(){var b=BRAND_STORE_LIST[String(AP.head.brand||'').trim()]||BRAND_STORE_LIST[BRAND_DEFAULT],cs=campStores();if(!cs.length)return b;var x=b.filter(function(n){return cs.indexOf(n)>=0});return x.length?x:cs}
+function storeN(){var cs=campStores();return cs.length?storeList().length:(BRAND_STORE_N[String(AP.head.brand||'').trim()]||12)}
+function qtyHint(){var n=num(AP.head.qty),k=storeN(),w=campStores().length?'參與的 '+k+' 家店合計':'全部門市合計';if(!(n>0))return '整個檔期、'+w+'幾份';return w+'；每店約 '+(Math.round(n/k*10)/10)+' 份'}
 function lossOf(l){if(!isNewItem(l)||isToolLine(l)||unitMis(l))return null;var bq=buyQty(l),pn=packOf(l),pc=num(l.pkgCost);if(!(bq>0)||!(pn>0))return null;
   var k=storeN(),per=bq/k,packs=Math.ceil(per/pn-1e-9),left=packs*pn-per,pct=packs>0?left/(packs*pn):0;
   return {k:k,per:per,packs:packs,left:left,pct:pct,servings:num(l.q)>0?pn/num(l.q):0,cost:pc>0?k*left/pn*pc:null,hot:pct>=0.5&&(pc<=0||k*left/pn*pc>=200)}}
@@ -3421,7 +3434,7 @@ function headHTML(c){var rate=rateOf(c),col=rateColor(rate);
    +'<div class="ap-row ap-row-7">'+cell('產品成本','<div class="ap-ro" id="apCostRO" title="唯讀＝成本卡每份材料成本">'+fm(c.total)+' 元</div>')
      +cell('產品定價',inp('price','number','元'))
      +cell('產品利潤率','<div class="ap-ro" id="apMarginRO" title="唯讀＝(定價−成本)÷定價" style="color:'+col+'">'+(rate===null?'—':(100-rate).toFixed(1)+'%')+'</div>')
-     +cell('產品規格',inp('spec','text','例：6吋、4入'))+cell('製作時間',sel('time',TIMES))+cell('預估銷售數',inp('qty','number','份')+'<div class="ap-hint" id="apQtyHint" title="填整個檔期、全部門市合計要賣幾份；採購系統用它算各店第一批叫多少。每店份數＝合計 ÷ 店數（依品牌別：自己做 10 家、吳寶春自己做 2 家、兩個品牌 12 家）">'+qtyHint()+'</div>')+'</div>'
+     +cell('產品規格',inp('spec','text','例：6吋、4入'))+cell('製作時間',sel('time',TIMES))+cell('預估銷售數',inp('qty','number','份')+'<div class="ap-hint" id="apQtyHint" title="填整個檔期、參與門市合計要賣幾份；採購系統用它算各店第一批叫多少。每店份數＝合計 ÷ 店數（檔期有勾參與門市＝勾的店；沒勾＝依品牌別：自己做 10 家、吳寶春自己做 2 家、兩個品牌 12 家）">'+qtyHint()+'</div>')+'</div>'
    +'<div class="ap-row ap-row-1 ap-dim">'+cell('POS 分類',catSelectHTML())+'</div>'
    +'</div>'}
 /* 2026-10-08：還沒填的欄位放在表頭下（原本只在最下方按「產出申請單」後才看得到）；只給主廚模式、未鎖定時 */
@@ -3557,7 +3570,7 @@ function table2HTML(){var NL=AP.lines.map(function(l,i){return inTable2(l)?i:-1}
   var h='<div class="ap-sheet"><div class="ap-sheet-title">🆕 新增食材/器模具 <span class="ap-muted">主檔還沒有的品項，在這裡補資料</span><button class="ap-btn2" id="apAddNew" style="margin-left:auto">＋ 新增品項</button></div>'
    +'<div class="ap-muted" style="padding:8px 12px 4px">主檔沒有、停售、過季的品項自動列入</div>'
    +'<details class="xhelp" style="margin:0 12px 4px"><summary>ⓘ 整檔採購量、⚠ 包裝太大、↺ 帶入上次填的</summary><div>'
-   +'<b>整檔採購量</b>＝每份用量 × 表頭的「預估銷售數」（整個檔期、全部門市合計）。<br>'
+   +'<b>整檔採購量</b>＝每份用量 × 表頭的「預估銷售數」（整個檔期、參與門市合計；檔期沒勾參與門市＝品牌別全部門市）。<br>'
    +'<b>秤重換算</b>：用料寫「支」或「包」但採購是秤重買的（例：迷迭香剪 8cm 1 支約 1 g），填「1 支約幾 g」→ 整檔採購量下面多一行「≈ 幾 g」；🆕 品項原包裝寫重量（例：50g/包）也會自動算出一包約幾支。用個數買的（例：雞蛋）不用填。<br>'
    +'<b>每店 N 包・剩 X%</b>：把整檔用量平均分到各店（自己做 10 家、吳寶春自己做 2 家、兩個品牌 12 家），每家店至少要叫 1 包，算出每店要叫幾包、用完還剩幾成。滑鼠移到數字上可以看細節。<br>'
    +'<b>⚠ 包裝太大</b>：每店用完還剩一半以上（有填成本的話，全部門市合計剩的料還要約 200 元以上），會浪費；可以考慮換小包裝或改分裝。<br>'
@@ -3757,11 +3770,12 @@ function campIsReg(c){return !!c&&String(c['類型']||'').trim()==='常態菜單
 function campLabel(c){var r=campRange(mmdd(c['起']),mmdd(c['迄']),campIsReg(c));return String(c['檔期名稱']||c.campaign_id)+(r?'（'+r+'）':'')+(c.status==='封存'?'［封存］':'')}
 function campText(){var h=AP.head;if(h.campaign_id){var r=campRange(h.campaign_start,h.campaign_end,campIsReg(campById(h.campaign_id)));return (h.campaign_name||h.campaign_id)+(r?' '+r:'')}return String(h.period||'').trim()}
 function setCampSnap(c){var h=AP.head;
-  if(!c){h.campaign_id='';h.campaign_name='';h.campaign_start='';h.campaign_end='';h.campaign_ship='';h.campaign_early='';return}
-  h.campaign_id=String(c.campaign_id||'');h.campaign_name=String(c['檔期名稱']||'');h.campaign_start=String(c['起']||'');h.campaign_end=String(c['迄']||'');h.campaign_ship=String(c['第一批配貨日']||'');h.campaign_early=String(c['自己人搶先開賣日']||'');h.period=h.campaign_name}
+  if(!c){h.campaign_id='';h.campaign_name='';h.campaign_start='';h.campaign_end='';h.campaign_ship='';h.campaign_early='';h.campaign_stores='';return}
+  h.campaign_id=String(c.campaign_id||'');h.campaign_name=String(c['檔期名稱']||'');h.campaign_start=String(c['起']||'');h.campaign_end=String(c['迄']||'');h.campaign_ship=String(c['第一批配貨日']||'');h.campaign_early=String(c['自己人搶先開賣日']||'');h.campaign_stores=String(c['參與門市']||'');h.period=h.campaign_name}
 function refreshCampSnap(){var h=AP.head;if(!h.campaign_id)return;var c=campById(h.campaign_id);if(!c)return;
-  var b=[h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||''].join('|');setCampSnap(c);
-  if([h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||''].join('|')!==b)saveDraft()}
+  var b=[h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||'',h.campaign_stores||''].join('|');setCampSnap(c);
+  if([h.campaign_name,h.campaign_start,h.campaign_end,h.campaign_ship,h.campaign_early||'',h.campaign_stores||''].join('|')!==b)saveDraft()}
+function campHasStoresCol(){return CAMP.list.some(function(c){return c.hasOwnProperty('參與門市')})}   /* 申請單 API 還沒更新（沒有這一欄）就不顯示，免得勾了存不進去 */
 function campSelectHTML(){var h=AP.head,cur=h.campaign_id||'',has=false;
   var live=CAMP.list.filter(function(c){return c.status!=='封存'||c.campaign_id===cur}).length;   /* 2026-10-05：清單是空的要講明白，不要只留一個點不開的「請選檔期」 */
   var ph=(CAMP.loading&&!CAMP.loaded)?'讀取檔期清單中…':((CAMP.err&&!CAMP.loaded)?'— 讀不到檔期清單 —':((CAMP.loaded&&!live&&!cur)?'— 目前沒有檔期，請按「＋ 新增檔期」—':'— 請選檔期 —'));
@@ -3783,6 +3797,7 @@ function campInfoHTML(){var h=AP.head;
   if(h.campaign_early)p.push('<b style="color:#B26A00">自己人搶先開賣 '+esc(h.campaign_early)+'</b>（採購系統以這天當開賣日，提前 14 天提醒各店叫貨）');
   p.push('第一批配貨日 '+esc(h.campaign_ship||'（未填）'));
   if(c['品牌別'])p.push('品牌別 '+esc(c['品牌別']));
+  if(c.hasOwnProperty('參與門市'))p.push('參與門市 '+esc(storesText(parseStores(c['參與門市'])))+(LM?'':' <button type="button" class="ap-btn2 ap-mini" id="apCampStEdit" title="勾選這個檔期有哪幾家店參加（要主廚密碼）">✏️ 改</button>'));   /* 2026-11-05 */
   if(c['自己人搶先體驗'])p.push('自己人搶先體驗 '+esc(c['自己人搶先體驗']));
   if(c['配合活動'])p.push('配合活動 '+esc(c['配合活動']));
   if(c['檔期備註'])p.push('備註 '+esc(c['檔期備註']));
@@ -3912,6 +3927,7 @@ function openCampForm(cr){
     +'<div class="ap-2col"><div><label id="apCampStartLbl">期間：開始日（必填）</label><input type="date" data-cf="起"></div><div id="apCampEndBox"><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
     +'<div class="ap-muted" id="apCampRegNote" style="display:none;margin-top:2px">沒有結束日；記得選 POS 分類</div>'
     +'<div class="ap-2col"><div><label>第一批配貨日</label><input type="date" data-cf="第一批配貨日"></div><div><label>品牌別</label><select data-cf="品牌別">'+opts(BRANDS,BRAND_DEFAULT,'— 不指定 —')+'</select></div></div>'
+    +(campHasStoresCol()?'<label>參與門市（不勾＝依品牌別全部門市）</label>'+storePickHTML([]):'')   /* 2026-11-05 */
     +'<label title="自己人會員比正式開賣早買得到的第一天。有填的話，採購系統會以這天當開賣日，提前 14 天提醒各店叫貨。">自己人搶先開賣日（沒有就留空）</label><input type="date" data-cf="自己人搶先開賣日" title="自己人會員比正式開賣早買得到的第一天。有填的話，採購系統會以這天當開賣日，提前 14 天提醒各店叫貨。">'
     +'<label>自己人搶先體驗（說明文字）</label><input type="text" data-cf="自己人搶先體驗" placeholder="例：9/25–9/30 自己人先開放；沒有就留空">'
     +'<label>配合活動</label><input type="text" data-cf="配合活動" placeholder="沒有就留空">'
@@ -3924,6 +3940,7 @@ function openCampForm(cr){
     m.querySelector('#apCampStartLbl').textContent=reg?'上市日（必填）':'期間：開始日（必填）';var nm=m.querySelector('[data-cf="檔期名稱"]');if(nm)nm.placeholder=reg?'例：2026 11月大菜單':'例：2026 萬聖節'};   /* 2026-10-17 */
   setTimeout(function(){var f=m.querySelector('[data-cf="檔期名稱"]');if(f)f.focus()},30);
   ok.onclick=function(){var o={};m.querySelectorAll('[data-cf]').forEach(function(el){o[el.dataset.cf]=String(el.value||'').trim()});
+    var stSel=storePicked(m);if(m.querySelector('input[data-st]'))o['參與門市']=stSel.join(',');   /* 2026-11-05 */
     var pwRow=m.querySelector('#apCampPwRow'),c2=cr;
     if(!c2||(pwRow&&pwRow.style.display!=='none')){var pw=String((m.querySelector('#apCampPw')||{}).value||'');if(!pw){box.textContent='請輸入主廚密碼';m.querySelector('#apCampPw').focus();return}c2={role:'主廚',pw:pw}}
     if(!o['檔期名稱']){box.textContent='請填檔期名稱';return}
@@ -3933,8 +3950,33 @@ function openCampForm(cr){
     if(!reg&&o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
     if(o['自己人搶先開賣日']&&o['自己人搶先開賣日']>o['起']){box.textContent='自己人搶先開賣日不能晚於開始日，請確認日期';return}
     var r=campRange(o['起'],o['迄'],reg);
-    if(!confirm('新增'+(reg?'常態菜單':'檔期')+'「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+'？\n建立後所有人都選得到。'))return;
+    if(!confirm('新增'+(reg?'常態菜單':'檔期')+'「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+(stSel.length?'\n參與門市：'+storesText(stSel):'')+'？\n建立後所有人都選得到。'))return;
     ok.disabled=true;box.textContent='建立中…';createCamp(o,c2,box,ok,m)}}
+/* 2026-11-05：改既有檔期的參與門市（主廚或管理者；只送 campaign_id＋參與門市，其他欄位不動）→ 兩層確認 → saveCampaign */
+document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('#apCampStEdit');if(b){e.preventDefault();campStoresDialog()}});
+function campStoresDialog(){var h=AP.head,c=campById(h.campaign_id);if(!c)return;var cr=getCred('主廚')||getCred('管理者'),cur=parseStores(c['參與門市']);
+  var m=modal('<div class="ap-h">🏬 參與門市：'+esc(c['檔期名稱']||c.campaign_id)+'</div><div class="ap-muted">勾有參加這個檔期的店；全部不勾＝依品牌別全部門市。採購系統拆首批量、這張表的每店用量都只算勾選的店。</div>'
+    +'<div id="apStPwRow"'+(cr?' style="display:none"':'')+'><label>主廚密碼（只記在這個分頁）</label><input type="password" id="apStPw" name="rcp-camp-pw" autocomplete="new-password"></div>'
+    +storePickHTML(cur)
+    +'<div class="ap-actions" style="justify-content:flex-start;margin-top:4px"><button class="ap-btn2 ap-mini" type="button" id="apStAll">全選</button><button class="ap-btn2 ap-mini" type="button" id="apStNone">全部不勾</button></div>'
+    +'<div id="apStMsg" class="ap-bad" style="min-height:18px;margin-top:6px"></div>'
+    +'<div class="ap-actions"><button class="ap-btn" id="apStOk" type="button">儲存</button><button class="ap-btn2" id="apStNo" type="button">取消</button></div>');
+  var ok=m.querySelector('#apStOk'),box=m.querySelector('#apStMsg');
+  m.querySelector('#apStNo').onclick=closeModal;
+  m.querySelector('#apStAll').onclick=function(){m.querySelectorAll('input[data-st]').forEach(function(el){el.checked=true})};
+  m.querySelector('#apStNone').onclick=function(){m.querySelectorAll('input[data-st]').forEach(function(el){el.checked=false})};
+  ok.onclick=function(){var sel=storePicked(m),c2=cr,pr=m.querySelector('#apStPwRow');
+    if(sel.length===12)sel=[];   /* 12 家全勾＝全部，存成空白 */
+    if(!c2||(pr&&pr.style.display!=='none')){var pw=String((m.querySelector('#apStPw')||{}).value||'');if(!pw){box.textContent='請輸入主廚密碼';return}c2={role:'主廚',pw:pw}}
+    if(sel.join(',')===cur.join(',')){closeModal();return}
+    if(!confirm('檔期「'+(c['檔期名稱']||c.campaign_id)+'」的參與門市改成：\n'+storesText(sel)+'\n\n採購系統明天 07:31 重算首批量時生效。確定？'))return;
+    ok.disabled=true;var t0=Date.now(),tick=setInterval(function(){box.textContent='儲存中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'},1000);
+    apiPost({action:'saveCampaign',role:c2.role,password:c2.pw,campaign:{campaign_id:c.campaign_id,'參與門市':sel.join(',')},rq:rqToken()}).then(function(r){clearInterval(tick);ok.disabled=false;
+      if(!r.ok){if(r.code==='auth'){setCred(null,c2.role);cr=null;if(pr){pr.style.display=''}box.textContent='密碼不對（或剛換過），請重新輸入';return}box.textContent=r.msg||'儲存失敗';return}
+      var d=r.data||{},nc=d.campaign||{};
+      if((d.skipped||[]).indexOf('參與門市')>=0){box.textContent='「'+c2.role+'」不能改參與門市，請用主廚密碼';return}
+      setCred(c2);nc.req_count=c.req_count;CAMP.list=CAMP.list.map(function(x){return x.campaign_id===nc.campaign_id?nc:x});campCachePut(CAMP.list);
+      setCampSnap(nc);OUT=null;saveDraft();closeModal();render();campLoad()})}}
 function createCamp(o,cr,box,btn,m){var t0=Date.now(),note='',tick=setInterval(function(){box.textContent='建立中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note},1000);
   apiPost({action:'saveCampaign',role:cr.role,password:cr.pw,campaign:o,rq:rqToken()},function(k){note='（連線不穩，自動重試第 '+k+' 次）'}).then(function(r){btn.disabled=false;clearInterval(tick);
     if(!r.ok){
