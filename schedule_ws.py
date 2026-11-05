@@ -610,7 +610,8 @@ def mset_clean(st, body):
         if days and d not in days:
             raise ValueError(f"這個月沒有 {d} 號")
         sp.append({"day": int(d), "revenue": _num(x.get("revenue"), None, 0, 10_000_000, "營收預估"),
-                   "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200]})
+                   "staff": str(x.get("staff") or "").strip()[:200], "note": str(x.get("note") or "").strip()[:200],
+                   "as_holiday": bool(x.get("as_holiday"))})
     ms["special"] = sorted(sp, key=lambda x: x["day"])
     ms["marks"], ms["avail_shift"] = marks_from_text(st, emps, cfg_load(st["store"]))
     ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
@@ -1088,9 +1089,10 @@ def _ext_from_form(st, cfg):
     info = (st.get("template") or {}).get("info") or {}
     shifts = {r["name"]: [list(x) for x in r["segs"]] for r in cfg["shifts"]}
     special = {str(x["day"]): x.get("revenue") for x in ms["special"] if x.get("revenue")}
+    holi = _hol_days(ms)
     demand = {}
     for d in info.get("days") or []:
-        wk = d["wd"] in ("六", "日")
+        wk = d["wd"] in ("六", "日") or d["d"] in holi
         need = []
         for r in cfg["shifts"]:
             need += [r["name"]] * int(r.get("we" if wk else "wd") or 0)
@@ -1105,7 +1107,12 @@ def _ext_from_form(st, cfg):
             "late_shift_ends": sorted({r["segs"][-1][1] for r in cfg["shifts"] if "晚" in r["name"]}),
             "early_shift_starts": sorted({r["segs"][0][0] for r in cfg["shifts"] if "早" in r["name"]}),
             "revenue": {"weekday": ms["revenue"].get("weekday"), "weekend": ms["revenue"].get("weekend"), "special": special},
-            "notes": [], "from_form": True}
+            "hol_days": sorted(holi), "notes": [], "from_form": True}
+
+
+def _hol_days(ms):
+    """特殊日勾了「當假日」的平日（2026-11-05 經營者：店長說 25、31 號視為假日，檢查卻還照平日班在比）"""
+    return {int(x["day"]) for x in (ms or {}).get("special") or [] if x.get("as_holiday")}
 
 
 def _ext(st, cfg=None):
@@ -1119,6 +1126,11 @@ def _ext(st, cfg=None):
         return ai
     out = dict(form, **ai)
     out["shifts"] = dict(ai.get("shifts") or {}, **form["shifts"])
+    # 排完之後才改「當假日」的日子：那幾天的需求改照表單（平日班↔假日班），其他天保留排班時算好的需求
+    flip = set(form.get("hol_days") or []) ^ set(ai.get("hol_days") or [])
+    if flip and ai.get("demand"):
+        out["demand"] = dict(ai["demand"], **{str(d): form["demand"].get(str(d), []) for d in flip})
+    out["hol_days"] = form.get("hol_days") or []
     return out
 
 
@@ -1715,6 +1727,7 @@ CHAT_RULES = """
  5. 只處理本店排班；其他話題回「我只負責本店排班，其他問題請洽總部」。
  6. 檢查結果有新的 ❌ 一定要再改到沒有才回覆；⚠ 要告訴店長。
  7. 回覆用繁體中文，不要夾雜英文字。
+- 店長說某個平日「視為假日／當假日／照假日排」（或反過來改回平日）：先用 set_day_type 改那天的需求（檢查會改照假日班），再用 apply_changes 排人。不要叫店長去改設定表。
 """
 
 TOOLS = [
@@ -1725,6 +1738,11 @@ TOOLS = [
                          "emp": {"type": "string", "description": "104 工號"},
                          "day": {"type": "integer", "description": "日期 1～31"},
                          "value": {"type": "string", "description": "格子新內容（照格子寫法）"}}}}}},
+     "strict": True},
+    {"name": "set_day_type", "description": "把某幾天設成「當假日」（需求、人效照假日算）或改回照星期幾。存在本月設定的特殊日。回傳改後的檢查結果。",
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["days", "holiday"], "properties": {
+         "days": {"type": "array", "items": {"type": "integer"}, "description": "日期 1～31"},
+         "holiday": {"type": "boolean", "description": "true＝當假日；false＝改回照星期幾"}}},
      "strict": True},
     {"name": "undo", "description": "復原上一次改動（不論是你改的還是店長在日曆上改的）。",
      "input_schema": {"type": "object", "additionalProperties": False, "properties": {}}, "strict": True},
@@ -1745,6 +1763,27 @@ def _apply(st, changes, why):
     st["history"] = (st.get("history") or [])[-19:] + [{"schedule": copy.deepcopy(st["schedule"]), "why": why}]
     for c in changes:
         st["schedule"][c["emp"]][str(int(c["day"]))] = c.get("value", "")
+    st["check"] = run_check(st)
+    return st["check"]
+
+
+def _set_day_type(st, days, holiday):
+    """特殊日「當假日」開關（對話用；畫面上是本月設定特殊日的勾選）"""
+    valid = {d["d"] for d in st["template"]["info"]["days"]}
+    ms = st.setdefault("mset", {})
+    sp = ms.setdefault("special", [])
+    for d in days:
+        d = int(d)
+        if d not in valid:
+            raise ValueError(f"這個月沒有 {d} 號")
+        x = next((x for x in sp if int(x["day"]) == d), None)
+        if x is None:
+            if not holiday:
+                continue
+            x = {"day": d, "revenue": None, "staff": "", "note": ""}
+            sp.append(x)
+        x["as_holiday"] = bool(holiday)
+    ms["special"] = sorted(sp, key=lambda x: x["day"])
     st["check"] = run_check(st)
     return st["check"]
 
@@ -1787,6 +1826,9 @@ def _chat_turn(st, text, model, k, tag=" "):
                 if b.name == "undo":
                     chk = _undo(st)
                     out = "沒有可以復原的改動" if chk is None else "已復原。\n" + check_text(chk)
+                elif b.name == "set_day_type":
+                    chk = _set_day_type(st, b.input.get("days") or [], b.input.get("holiday"))
+                    out = "已改日子類型。\n" + check_text(chk)
                 else:
                     chk = _apply(st, b.input.get("changes") or [], "對話：" + text[:40])
                     changed += len(b.input.get("changes") or [])

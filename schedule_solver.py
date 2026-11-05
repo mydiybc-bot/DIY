@@ -54,11 +54,11 @@ def shift_info(cfg):
     return out
 
 
-def demand_of(info, shifts, rules):
-    """每天每班要幾人 {日: {班別: 人數}}（平日照平日、六日照假日；備註可改某天某班人數）"""
+def demand_of(info, shifts, rules, hol=()):
+    """每天每班要幾人 {日: {班別: 人數}}（平日照平日、六日與特殊日「當假日」照假日；備註可改某天某班人數）"""
     need = {}
     for d in info["days"]:
-        wk = d["wd"] in WEEKEND
+        wk = d["wd"] in WEEKEND or d["d"] in hol
         need[d["d"]] = {n: (s["we"] if wk else s["wd"]) for n, s in shifts.items() if (s["we"] if wk else s["wd"])}
     for r in rules:
         if r["type"] in ("demand", "extra") and r.get("shift") in shifts:
@@ -85,7 +85,7 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
     days = [d["d"] for d in info["days"]]
     wd_of = {d["d"]: d["wd"] for d in info["days"]}
     nd = len(days)
-    need = demand_of(info, shifts, rules)
+    need = demand_of(info, shifts, rules, {int(x["day"]) for x in ms.get("special") or [] if x.get("as_holiday")})
     base = ms.get("base") or {}
     std_min = int(round(float(base.get("std_hours") or 0) * 60))
     off_days = base.get("off_days")
