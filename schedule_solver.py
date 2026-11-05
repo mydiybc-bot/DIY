@@ -25,6 +25,7 @@ W_REST11 = 6000      # 下班到隔天上班不到 11 小時（每次）
 W_LATE = 6000        # 晚接早超過本店上限（每次）
 W_PT_MIN = 60        # 兼職低於最低時數（每分鐘）
 W_FT_HRS = 50        # 正職時數跟目標差（每分鐘）
+W_FT_LEND = 2        # 兼職優先方案：正職時數不足（每分鐘；挪到其他月份補，比多排人便宜）
 W_EXTRA = 5000       # 某班多排人（每多 1 人；浪費人力）：比兼職目標時數優先，只輸給正職標準時數、兼職最低時數（2026-11-05 經營者：設定 1 人就排 1 人）
 W_PT_TGT = 4         # 兼職跟目標時數差（每分鐘）
 W_PREFER = 300       # 備註偏好的班別沒排到（每次）
@@ -68,12 +69,16 @@ def demand_of(info, shifts, rules, hol=()):
     return need
 
 
-def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0):
+def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std"):
     """
     info：104 範本資訊（days、emps）；cfg：店別基本設定；ms：本月設定（mset_view）
     rules：AI 從備註翻出來的規則（見 RULE_TYPES）；hol_days：這個月政府公告放假的平日日期
     prev_tail：{工號: 上個月最後連續上班幾天}；fixed_minutes：{(工號, 日): 固定格子的分鐘數}（rules 的 fixed_cell）
-    回傳 {"schedule": {工號: {日: 格子}}, "gaps": [...], "stats": {...}}
+    mode（2026-11-06 經營者：排兩種給店長比較）：
+      "ft"＝正職優先：正職排滿標準時數，兼職只補剩下的班（連最低時數都不必滿足）
+      "pt"＝兼職優先：兼職先排到目標時數（沒填目標就用最低時數），正職不夠的時數挪到其他月份（多出的休假標「彈性挪假」）
+      "std"＝原本的：正職排滿＋兼職排到最低時數
+    回傳 {"schedule": {工號: {日: 格子}}, "gaps": [...], "nuo": {工號: [日]}, "stats": {...}}
     """
     from ortools.sat.python import cp_model
 
@@ -251,15 +256,26 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
             sum(fixed.get((eid, d), 0) for d in days)
         H = m.NewIntVar(0, 31 * 24 * 60, f"H_{eid}")
         m.Add(H == sum(terms) + const)
-        if e["target"]:
-            dev = m.NewIntVar(0, 31 * 24 * 60, f"dev_{eid}")
-            m.Add(H - e["target"] <= dev)
-            m.Add(e["target"] - H <= dev)
-            pen.append((dev, W_FT_HRS if e["ft"] else W_PT_TGT))
-        if not e["ft"] and e["min"]:
-            under = m.NewIntVar(0, e["min"], f"under_{eid}")
-            m.Add(H + under >= e["min"])
-            pen.append((under, W_PT_MIN))
+        # 時數目標：低於／高於目標各自的罰分（依 mode）
+        if e["ft"]:
+            w_under, w_over = (W_FT_LEND, W_FT_HRS) if mode == "pt" else (W_FT_HRS, W_FT_HRS)
+            goal = e["target"]
+        elif mode == "ft":
+            w_under, w_over, goal = 0, 0, None
+        elif mode == "pt":
+            w_under, w_over, goal = W_PT_MIN, W_PT_TGT, e["target"] or e["min"]
+        else:
+            w_under, w_over, goal = W_PT_TGT, W_PT_TGT, e["target"]
+        if goal:
+            under = m.NewIntVar(0, 31 * 24 * 60, f"under_{eid}")
+            over = m.NewIntVar(0, 31 * 24 * 60, f"over_{eid}")
+            m.Add(H + under >= goal)
+            m.Add(H - over <= goal)
+            pen += [(under, w_under), (over, w_over)]
+        if not e["ft"] and e["min"] and mode == "std":
+            short_min = m.NewIntVar(0, e["min"], f"pmin_{eid}")
+            m.Add(H + short_min >= e["min"])
+            pen.append((short_min, W_PT_MIN))
 
         # 正職休假：國定假日標記、例假＋休息天數、完整一週至少 1 例 1 休
         if e["ft"]:
@@ -395,6 +411,21 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
         tot += sum(fixed.get((e["id"], d), 0) for d in days)
         hours[e["id"]] = {"name": e["name"], "ft": e["ft"], "hours": tot / 60,
                           "target": e["target"] / 60 if e["target"] else None, "min": e["min"] / 60 if e["min"] else None}
+    # 兼職優先：正職少排的天數改標「彈性挪假」（多放的假，之後月份補上班；只標在休息日，例假日不能挪）
+    nuo = {}
+    if mode == "pt":
+        for e in emps:
+            if not e["ft"] or not e["target"]:
+                continue
+            lack = e["target"] - int(round(hours[e["id"]]["hours"] * 60))
+            n = int(round(lack / 480)) if lack > 0 else 0
+            for d in reversed(days):
+                if n <= 0:
+                    break
+                if sched[e["id"]].get(str(d)) == "休息日":
+                    sched[e["id"]][str(d)] = "[彈性挪假]休息日"
+                    nuo.setdefault(e["id"], []).append(d)
+                    n -= 1
     extras = []
     for d in days:
         k = sum(need[d].values())
@@ -415,7 +446,7 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
             miss = [d for d in r["days"] if not worked(r["emp"], d)]
             if miss:
                 unmet.append({"rule": r, "days": miss})
-    return {"schedule": sched, "gaps": gaps, "extras": extras, "hours": hours, "need": need, "unmet": unmet,
+    return {"schedule": sched, "gaps": gaps, "extras": extras, "nuo": nuo, "mode": mode, "hours": hours, "need": need, "unmet": unmet,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(st), "objective": sv.ObjectiveValue()}}
 
 
