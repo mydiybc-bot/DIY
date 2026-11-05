@@ -1067,6 +1067,8 @@ def form_text(st, cfg):
                 bits.append(f"人力／班別調整：{x['staff']}")
             if x.get("note"):
                 bits.append(f"備註：{x['note']}")
+            if x.get("as_holiday"):
+                bits.append("當假日（人力需求照假日班）")
             L.append(f"{x['day']} 日：" + "；".join(bits))
     led = nuo_ledger(st, cfg)
     if any(r["open_rest"] or r["open_work"] for r in led):
@@ -1176,8 +1178,22 @@ def fill(st, schedule=None):
 
 # 不算現場人力的時段標籤／整天標籤（schedule_rules.md：開會、內訓、事務不佔現場班；特休、補休照常排班但人不在）
 # 2026-11-05 經營者：謝雨庭 12/4、12/11 排事務班，早班沒人，檢查卻沒列出缺口
-NOFLOOR_SEG_TAGS = {"事務班", "交流會議", "區會", "台北內訓課", "經管會"}
+NOFLOOR_SEG_TAGS = {"事務班", "交流會議", "區會", "台北內訓課", "經管會", "特休", "補休"}   # 特休／補休標在時段上（104 吳予茜 11/24）也不在店
 NOFLOOR_DAY_TAGS = {"特休", "補休"}
+
+
+GAP_MIN = 15   # 少於 15 分鐘的空窗不算（交接）
+
+
+def _hm2m(t):
+    """'HH:MM'／'次日HH:MM' → 分鐘"""
+    nxt = str(t).startswith("次日")
+    h, m = str(t).replace("次日", "").split(":")
+    return int(h) * 60 + int(m) + (1440 if nxt else 0)
+
+
+def _m2hm(t):
+    return ("次日" if t >= 1440 else "") + f"{t % 1440 // 60:02d}:{t % 60:02d}"
 
 
 def _coverage(info, parsed, ext, names):
@@ -1198,26 +1214,33 @@ def _coverage(info, parsed, ext, names):
             why = next((t for t in NOFLOOR_DAY_TAGS if t in c["dtag"]), "")
             floor = [] if why else [s for s in here if s[2] not in NOFLOOR_SEG_TAGS]
             if floor:
-                working.append(floor)
+                working.append((names.get(eid, eid), floor))
             else:
                 away.append(f"{names.get(eid, eid)}{why or next((s[2] for s in here if s[2]), '')}")
         note = f"（{'、'.join(away)}不算現場人力）" if away else ""
         if len(working) < len(need):
             errors.append(f"{d['label']} 需要 {len(need)} 人（{'、'.join(need)}），只排了 {len(working)} 人{note}")
             continue
-        free = list(working)
-        miss = []
+        # 2026-11-05：原本只比「開始時間一模一樣」，葉思柔 09:50–18:20 上平日也被說「早班沒人在那個時間上班」。
+        # 改成：需要的班的時段（含午休空檔）疊起來，跟實際在店現場的時段比，真的有空窗（店裡沒人）才提醒
+        req, cov = set(), set()
         for nm in need:
-            sh = shifts.get(nm)
-            if not sh:
-                continue
-            hit = next((w for w in free if w[0][0] == sh[0][0]), None)
-            if hit:
-                free.remove(hit)
-            else:
-                miss.append(nm)
-        if miss:
-            warns.append(f"{d['label']} 可能缺{'、'.join(miss)}（沒有人在那個時間上班）{note}")
+            for a, b in shifts.get(nm) or []:
+                req.update(range(_hm2m(a), _hm2m(b)))
+        for _, segs in working:
+            for sg in segs:
+                cov.update(range(_hm2m(sg[0]), _hm2m(sg[1])))
+        holes, start = [], None
+        for t in range(min(req, default=0), max(req, default=-1) + 2):
+            empty = t in req and t not in cov
+            if empty and start is None:
+                start = t
+            elif not empty and start is not None:
+                if t - start >= GAP_MIN:
+                    holes.append(f"{_m2hm(start)}–{_m2hm(t)}")
+                start = None
+        if holes:
+            warns.append(f"{d['label']} {'、'.join(holes)} 店裡沒有人（需要：{'、'.join(need)}）{note}")
     return errors, warns
 
 
@@ -1727,6 +1750,7 @@ CHAT_RULES = """
  5. 只處理本店排班；其他話題回「我只負責本店排班，其他問題請洽總部」。
  6. 檢查結果有新的 ❌ 一定要再改到沒有才回覆；⚠ 要告訴店長。
  7. 回覆用繁體中文，不要夾雜英文字。
+- 「本月設定」是店長填的設定表；格子開頭的 [指休]、[包館] 等是 104 班表上的標籤。說「設定表上是指休」只能根據本月設定的【指休】日期，不可以用格子標籤推論。
 - 店長說某個平日「視為假日／當假日／照假日排」（或反過來改回平日）：先用 set_day_type 改那天的需求（檢查會改照假日班），再用 apply_changes 排人。不要叫店長去改設定表。
 """
 
@@ -1797,8 +1821,10 @@ def _undo(st):
 
 
 def _chat_system(st):
+    cfg = cfg_load(st["store"])
     return (RULES + CHAT_RULES + "\n## 本店這個月的設定（AI 從設定表讀到的）\n" +
-            json.dumps(_ext(st), ensure_ascii=False) +
+            json.dumps(_ext(st, cfg), ensure_ascii=False) +
+            "\n\n## 本月設定（店長填的表單原文）\n" + form_text(st, cfg) +
             "\n\n## 104 範本\n- 班表：" + st["template"]["info"]["title"] +
             "\n- 日期：" + "、".join(d["label"] for d in st["template"]["info"]["days"]) +
             "\n- 可用標籤：" + "、".join(st["template"]["info"]["tags"]) +
