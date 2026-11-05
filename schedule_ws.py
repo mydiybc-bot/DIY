@@ -906,6 +906,22 @@ def form_ready(st, cfg):
 # 「挪假補班」那天沒上班＝補休給夥伴；有上班＝補上班給公司。標籤在整天或時段上都算。
 # 期初＝店別基本設定「挪假未補」（工作台以前的舊帳；日期落在工作台已有班表的月份就不重算）
 NUO_REST, NUO_WORK = "要補休給夥伴", "要補上班給公司"
+NUO_DAY_H = 8   # 沒上班的挪假日／補休日記 8 小時（2026-11-05 經營者：挪假、補班要自動記時數）
+
+
+def _nuo_h(c, tag):
+    """這格挪假／補班算幾小時：有上班＝標籤所在時段的實際時數（整天標籤＝全天），沒上班＝NUO_DAY_H"""
+    if not c["segs"]:
+        return NUO_DAY_H
+    segs = c["segs"] if tag in c["dtag"] else [x for x in c["segs"] if tag in x[2]]
+    return round(cell_hours(dict(c, segs=segs)), 2)
+
+
+def _nuo_txt(d, h):
+    return f"{d:g} 天（{h:g}h）" if d or h else "0 天"
+
+
+NUO_F = ["rest_add", "work_add", "rest_paid", "work_paid", "rest_add_h", "work_add_h", "rest_paid_h", "work_paid_h"]
 
 
 def _nuo_month(st):
@@ -925,13 +941,17 @@ def _nuo_month(st):
                 continue
             tags = c["dtag"] + "、" + "、".join(x[2] for x in c["segs"])
             work = bool(c["segs"])
-            r = out.setdefault(e["id"], {"rest_add": 0, "work_add": 0, "rest_paid": 0, "work_paid": 0, "days": []})
+            r = out.setdefault(e["id"], dict({f: 0 for f in NUO_F}, days=[]))
             if "彈性挪假" in tags:
-                r["rest_add" if work else "work_add"] += 1
-                r["days"].append((d["d"], "挪假（來上班，之後補休）" if work else "挪假（多放假，之後補上班）"))
+                f, h = "rest_add" if work else "work_add", _nuo_h(c, "彈性挪假")
+                r[f] += 1
+                r[f + "_h"] += h
+                r["days"].append((d["d"], f"挪假（來上班 {h:g}h，之後補休）" if work else f"挪假（多放假 {h:g}h，之後補上班）"))
             if "挪假補班" in tags:
-                r["work_paid" if work else "rest_paid"] += 1
-                r["days"].append((d["d"], "補上班" if work else "補休"))
+                f, h = "work_paid" if work else "rest_paid", _nuo_h(c, "挪假補班")
+                r[f] += 1
+                r[f + "_h"] += h
+                r["days"].append((d["d"], f"補上班 {h:g}h" if work else f"補休 {h:g}h"))
     return {k: v for k, v in out.items() if v["days"]}
 
 
@@ -966,26 +986,32 @@ def nuo_ledger(st, cfg=None):
         if m and f"{m.group(1)}{int(m.group(2)):02d}" >= first:
             continue
         eid = by_name.get(x.get("name")) or ("name:" + x.get("name", ""))
-        a = acc.setdefault(eid, [0, 0])
-        a[0 if x.get("type") != "B" else 1] += 1
+        a = acc.setdefault(eid, [0, 0, 0, 0])
+        i = 0 if x.get("type") != "B" else 1
+        a[i] += 1
+        a[i + 2] += NUO_DAY_H
         names.setdefault(eid, x.get("name", ""))
     out = {}
     for m in sorted(months):
         mm = _nuo_month(months[m]) if months[m].get("schedule") else {}
         for eid, r in mm.items():
-            a = acc.setdefault(eid, [0, 0])
+            a = acc.setdefault(eid, [0, 0, 0, 0])
             if m == ym:
-                out[eid] = dict(r, open_rest=a[0], open_work=a[1])
+                out[eid] = dict(r, open_rest=a[0], open_work=a[1], open_rest_h=a[2], open_work_h=a[3])
             a[0] += r["rest_add"] - r["rest_paid"]
             a[1] += r["work_add"] - r["work_paid"]
+            a[2] += r["rest_add_h"] - r["rest_paid_h"]
+            a[3] += r["work_add_h"] - r["work_paid_h"]
     rows = []
     for eid, a in acc.items():
-        cur = out.get(eid) or {"rest_add": 0, "work_add": 0, "rest_paid": 0, "work_paid": 0, "days": [], "open_rest": a[0], "open_work": a[1]}
-        if not (cur["open_rest"] or cur["open_work"] or cur["days"] or a[0] or a[1]):
+        cur = out.get(eid) or dict({f: 0 for f in NUO_F}, days=[], open_rest=a[0], open_work=a[1], open_rest_h=a[2], open_work_h=a[3])
+        if not (cur["open_rest"] or cur["open_work"] or cur["days"] or any(a)):
             continue
-        rows.append({"id": eid, "name": names.get(eid, eid), "open_rest": cur["open_rest"], "open_work": cur["open_work"],
-                     "rest_add": cur["rest_add"], "work_add": cur["work_add"], "rest_paid": cur["rest_paid"], "work_paid": cur["work_paid"],
-                     "close_rest": a[0], "close_work": a[1], "days": [f"{int(ym[4:])}/{d} {t}" for d, t in sorted(cur["days"])]})
+        rows.append(dict({f: round(cur[f], 2) for f in NUO_F}, id=eid, name=names.get(eid, eid),
+                         open_rest=cur["open_rest"], open_work=cur["open_work"],
+                         open_rest_h=round(cur["open_rest_h"], 2), open_work_h=round(cur["open_work_h"], 2),
+                         close_rest=a[0], close_work=a[1], close_rest_h=round(a[2], 2), close_work_h=round(a[3], 2),
+                         days=[f"{int(ym[4:])}/{d} {t}" for d, t in sorted(cur["days"])]))
     order = {e["id"]: i for i, e in enumerate(info.get("emps") or [])}
     return sorted(rows, key=lambda r: order.get(r["id"], 999))
 
@@ -1046,7 +1072,7 @@ def form_text(st, cfg):
         L.append("【挪假累積（上個月底還沒補的，程式從各月班表算的）】")
         for r in led:
             if r["open_rest"] or r["open_work"]:
-                L.append(f"{r['name']}：{NUO_REST} {r['open_rest']} 天；{NUO_WORK} {r['open_work']} 天")
+                L.append(f"{r['name']}：{NUO_REST} {_nuo_txt(r['open_rest'], r['open_rest_h'])}；{NUO_WORK} {_nuo_txt(r['open_work'], r['open_work_h'])}")
     if cfg.get("carry"):
         L.append("【挪假未補清單】姓名\t類型\t挪假日期\t備註")
         for x in cfg["carry"]:
@@ -1610,7 +1636,7 @@ def _solver_report(st, res, rules, bad, chk, secs_ai):
     led = nuo_ledger(st)
     if any(r["open_rest"] or r["open_work"] for r in led):
         L += ["", "**挪假還沒補的（程式沒有自動補，要補哪天請跟 AI 說）**"]
-        L += [f"- {r['name']}：{NUO_REST} {r['open_rest']} 天、{NUO_WORK} {r['open_work']} 天" for r in led if r["open_rest"] or r["open_work"]]
+        L += [f"- {r['name']}：{NUO_REST} {_nuo_txt(r['open_rest'], r['open_rest_h'])}、{NUO_WORK} {_nuo_txt(r['open_work'], r['open_work_h'])}" for r in led if r["open_rest"] or r["open_work"]]
     return "\n".join(L)
 
 
