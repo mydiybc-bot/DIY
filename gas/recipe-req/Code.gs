@@ -817,8 +817,9 @@ function listReqs_(p, auth) {
 }
 
 /* 2026-10-08 v14：申請表連結（整檔通行碼）上，簽核的同仁只能改「📋 新品研發工作申請單」這些表頭欄；檔期、用料、新品項等只有主廚能改 */
+/* 2026-11-05 行銷：連結上也要能改「📝 其他備註」（head.note，和主廚共用同一格）→ 加 P:head.note */
 /* 2026-11-04 行銷：連結上也要能選表二「第一單處理」→ 加 P:lines.first（用料列與半成品材料列都適用；其他表二欄位仍只有主廚／各單位身分能改） */
-var FORM_HEAD_RULES = 'P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther,P:lines.first';
+var FORM_HEAD_RULES = 'P:head.brand,P:head.date,P:head.name,P:head.diet,P:head.keep,P:head.fname,P:head.price,P:head.spec,P:head.time,P:head.qty,P:head.cat,P:head.catOther,P:head.note,P:lines.first';
 function formPatch_(p, auth) {
   if (!auth || auth.kind !== 'key' || !auth.camp) throw fail_('要用申請表連結', 'perm');
   var who = str_(p.who).trim().slice(0, 20);
