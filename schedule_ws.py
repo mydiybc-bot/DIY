@@ -48,6 +48,14 @@ PRICE = {MODEL: (2.00, 10.00, 2.50, 0.20), MODEL_BACKUP: (4.00, 20.00, 5.00, 0.2
 TWD = 32
 STORES = {1: "精明", 2: "草悟道", 3: "南京", 4: "士林", 5: "Focus", 6: "新竹", 7: "板橋", 8: "新店",
           9: "中壢", 10: "藝文", 11: "A13", 12: "SKM"}
+# 2026-11-05 經營者：開 13 號測試店試對話改班，測完會刪。只有總部登入看得到；第一次打開某月時從 12 號店同月複製一份；
+# 104 同步、全店日獎金表、跨店支援都不算它；營業額照 12 號店讀。
+TEST_STORES = {13: "測試店"}
+TEST_SRC = 12
+
+
+def _sname(store):
+    return STORES.get(store) or TEST_STORES.get(store, "")
 WEEKDAY = "一二三四五六日"
 # 104 崗位（13 個「X店」）→ 店號；台南店＝5 Focus、高雄店＝12 SKM（2026-10-28 跨店支援日獎金歸被支援店用）
 POS_STORE = {"精明店": 1, "草悟道店": 2, "南京店": 3, "士林店": 4, "台南店": 5, "新竹店": 6, "板橋店": 7, "新店店": 8,
@@ -122,6 +130,12 @@ def _load(store, ym):
     p = _dir() / f"{_key(store, ym)}.json"
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
+    src = _dir() / f"{_key(TEST_SRC, ym)}.json"
+    if int(store) in TEST_STORES and src.exists():
+        st = json.loads(src.read_text(encoding="utf-8"))
+        st.update(store=int(store), history=[], api_messages=[], usage=[], s104=None, s104_adopted=0,
+                  chat=[{"role": "ai", "ts": time.time(), "text": f"🧪 這是測試店：班表從 {TEST_SRC} 號店 {int(ym[4:])} 月複製過來，怎麼改都不會影響正式店和 104。"}])
+        return st
     return {"store": int(store), "ym": ym, "settings_files": [], "note": "", "template": None,
             "ext": None, "schedule": None, "report": "", "history": [], "chat": [], "api_messages": [],
             "check": None, "usage": [], "updated": ""}
@@ -367,6 +381,8 @@ def _cfg_path(store):
 
 def cfg_load(store):
     p = _cfg_path(store)
+    if int(store) in TEST_STORES and not p.exists():
+        p = _cfg_path(TEST_SRC)
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
@@ -1302,6 +1318,7 @@ def _ssl_ctx():
 
 def fetch_rev(store, ym):
     """排班分析 GAS getStoreDailyData（bonus=1）→ {日: {net, voucher, qty, rev}}；失敗丟 Exception"""
+    store = TEST_SRC if int(store) in TEST_STORES else store
     url = REV_API + "?" + urllib.parse.urlencode({"action": "getStoreDailyData", "store_id": int(store), "month": f"{ym[:4]}-{ym[4:]}", "bonus": "1", "callback": "cb"})
     with urllib.request.urlopen(url, timeout=90, context=_ssl_ctx()) as r:
         t = r.read().decode("utf-8")
@@ -1563,7 +1580,7 @@ def bonus_xlsx(stores, ym):
         info = st["template"]["info"]
         ext = _ext(st)
         etype = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
-        name = f"{store} {STORES.get(store, '')}"
+        name = f"{store} {_sname(store)}"
         if hdr3 is None:
             hdr3 = ["店號", "店名", "工號", "姓名"] + [str(d["d"]) for d in info["days"]] + ["合計"]
             ws3.append(hdr3)
@@ -1669,7 +1686,7 @@ def _public(st):
                 "diff": x.get("diff"), "diffs": diffs, "missing": x.get("missing") or [], "emps": x.get("emps") or [],
                 "unknown": x.get("unknown") or 0}
     return {
-        "ok": True, "store": st["store"], "storeName": STORES.get(st["store"], ""), "ym": st["ym"],
+        "ok": True, "store": st["store"], "storeName": _sname(st["store"]), "ym": st["ym"],
         "settingsFiles": [{"name": f["name"], "chars": len(f["text"])} for f in st.get("settings_files") or []],
         "note": st.get("note", ""), "s104": s104,
         "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
@@ -1678,7 +1695,7 @@ def _public(st):
         "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
         "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
-        "bonus": bonus_calc(st, ext), "stores": STORES,
+        "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES},
     }
 
 
@@ -1717,7 +1734,7 @@ def handle(path, body):
     except (TypeError, ValueError):
         return 400, {"ok": False, "error": "請選擇門市"}
     ym = str(body.get("ym") or "")
-    if store not in STORES or not re.fullmatch(r"20\d{2}(0[1-9]|1[0-2])", ym):
+    if not (store in STORES or (store in TEST_STORES and str(who) == "hq")) or not re.fullmatch(r"20\d{2}(0[1-9]|1[0-2])", ym):
         return 400, {"ok": False, "error": "門市或月份不對"}
     if not _can(store, who):
         return 403, {"ok": False, "error": "只能看自己店的班表"}
@@ -1790,7 +1807,7 @@ def handle(path, body):
             label = "全店"
         else:
             stores = [store]
-            label = f"{store}{STORES[store]}店"
+            label = f"{store}{_sname(store)}店"
         out, n = bonus_xlsx(stores, ym)
         if not n:
             return 400, {"ok": False, "error": "這個月還沒有班表，沒辦法算日獎金"}
@@ -1891,7 +1908,7 @@ def handle(path, body):
             st["check"] = run_check(st)
             out = fill(st)
             _save(st)
-        base = re.sub(r"\.xlsx?$", "", st["template"]["name"]) or f"{STORES[store]}店_{ym}"
+        base = re.sub(r"\.xlsx?$", "", st["template"]["name"]) or f"{_sname(store)}店_{ym}"
         return 200, {"ok": True, "b64": base64.b64encode(out).decode("ascii"),
                      "filename": f"{base}_已排班.xlsx", "check": st["check"]}
 
