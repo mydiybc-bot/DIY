@@ -1572,6 +1572,10 @@ def _solver_report(st, res, rules, bad, chk, secs_ai):
         for g in res["gaps"]:
             L.append(f"- {g['day']} 號 {g['shift']}：要 {g['need']} 人、只排得到 {g['got']} 人")
         L.append("可以：請兼職多填可上日、調整指休、或在下方對話框跟 AI 說要找誰支援。")
+    if res.get("extras"):
+        n = sum(g["got"] - g["need"] for g in res["extras"])
+        L += ["", f"**比設定多排的（共 {n} 人次）**：正職要排滿標準時數、兼職要排到最低時數，班不夠分才多出來。可以把這幾天改成特休、補休或事務班，或下修目標時數。"]
+        L += [f"- {g['day']} 號：設定 {g['need']} 人、排了 {g['got']} 人（多在{'、'.join(g['shifts'])}）" for g in res["extras"]]
     if rules:
         L += ["", "**照備註／店規套用的**"] + ["- " + _rule_text(r, names) for r in rules]
     if bad:
@@ -1635,6 +1639,8 @@ def _draft_worker(store, ym):
             if st.get("schedule"):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "重排前"}]
             msg = "✅ 班表排好了（程式排，硬規則全部通過）。" if chk["ok"] else f"✅ 班表排好了，但有 {len(chk['errors'])} 項沒過（多半是人不夠），請看檢查結果。"
+            if res.get("extras"):
+                msg += f"有 {sum(g['got'] - g['need'] for g in res['extras'])} 人次比設定多（正職時數要排滿、班不夠分），列在報告裡。"
             if bad:
                 msg += f"有 {len(bad)} 條備註沒辦法自動套用，列在報告裡。"
             st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],

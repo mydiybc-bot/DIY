@@ -17,14 +17,15 @@ W_WEEK = 200000      # 正職完整一週少於 1 例 1 休（每缺 1 天）
 W_OFF = 150000       # 正職例假＋休息天數跟本月基準不一樣（每天；不可少排）
 W_HOL = 150000       # 正職國定假日天數不足（每天）
 W_CONSEC = 120000    # 超過本店連上上限（每多一天的視窗）
-W_SHORT = 100000     # 某天某班缺人（每缺 1 人）
+W_SHORT = 100000     # 某天在店人數比設定少（每缺 1 人；檢查程式算人頭）
+W_SHIFT = 20000      # 某班沒人（人頭夠但班別對不上；檢查只提醒）
 W_FORCE = 8000       # 備註指定要上班卻沒排（每天）
 W_APART = 8000       # 備註說不能同一天上班卻排在一起（每天）
 W_REST11 = 6000      # 下班到隔天上班不到 11 小時（每次）
 W_LATE = 6000        # 晚接早超過本店上限（每次）
 W_PT_MIN = 60        # 兼職低於最低時數（每分鐘）
 W_FT_HRS = 50        # 正職時數跟目標差（每分鐘）
-W_EXTRA = 400        # 某班多排人（每多 1 人；會拉低人效）
+W_EXTRA = 5000       # 某班多排人（每多 1 人；浪費人力）：比兼職目標時數優先，只輸給正職標準時數、兼職最低時數（2026-11-05 經營者：設定 1 人就排 1 人）
 W_PT_TGT = 4         # 兼職跟目標時數差（每分鐘）
 W_PREFER = 300       # 備註偏好的班別沒排到（每次）
 W_HOL_DATE = 1500    # 國定假日沒放在政府公告的那天（每天）
@@ -167,15 +168,22 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
             if len(v) > 1:
                 m.Add(sum(v) <= 1)
 
-    # 每天每班人數
+    # 每天人數：總人頭不可少、也不要多（多＝浪費人力）；各班別盡量對上
     for d in days:
+        tot_need = sum(need[d].values())
+        if not tot_need:
+            continue
+        allv = [x[(e["id"], d, n)] for e in emps for n in allowed[(e["id"], d)]]
+        short = m.NewIntVar(0, tot_need, f"short_{d}")
+        extra = m.NewIntVar(0, len(emps), f"extra_{d}")
+        m.Add(sum(allv) + short >= tot_need)
+        m.Add(sum(allv) - tot_need <= extra)
+        pen += [(short, W_SHORT), (extra, W_EXTRA)]
         for n, k in need[d].items():
             v = [x[(e["id"], d, n)] for e in emps if (e["id"], d, n) in x]
-            short = m.NewIntVar(0, k, f"short_{d}_{n}")
-            extra = m.NewIntVar(0, len(emps), f"extra_{d}_{n}")
-            m.Add(sum(v) + short >= k)
-            m.Add(sum(v) - k <= extra)
-            pen += [(short, W_SHORT), (extra, W_EXTRA)]
+            miss = m.NewIntVar(0, k, f"miss_{d}_{n}")
+            m.Add(sum(v) + miss >= k)
+            pen.append((miss, W_SHIFT))
 
     for e in emps:
         eid = e["id"]
@@ -374,7 +382,14 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
         tot += sum(fixed.get((e["id"], d), 0) for d in days)
         hours[e["id"]] = {"name": e["name"], "ft": e["ft"], "hours": tot / 60,
                           "target": e["target"] / 60 if e["target"] else None, "min": e["min"] / 60 if e["min"] else None}
-    return {"schedule": sched, "gaps": gaps, "hours": hours, "need": need,
+    extras = []
+    for d in days:
+        k = sum(need[d].values())
+        got = sum(1 for e in emps for n in allowed[(e["id"], d)] if sv.Value(x[(e["id"], d, n)]))
+        if k and got > k:
+            extras.append({"day": d, "need": k, "got": got,
+                           "shifts": [n for n in shifts if sum(1 for e in emps if (e["id"], d, n) in x and sv.Value(x[(e["id"], d, n)])) > need[d].get(n, 0)]})
+    return {"schedule": sched, "gaps": gaps, "extras": extras, "hours": hours, "need": need,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(st), "objective": sv.ObjectiveValue()}}
 
 
