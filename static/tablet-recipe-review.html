@@ -389,11 +389,12 @@ tr.off td.nm{color:#a99a90}tr.off td.nm img{opacity:.45}tr.off .st{opacity:.4}
 ③ 點格子 → 輸入主廚或管理者密碼 → 一頁一頁看「英文原文 ↔ 譯文」；有提醒的頁會標橘色。看完按「✅ 核准放行」才會出現在店內平板。<br>
 ④ 食材名稱是照後台中文原名翻的（英文名常有歧義）。例：脆笛可可英文版寫 Whipping cream，中文版是「克林姆」，所以日文是カスタードクリーム——這是對的，不是翻錯。<br>
 ⑤ 英文原版食譜在後台改了，會自動重翻，<b>之前的核准會失效</b>，要再看一次。<br>
-⑥「🤖 翻譯這一份」約 1～2 分鐘；「🔁 重翻」會覆蓋現在的譯文、核准一起失效。<br>
+⑥「🤖 翻譯這一份」約 1～2 分鐘；「🔁 重翻」會覆蓋現在的譯文、核准一起失效。<b>「🤖 一次翻完全部還沒翻的」</b>把有勾的食譜裡還沒翻／失敗的格子一次翻完（同時 3 格，頁面要開著；中途可按停止，翻好的會留著），翻好一樣要逐格核准。<br>
 ⑦ 每列最前面的「☑ 給外國客人用」決定這支要不要給外國客人：<b>有勾</b>才會翻譯、核准後上平板；<b>取消勾</b>平板馬上看不到（譯文和核准都留著，再勾回來馬上恢復）。後台新出現的英文食譜（台灣區、啟用中）會自動加入（有勾），不想給外國客人的再取消勾即可。勾選要主廚或管理者密碼。
 </div></details>
 <div class="bar"><input type="search" id="q" placeholder="搜尋食譜名稱（中文或英文）" autocomplete="off">
 <span class="chips" id="chips"><button type="button" data-f="all" class="on">全部</button><button type="button" data-f="wait">有待核准</button><button type="button" data-f="review">有待檢查／失敗</button><button type="button" data-f="none">有還沒翻</button><button type="button" data-f="live">有已放行</button><button type="button" data-f="pkon" class="pkf">☑ 已勾選</button><button type="button" data-f="pkoff" class="pkf">☐ 沒勾選</button></span></div>
+<div class="bar" id="bulkBar"><button type="button" class="btn p" id="bulkTr" disabled>🤖 一次翻完全部還沒翻的</button><button type="button" class="btn r" id="bulkStop" hidden>⏹ 停止</button><span id="bulkMsg" class="muted"></span></div>
 <div id="pknote"></div>
 <div id="panel"></div>
 <div id="tbl"></div>
@@ -468,6 +469,7 @@ tr.off td.nm{color:#a99a90}tr.off td.nm img{opacity:.45}tr.off .st{opacity:.4}
     document.querySelectorAll('#chips .pkf').forEach(function (b) { b.style.display = d.pick_ready ? '' : 'none'; });
     $('sumTb').innerHTML = (d.pick_ready ? '給外國客人用 <b>' + pk + '</b> 支｜' : '') + '已放行 <b>' + cnt('live') + '</b>｜待核准 <b>' + cnt('wait') + '</b>｜待檢查 <b>' + cnt('review') + '</b>' + (cnt('fail') ? '｜失敗 ' + cnt('fail') : '');
     $('dsbT').innerHTML = '平板外語食譜：' + (d.pick_ready ? '給外國客人用 <b>' + pk + '</b>／' + d.sources + ' 支｜' : '') + '原文 <b>' + d.sources + '</b> 支（後台原文最後檢查 ' + esc(d.refresh_at || '—') + '）｜已放行 <b>' + cnt('live') + '</b>｜待核准 <b>' + cnt('wait') + '</b>｜待檢查 <b>' + cnt('review') + '</b>｜失敗 ' + cnt('fail') + '｜還沒翻 ' + cnt('') + '｜每天 06:30 檢查原文' + (d.schedule > 0 ? '' : '（⚠ 排程不在）') + (d.auto ? '、自動翻譯開啟' : '');
+    bulkLabel();
   }
   function keep(r) {
     if (S.q) { var t = (r.name + ' ' + LANGS.map(function (l) { return (r.local || {})[l] || ''; }).join(' ')).toLowerCase(); if (!S.q.split(/\s+/).every(function (w) { return t.indexOf(w) >= 0; })) return false; }
@@ -510,6 +512,7 @@ tr.off td.nm{color:#a99a90}tr.off td.nm img{opacity:.45}tr.off .st{opacity:.4}
       + '<div class="acts"><button type="button" class="btn p" id="doTr">🤖 翻譯這一份</button><button type="button" class="btn" data-close="1">關閉</button><span id="trMsg" class="muted"></span></div></div>';
     $('doTr').onclick = function () {
       if (S.busy) return;
+      if (S.bulk) { alert('「一次翻完」正在跑，這格會輪到，不用另外按'); return; }
       if (!confirm('翻譯「' + r.name + '」的' + LN[lang] + '？\n約 1～2 分鐘，會用到一點翻譯費。')) return;
       if (!confirm('確定開始翻譯？（翻好不會直接上平板，要核准）')) return;
       S.busy = true; this.disabled = true; $('trMsg').innerHTML = '<span class="spin">⏳</span> 翻譯中，請不要關掉這頁…';
@@ -585,6 +588,57 @@ tr.off td.nm{color:#a99a90}tr.off td.nm img{opacity:.45}tr.off .st{opacity:.4}
     if (S.busy) { alert('正在翻譯中，請等它完成'); return; }
     pick(t.getAttribute('data-id'), t.getAttribute('data-l'));
   });
+  /* ---- 🤖 一次翻完（2026-11-05 經營者：「這不能一次一起翻嗎」）----
+     把「有勾」的食譜裡還沒翻／失敗的格子排成一列，同時 3 格送 i18nKick（每格指定 id＋lang，跟按「翻譯這一份」一樣）。
+     後台每格有 6 分鐘認領、寫入有全系統鎖＋flush（10/24 並行事故後補的），所以並行安全。翻好一格就地改那格狀態，只重畫總表、不碰搜尋框。
+     翻好仍是「待核准／待檢查」，要一格一格核准才上平板。這頁要開著（關掉就停，已翻好的都留著）。 */
+  var BULK_N = 3;
+  function bulkTodo() { var a = []; ((S.st && S.st.matrix) || []).filter(pkOn).forEach(function (r) { LANGS.forEach(function (l) { var s = r.st[l] || ''; if (s === '' || s === 'fail') a.push({ r: r, l: l }); }); }); return a; }
+  function bulkLabel() {
+    if (S.bulk) return;
+    var n = bulkTodo().length, b = $('bulkTr');
+    b.disabled = !n; b.textContent = n ? '🤖 一次翻完全部還沒翻的（' + n + ' 格）' : '✔ 有勾的食譜都翻過了';
+  }
+  $('bulkTr').onclick = function () {
+    if (S.bulk || S.busy) return;
+    var q = bulkTodo(); if (!q.length) return;
+    var mins = Math.ceil(q.length * 50 / 60 / BULK_N);
+    if (!confirm('一次翻譯 ' + q.length + ' 格（「有勾」的食譜裡還沒翻／失敗的）？\n同時 3 格，大約 ' + mins + ' 分鐘，會用到翻譯費。\n翻好不會直接上平板，還是要一格一格核准。')) return;
+    if (!confirm('確定開始？這段時間這頁要開著（關掉就停，已翻好的會留著）。')) return;
+    S.bulk = { q: q, done: 0, ok: 0, chk: 0, bad: 0, skip: 0, stop: false, t0: Date.now(), total: q.length, errs: [] };
+    $('bulkTr').disabled = true; $('bulkStop').hidden = false;
+    window.addEventListener('beforeunload', bulkWarn);
+    var workers = []; for (var i = 0; i < BULK_N; i++) workers.push(bulkNext());
+    Promise.all(workers).then(bulkEnd);
+    bulkShow();
+  };
+  $('bulkStop').onclick = function () { if (S.bulk && confirm('停止？正在翻的那幾格會做完，其他的不再送。')) { S.bulk.stop = true; bulkShow(); } };
+  function bulkWarn(e) { e.preventDefault(); e.returnValue = ''; return ''; }
+  function bulkShow() {
+    var B = S.bulk; if (!B) return;
+    var sec = (Date.now() - B.t0) / 1000, left = B.total - B.done, eta = B.done ? Math.ceil(sec / B.done * left / 60) : Math.ceil(left * 50 / 60 / BULK_N);
+    $('bulkMsg').innerHTML = (B.stop ? '⏹ 停止中（等手上的做完）…' : '<span class="spin">⏳</span> 翻譯中，請不要關掉這頁…') + ' 完成 <b>' + B.done + '</b>／' + B.total
+      + '（待核准 ' + B.ok + '、待檢查 ' + B.chk + '、失敗 ' + B.bad + (B.skip ? '、略過 ' + B.skip : '') + '）' + (B.stop ? '' : '｜約剩 ' + eta + ' 分鐘');
+  }
+  function bulkNext() {
+    var B = S.bulk; if (!B || B.stop || !B.q.length) return Promise.resolve();
+    var x = B.q.shift();
+    return post({ action: 'i18nKick', id: x.r.id, lang: x.l, by: '對照核准頁（一次翻完）' }, 400000).then(function (j) {
+      if (!j.ok) throw new Error(j.msg);
+      var d = j.data || {};
+      if (!d.status) { B.skip++; return; }   /* 已經翻好或別人正在翻 */
+      x.r.st[x.l] = d.status === 'ok' ? 'wait' : d.status;
+      if (d.status === 'ok') B.ok++; else if (d.status === 'fail') B.bad++; else B.chk++;
+    }).catch(function (e) { B.bad++; B.errs.push(x.r.name + '｜' + LN[x.l] + '：' + errText(e)); x.r.st[x.l] = 'fail'; })
+      .then(function () { B.done++; bulkShow(); renderDsb(); renderTable(); return bulkNext(); });
+  }
+  function bulkEnd() {
+    var B = S.bulk; window.removeEventListener('beforeunload', bulkWarn);
+    $('bulkStop').hidden = true;
+    var msg = (B.stop ? '⏹ 已停止' : '✔ 一次翻完結束') + '：完成 ' + B.done + '／' + B.total + '（待核准 ' + B.ok + '、待檢查 ' + B.chk + '、失敗 ' + B.bad + (B.skip ? '、略過 ' + B.skip : '') + '），用了 ' + Math.round((Date.now() - B.t0) / 60000) + ' 分鐘。翻好的要一格一格點開核准才上平板。';
+    S.bulk = null;
+    load().then(function () { $('bulkMsg').textContent = msg + (B.errs.length ? '　沒成功的：' + B.errs.slice(0, 5).join('；') + (B.errs.length > 5 ? '…等 ' + B.errs.length + ' 格' : '') : ''); });
+  }
   /* ---- 勾選：給外國客人用（2026-10-26）---- */
   function togglePick(id, btn) {
     var r = rowOf(id); if (!r || S.busy) return;
