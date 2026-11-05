@@ -26,7 +26,7 @@
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v33';   /* 2026-10-19 v33：🌐 食譜翻譯加澳門英文（me）、英文（en）——三地確認用語可存這兩種語言（TR_LANGS）。v32：三地確認用語（分頁 tr_confirmed；動作 trConfList 讀、trConfirm／trConfDel 主廚或管理者）；📤 建新品項可一起填澳門中文／菲律賓英文／越南文名稱（nrIngCreate items[].tr），建好的記進確認用語、清對照表暫存。v31：🌐 食譜翻譯——tr_translate.gs 動作 trRecipe（讀一支食譜的匯出頁）、trDict（後台食材名稱對照表 10 語言＋各語言單位，暫存 6 小時）；都只讀、要身分密碼。2026-10-18 v30：五燈號配對的母體改全部年份（NM_MATCH_FROM 2000/01/01；驗證受測仍是 2026，NM_EVAL_FROM）；media_match 多更新日欄；nmKick agg 只重做彙整。v29：公版圖片／影片配對改五燈號（nm_match.gs：2026 年食譜、標題＋步驟文字＋最像的食譜；動作 nmEval 驗證）；nm_scan 多存步驟文字、寫 media_match、修更新日比對。2026-10-18 v28：新品申請表半成品的材料（payload.semi_items_new：🆕／停售／過季）核准時也建主檔、停售改回在用；不進甜點 BOM（qty 0、semiOnly）；newItemsPub 也列。2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v34';   /* 2026-11-05 v34：檔期「參與門市」（fact_campaign 最後一欄，migrate_ ⑬ MIG_STORES；saveCampaign_ 用 campStores_ 整理成「1,3,5」；核准寫新器具／模具標配只寫參與門市）。2026-10-19 v33：🌐 食譜翻譯加澳門英文（me）、英文（en）——三地確認用語可存這兩種語言（TR_LANGS）。v32：三地確認用語（分頁 tr_confirmed；動作 trConfList 讀、trConfirm／trConfDel 主廚或管理者）；📤 建新品項可一起填澳門中文／菲律賓英文／越南文名稱（nrIngCreate items[].tr），建好的記進確認用語、清對照表暫存。v31：🌐 食譜翻譯——tr_translate.gs 動作 trRecipe（讀一支食譜的匯出頁）、trDict（後台食材名稱對照表 10 語言＋各語言單位，暫存 6 小時）；都只讀、要身分密碼。2026-10-18 v30：五燈號配對的母體改全部年份（NM_MATCH_FROM 2000/01/01；驗證受測仍是 2026，NM_EVAL_FROM）；media_match 多更新日欄；nmKick agg 只重做彙整。v29：公版圖片／影片配對改五燈號（nm_match.gs：2026 年食譜、標題＋步驟文字＋最像的食譜；動作 nmEval 驗證）；nm_scan 多存步驟文字、寫 media_match、修更新日比對。2026-10-18 v28：新品申請表半成品的材料（payload.semi_items_new：🆕／停售／過季）核准時也建主檔、停售改回在用；不進甜點 BOM（qty 0、semiOnly）；newItemsPub 也列。2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -41,7 +41,7 @@ var LOG_KEEP = 5000;                   /* log 分頁保留筆數 */
 var TABS = {
   fact_campaign: ['campaign_id', '檔期名稱', '起', '迄', '第一批配貨日', '品牌別', '自己人搶先體驗', '配合活動',
     '作業_第一批出貨_時間', '作業_第一批出貨_備註', '作業_貼紙_時間', '作業_貼紙_備註', '作業_POS_時間', '作業_POS_備註',
-    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by', '自己人搶先開賣日', '類型'],   /* 類型：2026-10-17 新增（空白＝檔期、「常態菜單」＝長期菜單；migrate_ ⑫ 補表頭） */   /* 最後一欄 2026-10-05 新增（加在最後，舊欄位位置不動；migrate_ 自動補表頭） */
+    '檔期備註', 'status', 'created_at', 'updated_at', 'updated_by', '自己人搶先開賣日', '類型', '參與門市'],   /* 參與門市：2026-11-05 新增（店號逗號分隔，例「1,3,5」；空白＝依品牌別全部門市；採購系統拆首批量、申請表算每店用量都看它；migrate_ ⑬ 補表頭） */   /* 類型：2026-10-17 新增（空白＝檔期、「常態菜單」＝長期菜單；migrate_ ⑫ 補表頭） */   /* 最後一欄 2026-10-05 新增（加在最後，舊欄位位置不動；migrate_ 自動補表頭） */
   fact_recipe_req: ['req_id', 'campaign_id', 'seq', '商品暫定名稱', '商品正式名稱', '定價', '成本', '利潤率', '規格', '葷素',
     '保存方式', '包裝方式', '製作時間', '預估銷售數', 'status', 'signers', 'payload_1', 'payload_2', 'payload_3', 'payload_4',
     'created_at', 'updated_at', 'updated_by'],
@@ -139,7 +139,7 @@ function randPw_(len) {
    ① 2026-09-28「管理者」身分（🔑 密碼管理用）：舊試算表沒有這一列 → 補上；密碼 10 碼隨機，只在 dim_role 分頁
    ② 2026-09-29 B 階段：補建 fact_req_fill 分頁（只新增分頁，不動既有分頁）
    ③ 2026-09-29 C 階段：補建 fact_push 分頁 */
-var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH', 'MIG_EMAIL', 'MIG_CTYPE'];
+var MIG_KEYS = ['MIG_ADMIN', 'MIG_FILL', 'MIG_PUSH', 'MIG_BOM', 'MIG_EARLY', 'MIG_RBIMP', 'MIG_CMT', 'MIG_BATCH', 'MIG_EMAIL', 'MIG_CTYPE', 'MIG_STORES'];
 /* 2026-10-07 加速：每次請求的指令碼屬性只讀一次（原本 migrate_ 逐一讀 6 個、ss_ 再讀 1 個；一個約 50～100 毫秒） */
 var _props = null;
 function props_() { if (!_props) _props = PropertiesService.getScriptProperties().getProperties() || {}; return _props; }
@@ -221,6 +221,15 @@ function migrate_() {
       if (String(tc.getValue()).trim() !== TH[tn - 1]) throw new Error('fact_campaign 第 ' + tn + ' 欄表頭不對');
       ts.getRange(2, tn, Math.max(1, ts.getMaxRows() - 1), 1).setNumberFormat('@');
       setProp_('MIG_CTYPE', '1');
+    }
+    if (P.getProperty('MIG_STORES') !== '1') {   /* ⑬ 2026-11-05：fact_campaign 補一欄「參與門市」（只加表頭，既有檔期一格不動；空白＝依品牌別全部門市） */
+      var ps = ss_().getSheetByName('fact_campaign'), PH = TABS.fact_campaign, pn = PH.indexOf('參與門市') + 1;
+      if (ps.getMaxColumns() < pn) ps.insertColumnsAfter(ps.getMaxColumns(), pn - ps.getMaxColumns());
+      var pc = ps.getRange(1, pn);
+      if (String(pc.getValue()).trim() === '') pc.setValue(PH[pn - 1]).setFontWeight('bold').setBackground('#E0F2F1');
+      if (String(pc.getValue()).trim() !== PH[pn - 1]) throw new Error('fact_campaign 第 ' + pn + ' 欄表頭不對');
+      ps.getRange(2, pn, Math.max(1, ps.getMaxRows() - 1), 1).setNumberFormat('@');
+      setProp_('MIG_STORES', '1');
     }
     if (!P.getProperty('SIGN_SECRET')) setProp_('SIGN_SECRET', Utilities.getUuid() + Utilities.getUuid());   /* ⑧ 簽核連結通行碼的密鑰（只在伺服器；在鎖裡產生，不會兩個請求各產一組） */
     var seed = P.getProperty('SIGNER_SEED');
@@ -570,6 +579,13 @@ function listCampaigns_() {
   });
 }
 
+/* 2026-11-05：參與門市「1,3,5」→ [1,3,5]（只留 1～12、去重、排序；空白＝[]＝依品牌別全部門市） */
+var STORE_MAX = 12;
+function campStores_(v) {
+  var seen = {}, out = [];
+  str_(v).split(/[^0-9]+/).forEach(function (x) { var n = parseInt(x, 10); if (n >= 1 && n <= STORE_MAX && !seen[n]) { seen[n] = 1; out.push(n); } });
+  return out.sort(function (a, b) { return a - b; });
+}
 function saveCampaign_(p, auth) {
   var c = p.campaign || {}, t = load_('fact_campaign'), now = now_();
   var id = str_(c.campaign_id).trim();
@@ -595,6 +611,7 @@ function saveCampaign_(p, auth) {
   });
   obj['類型'] = str_(obj['類型']).trim() === REG_TYPE ? REG_TYPE : '';   /* 2026-10-17：常態菜單沒有結束日 */
   if (obj['類型'] === REG_TYPE) obj['迄'] = '';
+  obj['參與門市'] = campStores_(obj['參與門市']).join(',');   /* 2026-11-05：只留 1～12 的店號、去重、由小到大 */
   ['起', '迄', '第一批配貨日', '自己人搶先開賣日'].forEach(function (h) { obj[h] = normDate_(obj[h]); });
   if (obj['類型'] === REG_TYPE && !/^\d{4}-\d{2}-\d{2}$/.test(obj['起'])) throw fail_('常態菜單要填上市日（開始日）');
   if (obj['自己人搶先開賣日'] && !/^\d{4}-\d{2}-\d{2}$/.test(obj['自己人搶先開賣日'])) throw fail_('「自己人搶先開賣日」日期格式不對');
@@ -1623,6 +1640,8 @@ function planPush_(rid) {
     /* 店＝甜點品牌別 ∩ 檔期品牌別（檔期只在自己做、甜點預設兩個品牌 → 只放自己做 1～10 店；同採購系統檔期新品用檔期品牌別） */
     var bD = ptName_(h.brand), bC = camp ? ptName_(camp['品牌別']) : '', stores = brandStores_(bD || bC), haveSt = {};
     if (bD && bC && BRAND_STORES[bD] && BRAND_STORES[bC]) stores = stores.filter(function (n) { return BRAND_STORES[bC].indexOf(n) >= 0; });
+    var cS = camp ? campStores_(camp['參與門市']) : [];   /* 2026-11-05：檔期有勾參與門市 → 新器具／模具只寫這幾家店的標配 */
+    if (cS.length) { var sIn = stores.filter(function (n) { return cS.indexOf(n) >= 0; }); stores = sIn.length ? sIn : cS; }
     if (!stores.length) warn.push('甜點品牌別「' + bD + '」和檔期品牌別「' + bC + '」沒有共同的店：新器具／模具各店標配沒有寫，請體驗中心到採購系統店別參數設定');
     if (P.par) P.par.vals.forEach(function (r) { var n = Number(r[P.par.col['店號']]); if (n > 0) haveSt[n] = 1; });
     if (Object.keys(haveSt).length) stores = stores.filter(function (n) { return haveSt[n]; });

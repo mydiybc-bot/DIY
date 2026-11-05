@@ -1,4 +1,9 @@
 // ================================================================
+// EventLayer.gs — 節慶事件層 v1.15（2026-11-05）
+// v1.15：★ 檔期「參與門市」（經營者 2026-11-05：有些活動不是每間店都有）
+//   食譜系統 fact_campaign 最後一欄「參與門市」（「1,3,5」；空白＝依品牌別全部門市）。evReadPlan_／evReadReg_ 讀進 plan.stores，
+//   evPlanSplit_ 只把預估銷售數分給 品牌別 ∩ 參與門市 的店；有勾的店去年同檔期沒賣（今年才參加）→ 份額改看近 28 天。
+//   沒勾參與門市的檔期：輸出與 v1.14 逐字相同。曲線模式（已開賣、有去年曲線）照各店實際銷量，不受影響。
 // EventLayer.gs — 節慶事件層 v1.14（2026-10-21）
 // v1.14：★ 檔期曲線對齊全面修正（經營者：萬聖節之外，其他檔期與全新檔期也不能再發生）
 //   ① 國曆節日用規則自動算（萬聖節 10/31、聖誕節 12/25、情人節 2/14、白色情人節 3/14、母親節＝5 月第 2 個週日），不用每年登錄。
@@ -216,6 +221,12 @@ var EV_REQ_ID = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';
 var EV_PLAN_MANUAL_TAB = '預估銷售數_舊流程';   /* ★ v1.11 */
 var EV_PLAN_OK = { '已核准': 1, '已核准（採購寫入失敗）': 1, '已寫入採購': 1 };
 var EV_BRAND_STORES = { '自己做': [1,2,3,4,5,6,7,8,9,10], '吳寶春自己做': [11,12], '自己做＆吳寶春自己做': [1,2,3,4,5,6,7,8,9,10,11,12] };
+/* ★ v1.15：檔期「參與門市」「1,3,5」→ [1,3,5]（只留 1～12；空白＝[]＝依品牌別全部門市） */
+function evParseStores_(v) {
+  var seen = {}, out = [];
+  String(v == null ? '' : v).split(/[^0-9]+/).forEach(function (x) { var n = parseInt(x, 10); if (n >= 1 && n <= 12 && !seen[n]) { seen[n] = 1; out.push(n); } });
+  return out.sort(function (a, b) { return a - b; });
+}
 function evReadPlan_(log) {
   var out = {}, n = 0;
   try {
@@ -229,7 +240,10 @@ function evReadPlan_(log) {
       return { idx: idx, rows: sh.getRange(2, 1, sh.getLastRow() - 1, last).getValues() };
     }
     var C = tab(cp, ['campaign_id', '檔期名稱', '品牌別', 'status']), camp = {};
-    C.rows.forEach(function (r) { camp[String(r[C.idx['campaign_id']]).trim()] = { name: String(r[C.idx['檔期名稱']]).trim(), brand: String(r[C.idx['品牌別']]).trim(), st: String(r[C.idx['status']]).trim() }; });
+    /* ★ v1.15：參與門市欄（舊試算表沒有這欄＝全部空白） */
+    var CH = cp.getRange(1, 1, 1, cp.getLastColumn()).getValues()[0].map(function (x) { return String(x).trim(); }), sCol = CH.indexOf('參與門市');
+    var SV = (sCol >= 0 && C.rows.length) ? cp.getRange(2, sCol + 1, C.rows.length, 1).getValues() : [];
+    C.rows.forEach(function (r, i) { camp[String(r[C.idx['campaign_id']]).trim()] = { name: String(r[C.idx['檔期名稱']]).trim(), brand: String(r[C.idx['品牌別']]).trim(), st: String(r[C.idx['status']]).trim(), stores: evParseStores_(SV[i] ? SV[i][0] : '') }; });
     var R = tab(rq, ['req_id', 'campaign_id', '商品暫定名稱', '商品正式名稱', '預估銷售數', 'status', 'updated_at']);
     R.rows.forEach(function (r) {
       var st = String(r[R.idx['status']]).trim(), q = Number(r[R.idx['預估銷售數']]) || 0;
@@ -239,7 +253,7 @@ function evReadPlan_(log) {
       var nm = String(r[R.idx['商品正式名稱']] || '').trim() || String(r[R.idx['商品暫定名稱']] || '').trim(); if (!nm) return;
       var up = String(r[R.idx['updated_at']] || '');
       if (out[nm] && out[nm].up > up) return;
-      out[nm] = { qty: q, brand: c.brand || '', req: String(r[R.idx['req_id']]).trim(), camp: c.name || '', up: up };
+      out[nm] = { qty: q, brand: c.brand || '', stores: c.stores || [], req: String(r[R.idx['req_id']]).trim(), camp: c.name || '', up: up };
     });
     /* ★ v1.11：舊流程檔期的預估銷售數（申請單沒有的甜點才用） */
     var mh = ss.getSheetByName(EV_PLAN_MANUAL_TAB), nm2 = 0;
@@ -271,12 +285,16 @@ function evRecentStoreQty_(pos, today) {
 }
 /* 本店整檔推估 T＝預估×份額（品牌別限定店；份額＝去年同檔期 → 近 28 天 → 平均） */
 function evPlanSplit_(pl, pool, recent) {
-  var allow = {}; (EV_BRAND_STORES[pl.brand] || EV_BRAND_STORES['自己做＆吳寶春自己做']).forEach(function (s) { allow[String(s)] = 1; });
+  var bs = EV_BRAND_STORES[pl.brand] || EV_BRAND_STORES['自己做＆吳寶春自己做'], ps = pl.stores || [];
+  if (ps.length) { var inB = bs.filter(function (s) { return ps.indexOf(s) >= 0; }); bs = inB.length ? inB : ps; }   /* ★ v1.15：檔期有勾參與門市 → 只分給這幾家店（和品牌別取交集；沒交集就照勾的） */
+  var allow = {}; bs.forEach(function (s) { allow[String(s)] = 1; });
   var base = {}, tot = 0, src = '去年同檔期份額';
-  Object.keys(pool || {}).forEach(function (st) { if (allow[st] && pool[st] > 0) { base[st] = pool[st]; tot += pool[st]; } });
+  var poolOk = !ps.length || Object.keys(allow).every(function (st) { return (pool || {})[st] > 0; });   /* ★ v1.15：有勾的店去年沒賣（今年才參加）→ 不用去年份額，改看近 28 天，免得那家店分到 0 */
+  if (poolOk) Object.keys(pool || {}).forEach(function (st) { if (allow[st] && pool[st] > 0) { base[st] = pool[st]; tot += pool[st]; } });
   if (!(tot > 0)) { base = {}; tot = 0; src = '近 28 天甜點份額'; Object.keys(recent || {}).forEach(function (st) { if (allow[st] && recent[st] > 0) { base[st] = recent[st]; tot += recent[st]; } }); }
   if (!(tot > 0)) { base = {}; tot = 0; src = '平均'; Object.keys(allow).forEach(function (st) { base[st] = 1; tot += 1; }); }
   var t = {}; Object.keys(base).forEach(function (st) { t[st] = pl.qty * base[st] / tot; });
+  if (ps.length) src += '（參與門市 ' + bs.join('、') + '）';
   return { t: t, src: src };
 }
 /* ★ v1.12 試跑開關（只給 aaaEvRegDryRun 用；平常兩個都是 false）：dry＝算完不寫表、結果放 EV_DRY_OUT；noReg＝不算常態菜單 */
@@ -301,7 +319,7 @@ function evReadReg_(map, log) {
       if (String(r[cType]).trim() !== EV_REG_TYPE || String(r[C.c('status')]).trim() === '封存') return;
       var d1 = evDate_(r[C.c('起')]), dE = C.c('自己人搶先開賣日') >= 0 ? evDate_(r[C.c('自己人搶先開賣日')]) : null;
       if (dE && (!d1 || dE < d1)) d1 = dE;   /* 同食譜系統核准寫對照表的起始日規則 */
-      camp[String(r[C.c('campaign_id')]).trim()] = { name: String(r[C.c('檔期名稱')]).trim(), brand: String(r[C.c('品牌別')]).trim(), start: d1 }; nCamp++;
+      camp[String(r[C.c('campaign_id')]).trim()] = { name: String(r[C.c('檔期名稱')]).trim(), brand: String(r[C.c('品牌別')]).trim(), stores: evParseStores_(C.c('參與門市') >= 0 ? r[C.c('參與門市')] : ''), start: d1 }; nCamp++;   /* v1.15 stores */
     });
     if (!nCamp) { log.push('🍽 常態菜單：食譜系統目前沒有常態菜單檔期'); return out; }
     /* 對照表：甜點名 → 最早起始有效日、次類別（主廚／採購之後在 📚 BOM 管理改過日期就以對照表為準） */
@@ -321,7 +339,7 @@ function evReadReg_(map, log) {
       var nm = String(r[R.c('商品正式名稱')] || '').trim() || String(r[R.c('商品暫定名稱')] || '').trim(); if (!nm) return;
       var up = String(r[R.c('updated_at')] || '');
       if (byNm[nm] && byNm[nm].up > up) return;
-      byNm[nm] = { name: nm, qty: q, brand: c.brand, req: String(r[R.c('req_id')]).trim(), camp: c.name, up: up, cstart: c.start };
+      byNm[nm] = { name: nm, qty: q, brand: c.brand, stores: c.stores, req: String(r[R.c('req_id')]).trim(), camp: c.name, up: up, cstart: c.start };
     });
     Object.keys(byNm).forEach(function (nm) {
       var o = byNm[nm], m = mp[nm] || {};
@@ -342,7 +360,7 @@ function evAddReg_(ctx, regs, map, pos, log) {
     var k = EV_REG_TYPE + '｜' + o.camp + '｜' + evYmd_(o.start);
     var C = ctx.inst[k] = ctx.inst[k] || { year: o.start.getFullYear(), evName: o.camp, start: o.start, end: evAddDays_(o.start, EV_CFG.REG_DAYS - 1), items: {}, posNames: {}, reg: true, plan: {} };
     C.items[o.name] = { start: C.start, end: C.end };
-    C.plan[o.name] = { qty: o.qty, brand: o.brand, req: o.req, camp: o.camp, up: o.up };
+    C.plan[o.name] = { qty: o.qty, brand: o.brand, stores: o.stores || [], req: o.req, camp: o.camp, up: o.up };
     nm2k[o.name] = k;
   });
   var p2c = {};
