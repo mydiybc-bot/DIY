@@ -180,6 +180,8 @@ function adRun_(dry) {
 
     // ---- D) 最後有效日（v1.1）----
     var lvStat = adLastValid_(ss, skuSh, sv, h, bv, bh, bName, exact, dry, today, out);
+    var scRes = { changed: 0 };   /* 2026-11-05 平匙規格同步（spoonConv.gs） */
+    try { if (typeof spoonConvSync_ === 'function') { scRes = spoonConvSync_(ss, dry); out.push(scRes.msg); } } catch (eS) { out.push('⚠ 平匙同步失敗：' + eS); }
 
     out.push('別名 ' + Object.keys(aliasWrites).length + ' 筆、新增草稿 ' + newRows.length + ' 筆、甜點未上架暫緩 ' + held.length + ' 筆、上架完成清標記 ' + cleared.length + ' 筆' + (cleared.length ? '（' + cleared.join('、') + '）' : '') + '、最後有效日 ' + lvStat.written + ' 筆有日期／' + lvStat.expired + ' 筆已過季');
     var heldChanged = false;   /* v1.2：暫緩清單有變動才記 log */
@@ -189,7 +191,7 @@ function adRun_(dry) {
         if ((props.getProperty(AD_HELD_PROP) || '') !== sig) { heldChanged = true; props.setProperty(AD_HELD_PROP, sig); }
       } catch (eP) { heldChanged = held.length > 0; }
     }
-    if (!dry && (newRows.length || Object.keys(aliasWrites).length || cleared.length || heldChanged)) {
+    if (!dry && (newRows.length || Object.keys(aliasWrites).length || cleared.length || heldChanged || scRes.changed)) {
       var lg = ss.getSheetByName(AD_LOG_TAB);
       if (!lg) { lg = ss.insertSheet(AD_LOG_TAB); lg.getRange(1, 1, 1, 4).setValues([['執行時間', '別名', '草稿', '明細']]); }
       lg.appendRow([new Date(), Object.keys(aliasWrites).length, newRows.length, out.slice(1).join(' / ')]);

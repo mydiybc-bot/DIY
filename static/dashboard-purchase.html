@@ -3857,16 +3857,64 @@ function viewPeriodStats(){
   if(ANRES.noSku.length)h+='<div class="note">⚠️ '+ANRES.noSku.length+' 項用料在主檔找不到（照配方上的名稱列出，請體驗中心確認）：'+ANRES.noSku.slice(0,5).join('、')+(ANRES.noSku.length>5?'…':'')+'</div>';
   return h;}
 function viewQuery(){var store=ST.storeId;
-  var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+m+'</div>';}).join("")+'</span></div>';
+  var html='<div style="margin-bottom:6px"><span class="seg">'+["期間統計","品項用量","平匙"].map(function(m){return '<div class="'+(m==ST.qmode?"on":"")+'" data-qmode="'+m+'">'+(m==="平匙"?"🥄 平匙":m)+'</div>';}).join("")+'</span></div>';   /* 2026-11-05 加「🥄 平匙」 */
   if(ST.qmode==="跨店比較"||ST.qmode==="容器用量")ST.qmode="期間統計";  /* 2026-08-31 t 批 Q8：兩分頁已移除，殘留值歸位 */
   if(ST.qmode==="期間統計")return html+viewPeriodStats();
   var stPick=(ST.role==="店長")?storeChip(store):'<select class="sm" id="qStore" style="max-width:190px">'+STORES.map(function(s2){return '<option value="'+s2.id+'"'+(String(s2.id)===String(store)?' selected':'')+'>'+escH(storeLabel(s2.id))+'</option>';}).join('')+'</select>';   /* 2026-10-06 #3：總部在查詢頁用這個選分店 */
+  if(ST.qmode==="平匙")return html+viewSpoon(store,stPick);
   html+='<div class="note">門市：'+stPick+'</div>';
   html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
   html+=catChips();var rows=SKUS.filter(function(s){return ST.cat==="全部"||s.cat===ST.cat;}).map(function(s){var a=aggOf(store,s);return {s:s,avg:a.avg4,wk:a.week};}).filter(function(x){return x.avg>0||x.wk>0;}).sort(function(a,b){return b.avg-a.avg;});
   html+='<div class="card"><table><tr><th>品項</th><th>類別</th><th class="right">週平均</th></tr>';
   rows.forEach(function(x){var s=x.s,v=ST.qperiod==="上週"?x.wk:x.avg;html+='<tr><td><b>'+s.name+'</b>'+(statusOf(store,s)==="已停售"?' <span class="muted">(已停售)</span>':'')+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td class="right"><b>'+dec(v/s.packQty)+'</b> '+s.buyUnit+'/週<div class="muted" style="font-size:12px">'+fmt(v)+' '+s.useUnit+'</div></td></tr>';});
   if(!rows.length)html+='<tr><td colspan="3" class="muted">無資料</td></tr>';html+='</table></div>';return html;}
+
+/* ===== 2026-11-05 🥄 平匙（經營者：專案推動定案的平匙規格要顯示在採購系統，各店查自己店用的平匙規格對不對） =====
+   資料：🚀 專案推動 API action=spoon（定案明細 spoon_final＋規格 spoon_set），打開這頁才讀一次、留在記憶體。
+   規格＝每種食材最後一次確認的那組（同專案推動 spoonSpec_）；有實測克數 real_g 就顯示實測。
+   只列「已定案、本店近 4 週有用到」的食材（aggOf 週用量 > 0）；甜點＝門市平板上的平匙數（全公司同一份食譜，英文版不列）。
+   採購換算：每天早上 diybc-sku-autodraft 的 spoonConv.gs 把同一組克數寫進 dim_unitconv「平匙」列，建議量／訂貨點照這個算。
+   這頁沒有輸入框。 */
+var SPN_API="https://script.google.com/macros/s/AKfycbwBSEYcJb3iVwfcRAWQok5_v2EzRL9Lq55R80EtLEvxRSWhPoGfePMZdx7dCcwe4bD9Ig/exec";
+var SPN=null,SPN_LOAD=false,SPN_ERR="",SPN_OPEN={};
+var SPN_ML={"1.25":"1/4 小匙","2.5":"1/2 小匙","5":"1 小匙","7.5":"1/2 大匙","15":"1 大匙","30":"2 大匙","60":"1/4 杯"};
+function spnRe(){if(ST.tab==="查詢"&&ST.qmode==="平匙")render();}
+function spnLoad(){if(SPN||SPN_LOAD||SPN_ERR)return;SPN_LOAD=true;
+  var name="__spnCb"+Date.now(),s=document.createElement("script"),to=null,done=false;
+  function fin(){if(done)return false;done=true;clearTimeout(to);SPN_LOAD=false;try{delete window[name];}catch(e){window[name]=undefined;}if(s.parentNode)s.parentNode.removeChild(s);return true;}
+  window[name]=function(res){if(!fin())return;if(res&&res.ok&&res.data)SPN=spnBuild(res.data);else SPN_ERR=(res&&res.error)||"讀取失敗";spnRe();};
+  to=setTimeout(function(){if(fin()){SPN_ERR="等太久沒回應";spnRe();}},45000);
+  s.onerror=function(){if(fin()){SPN_ERR="連不上專案推動";spnRe();}};
+  s.src=SPN_API+"?action=spoon&callback="+name+"&_="+Date.now();document.head.appendChild(s);}
+function spnBuild(d){var spec={},real={};
+  (d.set||[]).forEach(function(r){if(+r.real_g>0)real[r.ingredient]=+r.real_g;});
+  (d.final||[]).forEach(function(r){if(r.deleted==="Y"||!r.ingredient||!(+r.g_per_spoon>0))return;
+    var o=spec[r.ingredient];if(!o)o=spec[r.ingredient]={ing:r.ingredient,at:"",g:0,ml:"",recs:{}};
+    if(String(r.confirmed_at)>=o.at){o.at=String(r.confirmed_at);o.g=+r.g_per_spoon;o.ml=String(r.spoon_ml||"");}
+    if(/^[A-Za-z]/.test(String(r.recipe||"")))return;   /* 英文版（English Recipe）不列 */
+    var fs=String(r.final_spoons||"").trim(),sp=!!(fs&&fs!=="秤重"),rc=o.recs[r.recipe]=o.recs[r.recipe]||{name:r.recipe,parts:[],wait:false};
+    rc.parts.push(sp?fs+" 平匙":"秤重 "+r.grams+" g");if(sp&&!r.applied_at)rc.wait=true;});   /* wait＝定案要改平匙、平板還沒改 */
+  Object.keys(spec).forEach(function(k){spec[k].real=real[k]||0;});
+  return spec;}
+function spnSku(name){for(var i=0;i<SKUS.length;i++){var s=SKUS[i];if(s.name===name||(s.aliases||[]).indexOf(name)>=0)return s;}return null;}
+function spnMl(ml){if(!ml)return '<span class="muted">未登記</span>';var t=SPN_ML[String(+ml)];return escH(ml)+' ml'+(t?'<div class="muted" style="font-size:12px">（'+t+'）</div>':'');}
+function viewSpoon(store,stPick){spnLoad();
+  var h='<div class="note">門市：'+stPick+'</div>'
+    +'<div class="card"><div class="muted"><b>這裡查什麼：</b>本店用到的平匙食材，每一種該用哪一支量匙、1 平匙幾 g、平板上每支甜點用幾匙。罐子裡的量匙跟這裡寫的不一樣，請告訴總部。'
+    +'<details class="xhelp"><summary>ⓘ 資料從哪來</summary><div>規格＝🚀 專案推動「乾料食材改平匙」最後定案的量匙與克數（有實測克數就用實測）。建議採購量、訂貨點也是用這個克數把「平匙」換算成 g。只列已定案、本店近 4 週有用到的食材；還沒定案的食材照原本秤重。</div></details></div></div>';
+  if(!SPN)return h+'<div class="card muted">'+(SPN_ERR?'讀不到平匙規格（'+escH(SPN_ERR)+'） <button class="sm" id="spnRetry">重試</button>':'讀取平匙規格中…（約 5 秒）')+'</div>';
+  var all=Object.keys(SPN),rows=all.map(function(k){var s=spnSku(k);return {o:SPN[k],s:s,avg:s?(aggOf(store,s).avg4||0):0};})
+    .filter(function(x){return x.avg>0;}).sort(function(a,b){return b.avg-a.avg;});
+  h+='<div class="card"><table><tr><th>食材</th><th>該用的量匙</th><th class="right">1 平匙</th><th class="right">本店每週用量</th><th>平板食譜（全公司）</th></tr>';
+  rows.forEach(function(x){var o=x.o,k=o.ing,recs=Object.keys(o.recs).sort().map(function(n){return o.recs[n];}),op=!!SPN_OPEN[k];
+    h+='<tr><td><b>'+escH(k)+'</b></td><td>'+spnMl(o.ml)+'</td><td class="right"><b>'+dec(o.real||o.g)+' g</b>'+(o.real?'<div class="muted" style="font-size:12px">實測</div>':'')+'</td>'
+      +'<td class="right">'+fmt(x.avg)+' '+escH(x.s.useUnit)+'</td>'
+      +'<td>'+(recs.length?'<span class="pill" data-spn="'+escA(k)+'" style="cursor:pointer">'+recs.length+' 支 '+(op?'▾':'▸')+'</span>':'<span class="muted">—</span>')+'</td></tr>';
+    if(op&&recs.length)h+='<tr><td colspan="5" style="background:#FAFAF7"><div class="muted" style="font-size:12px;margin-bottom:4px">門市平板上的用量（全公司同一份食譜）：</div>'
+      +recs.map(function(r){return '<div style="font-size:13px;padding:2px 0">'+escH(r.name)+'：<b>'+escH(r.parts.join("＋"))+'</b>'+(r.wait?' <span class="muted">（平板還沒改，準備中）</span>':'')+'</div>';}).join("")+'</td></tr>';});
+  if(!rows.length)h+='<tr><td colspan="5" class="muted">本店近 4 週沒有用到已定案的平匙食材</td></tr>';
+  h+='</table><div class="muted" style="font-size:12px;margin-top:6px">已定案 '+all.length+' 種，本店用到 '+rows.length+' 種。</div></div>';
+  return h;}
 
 /* ===== 店別參數 ===== */
 function parseBookingCsv(buf){var txt="";
@@ -6535,6 +6583,8 @@ function wire(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-need]"),function(el){el.onclick=function(){ST.needOnly=el.dataset.need==="1";render();};});
   invfWire(document);   /* cv 批：原本這一行的內容搬進 invfWire（就地篩選重寫籤列時共用） */
   Array.prototype.forEach.call(document.querySelectorAll("[data-qmode]"),function(el){el.onclick=function(){ST.qmode=el.dataset.qmode;render();};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-spn]"),function(el){el.onclick=function(){var k=el.dataset.spn;SPN_OPEN[k]=!SPN_OPEN[k];render();};});   /* 2026-11-05 🥄 平匙 */
+  var __spr=document.getElementById("spnRetry");if(__spr)__spr.onclick=function(){SPN_ERR="";render();};
   var __qs=document.getElementById("qStore");if(__qs)__qs.onchange=function(){var sel=$("#storeSel"),v=this.value;sel.value=v;sel.onchange.call(sel);if(String(ST.storeId)!==String(v))render();};   /* 頁內分店下拉＝走上方分店選單同一套（有沒存的修改會先問） */
   Array.prototype.forEach.call(document.querySelectorAll("[data-qperiod]"),function(el){el.onclick=function(){ST.qperiod=el.dataset.qperiod;render();};});
   var af=$("#anFrom");if(af)af.onchange=function(){ST.anFrom=af.value;};
