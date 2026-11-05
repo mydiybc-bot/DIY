@@ -26,7 +26,7 @@
 /* v17＝2026-10-17 經營者：檔期「類型」＝常態菜單（沒有結束日；核准寫對照表 次類別「無」、結束 2099-12-31、主類別＝POS 分類或「其他」）；fact_campaign 補「類型」欄（migrate_ ⑫ MIG_CTYPE）。 */
 /* v16＝2026-10-17 經營者：①同一檔期正式名稱不能重複（saveReq／formPatch／整檔送簽擋 code dupname）②表頭勾「改版既有甜點」(head.revise) → 核准時 BOM 表那支甜點原位整段換新（備份、還原放回）。 */
 /* v15＝2026-10-17 經營者：核准寫入採購時，申請單用到、主檔「停售」的品項自動改回在用（各店盤點看得到；最後有效日由 06:00 autodraft 依新檔期重算）；還原時改回停售；「不盤點」不動。 */
-var VERSION = 'recipe-req-v35';   /* 2026-11-05 v35：申請表連結上也能改檔期「參與門市」（新動作 linkCampStores，KEY_ACTS＋WRITES＋CAMP_TOUCH；要填名字）。v34：檔期「參與門市」（fact_campaign 最後一欄，migrate_ ⑬ MIG_STORES；saveCampaign_ 用 campStores_ 整理成「1,3,5」；核准寫新器具／模具標配只寫參與門市）。2026-10-19 v33：🌐 食譜翻譯加澳門英文（me）、英文（en）——三地確認用語可存這兩種語言（TR_LANGS）。v32：三地確認用語（分頁 tr_confirmed；動作 trConfList 讀、trConfirm／trConfDel 主廚或管理者）；📤 建新品項可一起填澳門中文／菲律賓英文／越南文名稱（nrIngCreate items[].tr），建好的記進確認用語、清對照表暫存。v31：🌐 食譜翻譯——tr_translate.gs 動作 trRecipe（讀一支食譜的匯出頁）、trDict（後台食材名稱對照表 10 語言＋各語言單位，暫存 6 小時）；都只讀、要身分密碼。2026-10-18 v30：五燈號配對的母體改全部年份（NM_MATCH_FROM 2000/01/01；驗證受測仍是 2026，NM_EVAL_FROM）；media_match 多更新日欄；nmKick agg 只重做彙整。v29：公版圖片／影片配對改五燈號（nm_match.gs：2026 年食譜、標題＋步驟文字＋最像的食譜；動作 nmEval 驗證）；nm_scan 多存步驟文字、寫 media_match、修更新日比對。2026-10-18 v28：新品申請表半成品的材料（payload.semi_items_new：🆕／停售／過季）核准時也建主檔、停售改回在用；不進甜點 BOM（qty 0、semiOnly）；newItemsPub 也列。2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
+var VERSION = 'recipe-req-v36';   /* 2026-11-05 v36：申請表連結上編輯檔期（新動作 linkCampEdit，只准改新增檔期表單那些欄，LINK_CAMP_RULES；要填名字）；連結也能改「📝 其他備註」（FORM_HEAD_RULES 加 P:head.note，雲端工作階段 73f623d）。v35：申請表連結上也能改檔期「參與門市」（新動作 linkCampStores，KEY_ACTS＋WRITES＋CAMP_TOUCH；要填名字）。v34：檔期「參與門市」（fact_campaign 最後一欄，migrate_ ⑬ MIG_STORES；saveCampaign_ 用 campStores_ 整理成「1,3,5」；核准寫新器具／模具標配只寫參與門市）。2026-10-19 v33：🌐 食譜翻譯加澳門英文（me）、英文（en）——三地確認用語可存這兩種語言（TR_LANGS）。v32：三地確認用語（分頁 tr_confirmed；動作 trConfList 讀、trConfirm／trConfDel 主廚或管理者）；📤 建新品項可一起填澳門中文／菲律賓英文／越南文名稱（nrIngCreate items[].tr），建好的記進確認用語、清對照表暫存。v31：🌐 食譜翻譯——tr_translate.gs 動作 trRecipe（讀一支食譜的匯出頁）、trDict（後台食材名稱對照表 10 語言＋各語言單位，暫存 6 小時）；都只讀、要身分密碼。2026-10-18 v30：五燈號配對的母體改全部年份（NM_MATCH_FROM 2000/01/01；驗證受測仍是 2026，NM_EVAL_FROM）；media_match 多更新日欄；nmKick agg 只重做彙整。v29：公版圖片／影片配對改五燈號（nm_match.gs：2026 年食譜、標題＋步驟文字＋最像的食譜；動作 nmEval 驗證）；nm_scan 多存步驟文字、寫 media_match、修更新日比對。2026-10-18 v28：新品申請表半成品的材料（payload.semi_items_new：🆕／停售／過季）核准時也建主檔、停售改回在用；不進甜點 BOM（qty 0、semiOnly）；newItemsPub 也列。2026-10-18 v27：🗂 找食譜——勾選後台食譜下載 Word（finder.gs、動作 rcpZip，要身分密碼、只讀）。2026-10-17 深夜 v26：lineage 家族也看相同步驟（shared_steps）、沒有直接關係的早期款自成源頭。v25：lineage 多回 cover_kb（封面檔大小）。v24：lineage 多回 cover（每款代表圖）。v23：🧬 食譜演化（lineage.gs、動作 lineage）；nm_scan 每日比對改 1 點 */   /* v14＝2026-10-08 經營者：申請表連結（整檔 &view=1）打開就是申請表本身，簽核的同仁可以改「新品研發工作申請單」（表頭），其他只有主廚能改 →
    新動作 formPatch（KEY_ACTS：整檔連結通行碼 k＋rid＋填寫人名字；只准改 FORM_HEAD_RULES 列的表頭欄，走 patchReq_，再同步申請單表的名稱／定價等欄）。
    v13＝v13＝2026-10-08 經營者：新品申請表下方只留「產出申請表連結（整檔、唯讀）」「簽核通過→上傳採購系統」「上傳自己做食譜系統」，簽核改由主廚用 104 表單自己送 →
    ①新動作 listReqs（主廚／管理者：曾經送件過的全部申請單清單，給「重新載入申請表」選）②pushPurchase 帶 approved104＝主廚確認 104 已簽核通過：草稿／退回／送簽中 先改成「已核准」再寫採購（log 記一筆 approve104）。
@@ -285,6 +285,8 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   formPatch: formPatch_,
   /* 2026-11-05：申請表連結上，行銷等同仁勾檔期「參與門市」 */
   linkCampStores: linkCampStores_,
+  /* 2026-11-05：申請表連結上編輯檔期（新增檔期表單那些欄） */
+  linkCampEdit: linkCampEdit_,
   /* 2026-10-08：🔑 密碼管理填主廚通知 Email、寄測試信 */
   adminSetRoleEmail: adminSetRoleEmail_, adminTestMail: adminTestMail_,
   /* 2026-10-06 🍰 匯入自己做食譜系統：函式在 rb_import.gs，包一層（呼叫時才找函式），不受檔案載入順序影響 */
@@ -292,12 +294,12 @@ var ACTIONS = { whoami: whoami_, saveCampaign: saveCampaign_, saveReq: saveReq_,
   rbPreview: function (p, a) { return rbPreview_(p, a); }, rbImport: function (p, a) { return rbImport_(p, a); } };
 var WRITES = { saveCampaign: 1, saveReq: 1, saveUnit: 1, adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1,
   patchReq: 1, submitSign: 1, withdrawSign: 1, sign: 1, pushPurchase: 1, rollbackPurchase: 1, optAdjust: 1, optAdjustUndo: 1, rbSetCred: 1, signSetPin: 1, commentAdd: 1, submitSignCamp: 1, signCamp: 1,
-  adminSetRoleEmail: 1, adminTestMail: 1, formPatch: 1, linkCampStores: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
+  adminSetRoleEmail: 1, adminTestMail: 1, formPatch: 1, linkCampStores: 1, linkCampEdit: 1 };   /* 回覆裡都不含密碼／PIN，才能放進回條快取（adminTestMail 放這裡＝重送不會多寄一封） */
 /* 2026-10-07：用簽核連結的通行碼 k 驗身分的動作（不用密碼／PIN）：signOpen 只讀、signSetPin 只能替「還沒設 PIN」的簽核人設一次 */
-var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1, linkCampStores: 1 };
+var KEY_ACTS = { signOpen: 1, signSetPin: 1, signOpenCamp: 1, formPatch: 1, linkCampStores: 1, linkCampEdit: 1 };
 var NOAUTH = { nmStatus: 1, nmKick: 1, nmProbe: 1 };   /* 2026-10-14 公版掃描排程：不用身分密碼（只讀後台、寫自己的分頁，重跑無害；見 nm_scan.gs） */   /* formPatch＝整檔連結上改表頭（2026-10-08 v14） */   /* signOpenCamp＝整檔連結（k＝檔期的通行碼） */
 /* 寫完要讓檔期清單暫存失效的動作（檔期內容或各檔期支數會變） */
-var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1, formPatch: 1, linkCampStores: 1 };
+var CAMP_TOUCH = { saveCampaign: 1, saveReq: 1, submitSign: 1, submitSignCamp: 1, formPatch: 1, linkCampStores: 1, linkCampEdit: 1 };
 /* 寫完要讓身分表暫存失效的動作 */
 var AUTH_TOUCH = { adminSaveSigner: 1, adminDeleteSigner: 1, adminSetPassword: 1, signSetPin: 1, adminSetRoleEmail: 1 };
 var RQ_SEC = 21600;   /* 回條保留 6 小時：同一個回條編號重送 → 直接回上次結果，不重複寫 */
@@ -600,6 +602,20 @@ function linkCampStores_(p, auth) {
   putCols_(t, row._row, obj, function (h) { return obj.hasOwnProperty(h); });
   var o = {}; t.H.forEach(function (h) { o[h] = obj.hasOwnProperty(h) ? obj[h] : row[h]; });
   return { id: auth.camp, data: { campaign: plain_(t.H, o) }, msg: who + ' 改參與門市：' + (v || '全部（依品牌別）') };
+}
+/* 2026-11-05 經營者「行銷要填檔期細節，但已經新增檔期，後續編輯怎麼做」：申請表連結上（同參與門市，拿到連結的人都能改）編輯檔期，
+   只准改新增檔期表單上的這些欄（作業_*、status 等不在內），要填名字；檢查規則與 saveCampaign_ 相同（日期格式、先後、常態菜單） */
+var LINK_CAMP_RULES = 'C:類型,C:檔期名稱,C:起,C:迄,C:第一批配貨日,C:品牌別,C:自己人搶先開賣日,C:自己人搶先體驗,C:配合活動,C:檔期備註,C:參與門市';
+function linkCampEdit_(p, auth) {
+  if (!auth || auth.kind !== 'key' || !auth.camp) throw fail_('要用申請表連結', 'perm');
+  var who = str_(p.who).trim().slice(0, 20);
+  if (!who) throw fail_('請填你的名字（記錄是誰改的）');
+  var c = {}; Object.keys(p.campaign || {}).forEach(function (h) { c[h] = p.campaign[h]; });
+  c.campaign_id = auth.camp;   /* 只能改連結上的這個檔期 */
+  if (c['檔期名稱'] !== undefined && !str_(c['檔期名稱']).trim()) throw fail_('檔期名稱不能空白');
+  var r = saveCampaign_({ campaign: c }, { kind: 'role', role: '104簽核：' + who, name: who, rules: parseRules_(LINK_CAMP_RULES), fields: LINK_CAMP_RULES });
+  r.msg = who + ' 編輯檔期：' + r.msg;
+  return r;
 }
 function saveCampaign_(p, auth) {
   var c = p.campaign || {}, t = load_('fact_campaign'), now = now_();

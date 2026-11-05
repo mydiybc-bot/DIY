@@ -3805,7 +3805,7 @@ function campInfoHTML(){var h=AP.head;
   if(c['配合活動'])p.push('配合活動 '+esc(c['配合活動']));
   if(c['檔期備註'])p.push('備註 '+esc(c['檔期備註']));
   if(c.req_count!==undefined)p.push('已送件 '+c.req_count+' 支');
-  return '<div class="ap-campinfo">'+p.join('｜')+'</div>'+(c.campaign_id?campStInlineHTML(c):'')}   /* 2026-11-05 經營者「直接顯示」：參與門市勾選放在檔期資訊下面；同日「開放讓行銷人員供選」→ 104 申請表連結上也顯示 */
+  return '<div class="ap-campinfo">'+p.join('｜')+(c.campaign_id?' <button type="button" class="ap-btn2 ap-mini" id="apCampEdit" title="改檔期名稱、期間、配貨日、品牌別、自己人搶先、配合活動、檔期備註">✏️ 編輯檔期</button>':'')+'</div>'+(c.campaign_id?campStInlineHTML(c):'')}   /* 2026-11-05 經營者「直接顯示」：參與門市勾選放在檔期資訊下面；同日「開放讓行銷人員供選」→ 104 申請表連結上也顯示 */
 /* 檔期資料：清單裡找；申請表連結模式（清單沒讀）用連結讀回來的那個檔期 */
 function campOf(id){return campById(id)||((LM&&LM.data&&LM.data.campaign&&LM.data.campaign.campaign_id===id)?LM.data.campaign:null)}
 /* 參與門市勾選（檔期資訊下面直接顯示）：勾了先記在 ST_PEND（檔期清單晚到重畫時不會被洗掉），按「💾 儲存參與門市」才送 */
@@ -3930,9 +3930,14 @@ function credRun(role,msg,run,done){var c=getCred(role);
   askCred(role,msg,done,run,true)}
 /* 新增檔期：直接開表單（2026-10-07 加速：不再先等 Google 驗密碼；這個分頁沒記主廚密碼的話，密碼填在表單裡、跟建立一起送）→ 兩層確認 → saveCampaign */
 function newCampDialog(){openCampForm(getCred('主廚'))}
-function openCampForm(cr){
-  var m=modal('<div class="ap-h">＋ 新增檔期</div><div class="ap-muted">同一檔期的新品都掛在這裡；建立後所有人都選得到。</div>'
-    +'<div id="apCampPwRow"'+(cr?' style="display:none"':'')+'><label>主廚密碼（建立檔期要；只記在這個分頁）</label><input type="password" id="apCampPw" name="rcp-camp-pw" autocomplete="new-password"></div>'
+/* 2026-11-05 經營者「行銷要填檔期細節，已經新增檔期，後續編輯怎麼做」：檔期資訊列「✏️ 編輯檔期」→ 同一張表帶入現有內容（ed＝檔期），只送改過的欄。
+   身分登入 → saveCampaign（主廚、管理者全部能改；行銷設計看 dim_role.fields）；104 申請表連結 → linkCampEdit（要填名字，拿到連結的人都能改這些欄） */
+document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('#apCampEdit');if(!b)return;e.preventDefault();
+  var c=campOf(AP.head.campaign_id);if(!c)return;openCampForm(LM?null:(getCred('主廚')||getCred('管理者')||getCred()),c)});
+function openCampForm(cr,ed){
+  var m=modal('<div class="ap-h">'+(ed?'✏️ 編輯檔期：'+esc(ed['檔期名稱']||ed.campaign_id):'＋ 新增檔期')+'</div><div class="ap-muted">'+(ed?'改完按「儲存修改」，只會存有改過的欄位；申請表、採購系統之後讀到的就是新內容。':'同一檔期的新品都掛在這裡；建立後所有人都選得到。')+'</div>'
+    +((ed&&LM)?'<div><label>你的名字（記錄是誰改的）</label><input type="text" id="apCampWho" maxlength="20" value="'+esc(LM.name||'')+'"></div>'
+      :'<div id="apCampPwRow"'+(cr?' style="display:none"':'')+'><label>主廚密碼（'+(ed?'改檔期':'建立檔期')+'要；只記在這個分頁）</label><input type="password" id="apCampPw" name="rcp-camp-pw" autocomplete="new-password"></div>')
     +'<label>類型</label><select data-cf="類型" id="apCampType"><option value="">限定檔期（有開始日和結束日，例：萬聖節、中秋）</option><option value="常態菜單">常態菜單（長期，只有上市日，例：11 月大菜單）</option></select>'
     +'<label>檔期名稱（必填）</label><input type="text" data-cf="檔期名稱" placeholder="例：2026 萬聖節">'
     +'<div class="ap-2col"><div><label id="apCampStartLbl">期間：開始日（必填）</label><input type="date" data-cf="起"></div><div id="apCampEndBox"><label>期間：結束日（必填）</label><input type="date" data-cf="迄"></div></div>'
@@ -3944,16 +3949,20 @@ function openCampForm(cr){
     +'<label>配合活動</label><input type="text" data-cf="配合活動" placeholder="沒有就留空">'
     +'<label>檔期備註</label><textarea data-cf="檔期備註"></textarea>'
     +'<div id="apCampMsg" class="ap-bad" style="min-height:18px;margin-top:6px"></div>'
-    +'<div class="ap-actions"><button class="ap-btn" id="apCampOk" type="button">建立檔期</button><button class="ap-btn2" id="apCampNo" type="button">取消</button></div>');
+    +'<div class="ap-actions"><button class="ap-btn" id="apCampOk" type="button">'+(ed?'儲存修改':'建立檔期')+'</button><button class="ap-btn2" id="apCampNo" type="button">取消</button></div>');
   var ok=m.querySelector('#apCampOk'),box=m.querySelector('#apCampMsg');
   m.querySelector('#apCampNo').onclick=closeModal;
   var ty=m.querySelector('#apCampType');if(ty)ty.onchange=function(){var reg=ty.value==='常態菜單';m.querySelector('#apCampEndBox').style.display=reg?'none':'';m.querySelector('#apCampRegNote').style.display=reg?'':'none';
     m.querySelector('#apCampStartLbl').textContent=reg?'上市日（必填）':'期間：開始日（必填）';var nm=m.querySelector('[data-cf="檔期名稱"]');if(nm)nm.placeholder=reg?'例：2026 11月大菜單':'例：2026 萬聖節'};   /* 2026-10-17 */
+  if(ed){m.querySelectorAll('[data-cf]').forEach(function(el){el.value=ed[el.dataset.cf]==null?'':String(ed[el.dataset.cf])});   /* 編輯：帶入現有內容 */
+    var es=parseStores(ed['參與門市']);m.querySelectorAll('input[data-st]').forEach(function(el){el.checked=es.indexOf(Number(el.dataset.st))>=0});
+    if(ty)ty.onchange()}
   setTimeout(function(){var f=m.querySelector('[data-cf="檔期名稱"]');if(f)f.focus()},30);
   ok.onclick=function(){var o={};m.querySelectorAll('[data-cf]').forEach(function(el){o[el.dataset.cf]=String(el.value||'').trim()});
     var stSel=storePicked(m);if(m.querySelector('input[data-st]'))o['參與門市']=stSel.join(',');   /* 2026-11-05 */
-    var pwRow=m.querySelector('#apCampPwRow'),c2=cr;
-    if(!c2||(pwRow&&pwRow.style.display!=='none')){var pw=String((m.querySelector('#apCampPw')||{}).value||'');if(!pw){box.textContent='請輸入主廚密碼';m.querySelector('#apCampPw').focus();return}c2={role:'主廚',pw:pw}}
+    var pwRow=m.querySelector('#apCampPwRow'),c2=cr,whoEl=m.querySelector('#apCampWho'),who=whoEl?String(whoEl.value||'').trim():'';
+    if(ed&&LM){if(!who){box.textContent='請填你的名字（記錄是誰改的）';whoEl.focus();return}}
+    else if(!c2||(pwRow&&pwRow.style.display!=='none')){var pw=String((m.querySelector('#apCampPw')||{}).value||'');if(!pw){box.textContent='請輸入主廚密碼';m.querySelector('#apCampPw').focus();return}c2={role:'主廚',pw:pw}}
     if(!o['檔期名稱']){box.textContent='請填檔期名稱';return}
     var reg=o['類型']==='常態菜單';if(reg)o['迄']='';
     if(reg&&!o['起']){box.textContent='請填上市日';return}
@@ -3961,6 +3970,11 @@ function openCampForm(cr){
     if(!reg&&o['迄']<o['起']){box.textContent='結束日早於開始日，請確認日期';return}
     if(o['自己人搶先開賣日']&&o['自己人搶先開賣日']>o['起']){box.textContent='自己人搶先開賣日不能晚於開始日，請確認日期';return}
     var r=campRange(o['起'],o['迄'],reg);
+    if(ed){var ch={},nm=[];if(reg)o['迄']='';o['參與門市']=stNorm(stSel).join(',');
+      Object.keys(o).forEach(function(k){var a=k==='參與門市'?parseStores(ed[k]).join(','):String(ed[k]==null?'':ed[k]).trim();if(String(o[k])!==a){ch[k]=o[k];nm.push(k==='起'?(reg?'上市日':'開始日'):k==='迄'?'結束日':k)}});
+      if(!nm.length){box.textContent='沒有修改';return}
+      if(!confirm('檔期「'+(ed['檔期名稱']||ed.campaign_id)+'」要改：'+nm.join('、')+'\n確定儲存？'))return;
+      ok.disabled=true;box.textContent='儲存中…';saveCampEdit(ed,ch,LM?null:c2,who,box,ok,m);return}
     if(!confirm('新增'+(reg?'常態菜單':'檔期')+'「'+o['檔期名稱']+'」'+(r?'（'+r+'）':'')+(o['自己人搶先開賣日']?'\n自己人搶先開賣日：'+o['自己人搶先開賣日']:'')+(stSel.length?'\n參與門市：'+storesText(stSel):'')+'？\n建立後所有人都選得到。'))return;
     ok.disabled=true;box.textContent='建立中…';createCamp(o,c2,box,ok,m)}}
 /* 2026-11-05：改既有檔期的參與門市（主廚或管理者；只送 campaign_id＋參與門市，其他欄位不動）→ 兩層確認（按鈕＋確認視窗）→ saveCampaign。
@@ -4018,6 +4032,16 @@ function campStoresDialog(pre){var h=AP.head,c=campOf(h.campaign_id);if(!c)retur
     campStoresSave(c,sel,c2).then(function(r){clearInterval(tick);ok.disabled=false;if(r.ok)return;
       if(r.code==='auth'){cr=null;if(pr){pr.style.display=''}box.textContent='密碼不對（或剛換過），請重新輸入';return}
       box.textContent=r.msg||'儲存失敗'})}}
+/* 編輯檔期送出：身分密碼 → saveCampaign；104 申請表連結 → linkCampEdit（帶名字）。沒權限的欄位伺服器會略過（skipped），照實告訴使用者 */
+function saveCampEdit(ed,ch,cr,who,box,btn,m){var t0=Date.now(),tick=setInterval(function(){box.textContent='儲存中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'},1000);
+  var req=LM?{action:'linkCampEdit',campaign_id:LM.cid,k:LM.k,who:who,campaign:ch,rq:rqToken()}:{action:'saveCampaign',role:cr.role,password:cr.pw,campaign:Object.assign({campaign_id:ed.campaign_id},ch),rq:rqToken()};
+  apiPost(req).then(function(r){clearInterval(tick);btn.disabled=false;
+    if(!r.ok){if(r.code==='auth'&&!LM){setCred(null,cr.role);var pr=m.querySelector('#apCampPwRow'),pi=m.querySelector('#apCampPw');if(pr){pr.style.display='';if(pi){pi.value='';pi.focus()}}box.textContent='密碼不對（或剛換過），請在上面重新輸入後再按「儲存修改」';return}box.textContent=r.msg||'儲存失敗';return}
+    var d=r.data||{},nc=d.campaign||{},sk=d.skipped||[];nc.req_count=ed.req_count;
+    if(LM){try{localStorage.setItem(FORM_NAME_KEY,who)}catch(e){}LM.name=who;if(LM.data)LM.data.campaign=nc}else setCred(cr);
+    var found=false;CAMP.list=CAMP.list.map(function(x){if(x.campaign_id===nc.campaign_id){found=true;return nc}return x});if(found&&!LM)campCachePut(CAMP.list);
+    if(AP.head.campaign_id===nc.campaign_id)setCampSnap(nc);OUT=null;if(!LM)saveDraft();closeModal();render();if(!LM)campLoad();
+    alert(sk.length?'已儲存，但這些欄位你的身分不能改、沒有存：'+sk.join('、'):'✓ 已儲存檔期「'+(nc['檔期名稱']||nc.campaign_id)+'」的修改')})}
 function createCamp(o,cr,box,btn,m){var t0=Date.now(),note='',tick=setInterval(function(){box.textContent='建立中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note},1000);
   apiPost({action:'saveCampaign',role:cr.role,password:cr.pw,campaign:o,rq:rqToken()},function(k){note='（連線不穩，自動重試第 '+k+' 次）'}).then(function(r){btn.disabled=false;clearInterval(tick);
     if(!r.ok){
@@ -4395,7 +4419,7 @@ function lmBarHTML(){if(!LM)return '';var c=(LM.data&&LM.data.campaign)||{},R=(L
   return '<div class="ap-lmbar"><div><b>📋 '+esc(c['檔期名稱']||LM.cid)+'</b>'+(c['起']||c['迄']?'　<span class="ap-muted">'+esc((c['起']||'?')+'～'+(c['迄']||(String(c['類型']||'')==='常態菜單'?'長期':'?')))+'</span>':'')+'　<span class="ap-muted">這個檔期的新甜點（點一支切換）：</span></div>'
     +'<div class="ap-lmlist">'+R.map(function(D){var q=D.req||{};return '<button type="button" class="ap-lmgo'+(q.req_id===LM.rid?' on':'')+'" data-lmgo="'+esc(q.req_id)+'">'+(q.seq?esc(q.seq)+'. ':'')+esc(lmNm(D))+'</button>'}).join('')+'</div>'
     +(LM.chef?'<div class="ap-okline" style="margin-top:6px">🔓 主廚模式：整張都可以改；改完按最下方「💾 存進檔期」存檔（連結不變）。</div>'
-      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…），「🆕 新增食材/器模具」的<b>「第一單處理」</b>，以及最下方的<b>「📝 其他備註」</b>；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。檔期資訊下面的<b>「🏬 參與門市」</b>另外按「💾 儲存參與門市」。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+campSumHTML()+'</div>'}
+      :'<div class="ap-muted" style="margin-top:6px">✍️ 你可以修改「📋 新品研發工作申請單」裡的<b>黃色框</b>（名稱、定價、規格、預估銷售數…），「🆕 新增食材/器模具」的<b>「第一單處理」</b>，以及最下方的<b>「📝 其他備註」</b>；其他內容只有主廚能改。改完按最下方「💾 儲存修改」。檔期資訊下面的<b>「🏬 參與門市」</b>另外按「💾 儲存參與門市」；檔期內容（期間、配貨日、配合活動、檔期備註…）按檔期資訊旁的<b>「✏️ 編輯檔期」</b>。　<button type="button" class="ap-btn2 ap-mini" id="apLmChef">🔒 我是主廚（改全部）</button></div>')+campSumHTML()+'</div>'}
 /* ===== 2026-10-18 經營者：📊 檔期總覽（同一檔期多支新品一次看）=====
    ①每支：品名、定價、成本、利潤率、預估銷售數、狀態（讀整檔連結已載入的每支申請表）
    ②新增食材／耗材／器具／模具各幾項（各支用料的 🆕＋半成品材料的 🆕；同名只算一次）
@@ -5331,7 +5355,7 @@ function roleSave(){if(_busy)return;var s=AP.sub||{},pt=rolePatch(),uu=unitChang
         SENDMSG='<span class="ap-bad">✕ '+(done.length?'已存：'+esc(done.join('、'))+'；但':'')+'沒有全部存成：'+esc(r.msg||'未知錯誤')+'</span>';updSendUI()})})}
 /* 各單位模式：只留自己負責的欄位可以改（黃色框），其餘唯讀 */
 function applyRoleLock(root){if(!unitMode()||lockedReq())return;
-  var keep={apGo:1,apClr:1,apLoadCamp:1,apRoleSave:1,apRoleSwitch:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1,apLmSave:1,apLmName:1,apLmChef:1};
+  var keep={apGo:1,apClr:1,apLoadCamp:1,apRoleSave:1,apRoleSwitch:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1,apLmSave:1,apLmName:1,apLmChef:1,apCampEdit:1};   /* apCampEdit：2026-11-05 編輯檔期（權限由伺服器逐欄判斷） */
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-lmgo')||el.hasAttribute('data-copy')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     if(el.closest&&el.closest('#apStInline')){if(LM||canDo('C:參與門市')){el.classList.add('ap-mine');return}el.disabled=true;return}   /* 2026-11-05 參與門市：104 申請表連結都能勾；身分登入看 dim_role.fields 有沒有 C:參與門市（行銷設計有） */
@@ -5341,7 +5365,7 @@ function applyRoleLock(root){if(!unitMode()||lockedReq())return;
     el.disabled=true})}
 /* 送簽中／已核准：整張唯讀，只留查看、複製、下載、開新單 */
 function applyLock(root){if(!lockedReq())return;
-  var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apLmChef:1,apSemiAll:1,apSemiRe:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apRbLink:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1};
+  var keep={apGo:1,apClr:1,apLoadCamp:1,apLink:1,apLinkCopy:1,apLmChef:1,apSemiAll:1,apSemiRe:1,apSgCopy:1,apSgLinkCopy:1,apSgRefresh:1,apSgWithdraw:1,apPushBtn:1,apPvBtn:1,apRbBtn:1,apRbOpen:1,apRbResume:1,apRbRe:1,apRbRefresh:1,apRbLink:1,apCmtTxt:1,apCmtSend:1,apCmtRefresh:1,apCampEdit:1};
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-lmgo')||el.hasAttribute('data-copy')||el.hasAttribute('data-copy104')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     if(el.id==='apOaGo'||el.id==='apOaUndo'||el.hasAttribute('data-oa'))return;   /* 2026-10-17：🔀 調整選項比例（已寫入採購的單才出現） */
