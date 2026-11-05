@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """投遞：python3 put.py <id8_lang> [--approve] [--model 名稱]
 讀 WORK/<id8_lang>.tr.json（{name, pres, slides:[{k,t,h}], dict:[{kind,en,tr}]}），連同拿稿時的指紋一起送。
---approve：硬檢查全過才放行（沒過只存成待檢查）。"""
+--approve：硬檢查全過才放行（沒過只存成待檢查；上一版放行過的話平板照舊顯示上一版）。
+src.json 有 partial（只翻改到的頁）→ 只送翻好的頁，其他頁伺服器從上一版沿用。"""
 import json, sys
 from common import *
 
@@ -18,6 +19,6 @@ def _clean(o):
     return o
 tr = _clean(tr)
 r = call('i18nPut', wkey=key('I18N_PUT_KEY'), id=src['id'], lang=src['lang'], fp=src['fp'], name=tr.get('name', ''), pres=tr.get('pres', ''),
-         slides=tr['slides'], dict=tr.get('dict', []), approve=1 if approve else 0, overwrite=1 if '--overwrite' in sys.argv else 0, model=model, by='Claude Code')
+         slides=tr['slides'], partial=1 if src.get('partial') else 0, dict=tr.get('dict', []), approve=1 if approve else 0, overwrite=1 if '--overwrite' in sys.argv else 0, model=model, by='Claude Code')
 print(json.dumps(r, ensure_ascii=False, indent=1)[:1500])
 sys.exit(0 if r.get('ok') else 1)

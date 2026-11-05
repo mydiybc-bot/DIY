@@ -27,7 +27,7 @@ for s, x in zip(src['slides'], tr['slides']):
         to, tc = co(x['h'], r'<%s[\s>]' % tg), co(x['h'], r'</%s>' % tg)
         if to != tc: bad.append('第%d頁 <%s> 開關不成對（開%d關%d）' % (k + 1, tg, to, tc))
 if src['pres'] and not tr.get('pres', '').strip(): bad.append('保存方式空')
-if not tr.get('name', '').strip(): bad.append('名稱空')
+if src['name'] and not tr.get('name', '').strip(): bad.append('名稱空')   # 名稱沒變（沿用上一版）時 src.json 的 name 是空的
 miss_terms = [m for m in src['missing'] if not any(d['kind'] == m['kind'] and d['en'].lower() == m['en'].lower() for d in tr.get('dict', []))]
 if miss_terms: bad.append('詞典還缺 %d 個：%s' % (len(miss_terms), ', '.join(m['en'] for m in miss_terms[:8])))
 print(t, '預檢', '全過' if not bad else '有 %d 個問題' % len(bad))

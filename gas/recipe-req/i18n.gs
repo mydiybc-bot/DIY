@@ -21,6 +21,8 @@
                  只有表上記成 N（有人按過取消勾）才不翻、平板不列。
      i18nApprove 主廚／管理者：核准放行（undo:1 收回）。**沒核准的平板看不到**（經營者 10/24：「完成後還是要一一打開比對，確認沒有問題才可以放行」）；
                  原文改版重翻 → 核准自動失效（appr_fp 對不上），要重新看過
+                 2026-11-05：只改食材份量／圖片／影片不算改版（指紋只看要翻的字）；原文改版後、新譯文放行前，平板照舊顯示放行過的上一版；
+                 Claude 投遞口只翻改到的頁（i18nPull 回 keep，i18nPut partial:1 沿用沒變的頁）
      i18nKick    做下一件待翻譯的事：沒開自動（指令碼屬性 I18N_AUTO≠1）時只做指定的 id＋lang；同一件 6 分鐘內不會兩個人同時做
    排程：i18nDaily 每天 06:30（i18nKick 第一次被呼叫時自動建立，不用到編輯器按）：更新原文（後台有改才重抓、內容真的變了才重翻）；
          I18N_AUTO＝1 時接著翻待翻譯的，做到 5 分鐘為止。
@@ -206,10 +208,13 @@ function i18nClean_(html) {
     .replace(/(<br>\s*){3,}/g, '<br><br>').replace(/^(\s*<br>)+|(<br>\s*)+$/g, '').replace(/ {2,}/g, ' ').trim();
   return { h: out, imgs: imgs };
 }
-/* 原文指紋：內容（不含 cover 版本號）一樣＝不重翻 */
+/* 原文指紋：只看「要翻的字」（名稱、保存方式、每頁標題＋內文）一樣＝不重翻。
+   2026-11-05 經營者：前一天改英文食譜的份量，隔天 155 組外語全部下架、外國客人不能用 →
+   食材份量／名稱／單位、圖片、影片不算改版（食材走詞典、份量照原文數字、圖片影片照原文網址，平板組畫面時都拿最新原文） */
 function i18nFp_(src) {
-  return i18nHash_(JSON.stringify([src.name, src.pres, src.slides.map(function (s) { return [s.t, s.h, s.video.replace(/\?.*$/, ''), s.img.replace(/\?.*$/, ''), s.imgs, s.ings.map(function (g) { return [g.n, g.q, g.u, g.c, g.a]; })]; })]));
+  return i18nHash_(JSON.stringify([src.name, src.pres, src.slides.map(function (s) { return [s.t, s.h]; })]));
 }
+function i18nSlideKey_(s) { return i18nHash_(JSON.stringify([s.t || '', s.h || ''])); }   /* 一頁的「要翻的字」：沒變的頁沿用舊譯文 */
 
 /* ---------------- 自動檢查（純函式） ---------------- */
 function i18nPlain_(h) { return i18nTxt_(String(h || '').replace(/\[\[IMG\d+\]\]/g, ' ')); }
@@ -529,13 +534,54 @@ function i18nWork_(id, lang, by, redict) {
   if (!done) check = '沒翻完（' + src.slides.filter(function (s, i) { return !out.slides[i]; }).length + ' 頁沒有回來）' + (check ? '；' + check : '');
   var key = id + '|' + lang, prev = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === key; })[0];
   var tries = prev && prev.fp === src.fp ? Number(prev.tries || 0) + 1 : 1;
-  var json = { id: id, lang: lang, fp: src.fp, model: model, at: now_(), name: out.name, pres: out.pres, slides: out.slides, titles: tt };
-  i18nLock_(function () { i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', { key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_(), appr_by: '', appr_at: '', appr_fp: '' }, json); });
+  var json = i18nJson_(src, { id: id, lang: lang, model: model, name: out.name, pres: out.pres, slides: out.slides, titles: tt });
+  i18nLock_(function () { i18nSaveRcp_({ key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_() }, json, false, ''); });
   i18nLog_(by, 'work', id, lang, status, (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (check || '通過') , sec);
   return { id: id, lang: lang, name: src.name, status: status, check: check, sec: sec, slides: src.slides.length, chunks: chunks.length, dict: dict, model: model };
 }
 
-function i18nLive_(r, fp) { return !!r && r.fp === fp && r.status !== 'fail' && r.appr_fp === fp && !!r.appr_by; }   /* 平板看得到＝這版翻譯已核准 */
+function i18nLive_(r, fp) { return !!r && r.fp === fp && r.status !== 'fail' && r.appr_fp === fp && !!r.appr_by; }   /* 這版翻譯已核准（跟現在的原文同一版） */
+
+/* ---------------- 上一版保底（2026-11-05 經營者：新譯文還沒好之前，平板先顯示上一版，頁面不提示；改完再換新版） ----------------
+   平板看得到＝有一份放行過的譯文：
+     ① appr_fp＝fp：這一列的譯文本身放行過（原文改版後仍照舊顯示，對不上的頁見 i18nAlign_）；
+     ② appr_fp＝'L:'＋舊指紋：新譯文還沒放行（待檢查），放行過的上一版收在 JSON 的 live 裡。 */
+function i18nShowable_(r) { return !!r && !!r.appr_by && (/^L:/.test(r.appr_fp) || (r.appr_fp === r.fp && r.status !== 'fail')); }
+function i18nLiveContent_(sh, r, j) {   /* 放行過的那份內容 {fp, name, pres, slides, titles, sk, snk, spk} */
+  if (!i18nShowable_(r)) return null;
+  j = j || i18nReadJ_(sh, r._r, I18N_RCP_HEAD); if (!j) return null;
+  if (/^L:/.test(r.appr_fp)) return j.live || null;
+  return { fp: r.fp, name: j.name, pres: j.pres, slides: j.slides || [], titles: j.titles || {}, sk: j.sk || null, snk: j.snk || '', spk: j.spk || '' };
+}
+/* 譯文 JSON：附上每頁原文的鍵（sk）、名稱／保存方式的鍵，下次原文改版時才知道哪幾頁沒變 */
+function i18nJson_(src, o) {
+  o.fp = src.fp; o.at = now_(); o.sk = src.slides.map(i18nSlideKey_); o.snk = i18nHash_(String(src.name || '')); o.spk = i18nHash_(String(src.pres || ''));
+  return o;
+}
+/* 存一份新譯文（要在鎖裡呼叫）：沒放行、但上一版放行過 → 上一版收進 live、放行欄照舊（平板繼續顯示上一版） */
+function i18nSaveRcp_(meta, json, approved, by) {
+  var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), prev = m.rows.filter(function (r) { return r.key === meta.key; })[0];
+  if (approved) { meta.appr_by = by; meta.appr_at = now_(); meta.appr_fp = meta.fp; }
+  else {
+    var live = prev ? i18nLiveContent_(m.sh, prev) : null;
+    if (live) { json.live = live; meta.appr_by = prev.appr_by; meta.appr_at = prev.appr_at; meta.appr_fp = 'L:' + live.fp; }
+    else { meta.appr_by = ''; meta.appr_at = ''; meta.appr_fp = ''; }
+  }
+  return i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', meta, json);
+}
+/* 放行過的譯文 → 現在原文每一頁：同一頁字沒變的直接用；只有沒變的才算（exact）；
+   不 exact 時，頁數沒變的照頁碼用上一版，對不上的頁用英文原文（極少見：頁數變了又改字） */
+function i18nAlign_(c, src, exact) {
+  var cs = c.slides || [];
+  if (c.fp === src.fp && cs.length === src.slides.length) return cs.slice();
+  var by = {}; (c.sk || []).forEach(function (k, j) { if (by[k] == null && cs[j]) by[k] = j; });
+  var same = cs.length === src.slides.length;
+  return src.slides.map(function (s, i) {
+    var j = by[i18nSlideKey_(s)]; if (j != null) return cs[j];
+    if (exact) return null;
+    return same && cs[i] ? cs[i] : { t: s.t, h: s.h };
+  });
+}
 function i18nState_(r, fp) { if (!r || r.fp !== fp) return ''; if (i18nLive_(r, fp)) return 'live'; return r.status === 'ok' ? 'wait' : r.status; }   /* live 已放行／wait 自動檢查過、待核准／review 待檢查／fail */
 
 /* 只重新跑自動檢查（不重翻、不花錢）：檢查規則改了以後用 */
@@ -646,11 +692,12 @@ function i18nDaily() {
 function i18nStatus_() {
   var src = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows, rc = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows, cnt = {}, review = [], fail = [], wait = [];
   var nm = {}; src.forEach(function (s) { nm[s.id] = s.name; });
-  I18N_LANGS.forEach(function (l) { cnt[l] = { live: 0, wait: 0, review: 0, fail: 0, old: 0 }; });
+  I18N_LANGS.forEach(function (l) { cnt[l] = { live: 0, wait: 0, review: 0, fail: 0, old: 0, prev: 0 }; });   /* prev：新譯文還沒好、平板照舊顯示上一版（2026-11-05） */
   var fp = {}; src.forEach(function (s) { fp[s.id] = s.fp; });
   rc.forEach(function (r) {
     if (!cnt[r.lang] || !fp[r.id]) return;
     var st = r.fp !== fp[r.id] ? 'old' : i18nState_(r, fp[r.id]); if (cnt[r.lang][st] != null) cnt[r.lang][st]++;
+    if (st !== 'live' && i18nShowable_(r)) cnt[r.lang].prev++;
     if (st === 'wait') wait.push({ id: r.id, lang: r.lang, name: nm[r.id] || '', at: r.at });
     if (st === 'review') review.push({ id: r.id, lang: r.lang, name: nm[r.id] || '', check: r.check, at: r.at });
     if (st === 'fail') fail.push({ id: r.id, lang: r.lang, name: nm[r.id] || '', check: r.check, tries: r.tries, at: r.at });
@@ -691,7 +738,8 @@ function i18nList_(p) {
     var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: loc };
     I18N_LANGS.forEach(function (l) {
       var r = rc[s.id + '|' + l]; o.langs[l] = i18nState_(r, s.fp);
-      if (o.langs[l] === 'live') o.ver[l] = String(s.fp).slice(0, 8) + '|' + r.appr_at;   /* ver：平板快取用，核准或原文改了就換 */
+      if (o.langs[l] !== 'live' && i18nShowable_(r)) o.langs[l] = 'live';   /* 新譯文還沒好 → 平板照舊顯示上一版（2026-11-05） */
+      if (o.langs[l] === 'live') o.ver[l] = i18nHash_([s.fp, s.upd, r.fp, r.appr_fp, r.appr_at].join('|')).slice(0, 12);   /* ver：平板快取用；原文任何更動（含只改份量）、新譯文放行就換 */
       if (g[l]) loc[l] = g[l];
       else if (o.langs[l] === 'live') { var t = i18nTrName_(rm.sh, r, o.ver[l]); if (t) loc[l] = t; }   /* 到店須知頁沒有這支（例：鳳梨酥）→ 用譯文自己的品名，卡片才不會只剩英文（2026-10-29） */
     });
@@ -704,7 +752,7 @@ function i18nTrName_(sh, r, ver) {
   var c = CacheService.getScriptCache(), k = 'i18n:tn:' + r.key + '|' + ver, hit = c.get(k);
   if (hit != null) return hit;
   var nm = '';
-  try { var tr = i18nReadJ_(sh, r._r, I18N_RCP_HEAD); nm = rbTrim_(String((tr && tr.name) || '').split('｜')[0]); } catch (e) { }
+  try { var c = i18nLiveContent_(sh, r); nm = rbTrim_(String((c && c.name) || '').split('｜')[0]); } catch (e) { }
   c.put(k, nm, 21600);
   return nm;
 }
@@ -715,9 +763,9 @@ function i18nGet_(p) {
   var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
   if (!i18nOn_(i18nPickMap_(), id)) throw fail_('這支食譜目前沒有開放給外國客人', 'notyet');
   var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
-  if (!r || r.fp !== src.fp) throw fail_('這支食譜這個語言還沒翻好', 'notyet');
-  if (!i18nLive_(r, src.fp)) throw fail_('這支食譜這個語言還沒核准放行', 'notyet');
-  return { data: i18nBuild_(src, i18nReadJ_(m.sh, r._r, I18N_RCP_HEAD), i18nDictRows_(), lang, r) };
+  var c = i18nLiveContent_(m.sh, r);   /* 放行過的那份（原文改版、新譯文還沒好 → 上一版） */
+  if (!c) throw fail_('這支食譜這個語言還沒翻好', 'notyet');
+  return { data: i18nBuild_(src, { name: c.name, pres: c.pres, slides: i18nAlign_(c, src) }, i18nDictRows_(), lang, r) };
 }
 function i18nBoss_(auth) { if (!auth || auth.kind !== 'role' || ['主廚', '管理者'].indexOf(auth.role) < 0) throw fail_('要主廚或管理者的密碼', 'perm'); }
 /* 對照預覽：譯文合成＋原文英文（每頁並排看） */
@@ -762,6 +810,7 @@ function i18nBuild_(src, tr, D, lang, row) {
   var slides = src.slides.map(function (s, i) {
     var t = (tr.slides || [])[i] || {}, h = String(t.h || '');
     (s.imgs || []).forEach(function (u, j) { h = h.split('[[IMG' + (j + 1) + ']]').join('<img src="' + String(u).replace(/"/g, '&quot;') + '">'); });
+    h = h.replace(/\[\[IMG\d+\]\]/g, '');   /* 上一版譯文的圖片位置比現在原文多（保底顯示時）→ 拿掉，不顯示怪字 */
     var ings = s.ings.map(function (g) {
       if (g.a && !areas[g.a]) areas[g.a] = { name: i18nLook_(D, 'area', g.an, lang) || g.an, en: g.an, img: src.areaPre && src.areaHas.indexOf(g.a) >= 0 ? '/img/MenuCateGroups/' + src.areaPre + '-' + g.a + '.jpg' : '' };
       var nmk = NM[cut(g.n).toLowerCase()];
@@ -868,8 +917,11 @@ function i18nPull_(p) {
   i18nWriteKey_(p);
   var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
   if (!(id && lang)) {
+    /* fresh：今天 06:00 後還沒更新過原文 → 先更新（Claude 早上巡檢不用等 06:30 的排程，排程晚跑也不會漏） */
+    var ref = null, last = i18nProp_('I18N_REFRESH_AT'), today6 = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd') + ' 06:00';
+    if (p.fresh && (!last || last < today6 || p.fresh === 'force')) ref = i18nRefresh_(false, Date.now() + 140000);
     var pend = i18nPending_(), rc = {}; i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.forEach(function (r) { rc[r.key] = r; });
-    return { data: { pending: pend.length, items: pend.slice(0, 400).map(function (x) { var r = rc[x.id + '|' + x.lang]; return { id: x.id, lang: x.lang, name: x.name, why: !r ? '還沒翻' : r.status === 'fail' ? '失敗' : '原文改版' }; }), at: now_() } };
+    return { data: { pending: pend.length, refresh: ref, refresh_at: i18nProp_('I18N_REFRESH_AT'), items: pend.slice(0, 400).map(function (x) { var r = rc[x.id + '|' + x.lang]; return { id: x.id, lang: x.lang, name: x.name, why: !r ? '還沒翻' : r.status === 'fail' ? '失敗' : '原文改版', showing: i18nShowable_(r) }; }), at: now_() } };
   }
   if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言只能是 ' + I18N_LANGS.join('／'), 'bad');
   var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜（不是台灣區啟用中的英文食譜？）', 'nosrc');
@@ -883,10 +935,19 @@ function i18nPull_(p) {
     miss.push(o);
   });
   var guide = i18nGuideNames_()[i18nNameKey_(src.name)] || {}, local = guide[lang] || '';
-  var cur = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === id + '|' + lang; })[0];
+  var rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), cur = rm.rows.filter(function (r) { return r.key === id + '|' + lang; })[0];
+  /* 只翻改到的頁（2026-11-05）：放行過的上一版裡字沒變的頁直接沿用（keep），只回要翻的頁；同頁碼的舊譯文附在 prev 給譯者參考 */
+  var base = cur ? i18nLiveContent_(rm.sh, cur) : null, reuse = base ? i18nAlign_(base, src, true) : [], keep = [], prev = {}, tt = {};
+  src.slides.forEach(function (s, i) {
+    if (reuse[i]) { keep.push(i); return; }
+    if (base && base.slides && base.slides.length === src.slides.length && base.slides[i]) prev[i] = base.slides[i];
+  });
+  if (base) src.slides.forEach(function (s) { if (s.t && base.titles && base.titles[s.t]) tt[s.t] = base.titles[s.t]; });   /* 沿用頁的標題譯法，新頁同標題照用 */
+  var nameKeep = !!(base && base.name && base.snk === i18nHash_(String(src.name || ''))), presKeep = !!(base && base.spk === i18nHash_(String(src.pres || '')));
   return { data: { id: id, lang: lang, label: I18N_LABEL[lang], rules: I18N_RULES[lang], fp: src.fp, name: src.name, pres: src.pres, local: local,
-    slides: src.slides.map(function (s, i) { return { k: i, t: s.t, h: s.h }; }),
-    dict: have, missing: miss, brief: i18nSystem_(lang, src, D, local, {}),
+    slides: src.slides.map(function (s, i) { return { k: i, t: s.t, h: s.h }; }), keep: keep, prev: prev,
+    name_keep: nameKeep, pres_keep: presKeep, old_name: base ? base.name : '', old_pres: base ? base.pres : '',
+    dict: have, missing: miss, brief: i18nSystem_(lang, src, D, local, tt),
     now: cur ? { status: cur.status, state: i18nState_(cur, src.fp), at: cur.at, model: cur.model } : null } };
 }
 /* 把 Claude 翻好的詞放進詞典：只補空格、不蓋掉已有的（除非 overwrite）；只收這支食譜用到的詞 */
@@ -923,9 +984,19 @@ function i18nPut_(p) {
   if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言只能是 ' + I18N_LANGS.join('／'), 'bad');
   var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
   if (p.fp && String(p.fp) !== String(src.fp)) throw fail_('原文在你拿稿之後改版了（指紋不同），請重新拿稿再翻', 'stale');
-  var sl = p.slides; if (!sl || sl.length !== src.slides.length) throw fail_('頁數不對：原文 ' + src.slides.length + ' 頁，收到 ' + (sl ? sl.length : 0) + ' 頁', 'bad');
+  var sl = p.slides || [], partial = !!Number(p.partial) || p.partial === true;
+  if (!partial && sl.length !== src.slides.length) throw fail_('頁數不對：原文 ' + src.slides.length + ' 頁，收到 ' + sl.length + ' 頁', 'bad');
   var out = { name: String(p.name || '').trim(), pres: String(p.pres || '').trim(), slides: [] };
   sl.forEach(function (s) { var k = Number(s.k); if (!(k >= 0 && k < src.slides.length) || out.slides[k]) throw fail_('頁碼 k 不對或重複：' + s.k, 'bad'); out.slides[k] = { t: String(s.t || '').trim(), h: String(s.h || '') }; });
+  var reused = 0;
+  if (partial) {   /* 只翻改到的頁（2026-11-05）：沒送的頁＝字沒變，從放行過的上一版沿用；名稱、保存方式沒變也沿用 */
+    var rm0 = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r0 = rm0.rows.filter(function (r) { return r.key === id + '|' + lang; })[0];
+    var base = r0 ? i18nLiveContent_(rm0.sh, r0) : null, reuse = base ? i18nAlign_(base, src, true) : [], lack = [];
+    src.slides.forEach(function (s, i) { if (out.slides[i]) return; if (reuse[i]) { out.slides[i] = { t: String(reuse[i].t || ''), h: String(reuse[i].h || '') }; reused++; } else lack.push(i + 1); });
+    if (lack.length) throw fail_('第 ' + lack.join('、') + ' 頁沒翻、上一版也沒有同樣的頁，請重新拿稿', 'bad');
+    if (!out.name && base && base.snk === i18nHash_(String(src.name || ''))) out.name = String(base.name || '');
+    if (!out.pres && base && base.spk === i18nHash_(String(src.pres || ''))) out.pres = String(base.pres || '');
+  }
   var dict = i18nPutDict_(p.dict, lang, src, !!p.overwrite);
   var local = (i18nGuideNames_()[i18nNameKey_(src.name)] || {})[lang] || '';
   if (local) out.name = local + '｜' + src.name.split('｜').slice(1).join('｜');
@@ -941,14 +1012,44 @@ function i18nPut_(p) {
   var key = id + '|' + lang, prev = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === key; })[0];
   var tries = prev && prev.fp === src.fp ? Number(prev.tries || 0) + 1 : 1, model = String(p.model || 'claude-code').slice(0, 60);
   var approved = status === 'ok' && !!p.approve, sec = Math.round((Date.now() - t0) / 1000);
-  var json = { id: id, lang: lang, fp: src.fp, model: model, at: now_(), name: out.name, pres: out.pres, slides: out.slides, titles: tt };
+  var json = i18nJson_(src, { id: id, lang: lang, model: model, name: out.name, pres: out.pres, slides: out.slides, titles: tt });
+  var kept = false;
   i18nLock_(function () {
-    i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', { key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_(),
-      appr_by: approved ? 'Claude' : '', appr_at: approved ? now_() : '', appr_fp: approved ? src.fp : '' }, json);
+    var meta = { key: key, id: id, lang: lang, fp: src.fp, status: status, tries: tries, model: model, check: check, sec: sec, at: now_() };
+    i18nSaveRcp_(meta, json, approved, 'Claude'); kept = /^L:/.test(meta.appr_fp);
   });
-  i18nLog_(by, 'put', id, lang, status, (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (approved ? '自動放行；' : '') + (check || '通過'), sec);
-  return { id: key, msg: 'put ' + key + ' ' + status, data: { id: id, lang: lang, name: out.name, status: status, check: check, approved: approved, state: approved ? 'live' : (status === 'ok' ? 'wait' : status), slides: src.slides.length, dict: dict, left: i18nPending_().length } };
+  i18nLog_(by, 'put', id, lang, status, (reused ? '沿用 ' + reused + ' 頁；' : '') + (dict.added ? '詞典新增 ' + dict.added + '；' : '') + (approved ? '自動放行；' : kept ? '平板照舊顯示上一版；' : '') + (check || '通過'), sec);
+  return { id: key, msg: 'put ' + key + ' ' + status, data: { id: id, lang: lang, name: out.name, status: status, check: check, approved: approved, state: approved ? 'live' : (status === 'ok' ? 'wait' : status), tablet: approved ? 'new' : kept ? 'old' : 'none', slides: src.slides.length, reused: reused, dict: dict, left: i18nPending_().length } };
 }
+/* 一次性搬家（2026-11-05 指紋改成只看要翻的字）：原文與現有譯文一起換新指紋，譯文補每頁的鍵（sk）。
+   只動「譯文指紋＝原文舊指紋」的列（跟原文同一版的）；放行過的放行欄一起換。每次最多跑 4 分鐘，回 left>0 就再呼叫，重跑安全。 */
+function i18nMigrateFp_(p) {
+  i18nWriteKey_(p);
+  var t0 = Date.now(), res = { recipes: 0, rows: 0, left: 0, same: 0 }, sm = i18nMeta_('i18n_src', I18N_SRC_HEAD);
+  sm.rows.forEach(function (s) {
+    if (s.state !== 'ok') return;
+    if (Date.now() - t0 > 240000) { res.left++; return; }
+    var src = i18nReadJ_(sm.sh, s._r, I18N_SRC_HEAD); if (!src) return;
+    var old = s.fp, nfp = i18nFp_(src); if (old === nfp) { res.same++; return; }
+    src.fp = nfp;
+    var sk = src.slides.map(i18nSlideKey_), snk = i18nHash_(String(src.name || '')), spk = i18nHash_(String(src.pres || ''));
+    i18nLock_(function () {
+      var rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD);
+      rm.rows.filter(function (r) { return r.id === s.id && r.fp === old; }).forEach(function (r) {
+        var j = i18nReadJ_(rm.sh, r._r, I18N_RCP_HEAD); if (!j) return;
+        j.fp = nfp; j.sk = sk; j.snk = snk; j.spk = spk;
+        i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', { key: r.key, fp: nfp, appr_fp: r.appr_fp === old ? nfp : r.appr_fp }, j);
+        res.rows++;
+      });
+      i18nUpsert_('i18n_src', I18N_SRC_HEAD, 'id', { id: s.id, fp: nfp }, null);
+    });
+    res.recipes++;
+  });
+  i18nLog_('Claude Code', 'migrate-fp', '', '', 'ok', '換指紋 ' + res.recipes + ' 支、譯文 ' + res.rows + ' 列；已是新的 ' + res.same + '；剩 ' + res.left);
+  return { data: res };
+}
+ACTIONS.i18nMigrateFp = function (p, a) { return i18nMigrateFp_(p, a); };
+NOAUTH.i18nMigrateFp = 1; SELFLOCK.i18nMigrateFp = 1;
 ACTIONS.i18nPull = function (p, a) { return i18nPull_(p, a); };
 ACTIONS.i18nPut = function (p, a) { return i18nPut_(p, a); };
 NOAUTH.i18nPull = 1; NOAUTH.i18nPut = 1; READS.i18nPull = 1; SELFLOCK.i18nPut = 1;   /* 通行碼在函式裡驗；Put 自己拿鎖 */

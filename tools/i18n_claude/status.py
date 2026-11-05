@@ -21,7 +21,8 @@ for r in s['matrix']:
         st[tag(r['id'], l)] = v
 print('食譜 %d 支' % len(s['matrix']))
 for l in langs:
-    print('  %s：%s' % (l, '、'.join('%s %d' % kv for kv in sorted(cnt[l].items()))))
+    pv = ((s.get('count') or {}).get(l) or {}).get('prev', 0)   # 新譯文還沒好、平板照舊顯示上一版（2026-11-05）
+    print('  %s：%s%s' % (l, '、'.join('%s %d' % kv for kv in sorted(cnt[l].items())), '（其中平板顯示上一版 %d）' % pv if pv else ''))
 rv = s.get('review') or []
 print('待檢查 %d 組' % len(rv))
 for x in rv:
