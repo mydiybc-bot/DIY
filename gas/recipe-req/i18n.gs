@@ -900,7 +900,7 @@ function i18nTrName_(sh, r, ver) {
   var c = CacheService.getScriptCache(), k = 'i18n:tn:' + r.key + '|' + ver, hit = c.get(k);
   if (hit != null) return hit;
   var nm = '';
-  try { var c = i18nLiveContent_(sh, r); nm = rbTrim_(String((c && c.name) || '').split('｜')[0]); } catch (e) { }
+  try { var lc = i18nLiveContent_(sh, r); nm = rbTrim_(String((lc && lc.name) || '').split('｜')[0]); } catch (e) { }   /* 2026-11-06 修：原本內層也叫 c，把快取蓋掉 → 平板「c.put is not a function」 */
   c.put(k, nm, 21600);
   return nm;
 }
