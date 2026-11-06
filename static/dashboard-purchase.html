@@ -1754,8 +1754,28 @@ var NW={map:null,bom:null,pub:null,err:"",ld:false,bomErr:"",pubErr:"",shLd:{},s
 var NW_LEAD=14,NW_PAST=7,NW_AHEAD=120,NW_ORD=45;
 var NW_PV=28,NEWPV={};   /* 2026-10-07 晚（經營者裁定）：開賣前 28～15 天的「預計首批量」（EventLayer v1.10 寫 agg_newitem_pv）；只在這頁顯示、標「預計」，不進 NEWAGG＝不進訂貨單／盤點清單 */
 var NW_CAMP_PAST=35;   /* 2026-10-01 ct 批：檔期複選的候選＝次類別是檔期、結束日在今天前 35 天內、開始日在今天後 120 天內 */
+/* ===== 2026-11-06 經營者「全面測試採購系統，同樣問題全部解決」：讀 Google Apps Script 一律先走自家伺服器代轉 =====
+   手機用 <script>（JSONP）直連 script.google.com 會帶上手機登入的 Google 帳號，某些帳號會被 Google 擋（10/27 專案推動、11/06 2 號店平匙「連不上專案推動」）。
+   改成先 fetch /api/gas/<部署ID>（server.py → gas_proxy.py，Google 只看到伺服器），失敗才退回原本 JSONP。
+   用在：nwJsonp（檔期新品）、dcoJsonp（出貨中心訂單查詢）、rbJsonp（🔄 更新重算）、spnLoad（平匙）；頁尾「最後更新」另有一段同做法。
+   寫入（fetch POST：盤點、參數、單位、上架、申請、出貨中心）本來就不帶 Google 帳號，不用改。gviz 讀試算表也是 fetch，不受影響。
+   gasProxyGet(網址含參數不含 callback, 毫秒) → Promise(資料)；失敗的 Error 帶 reached：true＝要求可能已到 Google（有副作用的動作不可再送一次）。 */
+function gasProxyUrl(url){var m=/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec(\?.*)?$/.exec(String(url||""));return m?"/api/gas/"+m[1]+(m[2]||""):"";}
+function gasPxErr(msg,reached){var e=new Error(msg);e.gasPx=true;e.reached=!!reached;return e;}
+function gasProxyGet(url,ms){var pu=gasProxyUrl(url);
+  if(!pu||!window.fetch)return Promise.reject(gasPxErr("不支援代轉",false));
+  pu+=(pu.indexOf("?")<0?"?":"&")+"_="+Date.now();
+  var ac=window.AbortController?new AbortController():null,timedOut=false,to=null;
+  var req=fetch(pu,ac?{cache:"no-store",signal:ac.signal}:{cache:"no-store"}).then(function(r){
+      if(r.status===404)throw gasPxErr("代轉不放行",false);   /* 本站自己擋下，沒到 Google */
+      if(!r.ok)throw gasPxErr("代轉回應 "+r.status,true);
+      return r.json().catch(function(){throw gasPxErr("代轉資料格式不對",true);});},
+    function(e){throw timedOut?gasPxErr("代轉逾時",true):gasPxErr("連不上本站",false);});
+  var tmo=new Promise(function(res,rej){to=setTimeout(function(){timedOut=true;if(ac)try{ac.abort();}catch(x){}rej(gasPxErr("代轉逾時",true));},ms||40000);});
+  return Promise.race([req,tmo]).then(function(d){clearTimeout(to);return d;},function(e){clearTimeout(to);throw e;});}
 var NW_PUB="https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec";   /* 食譜系統申請單 API（只讀公開查詢） */
-function nwJsonp(url,ms){return new Promise(function(res,rej){var n="__nw"+Date.now()+Math.floor(Math.random()*1e5),s=document.createElement("script");
+function nwJsonp(url,ms){return gasProxyGet(url,Math.min(ms||45000,40000)).catch(function(){return nwJsonpRaw(url,ms);});}   /* 2026-11-06：先代轉、失敗退回直連（唯讀，可重送） */
+function nwJsonpRaw(url,ms){return new Promise(function(res,rej){var n="__nw"+Date.now()+Math.floor(Math.random()*1e5),s=document.createElement("script");
   var to=setTimeout(function(){done(null,new Error("逾時"));},ms||45000);
   function done(d,e){clearTimeout(to);window[n]=function(){};setTimeout(function(){try{delete window[n];}catch(x){}},120000);if(s.parentNode)s.parentNode.removeChild(s);if(e)rej(e);else res(d);}
   window[n]=function(d){done(d);};s.onerror=function(){done(null,new Error("連線失敗"));};
@@ -4517,7 +4537,9 @@ var DCO_API="https://script.google.com/macros/s/AKfycbz_3-R1xG6RQmBsm3KOIWzkU_Xk
 var DCO={store:{},storeLd:{},all:null,allLd:false,month:{},monthLd:{},stock:null,stockLd:false,busy:false,loc:{},locOK:false};   /* 2026-10-05：loc＝出貨中心品項位置（後端 v1.2 dc_loc） */
 var DCO_ST_COLOR={"待處理":"#d97706","備貨中":"#2563eb","已出貨":"#16a34a","已取消":"#6b7280"};
 function dcoOn(){return !!DCO_API;}
-function dcoJsonp(params){return new Promise(function(res,rej){
+function dcoJsonp(params){var p={};Object.keys(params).forEach(function(k){p[k]=params[k];});p.token=DCO_TOKEN;   /* 2026-11-06：先代轉、失敗退回直連（後端 doGet 全部唯讀，可重送） */
+  return gasProxyGet(DCO_API+"?"+Object.keys(p).map(function(k){return k+"="+encodeURIComponent(p[k]);}).join("&"),30000).catch(function(){return dcoJsonpRaw(params);});}
+function dcoJsonpRaw(params){return new Promise(function(res,rej){
   var n="__dco"+Date.now()+Math.floor(Math.random()*1e5),s=document.createElement("script");
   var to=setTimeout(function(){done(null,new Error("連線逾時"));},30000);
   function done(d,e){clearTimeout(to);try{delete window[n];}catch(x){}if(s.parentNode)s.parentNode.removeChild(s);if(e)rej(e);else res(d);}
@@ -5789,7 +5811,10 @@ function rbCard(){return '<div class="card"><div style="display:flex;align-items
   +'<span id="rbMsg" style="font-size:13px;color:'+rbColor(RB.cls)+'">'
   +(RB.msg||"改了預約、節慶檔期、單位對照或配方後，按這裡馬上重算，不用等隔天早上（約 2–3 分鐘）")
   +'</span></div></div>';}
-function rbJsonp(action,done){var name="__rbCb"+(++RB.cbN),to=null,s=document.createElement("script"),fin=false;
+function rbJsonp(action,done){   /* 2026-11-06：先代轉；rebuild 會真的開始重算，只有「確定沒到 Google」才退回直連，避免重送兩次（後端會回忙碌） */
+  gasProxyGet(GAS_URL+"?action="+action+"&token="+encodeURIComponent(API_TOKEN),25000).then(function(res){done(null,res);},function(e){
+    if(action!=="rebuild"||!e.reached)rbJsonpRaw(action,done);else done(e.message==="代轉逾時"?"timeout":"neterr");});}
+function rbJsonpRaw(action,done){var name="__rbCb"+(++RB.cbN),to=null,s=document.createElement("script"),fin=false;
   function cleanup(){if(fin)return;fin=true;try{delete window[name];}catch(e){window[name]=undefined;}
     if(s.parentNode)s.parentNode.removeChild(s);}
   window[name]=function(res){clearTimeout(to);cleanup();done(null,res);};
@@ -7672,8 +7697,14 @@ document.addEventListener("error",function(ev){var t=ev.target;if(!t||t.tagName!
     sc.onerror = function(){ clean(); if (over) return; if (++fails >= 3) done(null); else setTimeout(fire, 700); };
     sc.src = API + '?action=fresh&callback=' + cb; document.head.appendChild(sc);
   }
-  fire();
-  timers.push(setTimeout(fire, 8000), setTimeout(fire, 20000), setTimeout(function(){ done(null); }, 75000));
+  function start(){ if (started) return; started = true; fire(); timers.push(setTimeout(fire, 8000), setTimeout(fire, 20000), setTimeout(function(){ done(null); }, 75000)); }
+  /* 2026-11-06：先走自家伺服器代轉（手機登入的 Google 帳號不會被擋），20 秒沒回或失敗才改原本直連 */
+  var started = false, PX = API.replace(/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/, '/api/gas/$1');
+  if (window.fetch && PX !== API) {
+    timers.push(setTimeout(start, 20000));
+    fetch(PX + '?action=fresh&_=' + Date.now(), { cache: 'no-store' }).then(function(r){ if (!r.ok) throw 0; return r.json(); })
+      .then(function(d){ if (d && d.ok && d.items) done(d); else start(); }).catch(start);
+  } else start();
 })();
 </script>
 </body>
