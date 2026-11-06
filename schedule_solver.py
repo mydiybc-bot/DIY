@@ -143,6 +143,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
     for u in U:
         rules = u["rules"]
         u["off_rule"] = {(r["emp"], dd) for r in rules if r["type"] == "off" for dd in r["days"]}
+        # 區域排班（魔導師對話框加的條件）：no_lend＝某人（某幾天）不調去別店
+        u["no_lend"] = {(r["emp"], dd) for r in rules if r["type"] == "no_lend" for dd in (r.get("days") or days)}
         u["only"] = {}
         for r in rules:
             if r["type"] == "only_shift":
@@ -176,7 +178,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             if lim and [n for n in ok if n in lim]:
                 ok = [n for n in ok if n in lim]
             opts = [(u["store"], n) for n in ok]
-            if lend and not (not e["ft"] and avail.get(str(d))):
+            if lend and not (not e["ft"] and avail.get(str(d))) and (eid, d) not in u["no_lend"]:
                 for o in U:
                     if o["store"] != u["store"]:
                         opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n)]
@@ -386,6 +388,12 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     miss = m.NewBoolVar("")
                     m.Add(sum(pool) + miss >= 1) if pool else m.Add(miss == 1)
                     pen.append((miss, W_FORCE))
+            elif r["type"] == "lend" and lend:    # 區域排班：某人某幾天一定調去某店（可指定那家店的班別）
+                for dd in r["days"]:
+                    pool = opts_where((st_, r["emp"]), dd, lambda s, n: s == r["to"] and (not r.get("shift") or n == r["shift"]))
+                    miss = m.NewBoolVar("")
+                    m.Add(sum(pool) + miss >= 1) if pool else m.Add(miss == 1)
+                    pen.append((miss, W_FORCE))
             elif r["type"] == "prefer_shift":
                 for dd in (r.get("days") or days):
                     for s, n in allowed.get((st_, r["emp"], dd), []):
@@ -529,4 +537,6 @@ RULE_TYPES = {
     "demand": "某幾天某班要幾個人（取代原本人數）",
     "extra": "某幾天某班多加幾個人",
     "fixed_cell": "某人某天固定用這個格子（上課、會議、跨店支援等自訂時段）",
+    "no_lend": "（區域排班）某人（某幾天）不調去別店",
+    "lend": "（區域排班）某人某幾天一定調去某店",
 }

@@ -29,7 +29,7 @@ window.__ime=(function(){
 <!-- 2026-11-06 新建（經營者：魔導師把同城的店一起排，自己店優先，缺人／多人才調店；20 日前各店填好本月設定，21 日魔導師整區排）。
      後端 schedule_ws.py 的 region_state／region_draft／region_pick（排班程式 schedule_solver.solve_multi）。
      登入沿用門市排班工作台（localStorage sw_auth_v1，目前只有體驗中心身分可用；魔導師各區登入待權限中心加）。
-     本頁沒有打字的輸入框（只有下拉選單與按鈕），IME-GUARD 照全站規定放著。 -->
+     2026-11-06 加「④ 💬 跟 AI 說要怎麼調」：輸入框只建一次，收到回覆只重畫 #rgChatLog，選字中按 Enter 不送出（中文輸入規則）。 -->
 <style>
 :root{--bg:#f6f4ef;--card:#fff;--ink:#2b2b2b;--mute:#6b6b6b;--line:#e3ded3;--acc:#c0622f;--acc2:#8a4a25;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828;
   --wk:#fbf3e6;--short:#fbe3dd;--extra:#e3eefc;--fine:#f1efe9}
@@ -72,6 +72,11 @@ table.strip td.x{background:var(--extra);color:#1b4d8a;font-weight:700}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin:4px 0}
 .sw{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:4px}
 .hide{display:none!important}
+.chatlog{max-height:420px;overflow-y:auto;margin:8px 0;display:flex;flex-direction:column;gap:6px}
+.msg{max-width:88%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;word-break:break-word;font-size:14px}
+.msg.me{align-self:flex-end;background:#fdecdf}
+.msg.ai{align-self:flex-start;background:#f1efe9}
+.msg .md{font-size:12px;color:var(--mute);margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -110,6 +115,15 @@ table.strip td.x{background:var(--extra);color:#1b4d8a;font-weight:700}
       <div class="tabs" id="planTabs"></div>
       <div id="planBody"></div>
     </div>
+
+    <div class="card hide" id="chatCard">
+      <h2>④ 💬 跟 AI 說要怎麼調（改的是上面選的方案）</h2>
+      <div class="mute" style="font-size:13px">例：「李欣祐這個月不要調店」「12/12 從南京調一個人去新店上晚班」「測試甲 20 號不能上班」。改完上面的表格會更新；方案改好後按「採用」才會寫進各店。</div>
+      <div id="rgRules" class="mute" style="font-size:13px;margin-top:6px"></div>
+      <div id="rgChatLog" class="chatlog"></div>
+      <div class="row" style="align-items:flex-end"><textarea id="rgChatIn" rows="2" style="flex:1;min-width:0;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line)" placeholder="要怎麼調？（Enter 送出、Shift＋Enter 換行）"></textarea><button class="btn" id="rgChatBtn" type="button">送出</button></div>
+      <div id="rgChatMsg" class="err" style="font-size:13px"></div>
+    </div>
   </div>
 </main>
 
@@ -136,6 +150,8 @@ function twoStep(btn,label,fn){var t=null,orig=btn.textContent;
   $('rgSel').onchange=$('ymSel').onchange=function(){try{localStorage.setItem('rg_region',$('rgSel').value)}catch(_){}S=null;lastKey='';refresh()};
   twoStep($('draftBtn'),'再按一次確認（整區重排，約 2～5 分鐘）',function(){$('draftMsg').textContent='';$('draftBtn').disabled=true;
     post('region_draft').then(apply).catch(function(e){$('draftMsg').textContent='⚠ '+e.message;$('draftBtn').disabled=false})});
+  $('rgChatBtn').onclick=sendChat;
+  $('rgChatIn').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!(window.__ime&&__ime.on)){e.preventDefault();sendChat()}});
   refresh();
 })();
 function refresh(){return post('region_state').then(apply).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
@@ -144,19 +160,34 @@ function apply(j){S=j;var run=j.job&&j.job.status==='running';
   renderReady();
   $('draftBtn').disabled=run||j.stores.some(function(s){return !s.ready});
   var jb=$('job');if(j.job&&j.job.status){jb.classList.remove('hide');jb.className='job'+(j.job.status==='error'?' err':'');jb.textContent=(j.job.status==='running'?'⏳ ':j.job.status==='done'?'✅ ':'⚠ ')+(j.job.step||'')+(run&&j.job.secs?'（已 '+(j.job.secs>=60?Math.floor(j.job.secs/60)+' 分 ':'')+(j.job.secs%60)+' 秒）':'')}else jb.classList.add('hide');
-  renderPlans();
+  renderPlans();renderChat();
   clearTimeout(pollT);if(run)pollT=setTimeout(refresh,3000);
 }
 function renderReady(){var h='<thead><tr><th>店</th><th>人數</th><th>狀態</th><th>最近一次採用區域班表</th><th></th></tr></thead><tbody>';
   S.stores.forEach(function(s){h+='<tr><td>'+s.store+' '+esc(s.name)+'</td><td class="n">'+s.emps+'</td><td>'+(s.ready?'<span class="tag ok">✅ 可以排</span>':'<span class="tag bad">'+esc(s.why)+'</span>')+'</td><td class="mute">'+(s.region?esc(s.region.replace('T',' ')):'—')+'</td><td><a href="#" data-go="'+s.store+'">到工作台看這家店 →</a></td></tr>'});
   $('readyTbl').innerHTML=h+'</tbody>';bindGo($('readyTbl'))}
 function bindGo(root){Array.prototype.forEach.call(root.querySelectorAll('a[data-go]'),function(a){a.onclick=function(e){e.preventDefault();try{localStorage.setItem('sw_hq_store',a.dataset.go)}catch(_){}location.href='/static/schedule-workbench.html'}})}
+/* ── 對話框（2026-11-06）：輸入框只建一次，收到回覆只重畫 #rgChatLog（中文輸入規則） ── */
+var chatKey='',pendingText='';
+function renderChat(){
+  var has=S.plans&&Object.keys(S.plans).length;$('chatCard').classList.toggle('hide',!has);if(!has)return;
+  var run=S.job&&S.job.status==='running';$('rgChatBtn').disabled=run;
+  $('rgRules').innerHTML=(S.extraRules||[]).length?'已加的條件（重排時都會套用）：'+S.extraRules.map(esc).join('；'):'';
+  var key=(S.chat||[]).length+'|'+(run?S.job.step:'')+'|'+pendingText;if(key===chatKey)return;chatKey=key;
+  var h=(S.chat||[]).map(function(c){return '<div class="msg '+(c.role==='me'?'me':'ai')+'"><div class="md">'+(c.role==='me'?'魔導師':'AI')+'・'+(c.mode==='pt'?'方案 B':'方案 A')+'</div>'+esc(c.text).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')+'</div>'}).join('');
+  if(!run)pendingText='';
+  if(run&&pendingText)h+='<div class="msg me"><div class="md">魔導師・'+(cur==='pt'?'方案 B':'方案 A')+'</div>'+esc(pendingText)+'</div>';
+  if(run&&S.job.step&&/AI|改|重排|排整區/.test(S.job.step))h+='<div class="msg ai"><div class="md">AI</div>⏳ '+esc(S.job.step)+'</div>';
+  $('rgChatLog').innerHTML=h||'<div class="mute" style="font-size:13px">還沒有對話</div>';$('rgChatLog').scrollTop=1e6;
+}
+function sendChat(){var t=$('rgChatIn').value.trim();if(!t||$('rgChatBtn').disabled)return;$('rgChatMsg').textContent='';$('rgChatBtn').disabled=true;
+  post('region_chat',{plan:cur,text:t}).then(function(j){$('rgChatIn').value='';pendingText=t;chatKey='';apply(j)}).catch(function(e){$('rgChatBtn').disabled=false;$('rgChatMsg').textContent='⚠ '+e.message})}
 function sum(a,b,f){var t=0;a.forEach(function(n,i){t+=f(n,b[i])});return t}
 function renderPlans(){
   var P=S.plans||{},modes=['ft','pt'].filter(function(m){return P[m]});
   if(!modes.length){$('planCard').classList.add('hide');return}
   if(modes.indexOf(cur)<0)cur=modes[0];
-  var key=[S.region,S.ym,S.at,S.picked&&S.picked.at,cur].join('|');if(key===lastKey)return;lastKey=key;
+  var key=[S.region,S.ym,S.at,S.picked&&S.picked.at,S.picked&&S.picked.stale,cur,JSON.stringify(modes.map(function(m){return [P[m].moves.length,Object.keys(P[m].stores).map(function(k){var x=P[m].stores[k];return x.got.join(',')+x.ok+x.warns})]}))].join('|');if(key===lastKey)return;lastKey=key;
   $('planCard').classList.remove('hide');
   $('planInfo').textContent='排好時間 '+(S.at||'').replace('T',' ')+'。淺紅＝缺人、淺藍＝比設定多（數字＝那天在店人數，含外店調來的）。按「採用」會把整區每家店的班表一起換成這個方案（各店可以按「復原上一步」換回原本的）。';
   $('planTabs').innerHTML=modes.map(function(m){return '<button type="button" class="tab'+(m===cur?' on':'')+'" data-m="'+m+'">'+esc(P[m].name)+'</button>'}).join('');
@@ -167,6 +198,7 @@ function renderPlans(){
     h+='<tr><td>'+s.store+' '+esc(s.name)+'</td><td class="n">'+sum(x.need,x.got,function(a,b){return Math.max(0,a-b)})+'</td><td class="n">'+sum(x.need,x.got,function(a,b){return Math.max(0,b-a)})+'</td><td class="n">'+out+'</td><td class="n">'+inn+'</td><td>'+(x.ok?'<span class="tag ok">✅ 通過</span>':'<span class="tag bad">❌ '+x.errors.length+' 項</span>')+(x.warns?' <span class="tag warn">⚠ '+x.warns+'</span>':'')+'</td></tr>'});
   h+='</tbody></table></div>';
   var picked=S.picked&&S.picked.mode===cur;
+  if(picked&&S.picked.stale)h+='<div class="tag warn" style="margin:8px 0">⚠ 這個方案採用後在對話框改過，要再按一次「採用」才會寫進各店</div>';
   h+='<div class="row" style="margin:10px 0">'+(picked?'<span class="tag ok">✅ 已採用（'+esc(S.picked.at.replace('T',' '))+'）</span>':'')+'<button class="btn" id="pickBtn" type="button">'+(picked?'再採用一次（覆蓋各店目前的班表）':'採用這個方案（寫進整區 '+S.stores.length+' 家店的班表）')+'</button><span id="pickMsg" class="err"></span></div>';
   h+='<div class="legend"><span><i class="sw" style="background:var(--short)"></i>缺人</span><span><i class="sw" style="background:var(--extra)"></i>比設定多</span><span><i class="sw" style="background:var(--fine)"></i>剛好</span><span>粗體日期＝週末</span></div>';
   h+='<div class="tw"><table class="strip"><thead><tr><th></th>'+days.map(function(d){return '<th class="'+(d.wd==='六'||d.wd==='日'?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'}).join('')+'</tr></thead><tbody>';
