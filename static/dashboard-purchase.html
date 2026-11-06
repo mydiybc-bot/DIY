@@ -3883,12 +3883,19 @@ var SPN=null,SPN_LOAD=false,SPN_ERR="",SPN_OPEN={},SPN8={};   /* SPN8[店號]＝
 var SPN_ML={"1.25":"1/4 小匙","2.5":"1/2 小匙","5":"1 小匙","7.5":"1/2 大匙","15":"1 大匙","30":"2 大匙","60":"1/4 杯"};
 function spnRe(){if(ST.tab==="平匙")render();}
 function spnLoad(){if(SPN||SPN_LOAD||SPN_ERR)return;SPN_LOAD=true;
-  var name="__spnCb"+Date.now(),s=document.createElement("script"),to=null,done=false;
-  function fin(){if(done)return false;done=true;clearTimeout(to);SPN_LOAD=false;try{delete window[name];}catch(e){window[name]=undefined;}if(s.parentNode)s.parentNode.removeChild(s);return true;}
-  window[name]=function(res){if(!fin())return;if(res&&res.ok&&res.data)SPN=spnBuild(res.data);else SPN_ERR=(res&&res.error)||"讀取失敗";spnRe();};
-  to=setTimeout(function(){if(fin()){SPN_ERR="等太久沒回應";spnRe();}},45000);
-  s.onerror=function(){if(fin()){SPN_ERR="連不上專案推動";spnRe();}};
-  s.src=SPN_API+"?action=spoon&callback="+name+"&_="+Date.now();document.head.appendChild(s);}
+  /* 2026-11-06 經營者（2 號店手機「讀不到平匙規格（連不上專案推動）」）：先走自家伺服器代轉 /api/gas/<部署ID>（同 project-hub），
+     手機登什麼 Google 帳號都不會被 Google 擋；代轉失敗才直連 GAS（JSONP）。 */
+  var m=/^https:\/\/script\.google\.com\/macros\/s\/(AKfycb[\w-]+)\/exec$/.exec(SPN_API),done=false;
+  function ok(res){if(done)return;done=true;SPN_LOAD=false;if(res&&res.ok&&res.data)SPN=spnBuild(res.data);else SPN_ERR=(res&&res.error)||"讀取失敗";spnRe();}
+  function jsonp(){var name="__spnCb"+Date.now(),s=document.createElement("script"),to=null,fd=false;
+    function fin(){if(fd)return false;fd=true;clearTimeout(to);try{delete window[name];}catch(e){window[name]=undefined;}if(s.parentNode)s.parentNode.removeChild(s);return true;}
+    window[name]=function(res){if(fin())ok(res);};
+    to=setTimeout(function(){if(fin()&&!done){done=true;SPN_LOAD=false;SPN_ERR="等太久沒回應";spnRe();}},45000);
+    s.onerror=function(){if(fin()&&!done){done=true;SPN_LOAD=false;SPN_ERR="連不上專案推動";spnRe();}};
+    s.src=SPN_API+"?action=spoon&callback="+name+"&_="+Date.now();document.head.appendChild(s);}
+  if(!m||!window.fetch){jsonp();return;}
+  fetch("/api/gas/"+m[1]+"?action=spoon&_="+Date.now()).then(function(r){if(!r.ok)throw 0;return r.json();})
+    .then(function(res){if(!res||!res.ok||!res.data)throw 0;ok(res);}).catch(function(){if(!done)jsonp();});}
 function spnBuild(d){var spec={},real={};
   (d.set||[]).forEach(function(r){if(+r.real_g>0)real[r.ingredient]=+r.real_g;});
   (d.final||[]).forEach(function(r){if(r.deleted==="Y"||!r.ingredient||!(+r.g_per_spoon>0))return;
