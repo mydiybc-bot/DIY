@@ -6,13 +6,16 @@
 
 網址：GET  /api/gas/<部署ID>?action=…        → 回 JSON（Google 回的 JSONP 會拆成純 JSON）
       POST /api/gas/<部署ID>  body＝JSON 字串 → 原樣轉給 Google、回 JSON
-只放行 static/*.html 裡出現過的部署 ID（開機時掃一次），別人不能拿本伺服器當跳板。
+只放行 static/*.html 裡出現過的部署 ID（開機時掃一次；2026-11-08 起遇到新 ID 會去儀表板靜態網站讀 gas-ids.txt 補），別人不能拿本伺服器當跳板。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import ssl
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,6 +55,36 @@ def _allowed_ids() -> set[str]:
 
 
 _ALLOWED = _allowed_ids()
+
+# 2026-11-08 儀表板搬到靜態網站（diybc-dash）：只改儀表板網頁時本伺服器不再重開，
+# 開機掃到的名單會變舊。遇到不認得的 ID，就去靜態網站讀建置時產生的 gas-ids.txt 補進名單（最多每 30 秒讀一次）。
+_DASH_ORIGIN = os.environ.get("DASH_ORIGIN", "").rstrip("/")
+_REFRESH_GAP = 30
+_last_refresh = 0.0
+_refresh_lock = threading.Lock()
+
+
+def _is_allowed(sid: str | None) -> bool:
+    global _last_refresh
+    if not sid:
+        return False
+    if sid in _ALLOWED:
+        return True
+    if not _DASH_ORIGIN:
+        return False
+    with _refresh_lock:
+        if time.time() - _last_refresh < _REFRESH_GAP:
+            return sid in _ALLOWED
+        _last_refresh = time.time()
+        try:
+            req = urllib.request.Request(f"{_DASH_ORIGIN}/static/gas-ids.txt?_={int(time.time())}",
+                                         headers={"User-Agent": "diybc-dashboard-proxy/1.0"})
+            with urllib.request.urlopen(req, timeout=10, context=_CTX) as r:
+                txt = r.read().decode("utf-8", errors="ignore")
+            _ALLOWED.update(x for x in txt.split() if re.fullmatch(r"AKfycb[\w-]+", x))
+        except Exception:
+            pass
+    return sid in _ALLOWED
 
 
 def _parse(path: str):
@@ -97,7 +130,7 @@ def _fetch(url: str, data: bytes | None = None) -> tuple[int, str]:
 def handle_get(path: str, query: str) -> tuple[int, str]:
     """回 (HTTP 狀態, JSON 字串)。"""
     sid = _parse(path)
-    if not sid or sid not in _ALLOWED:
+    if not _is_allowed(sid):
         return 404, json.dumps({"ok": False, "error": "不在放行清單"}, ensure_ascii=False)
     q = urllib.parse.parse_qs(query, keep_blank_values=True)
     q.pop("callback", None)  # 代轉一律回純 JSON，不需要 JSONP
@@ -108,7 +141,7 @@ def handle_get(path: str, query: str) -> tuple[int, str]:
 
 def handle_post(path: str, body: bytes) -> tuple[int, str]:
     sid = _parse(path)
-    if not sid or sid not in _ALLOWED:
+    if not _is_allowed(sid):
         return 404, json.dumps({"ok": False, "error": "不在放行清單"}, ensure_ascii=False)
     if len(body) > _MAX_BODY:
         return 413, json.dumps({"ok": False, "error": "內容太大"}, ensure_ascii=False)

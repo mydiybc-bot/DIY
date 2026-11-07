@@ -33,6 +33,12 @@ import gas_proxy     # 儀表板 → Google Apps Script 代轉（2026-10-27，�
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
+# 2026-11-08 儀表板搬到靜態網站 diybc-dash（經營者同意改核心檔）：Render 後台設了 DASH_ORIGIN 才把舊網址轉過去；
+# 沒設（或拿掉）就跟以前一樣由本伺服器提供儀表板，這也是出事時的退回方法。
+DASH_ORIGIN = os.environ.get("DASH_ORIGIN", "").rstrip("/")
+# 訓練站自己的網頁（要用本伺服器的登入與 API），繼續由本伺服器提供、不轉址。
+LOCAL_STATIC = {"index.html", "app.js", "styles.css", "dashboard.html", "dashboard.js", "dashboard.css",
+                "self-dashboard.html", "self-dashboard.js", "self-dashboard.css"}
 
 # 2026-10-04 效能第 2 批：靜態檔（儀表板 HTML）改「gzip 壓縮＋ETag 版本比對」。
 # 以 mtime＋size 當鍵把壓縮結果與 ETag 留在記憶體，Render 換版（檔案換新）自動重算；只服務 static/，API JSON 不經過這裡。
@@ -76,12 +82,18 @@ class TrainingHandler(BaseHTTPRequestHandler):
             self.serve_file("index.html", "text/html; charset=utf-8")
             return
         if parsed.path in ("/r", "/R", "/r/"):   # 平板外語食譜短網址（2026-10-29 經營者同意）
+            if DASH_ORIGIN:
+                self.redirect_dash("/static/tablet-recipe.html")
+                return
             self.send_response(HTTPStatus.FOUND); self.send_header("Location", "/static/tablet-recipe.html"); self.send_header("Content-Length", "0"); self.end_headers()
             return
         if parsed.path == "/dashboard":
             self.serve_file("dashboard.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/pnl":
+            if DASH_ORIGIN:
+                self.redirect_dash("/static/dashboard-pnl.html")
+                return
             self.serve_file("dashboard-pnl.html", "text/html; charset=utf-8")
             return
             
@@ -89,6 +101,9 @@ class TrainingHandler(BaseHTTPRequestHandler):
             self.serve_file("self-dashboard.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/google-reviews":
+            if DASH_ORIGIN:
+                self.redirect_dash("/static/google-reviews.html")
+                return
             self.serve_file("google-reviews.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/api/config":
@@ -185,6 +200,9 @@ class TrainingHandler(BaseHTTPRequestHandler):
         file_path = parsed.path.lstrip("/")
         if file_path.startswith("static/"):
             local_name = file_path.replace("static/", "", 1)
+            if DASH_ORIGIN and local_name not in LOCAL_STATIC:   # 2026-11-08 儀表板改由靜態網站提供
+                self.redirect_dash(parsed.path, parsed.query)
+                return
             self.serve_file(local_name, self._guess_content_type(local_name))
             return
 
@@ -435,6 +453,15 @@ class TrainingHandler(BaseHTTPRequestHandler):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def redirect_dash(self, path: str, query: str = "") -> None:
+        """2026-11-08：舊網址轉到儀表板靜態網站（網址後面的參數照帶；# 後面的部分瀏覽器會自己帶過去）。
+        不讓瀏覽器記住這個轉址，拿掉 DASH_ORIGIN 退回時立刻生效。"""
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", DASH_ORIGIN + path + (f"?{query}" if query else ""))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def serve_file(self, filename: str, content_type: str) -> None:
         """2026-10-04 效能第 2 批（原本：每次整檔重送、Cache-Control no-store）。

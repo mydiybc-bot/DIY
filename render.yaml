@@ -5,6 +5,25 @@ services:
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python3 server.py
+    # 2026-11-08：儀表板網頁改由 diybc-dash 靜態網站提供，只改儀表板網頁時本伺服器不重開。
+    # 只有下列後端相關檔案有改動時才自動重新部署（訓練站自己的網頁 index／app.js／styles.css 等也在內）。
+    buildFilter:
+      paths:
+        - "*.py"
+        - requirements.txt
+        - render.yaml
+        - training_content.json
+        - schedule_rules.md
+        - data/**
+        - static/index.html
+        - static/app.js
+        - static/styles.css
+        - static/dashboard.html
+        - static/dashboard.js
+        - static/dashboard.css
+        - static/self-dashboard.html
+        - static/self-dashboard.js
+        - static/self-dashboard.css
     disk:
       name: training-data
       mountPath: /var/data/employee-training
@@ -16,3 +35,35 @@ services:
         value: /var/data/employee-training
       - key: OPENAI_API_KEY
         sync: false
+      # DASH_ORIGIN（儀表板靜態網站網址）在 Render 後台設定：設了才把舊網址轉到新網站；拿掉就恢復由本伺服器提供儀表板。
+
+  # 2026-11-08：儀表板靜態網站。換版時舊版持續服務、新版好了才切換，不會停。
+  - type: web
+    name: diybc-dash
+    runtime: static
+    buildCommand: bash tools/build_dash_site.sh
+    staticPublishPath: ./_site
+    buildFilter:
+      paths:
+        - static/**
+        - tools/build_dash_site.sh
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: redirect
+        source: /
+        destination: /static/hub.html
+      - type: redirect
+        source: /r
+        destination: /static/tablet-recipe.html
+      - type: redirect
+        source: /pnl
+        destination: /static/dashboard-pnl.html
+      - type: redirect
+        source: /google-reviews
+        destination: /static/google-reviews.html
+      - type: rewrite
+        source: /api/*
+        destination: https://diybc-training.onrender.com/api/*
