@@ -20,7 +20,7 @@ Flask 單一服務（`server.py`）＋儀表板靜態網站，部署在 Render�
 - 本機啟動：`python3 server.py`（預設埠見 server.py）
 - 測試：`python3 -m pytest test_training_logic.py test_integration.py -q`
 - 改 HTML/JS 後：本機 `python3 server.py` 開頁實際點過一遍，看瀏覽器 console 有無紅字。
-- 部署：推到 `main` 分支後 Render 自動部署。只改儀表板網頁 → 只有 diybc-dash 建置（約 1 分鐘，不停機），驗證用 `curl -sI https://diybc-dash.onrender.com/static/<檔名>` 看 200 與 content-length；改到後端（`*.py` 等，清單見 render.yaml `buildFilter`）→ diybc-training 會重開、停約 1～1.5 分鐘，盡量避開營業尖峰並合併成一次推。新增後端要讀的檔案時，記得把路徑加進 render.yaml `buildFilter.paths`，否則改了不會重開。
+- 部署：推到 `main` 分支後 Render 自動部署。只改儀表板網頁 → 只有 diybc-dash 建置（約 1 分鐘，不停機），驗證用 `curl -sI https://diybc-dash.onrender.com/static/<檔名>` 看 200 與 content-length；改到後端（`*.py` 等，清單見 render.yaml `buildFilter`）→ diybc-training 會重開、停約 1～1.5 分鐘，**只能在 10:00 前或 22:00 後推**（經營者 2026-11-08 裁定；營業時間內只有緊急修正且要先問），並合併成一次推。新增後端要讀的檔案時，記得把路徑加進 render.yaml `buildFilter.paths`，否則改了不會重開。
 
 ## 工作流程（每次任務）
 1. **先計畫**：讀對應 skill → 讀要改的檔 → 自己規劃「要改哪幾個檔、哪幾段、為什麼」後直接動手，不必等我確認。例外：核心檔案先報備、碰到紅線先停下問。
