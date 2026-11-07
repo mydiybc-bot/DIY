@@ -85,6 +85,9 @@ class TrainingHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.FOUND); self.send_header("Location", "/static/tablet-recipe.html"); self.send_header("Content-Length", "0"); self.end_headers()
             return
         if parsed.path == "/dashboard":
+            if DASH_ORIGIN:   # 2026-11-08 經營者：舊整合頁轉到新首頁 hub（經交接頁帶過裝置記憶）
+                self.redirect_local("/static/hub.html")
+                return
             self.serve_file("dashboard.html", "text/html; charset=utf-8")
             return
         if parsed.path == "/pnl":
