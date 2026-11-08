@@ -53,6 +53,9 @@ select,.btn{font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var
 .job{margin-top:10px;padding:8px 12px;border-radius:8px;background:#fff7e6;border:1px solid #f1d9a8}
 .err{color:var(--bad)}
 .tw{overflow-x:auto}
+.mvrow{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}.mvrow>div{min-width:0}
+table.hrs td.n{text-align:right}table.hrs td.sn{vertical-align:top;font-weight:600;background:#faf7f1}table.hrs tr.sg td{border-top:2px solid var(--line)}
+table.hrs td.hb.s{background:var(--short)}table.hrs td.hb.x{background:var(--extra)}
 table{border-collapse:collapse}
 table.t th,table.t td{border-bottom:1px solid var(--line);padding:5px 10px;text-align:left;white-space:nowrap;font-size:13px}
 table.t th{color:var(--mute);font-weight:600;background:#faf7f1}
@@ -183,6 +186,20 @@ function renderChat(){
 function sendChat(){var t=$('rgChatIn').value.trim();if(!t||$('rgChatBtn').disabled)return;$('rgChatMsg').textContent='';$('rgChatBtn').disabled=true;
   post('region_chat',{plan:cur,text:t}).then(function(j){$('rgChatIn').value='';pendingText=t;chatKey='';apply(j)}).catch(function(e){$('rgChatBtn').disabled=false;$('rgChatMsg').textContent='⚠ '+e.message})}
 function sum(a,b,f){var t=0;a.forEach(function(n,i){t+=f(n,b[i])});return t}
+function hoursHtml(p){
+  var rows='';
+  S.stores.forEach(function(s){var x=p.stores[s.store];if(!x||!x.hours||!x.hours.length)return;
+    var mvN={};p.moves.forEach(function(m){if(m.store==s.store)mvN[m.name]=(mvN[m.name]||0)+1});
+    x.hours.forEach(function(e,i){
+      var pt=e.type==='兼職',goal=pt?e.min:e.target,g=goal==null||goal===''?null:+goal,t=+e.hours;
+      var cls=g==null?'':(pt?(t<g?'s':''):(Math.abs(t-g)>0.01?(t<g?'s':'x'):''));
+      rows+='<tr'+(i===0?' class="sg"':'')+'>'+(i===0?'<td rowspan="'+x.hours.length+'" class="sn">'+s.store+' '+esc(s.name)+'</td>':'')+
+        '<td>'+esc(e.name)+(e.move==='否'?' <span class="mute" title="本月設定「調店」選否">不調店</span>':'')+'</td><td>'+esc(e.type||'')+'</td>'+
+        '<td class="n hb '+cls+'">'+t+' h</td><td class="n mute">'+(g==null?'—':(pt?'最低 ':'目標 ')+g+' h')+'</td><td class="n">'+(mvN[e.name]?mvN[e.name]+' 次':'—')+'</td></tr>'})});
+  if(!rows)return '';
+  return '<h2 style="margin-top:14px">各店每人總時數</h2><div class="mute" style="font-size:13px">本月排到的總工時（含調去別店上的班、特休照排班時數）；淺紅＝低於目標／最低時數、淺藍＝正職超過目標</div>'+
+    '<div class="tw"><table class="t hrs"><thead><tr><th>店</th><th>夥伴</th><th>正職／兼職</th><th>總時數</th><th>目標</th><th>調去別店</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
 function renderPlans(){
   var P=S.plans||{},modes=['ft','pt'].filter(function(m){return P[m]});
   if(!modes.length){$('planCard').classList.add('hide');return}
@@ -206,12 +223,15 @@ function renderPlans(){
     h+='<tr><td class="lb">'+s.store+' '+esc(s.name)+' 需要</td>'+x.need.map(function(n){return '<td>'+n+'</td>'}).join('')+'</tr>';
     h+='<tr><td class="lb">　　　排到</td>'+x.got.map(function(g,i){var n=x.need[i];return '<td class="'+(g<n?'s':g>n?'x':'')+'">'+g+'</td>'}).join('')+'</tr>'});
   h+='</tbody></table></div>';
+  /* 2026-11-09 經營者：調店清單右邊顯示這些店每位夥伴的本月總時數（含調去別店上的時數） */
+  h+='<div class="mvrow"><div class="mvl">';
   if(p.moves.length){
     var by={};p.moves.forEach(function(m){by[m.name+'|'+m.from_name]=(by[m.name+'|'+m.from_name]||0)+1});
     h+='<h2 style="margin-top:14px">調店清單（'+p.moves.length+' 人次）</h2><div class="mute" style="font-size:13px">誰調最多：'+Object.keys(by).sort(function(a,b){return by[b]-by[a]}).map(function(k){var q=k.split('|');return esc(q[0])+'（'+esc(q[1])+'）'+by[k]+' 次'}).join('、')+'</div>';
     h+='<div class="tw"><table class="t"><thead><tr><th>日期</th><th>夥伴</th><th>從</th><th>調去</th><th>班別</th></tr></thead><tbody>'+
       p.moves.slice().sort(function(a,b){return a.day-b.day}).map(function(m){var d=days.find(function(x){return x.d==m.day})||{};return '<tr><td>'+m.day+' 號（'+(d.wd||'')+'）</td><td>'+esc(m.name)+'</td><td>'+esc(m.from_name)+'</td><td>'+esc(m.to_name)+'</td><td>'+esc(m.shift)+'</td></tr>'}).join('')+'</tbody></table></div>';
   }else h+='<div class="mute" style="margin-top:10px">這個方案沒有調店。</div>';
+  h+='</div><div class="mvr">'+hoursHtml(p)+'</div></div>';
   var errs=[];S.stores.forEach(function(s){var x=p.stores[s.store];if(x&&x.errors.length)errs.push('<b>'+esc(s.name)+'</b>：'+x.errors.map(esc).join('；'))});
   if(errs.length)h+='<div style="margin-top:10px"><div class="err">❌ 檢查沒過的（多半是整區都缺人，調不出來）</div><div style="font-size:13px">'+errs.join('<br>')+'</div></div>';
   $('planBody').innerHTML=h;

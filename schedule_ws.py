@@ -2299,17 +2299,24 @@ def _region_public(rg, ym):
     if job.get("status") == "running":
         job["secs"] = int(time.time() - job.get("t0", time.time()))
     days = None
+    meta = {}   # 2026-11-09 經營者：調店清單右邊列各店每人總時數 → 帶正職／兼職、目標或最低時數、調店
     for s in REGIONS[rg]:
         st = _load(s, ym)
         if st.get("template"):
-            days = st["template"]["info"]["days"]
-            break
+            days = days or st["template"]["info"]["days"]
+            try:
+                meta[str(s)] = {eid: {"type": v.get("type", "正職"), "target": v.get("target"), "min": v.get("min_hours"),
+                                      "move": "可" if can_move(v) else "否"} for eid, v in mset_view(st)["emps"].items()}
+            except Exception:   # noqa: BLE001 — 只是補充資訊，讀不到就不顯示目標
+                meta[str(s)] = {}
     plans = {}
     for mode, P in ((data or {}).get("plans") or {}).items():
         plans[mode] = {"name": PLAN_NAME[mode], "desc": PLAN_DESC[mode], "stats": P["stats"], "moves": P["moves"],
                        "stores": {k: {"schedule": v["schedule"], "need": v["need"], "got": v["got"], "summary": v["summary"],
                                       "names": v["names"], "ok": v["check"]["ok"], "errors": v["check"]["errors"][:20],
-                                      "warns": len(v["check"]["warns"])} for k, v in P["stores"].items()}}
+                                      "warns": len(v["check"]["warns"]),
+                                      "hours": [dict(h, **((meta.get(k) or {}).get(h.get("id")) or {})) for h in v["check"].get("hours") or []]}
+                                  for k, v in P["stores"].items()}}
     return {"ok": True, "region": rg, "ym": ym, "regions": REGIONS, "stores": _region_ready(rg, ym), "days": days, "job": job,
             "plans": plans, "at": (data or {}).get("at"), "picked": (data or {}).get("picked"),
             "chat": ((data or {}).get("chat") or [])[-80:], "cost": (data or {}).get("cost") or 0,
