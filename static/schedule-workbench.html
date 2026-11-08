@@ -396,11 +396,12 @@ function renderMsetForm(ms){
   function tag(f,src){return ef.indexOf(f)>=0?'<span class="esttag" title="'+esc(src||'')+'">估算</span>':''}
   var h='<div class="sub">正職基準</div><label class="fld">標準時數 <input type="number" id="mStd" min="0" value="'+esc(b.std_hours==null?'':b.std_hours)+'"> h'+tag('std_hours',est.base_src)+'</label><label class="fld">休假 <input type="number" id="mOff" min="0" max="31" value="'+esc(b.off_days==null?'':b.off_days)+'"> 天'+tag('off_days',est.base_src)+'</label><label class="fld">國定假日 <input type="number" id="mHol" min="0" max="31" value="'+esc(b.holidays==null?'':b.holidays)+'"> 天'+tag('holidays',est.base_src)+'</label>';
   h+='<div class="sub">營收預估</div><label class="fld">平日每天 $<input type="number" id="mWd" min="0" value="'+esc(rv.weekday==null?'':rv.weekday)+'">'+tag('rev_weekday',est.rev_src)+'</label><label class="fld">假日每天 $<input type="number" id="mWe" min="0" value="'+esc(rv.weekend==null?'':rv.weekend)+'">'+tag('rev_weekend',est.rev_src)+'</label>';
-  h+='<div class="sub">夥伴</div>'+chipBar()+'<div class="tblwrap"><table class="frm" id="empTbl"><thead><tr><th>工號</th><th>姓名</th><th>正職／兼職</th><th>目標時數</th><th>兼職最低時數</th><th>指休</th><th>特休</th><th>兼職可上日與時段</th><th>個人特殊班別／備註</th></tr></thead><tbody>';
+  h+='<div class="sub">夥伴</div>'+chipBar()+'<div class="tblwrap"><table class="frm" id="empTbl"><thead><tr><th>工號</th><th>姓名</th><th>正職／兼職</th><th>目標時數</th><th>兼職最低時數</th><th>指休</th><th>特休</th><th title="區域排班時，能不能把這位夥伴調去同城別家店。正職預設「可」；兼職預設「否」，先問過本人，同意才改成「可」">調店</th><th>兼職可上日與時段</th><th>個人特殊班別／備註</th></tr></thead><tbody>';
   info.emps.forEach(function(e){var v=(ms.emps||{})[e.id]||{};
     h+='<tr data-e="'+esc(e.id)+'"><td>'+esc(e.id)+'</td><td>'+esc(e.name)+'</td><td><select><option'+(v.type!=='兼職'?' selected':'')+'>正職</option><option'+(v.type==='兼職'?' selected':'')+'>兼職</option></select></td>'+
       '<td><input type="number" class="n tgt" min="0" value="'+esc(v.target==null?'':v.target)+'" placeholder="'+esc(v.target_hint||'')+'"'+(v.target_est?' data-est="1" title="套本月標準時數（可改）"':'')+'></td><td><input type="number" class="n" min="0" value="'+esc(v.min_hours==null?'':v.min_hours)+'"></td>'+
       '<td><input type="text" class="mk-off mk" data-k="指休" style="width:110px" value="'+esc(v.off_txt||'')+'" placeholder="例：4、9、17"><div class="echo"></div></td><td><input type="text" class="mk-pto mk" data-k="特休" style="width:90px" value="'+esc(v.pto_txt||'')+'" placeholder="例：12-14"><div class="echo"></div></td>'+
+      '<td><select class="mv" title="區域排班能不能調去同城別家店">'+['可','否'].map(function(o){return '<option'+((v.move||(v.type==='兼職'?'否':'可'))===o?' selected':'')+'>'+o+'</option>'}).join('')+'</select></td>'+
       '<td><input type="text" class="mk-av mk wide" data-k="可上" value="'+esc(v.avail_txt||'')+'" placeholder="例：每週一到週三 晚班；20、21 早班"><div class="echo"></div></td>'+
       '<td><input type="text" class="wide nt" value="'+esc(v.note||'')+'" placeholder="例：週二固定南京上課／區主管週四在板橋"></td></tr>'});
   h+='</tbody></table></div>';
@@ -411,8 +412,11 @@ function renderMsetForm(ms){
   /* 正職目標時數跟著標準時數走（店長自己改過的那格就不動） */
   function stdNow(){return $('mStd').value}
   $('mStd').addEventListener('input',function(){Array.prototype.forEach.call($('empTbl').querySelectorAll('input.tgt[data-est]'),function(x){x.value=stdNow()})});
-  Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var sel=tr.querySelector('select'),t=tr.querySelector('input.tgt');
+  Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var sel=tr.querySelector('select'),t=tr.querySelector('input.tgt'),mv=tr.querySelector('select.mv');
     t.addEventListener('input',function(){t.removeAttribute('data-est')});
+    /* 2026-11-09 經營者：調店 正職預設可、兼職預設否（問過本人才改可）；店長這次沒動過調店，就跟著正職／兼職換 */
+    mv.addEventListener('change',function(){mv.setAttribute('data-set','1')});
+    sel.addEventListener('change',function(){if(!mv.hasAttribute('data-set'))mv.value=sel.value==='兼職'?'否':'可'});
     sel.addEventListener('change',function(){if(sel.value==='正職'&&!t.value){t.value=stdNow();t.setAttribute('data-est','1')}else if(sel.value==='兼職'&&t.hasAttribute('data-est')){t.value='';t.removeAttribute('data-est')}})});
   $('msetSave').onclick=saveMset;
   bindEcho();
@@ -471,7 +475,7 @@ function bindEcho(){
   });
 }
 function collectMset(){
-  var emps={};Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');emps[tr.dataset.e]={type:tr.querySelector('select').value,target:ins[0].value,min_hours:ins[1].value,off_txt:tr.querySelector('.mk-off').value,pto_txt:tr.querySelector('.mk-pto').value,avail_txt:tr.querySelector('.mk-av').value,note:tr.querySelector('.nt').value}});
+  var emps={};Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');emps[tr.dataset.e]={type:tr.querySelector('select').value,target:ins[0].value,min_hours:ins[1].value,off_txt:tr.querySelector('.mk-off').value,pto_txt:tr.querySelector('.mk-pto').value,avail_txt:tr.querySelector('.mk-av').value,move:tr.querySelector('select.mv').value,note:tr.querySelector('.nt').value}});
   var sp=[];Array.prototype.forEach.call($('spTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input:not(.hol)');sp.push({day:tr.querySelector('select').value,revenue:ins[0].value,staff:ins[1].value,note:ins[2].value,as_holiday:tr.querySelector('.hol').checked})});
   return {base:{std_hours:$('mStd').value,off_days:$('mOff').value,holidays:$('mHol').value},revenue:{weekday:$('mWd').value,weekend:$('mWe').value},emps:emps,special:sp};
 }

@@ -565,6 +565,8 @@ def mset_view(st):
                 cur["target"] = None
             cur["_default"] = True
             ms["emps"][e["id"]] = cur
+        if cur.get("move") not in ("可", "否"):   # 2026-11-09 經營者：調店 正職預設可、兼職預設否（問過本人才改可）
+            cur["move"] = "否" if cur.get("type") == "兼職" else "可"
         if cur.get("type") == "正職" and not cur.get("target"):
             must = (s104.get(e["name"]) or {}).get("mustHour")
             cur["target_hint"] = ms["base"].get("std_hours") or must
@@ -589,6 +591,14 @@ def mset_view(st):
     return ms
 
 
+def can_move(v):
+    """區域排班能不能調去同城別家店（本月設定「調店」欄）：沒填的正職可、兼職否"""
+    v = v or {}
+    if v.get("move") in ("可", "否"):
+        return v["move"] == "可"
+    return v.get("type", "正職") != "兼職"
+
+
 def mset_clean(st, body):
     """本月設定（不含指休格子，那個走 mark）"""
     ms = copy.deepcopy(st.get("mset") or {})
@@ -605,6 +615,8 @@ def mset_clean(st, body):
         v = v or {}
         emps[eid] = {"type": ("兼職" if str(v.get("type") or "") == "兼職" else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
                      "min_hours": _num(v.get("min_hours"), None, 0, 400, "最低時數"), "note": str(v.get("note") or "").strip()[:300]}
+        mv = str(v.get("move") or "")
+        emps[eid]["move"] = mv if mv in ("可", "否") else ("否" if emps[eid]["type"] == "兼職" else "可")
         for f in MARK_TXT.values():
             emps[eid][f] = str(v.get(f) or "").strip()[:300]
     ms["emps"] = emps
@@ -2088,6 +2100,7 @@ RG_CHAT_RULES = """
  1. rg_apply：直接改某店某人某天的格子（一次可改多格、可跨店）。調去別家店上班＝在夥伴「自己店」的格子寫那家店的班別時段，每段加「@支援#崗位」（崗位見下方各店的調店崗位），例「13:00-15:00@支援#台南店,15:30-21:30@支援#台南店」；原本被調走的那天改回自己店上班就寫自己店的班別名稱。
  2. rg_rerun：加條件後讓程式整區重排這個方案（約 1～3 分鐘），適合「某人整月不要調店」「某人某幾天一定要調去某店」「某人某幾天不能上班」「某店某天某班要幾人」這類條件。條件會記住，之後按「整區排初稿」也會照樣套。
  3. rg_undo：復原上一次改動。
+- 夥伴清單標「不調店」的（店長在本月設定「調店」選否：兼職沒問過本人或本人不願意），不可以把他調去別家店（rg_apply、rg_rerun 都不行）；魔導師要調的話，請他先請店長把那人的「調店」改成「可」並存檔。
 - 回覆規矩：每句話都要給答案；能做就直接做好再說明；做不到說清楚卡在哪一條規則並給 2～3 個做法；改完用一兩句白話說改了什麼、檢查結果（各店 ❌／⚠ 有幾項）；不要貼整張表、不要提程式內部用語；用繁體中文。
 - 檢查結果有新的 ❌ 一定要再改到沒有才回覆（人真的不夠時說清楚缺在哪天哪店）。
 """
@@ -2149,7 +2162,7 @@ def _rg_system(rg, ym, ctx):
         info = sts[s]["template"]["info"]
         parts.append(f"\n### {s} {_sname(s)}（104 班表：{info['title']}；調來這家店時崗位填「{_region_pos(rg, s)}」）")
         parts.append("班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + f"；平日 {r.get('wd', 0)} 人、假日 {r.get('we', 0)} 人）" for r in cfgs[s]["shifts"]))
-        parts.append("夥伴：" + "；".join(f"{e['id']} {e['name']}（{(mss[s]['emps'].get(e['id']) or {}).get('type', '正職')}）" for e in info["emps"]))
+        parts.append("夥伴：" + "；".join(f"{e['id']} {e['name']}（{(mss[s]['emps'].get(e['id']) or {}).get('type', '正職')}" + ("" if can_move(mss[s]['emps'].get(e['id'])) else "，不調店") + "）" for e in info["emps"]))
         parts.append("本月設定：\n" + marks_text(sts[s]))
     parts.append("\n日期：" + "、".join(d["label"] for d in sts[stores[0]]["template"]["info"]["days"]))
     return "\n".join(parts)
@@ -2179,6 +2192,8 @@ def _rg_rule_check(rg, r, sts):
         if t == "lend":
             if int(r.get("to") or 0) not in REGIONS[rg] or int(r["to"]) == s:
                 raise ValueError("lend 要指定同區另一家店")
+            if not can_move(((sts[s].get("mset") or {}).get("emps") or {}).get(r["emp"])):
+                raise ValueError(f"{_sname(s)} {nm[r['emp']]} 本月設定「調店」是「否」，不能調去別店；要調請店長先改成「可」再存檔")
             out["to"] = int(r["to"])
     if out.get("days") == [] and t != "no_lend":
         raise ValueError("沒有有效的日期")
@@ -2237,6 +2252,9 @@ def _region_chat_worker(rg, ym, mode, text):
                             if int(c_["day"]) not in {d["d"] for d in info["days"]}:
                                 raise ValueError(f"這個月沒有 {c_['day']} 號")
                             parse_cell(c_["value"], P["stores"][str(s)]["ext"].get("shifts") or {}, set(info["dayTypes"]))
+                            if "@支援#" in str(c_["value"]) and not can_move(((sts[s].get("mset") or {}).get("emps") or {}).get(c_["emp"])):
+                                nm_ = next(e["name"] for e in info["emps"] if e["id"] == c_["emp"])
+                                raise ValueError(f"{_sname(s)} {nm_} 本月設定「調店」是「否」，不能調去別店；要調請店長先改成「可」再存檔")
                         P.setdefault("history", []).append({"schedules": {k: copy.deepcopy(v["schedule"]) for k, v in P["stores"].items()}, "why": "對話：" + text[:40]})
                         P["history"] = P["history"][-20:]
                         for c_ in chg:

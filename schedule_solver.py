@@ -133,7 +133,9 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             tgt = v.get("target") or (v.get("target_hint") if typ == "正職" else None)
             tgt = float(tgt) if tgt not in (None, "") else (u["std_min"] / 60 if typ == "正職" and u["std_min"] else None)
             mn = v.get("min_hours")
+            mv = v.get("move")   # 2026-11-09 本月設定「調店」：沒填的正職可、兼職否
             emps.append({"k": (u["store"], e["id"]), "id": e["id"], "name": e["name"], "u": u, "ft": typ == "正職",
+                         "move": (mv == "可") if mv in ("可", "否") else typ == "正職",
                          "target": int(round(tgt * 60)) if tgt else None,
                          "min": int(round(float(mn) * 60)) if mn not in (None, "") else None})
     E = {e["k"]: e for e in emps}
@@ -178,10 +180,13 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             if lim and [n for n in ok if n in lim]:
                 ok = [n for n in ok if n in lim]
             opts = [(u["store"], n) for n in ok]
-            if lend and not (not e["ft"] and avail.get(str(d))) and (eid, d) not in u["no_lend"]:
+            if lend and e["move"] and (eid, d) not in u["no_lend"]:
+                # 兼職這天指定了班別（例：只能晚班）→ 別家店也只排同一種（早／中／晚；看不出種類就要同名）
+                want = u["shifts"].get(avail.get(str(d))) if (not e["ft"] and can) else None
                 for o in U:
                     if o["store"] != u["store"]:
-                        opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n)]
+                        opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n) and (
+                            not want or (o["shifts"][n]["kind"] == want["kind"] if want["kind"] else n == avail.get(str(d))))]
             allowed[k + (d,)] = opts
 
     def pto_shift(u, d):
