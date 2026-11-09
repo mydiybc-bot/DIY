@@ -4753,7 +4753,7 @@ function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
       +'<button class="btn sm" data-hctbatch="1"'+(selN&&!DCO.busy?'':' disabled')+'>🚚 勾選的 '+selN+' 張產生托運單</button><span class="muted" style="font-size:12px">要寄新竹的才勾；不用託運的不要勾</span>':'')
     +'<span class="muted" style="font-size:13px">點店名展開明細</span><span style="flex:1"></span><button class="btn sm ghost" data-dccall="'+(nOpen===list.length?'0':'1')+'">'+(nOpen===list.length?'▴ 全部收合':'▾ 全部展開')+'</button></div>';
   list.forEach(function(o){h+=dcoCard(o);});
-  if(ST.dcoEdit&&list.some(function(o){return ST.dcoEdit[o.id];}))h+=dcoEditDatalist();   /* 2026-10-05：編輯模式的「加品項」清單（整頁一份） */
+  /* 2026-11-09：加品項改用 dcoAddBox（搜尋＋勾選多項），不再用整頁 datalist */
   return h;}
 function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 2026-10-05 經營者 1005 #2：編輯模式 */
   var open=(o.status==="待處理"||o.status==="備貨中"),q=(ST.dcoShipQ||{})[o.id]||{},tot=0,ex=!!(ST.dcoCardOpen||{})[o.id],hl=HCT.byId&&HCT.byId[o.id];
@@ -5433,9 +5433,61 @@ function dcoEditCard(o){var E=ST.dcoEdit[o.id],shipped=(o.status==="已出貨"),
       +'<td class="right"><input class="sm" type="number" min="0" step="any" style="width:80px" data-dcoel="'+k+'|'+i+'|price" value="'+escA(l.price)+'"></td>'
       +'<td class="right">'+fmt(amt)+'</td><td><button class="btn sm ghost" data-dcoelrm="'+k+'|'+i+'" title="移除這一項">✕</button></td></tr>';});
   h+='<tr><td colspan="'+(shipped?5:4)+'" class="right"><b>'+(shipped?'出貨金額':'金額')+'（'+E.lines.filter(function(l){return num(l.qty)>0;}).length+' 項）</b></td><td class="right"><b>$'+fmt(tot)+'</b></td><td></td></tr></table></div>';
-  h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px"><input class="tx" data-dcoeaddn="'+k+'" list="dcoEList" style="flex:1;min-width:180px" placeholder="➕ 加品項（打字搜尋品名或編號）"><input class="sm" data-dcoeaddq="'+k+'" type="number" min="0" step="any" value="1" style="width:64px"><button class="btn sm ghost" data-dcoeladd="'+k+'">加入</button></div>';
+  h+=dcoAddBox(o.id);   /* 2026-11-09 出貨中心：加品項改成可一次勾選多項 */
   h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center"><button class="btn sm" data-dcoedsave="'+k+'"'+(DCO.busy?' disabled':'')+'>'+(DCO.busy?'⏳ 處理中…':'💾 儲存修改')+'</button><button class="btn sm ghost" data-dcoedcancel="'+k+'">取消編輯</button><span class="muted" style="font-size:12px">改完按「儲存修改」才會寫入；數量改 0＝刪掉這一項。別人同時改過這張單會擋下，請重新整理。</span></div>';
   return h+'</div>';}
+/* ── 編輯訂單：一次加多個品項（2026-11-09 出貨中心「假設有 5 個商品要加，可以一次加入嗎」）
+   搜尋框只建一次；打字只重畫下面的結果清單（不重建輸入框，注音選字不會被打斷）；勾選跨搜尋保留，按「加入勾選的 N 項」一次加進訂單。 */
+function dcoAddSt(id){ST.dcoAdd=ST.dcoAdd||{};return ST.dcoAdd[id]=ST.dcoAdd[id]||{q:"",sel:{},order:[]};}
+function dcoAddFind(q){var ts=String(q||"").toLowerCase().split(/\s+/).filter(Boolean);if(!ts.length)return [];
+  return SKUS.filter(function(s){if(String(s.status||"").trim()==="停售")return false;
+      var hay=(s.name+" "+s.id+" "+(s.aliases||[]).join(" ")+" "+(s.vendor||"")).toLowerCase();
+      return ts.every(function(t){return hay.indexOf(t)>=0;});})
+    .sort(function(a,b){return ((dcAny(b)?1:0)-(dcAny(a)?1:0))||(a.name.length-b.name.length);}).slice(0,40);}
+function dcoAddUnit(s){return s.buyUnit||s.useUnit||"";}
+function dcoAddResHtml(id){var A=dcoAddSt(id),E=(ST.dcoEdit||{})[id]||{lines:[]},k=escA(id);
+  if(!String(A.q).trim())return '<div class="muted" style="font-size:12px;padding:4px 2px">打字搜尋後，勾選要加的品項、填數量；可以換關鍵字繼續勾，最後一次加入。</div>';
+  var L=dcoAddFind(A.q);
+  if(!L.length)return '<div class="muted" style="font-size:13px;padding:4px 2px">找不到「'+escH(A.q)+'」</div>';
+  return '<div style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;margin-top:4px">'+L.map(function(s){var on=A.sel.hasOwnProperty(s.id),has=E.lines.some(function(l){return l.sku_id===s.id;});
+      return '<label style="display:flex;gap:8px;align-items:center;padding:4px 8px;border-bottom:1px solid #f1f1f1;font-size:13px;cursor:pointer'+(on?';background:#EEF6F0':'')+'"><input type="checkbox" style="width:18px;height:18px" data-dcoachk="'+k+'|'+escA(s.id)+'"'+(on?' checked':'')+'>'
+        +'<span style="flex:1">'+escH(s.name)+' <span class="muted" style="font-size:12px">'+escH(s.id)+'　'+escH(dcoAddUnit(s))+(s.price>0?'　$'+fmt(s.price):'')+(dcAny(s)?'':'　非出貨中心品項')+(has?'　（訂單已有，會加在原數量上）':'')+'</span></span>'
+        +'<input class="sm" type="number" min="0" step="any" style="width:64px" data-dcoaqty="'+k+'|'+escA(s.id)+'" value="'+escA(on?A.sel[s.id]:1)+'"></label>';}).join('')+'</div>';}
+function dcoAddSelHtml(id){var A=dcoAddSt(id),k=escA(id),n=A.order.length;
+  var chips=A.order.map(function(sid){var s=SKU[sid];return '<span style="display:inline-block;background:#EEF6F0;border:1px solid #B8DCC4;border-radius:12px;padding:1px 8px;margin:2px 4px 2px 0;font-size:12px">'+escH(s?s.name:sid)+' ×'+escH(A.sel[sid])+' <a href="#" data-dcoarm="'+k+'|'+escA(sid)+'" style="color:#B3261E;text-decoration:none">✕</a></span>';}).join('');
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px"><button class="btn sm" data-dcoaddgo="'+k+'"'+(n?'':' disabled')+'>➕ 加入勾選的 '+n+' 項</button>'+(n?'<button class="btn sm ghost" data-dcoaclr="'+k+'">清除勾選</button>':'')+'<span>'+chips+'</span></div>';}
+function dcoAddBox(id){var A=dcoAddSt(id),k=escA(id);
+  return '<div style="margin-top:8px;padding:8px;border:1px dashed #9cc7a9;border-radius:8px;background:#FBFDFB"><input class="tx" style="width:100%;box-sizing:border-box" data-dcoaq="'+k+'" value="'+escA(A.q)+'" placeholder="➕ 加品項：打字搜尋品名或編號，可勾選多項一次加入">'
+    +'<div data-dcoares="'+k+'">'+dcoAddResHtml(id)+'</div><div data-dcoasel="'+k+'">'+dcoAddSelHtml(id)+'</div></div>';}
+function dcoAddPaint(id,res){var q=window.CSS&&CSS.escape?CSS.escape(id):id,r=document.querySelector('[data-dcoares="'+q+'"]'),sl=document.querySelector('[data-dcoasel="'+q+'"]');
+  if(res&&r)r.innerHTML=dcoAddResHtml(id);if(sl)sl.innerHTML=dcoAddSelHtml(id);}
+function dcoAddPick(id,sid,on,qty){var A=dcoAddSt(id);
+  if(on){A.sel[sid]=num(qty)>0?num(qty):1;if(A.order.indexOf(sid)<0)A.order.push(sid);}
+  else{delete A.sel[sid];A.order=A.order.filter(function(x){return x!==sid;});}}
+function dcoEditAddMany(id){var E=(ST.dcoEdit||{})[id],o=(DCO.all||[]).filter(function(x){return x.id===id;})[0],A=dcoAddSt(id);if(!E||!o||!A.order.length)return;
+  var shipped=o.status==="已出貨",names=[];
+  A.order.forEach(function(sid){var s=SKU[sid],qn=num(A.sel[sid]);if(!s||!(qn>0))return;
+    var unit=dcoAddUnit(s),pr=num(s.price);
+    var dup=E.lines.filter(function(l){return l.sku_id===s.id&&String(l.unit)===String(unit)&&num(l.price)===pr;})[0];
+    if(dup){dup.qty=num(dup.qty)+qn;if(shipped)dup.ship=num(dup.ship)+qn;}
+    else E.lines.push({sku_id:s.id,name:s.name,unit:unit,qty:qn,price:pr,ship:shipped?qn:null});
+    names.push(s.name+" ×"+qn);});
+  ST.dcoAdd[id]={q:"",sel:{},order:[]};
+  render();toast("已加入 "+names.length+" 項（按「儲存修改」才會寫入）："+names.join("、"),5000);}
+document.addEventListener("input",function(ev){var t=ev.target;if(!t||!t.getAttribute)return;var a;
+  if((a=t.getAttribute("data-dcoaq"))!=null){if(ev.isComposing||(window.__ime&&__ime.on))return;dcoAddSt(a).q=t.value;dcoAddPaint(a,true);return;}
+  if((a=t.getAttribute("data-dcoaqty"))!=null){var p=a.split("|"),A=dcoAddSt(p[0]);var v=num(t.value);
+    if(v>0){dcoAddPick(p[0],p[1],true,v);var cb=t.parentNode.querySelector('[data-dcoachk]');if(cb)cb.checked=true;}
+    dcoAddPaint(p[0],false);}});
+document.addEventListener("compositionend",function(ev){var t=ev.target;if(!t||!t.getAttribute)return;var a=t.getAttribute("data-dcoaq");
+  if(a!=null){dcoAddSt(a).q=t.value;dcoAddPaint(a,true);}});
+document.addEventListener("change",function(ev){var t=ev.target;if(!t||!t.getAttribute)return;var a=t.getAttribute("data-dcoachk");if(a==null)return;
+  var p=a.split("|"),qi=t.closest("label")&&t.closest("label").querySelector('[data-dcoaqty]');
+  dcoAddPick(p[0],p[1],t.checked,qi?qi.value:1);var lb=t.closest("label");if(lb)lb.style.background=t.checked?"#EEF6F0":"";dcoAddPaint(p[0],false);});
+document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target:null;if(!t)return;var el;
+  if((el=t.closest("[data-dcoaddgo]"))){ev.preventDefault();dcoEditAddMany(el.getAttribute("data-dcoaddgo"));return;}
+  if((el=t.closest("[data-dcoaclr]"))){ev.preventDefault();var id=el.getAttribute("data-dcoaclr");dcoAddSt(id).sel={};dcoAddSt(id).order=[];dcoAddPaint(id,true);return;}
+  if((el=t.closest("[data-dcoarm]"))){ev.preventDefault();var p=el.getAttribute("data-dcoarm").split("|");dcoAddPick(p[0],p[1],false);dcoAddPaint(p[0],true);return;}});
 function dcoEditDatalist(){return '<datalist id="dcoEList">'+SKUS.filter(function(s){return String(s.status||"").trim()!=="停售";}).sort(function(a,b){return (dcAny(b)?1:0)-(dcAny(a)?1:0);}).map(function(s){return '<option value="'+escA(s.name)+'">'+escH(s.id+"　"+(s.buyUnit||s.useUnit)+(s.price>0?"　$"+fmt(s.price):""))+'</option>';}).join('')+'</datalist>';}
 function dcoEditAdd(id){var E=(ST.dcoEdit||{})[id],o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!E||!o)return;
   var ni=document.querySelector('[data-dcoeaddn="'+id+'"]'),qi=document.querySelector('[data-dcoeaddq="'+id+'"]');
@@ -5461,12 +5513,12 @@ function dcoEditSave(id){var o=(DCO.all||[]).filter(function(x){return x.id===id
   dcoWrite(body,function(){return dcoJsonp({action:"orders",id:id}).then(function(d){var x=d&&d.ok&&d.orders[0];if(!x||x.updated===E.base)return null;
       var same=x.lines.length===body.lines.length&&body.lines.every(function(l,i){var y=x.lines[i];return y&&y.sku_id===l.sku_id&&Math.abs(y.qty-l.qty)<1e-6&&Math.abs(y.price-l.price)<1e-6;});
       return same?{ok:true}:null;});})
-    .then(function(){DCO.busy=false;delete ST.dcoEdit[id];if(ST.dcoShipQ)delete ST.dcoShipQ[id];dcoRefresh();render();toast("✅ 已儲存 "+id+" 的修改");})
+    .then(function(){DCO.busy=false;delete ST.dcoEdit[id];if(ST.dcoAdd)delete ST.dcoAdd[id];if(ST.dcoShipQ)delete ST.dcoShipQ[id];dcoRefresh();render();toast("✅ 已儲存 "+id+" 的修改");})
     .catch(function(e){DCO.busy=false;render();toast("⚠️ 沒存成功："+e.message);});}
 document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target:null;if(!t)return;var el;
   function d(sel){el=t.closest(sel);return !!el;}
   if(d("[data-dcoedit]")){ev.preventDefault();if(ST.role!=="出貨中心"&&ST.role!=="總部")return;dcoEditStart(el.getAttribute("data-dcoedit"));return;}
-  if(d("[data-dcoedcancel]")){var ci=el.getAttribute("data-dcoedcancel");if(typeof confirm==="function"&&!confirm("放棄這張訂單還沒存的修改？"))return;delete ST.dcoEdit[ci];render();return;}
+  if(d("[data-dcoedcancel]")){var ci=el.getAttribute("data-dcoedcancel");if(typeof confirm==="function"&&!confirm("放棄這張訂單還沒存的修改？"))return;delete ST.dcoEdit[ci];if(ST.dcoAdd)delete ST.dcoAdd[ci];render();return;}
   if(d("[data-dcoedsave]")){dcoEditSave(el.getAttribute("data-dcoedsave"));return;}
   if(d("[data-dcoeladd]")){dcoEditAdd(el.getAttribute("data-dcoeladd"));return;}
   if(d("[data-dcoelrm]")){var pr=el.getAttribute("data-dcoelrm").split("|"),E=(ST.dcoEdit||{})[pr[0]];if(E){E.lines.splice(+pr[1],1);render();}return;}
