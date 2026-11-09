@@ -2961,7 +2961,9 @@ def _cloud104_loop():
             cloud104_run("schedule")
 
 
-if os.environ.get("SCHED_CLOUD104", "1") == "1":   # 測試時設 0 就不開背景排程
+# 2026-11-09 深夜：實測 104 登入 API（bsignin /api/is-valid-account）被 Cloudflare 機器人防護擋下回 403（本機與 Render 都一樣），
+# 偽裝瀏覽器身分繞過 bot 偵測不在允許範圍 → 每天 06:05 的雲端自動登入預設關閉（SCHED_CLOUD104=1 才開），等 104 開放 API 再啟用。
+if os.environ.get("SCHED_CLOUD104", "0") == "1":
     threading.Thread(target=_cloud104_loop, daemon=True, name="cloud104").start()
 
 
@@ -3390,6 +3392,16 @@ def handle(path, body):
             return 400, {"ok": False, "error": "email／pwd104 必填"}
         _cred104({"email": email, "pwd": pwd, "set_at": time.time()})
         return 200, {"ok": True, "email": email}
+    if act == "cred104_clear":   # 2026-11-09 深夜：無頭瀏覽器登入被 104 的 Cloudflare 機器人防護擋（403），不可繞過 → 把存的帳密刪掉
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以清除"}
+        p = _dir() / CRED104
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError as ex:
+            return 500, {"ok": False, "error": str(ex)}
+        return 200, {"ok": True, "has_cred": bool(_cred104().get("email"))}
     if act == "cloud104_status":   # 2026-11-09：雲端 06:05 自動同步的狀態
         if str(who) != "hq":
             return 403, {"ok": False, "error": "只有總部可以看"}
