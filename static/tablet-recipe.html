@@ -343,9 +343,25 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
       $('tpwOk').onclick = ok; inp.onkeydown = function (e) { if (e.key === 'Enter') ok(); };
     });
   }
+  /* 2026-11-09 經營者：「未來如果我希望可以讓 100 人同時使用」→ 清單與食譜先向訓練站伺服器讀（同網域 /api/i18n/，Google 定時推上去的快照，
+     幾百台同時也撐得住）；伺服器沒有這一版、連不上、8 秒沒回 → 自動改問 Google（原本的路，照舊）。密碼錯兩邊一樣請店員重輸。 */
+  var SNAP = { i18nList: '/api/i18n/list', i18nGet: '/api/i18n/get' };
+  function viaSnap(b) {
+    var url = SNAP[b.action]; if (!url || !window.fetch) return Promise.reject({ fallback: 1 });
+    var ctl = window.AbortController ? new AbortController() : null, tm = ctl ? setTimeout(function () { ctl.abort(); }, 8000) : 0;
+    return fetch(url, { method: 'POST', body: JSON.stringify(b), signal: ctl ? ctl.signal : undefined })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        clearTimeout(tm); var j = null; try { j = JSON.parse(t); } catch (e) { }
+        if (j && j.ok && j.act === b.action && j.data) return j;
+        if (j && j.code === 'auth') { var e2 = new Error(j.msg); e2.code = 'auth'; throw e2; }
+        throw { fallback: 1 };
+      }, function () { clearTimeout(tm); throw { fallback: 1 }; });
+  }
   /* 帶平板密碼呼叫；密碼不對 → 問一次再試 */
   function call(body, ms) {
-    var run = function () { var b = {}; for (var k in body) b[k] = body[k]; b.tpw = tpw(); return post(b, ms).then(function (j) { if (!j.ok && j.code === 'auth') { var e = new Error(j.msg); e.code = 'auth'; throw e; } return j; }); };
+    var gas = function (b) { return post(b, ms).then(function (j) { if (!j.ok && j.code === 'auth') { var e = new Error(j.msg); e.code = 'auth'; throw e; } return j; }); };
+    var run = function () { var b = {}; for (var k in body) b[k] = body[k]; b.tpw = tpw(); return viaSnap(b).catch(function (e) { if (e && e.code === 'auth') throw e; return gas(b); }); };
     return (tpw() ? run() : askPw('請輸入平板密碼（輸入一次，這台平板會記住）').then(run)).catch(function (e) {
       if (e && e.code === 'auth') return askPw('平板密碼不對或已更換，請重新輸入').then(run);
       throw e;
