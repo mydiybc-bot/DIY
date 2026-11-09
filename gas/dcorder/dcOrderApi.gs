@@ -1,6 +1,10 @@
 /**
- * diybc-dcorder-api  v1.6（2026-10-30 門市「本輪已叫貨」標記）
+ * diybc-dcorder-api  v1.7（2026-11-09 取消合併）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
+ *
+ * v1.7：POST unmerge {id:<併入的那張>, base?}：把合併拆回原本的幾張（被併入的那幾張回到合併前的狀態與備註；
+ *       併入那張扣掉它們的品項數量）。合併後那張已出貨就不能拆。合併時 dc_log 多記每張合併前的狀態與備註（prev），
+ *       拆回時優先用它；v1.7 以前的合併改從 dc_log 的建單／改狀態紀錄推回合併前狀態（查不到＝待處理）。
  *
  * v1.6：新分頁 dc_vmark（一列＝一次標記的一個品項）：門市在訂貨單按「✓ 已向某廠商叫貨」或「這週下單完成（剩下的不叫）」時記下來，
  *       平板、電腦看到同一份。出貨中心的單不用標（送出的訂單本身就是紀錄）。
@@ -44,7 +48,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.6-vmark';
+var DCO_VER = 'v1.7-unmerge';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -333,6 +337,7 @@ function doPost(e) {
     else if (a === 'locSet') r = dcoLocSet_(body);   /* v1.2 */
     else if (a === 'edit') r = dcoEdit_(body);       /* v1.2 */
     else if (a === 'merge') r = dcoMerge_(body);     /* v1.2 */
+    else if (a === 'unmerge') r = dcoUnmerge_(body); /* v1.7 */
     else if (a === 'hctCreate') r = hctCreate_(body);   /* v1.3 */
     else if (a === 'hctVoid') r = hctVoid_(body);       /* v1.3 */
     else if (a === 'hctReport') r = hctReport_(body);   /* v1.3 */
@@ -642,8 +647,104 @@ function dcoMerge_(b) {
   });
   dcoDelRows_(t, by[into]);
   t.sh.getRange(t.sh.getLastRow() + 1, 1, out.length, H_LINE.length).setValues(out);
-  dcoLog_('merge', into, store, { merged: others, n: out.length, total: total, status: status });
+  var prev = {};   /* v1.7：合併前每張的狀態與備註，取消合併時用 */
+  ids.forEach(function (x) { prev[x] = { status: dcoStr_(by[x][0]['狀態']), note: dcoStr_(by[x][0]['備註']) }; });
+  dcoLog_('merge', into, store, { merged: others, n: out.length, total: total, status: status, prev: prev });
   return { ok: true, id: into, merged: others, n: out.length, total: total, status: status, updated: dcoFmt_(now) };
+}
+
+/* v1.7：取消合併：{id:<併入的那張>, base?:畫面上那張的更新時間}
+   找出備註是「已併入 <id>」的已取消訂單（同一店）→ 各自回到合併前的狀態與備註（明細本來就保留著）；
+   併入那張扣掉它們的品項數量（同品項同單位同單價），扣完剩下的就是合併前的內容。
+   合併後那張若又被編輯到扣不回去（數量比被併入的少），就擋下、請改用「✏️ 編輯」手動處理。 */
+function dcoUnmerge_(b) {
+  var into = dcoStr_(b.id), t = dcoRead_(SH_LINE), rsI = dcoRowsOf_(t, into);
+  if (!rsI.length) return { ok: false, error: '找不到訂單 ' + into };
+  var stI = dcoStr_(rsI[0]['狀態']);
+  if (!OPEN_ST[stI]) return { ok: false, error: into + ' 已是「' + stI + '」，只有還沒出貨的訂單能取消合併' };
+  if (b.base && dcoStr_(b.base) !== dcoUpd_(rsI)) return { ok: false, error: into + ' 剛被改過，請按「🔄 重新整理」再取消合併', code: 'conflict' };
+  var store = dcoStr_(rsI[0]['店號']), tag = DCO_MERGED_PREFIX + into, by = {}, others = [];
+  t.rows.forEach(function (r) {
+    var id = dcoStr_(r['訂單號']), nt = dcoStr_(r['備註']);
+    if (!id || id === into || dcoStr_(r['狀態']) !== '已取消' || dcoStr_(r['店號']) !== store) return;
+    if (nt !== tag && nt.indexOf(tag + '｜') !== 0) return;
+    if (!by[id]) { by[id] = []; others.push(id); }
+    by[id].push(r);
+  });
+  if (!others.length) return { ok: false, error: into + ' 沒有被合併進來的訂單' };
+  function key(r) { return dcoStr_(r['sku_id']) + '\u0001' + dcoStr_(r['單位']) + '\u0001' + dcoNum_(r['單價']); }
+  /* 併入那張扣掉其他張的數量 */
+  var need = {};
+  others.forEach(function (oid) { by[oid].forEach(function (r) { var k = key(r); need[k] = (need[k] || 0) + dcoNum_(r['訂購量']); }); });
+  var keep = [];
+  rsI.slice().sort(function (a, c) { return dcoNum_(a['行號']) - dcoNum_(c['行號']); }).forEach(function (r) {
+    var k = key(r), q = dcoNum_(r['訂購量']), take = Math.min(q, need[k] || 0);
+    need[k] = (need[k] || 0) - take; q = Math.round((q - take) * 1e6) / 1e6;
+    if (q > 0) keep.push({ r: r, qty: q });
+  });
+  var short = Object.keys(need).filter(function (k) { return need[k] > 1e-6; });
+  if (short.length) return { ok: false, error: '合併後 ' + into + ' 有品項被改過，數量對不起來，無法自動拆回；請用「✏️ 編輯」手動調整' };
+  if (!keep.length) return { ok: false, error: '扣掉被併入的品項後 ' + into + ' 沒有品項了，無法自動拆回' };
+  /* 合併前的狀態與備註：v1.7 起合併時有記；以前的合併從 dc_log 推回 */
+  var snap = dcoMergeSnap_(into, others);
+  function origNote(oid) { var nt = dcoStr_(by[oid][0]['備註']); return nt === tag ? '' : nt.slice((tag + '｜').length); }
+  var noteI = dcoStr_(rsI[0]['備註']);
+  if (snap.prev && snap.prev[into]) noteI = dcoStr_(snap.prev[into].note);
+  else others.forEach(function (oid) {
+    var on = origNote(oid); if (!on) return;
+    var seg = '（' + oid + '）' + on;
+    if (noteI.indexOf('；' + seg) >= 0) noteI = noteI.replace('；' + seg, '');
+    else if (noteI.indexOf(seg + '；') === 0) noteI = noteI.slice((seg + '；').length);
+    else if (noteI === seg) noteI = '';
+  });
+  function prevSt(oid) {
+    if (snap.prev && snap.prev[oid] && OPEN_ST[snap.prev[oid].status]) return snap.prev[oid].status;
+    return dcoPrevStatus_(snap.logs, oid, snap.time);
+  }
+  var now = new Date(), stInto = prevSt(into), back = [];
+  others.forEach(function (oid) {
+    var s1 = prevSt(oid), on = (snap.prev && snap.prev[oid]) ? dcoStr_(snap.prev[oid].note) : origNote(oid);
+    dcoWriteRows_(t, by[oid], function () { return { '狀態': s1, '備註': on, '更新時間': now }; });
+    back.push({ id: oid, status: s1 });
+  });
+  var r0 = rsI[0], total = 0;
+  var out = keep.map(function (x, k) {
+    var r = x.r, amt = Math.round(x.qty * dcoNum_(r['單價'])); total += amt;
+    var o = {};
+    H_LINE.forEach(function (h) { o[h] = r[h]; });
+    o['狀態'] = stInto; o['行號'] = k + 1; o['訂購量'] = x.qty; o['實出量'] = ''; o['小計'] = amt; o['備註'] = noteI;
+    o['出貨時間'] = ''; o['新竹貨號'] = dcoStr_(r0['新竹貨號']); o['cid'] = r0['cid']; o['下單時間'] = r0['下單時間']; o['更新時間'] = now;
+    return dcoLineRow_(o);
+  });
+  dcoDelRows_(t, rsI);
+  t.sh.getRange(t.sh.getLastRow() + 1, 1, out.length, H_LINE.length).setValues(out);
+  dcoLog_('unmerge', into, store, { back: back, status: stInto, n: out.length, total: total, snap: snap.prev ? 'log' : 'derived' });
+  return { ok: true, id: into, status: stInto, back: back, n: out.length, total: total, updated: dcoFmt_(now) };
+}
+/* 找這次合併的 dc_log：時間＋合併前快照（v1.7 起才有 prev）；另回傳 dc_log 全部列給 dcoPrevStatus_ 用 */
+function dcoMergeSnap_(into, others) {
+  var logs = [];
+  try { logs = dcoRead_(SH_LOG).rows; } catch (e) { }
+  var hit = null;
+  logs.forEach(function (r) {
+    if (dcoStr_(r['動作']) !== 'merge' || dcoStr_(r['訂單號']) !== into) return;
+    var c = {}; try { c = JSON.parse(r['內容'] || '{}'); } catch (e) { }
+    if ((c.merged || []).some(function (x) { return others.indexOf(x) >= 0; })) hit = { time: r['時間'], c: c };
+  });
+  return { logs: logs, time: hit ? hit.time : null, prev: hit && hit.c.prev ? hit.c.prev : null };
+}
+/* 合併前這張是什麼狀態：看合併以前最後一筆建單／改狀態紀錄（查不到＝待處理） */
+function dcoPrevStatus_(logs, id, before) {
+  var lim = before instanceof Date ? before.getTime() : Infinity, st = '待處理';
+  (logs || []).forEach(function (r) {
+    if (dcoStr_(r['訂單號']) !== id) return;
+    var tm = r['時間'] instanceof Date ? r['時間'].getTime() : 0;
+    if (tm >= lim) return;
+    var a = dcoStr_(r['動作']);
+    if (a === 'create') st = '待處理';
+    else if (a === 'status') { var c = {}; try { c = JSON.parse(r['內容'] || '{}'); } catch (e) { } if (OPEN_ST[c.to]) st = c.to; }
+  });
+  return st;
 }
 
 /* ── v1.3／v1.5：新竹物流托運單 ──────────────────────────────────

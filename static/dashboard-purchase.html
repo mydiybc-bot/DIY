@@ -4760,7 +4760,7 @@ function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 
   var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+(hctSelOK(o)?'<input type="checkbox" title="勾選＝要寄新竹物流（一次產生托運單）" style="width:18px;height:18px" data-dccsel="'+escA(o.id)+'"'+((ST.dcoSel||{})[o.id]?' checked':'')+'>':'')+'<span data-dccexp="'+escA(o.id)+'" title="'+(ex?'收合明細':'展開明細')+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer;flex:1;min-width:240px"><span class="muted" style="width:12px">'+(ex?'▾':'▸')+'</span>'+dcoStBadgeO(o)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
     +(o.status==="已出貨"?'<span class="muted">出貨 '+dcoTime(o.shipTime)+'</span>':'')+(!ex&&o.note?'<span title="'+escA(o.note)+'">📝</span>':'')+(!ex&&hl&&hl.length?'<span class="muted" style="font-size:12px">🚚 '+hl.map(function(l){return escH(hctDash(l.edelno));}).join('、')+'</span>':'')+'</span><span>'+o.lines.length+' 項</span>'
     +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoedit="'+escA(o.id)+'"'+(DCO.busy?' disabled':'')+' title="改這張訂單的門市、品項、數量、單價、實出、備註、新竹貨號">✏️ 編輯</button>':'')   /* 2026-10-05 */
-    +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoslip="'+escA(o.id)+'" title="印 A4 出貨單，放進箱子給門市收貨核對">🖨 出貨單</button>':'')+'</div>';   /* cw 批 */
+    +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoslip="'+escA(o.id)+'" title="印 A4 出貨單，放進箱子給門市收貨核對">🖨 出貨單</button>':'')+dcoUnmergeBtn(o)+'</div>';   /* cw 批；2026-11-09 取消合併 */
   if(!ex)return h+'</div>';   /* 收合：只留標題列（店名、單號、項數、編輯、出貨單） */
   if(o.note)h+='<div class="banner" style="margin:6px 0 0;padding:5px 8px">📝 '+escH(o.note)+'</div>';
   h+='<div style="overflow-x:auto"><table class="dcot" style="margin-top:6px"><tr><th></th><th>品名</th><th class="right">訂購</th><th class="right">實出</th><th class="right">單價</th><th class="right">小計</th><th class="right" title="記數量的品項：庫存－其他待出貨">庫存</th></tr>';
@@ -5340,15 +5340,35 @@ function dcoLocInput(t){var id=t.getAttribute("data-dcoloc");ST.dcoLocEdit=ST.dc
   var b=document.querySelector('[data-dcostks="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');if(b)b.disabled=DCO.busy||!(((ST.dcoStkEdit||{})[id])||ch);
   var n=dcoLocEdits().length,ab=document.getElementById("dcoLocAllBtn");if(ab){ab.disabled=!n||DCO.busy||!DCO.locOK;ab.textContent="💾 儲存全部位置（"+n+" 項）";}}
 /* ── 已併入 ── */
-function dcoMergedInto(o){var m=String((o&&o.note)||"").match(/^已併入 (\S+)/);return (o&&o.status==="已取消"&&m)?m[1]:"";}
+function dcoMergedInto(o){var m=String((o&&o.note)||"").match(/^已併入 ([^\s｜]+)/);   /* 2026-11-09：原本 \S+ 會把「｜原備註」一起吃進單號 */
+return (o&&o.status==="已取消"&&m)?m[1]:"";}
 function dcoStBadgeO(o){var to=dcoMergedInto(o);return to?'<span class="dcost" style="background:#6b7280" title="這張已併入 '+escA(to)+'，品項在那張出貨">已併入 '+escH(to)+'</span>':dcoStBadge(o.status);}
 /* ── 合併 ── */
 function dcoOpenOf(store){return (DCO.all||[]).filter(function(o){return String(o.store)===String(store)&&(o.status==="待處理"||o.status==="備貨中");}).sort(function(a,b){return a.time<b.time?-1:(a.time>b.time?1:(a.id<b.id?-1:1));});}
 function dcoMultiStores(stores){return stores.filter(function(st){return dcoOpenOf(st).length>1;});}
 function dcoStoresOf(list){var out=[];list.forEach(function(o){var st=String(o.store);if(out.indexOf(st)<0)out.push(st);});return out;}
+/* 2026-11-09 出貨中心：合併區預設收合（怕誤按），點標題才展開 */
 function dcoMergeBar(list){var multi=dcoMultiStores(dcoStoresOf(list)).sort(function(a,b){return num(a)-num(b);});if(!multi.length)return "";
-  return '<div class="card" style="border-color:#F0B35A;background:#FFF8EC"><b>🔗 這些門市有 2 張以上還沒出貨的訂單，列印出貨單前請先合併成一張</b>'
-    +multi.map(function(st){var os=dcoOpenOf(st);return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px"><b>'+escH(storeLabel(st))+'</b><span class="muted">'+os.map(function(o){return escH(o.id)+'（'+escH(o.status)+'，'+o.lines.length+' 項）';}).join('、')+'</span><button class="btn sm" data-dcomerge="'+escA(st)+'"'+(DCO.busy?' disabled':'')+' title="合併＝把同一店的品項併進最早那張（同品項數量相加），其他張標成「已併入」（明細保留、不算錢）。按「🖨 列印全部出貨單」也會先問要不要合併。">🔗 合併成一張</button></div>';}).join('')+'</div>';}
+  return '<details class="card" style="border-color:#F0B35A;background:#FFF8EC"'+(ST.dcoMergeOpen?' open':'')+' ontoggle="ST.dcoMergeOpen=this.open"><summary style="cursor:pointer"><b>🔗 有 '+multi.length+' 家門市有 2 張以上還沒出貨的訂單</b> <span class="muted">（點開才看得到合併鈕；合併前先確認舊的那張是不是其實已經寄出）</span></summary>'
+    +multi.map(function(st){var os=dcoOpenOf(st);return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px"><b>'+escH(storeLabel(st))+'</b><span class="muted">'+os.map(function(o){return escH(o.id)+'（'+escH(o.status)+'，'+o.lines.length+' 項）';}).join('、')+'</span><button class="btn sm" data-dcomerge="'+escA(st)+'"'+(DCO.busy?' disabled':'')+' title="合併＝把同一店的品項併進最早那張（同品項數量相加），其他張標成「已併入」（明細保留、不算錢）。按錯可以在訂單上按「↩ 取消合併」拆回。">🔗 合併成一張</button></div>';}).join('')+'</details>';}
+/* ── 取消合併（2026-11-09；後端 v1.7 unmerge） ── */
+function dcoMergedFrom(id){return (DCO.all||[]).filter(function(x){return dcoMergedInto(x)===id;});}
+function dcoUnmergeBtn(o){if(ST.role!=="出貨中心"&&ST.role!=="總部")return "";
+  var into=dcoMergedInto(o)||((o.status==="待處理"||o.status==="備貨中")&&dcoMergedFrom(o.id).length?o.id:"");if(!into)return "";
+  return '<button class="btn sm ghost" style="color:#8a5a00;border-color:#d9a441" data-dcounmerge="'+escA(into)+'"'+(DCO.busy?' disabled':'')+' title="把合併拆回原本的幾張訂單（各自回到合併前的狀態與備註）">↩ 取消合併</button>';}
+function dcoUnmergeUI(into){if(DCO.busy){toast("上一個動作還在處理中");return;}
+  var o=(DCO.all||[]).filter(function(x){return x.id===into;})[0],fr=dcoMergedFrom(into);
+  if(!o||!fr.length){toast("找不到這次合併，請按「🔄 重新整理」");return;}
+  if(o.status!=="待處理"&&o.status!=="備貨中"){toast("⚠️ "+into+" 已是「"+o.status+"」，已出貨的不能取消合併");return;}
+  if(typeof confirm==="function"&&!confirm("要把「"+storeLabel(o.store)+"」的合併拆回去嗎？\n\n"+into+"（現在 "+o.lines.length+" 項，$"+fmt(o.total)+"）會拆回：\n"+[into].concat(fr.map(function(x){return x.id;})).map(function(id){return "・"+id;}).join("\n")+"\n\n每張回到合併前的品項、狀態和備註。已經印的出貨單要重印。"))return;
+  var ids=fr.map(function(x){return x.id;});
+  DCO.busy=true;render();
+  dcoWrite({action:"unmerge",id:into,base:o.updated},function(){return dcoJsonp({action:"orders",store:o.store,days:60}).then(function(d){if(!d||!d.ok)return null;
+      var by={};d.orders.forEach(function(x){by[x.id]=x;});
+      var good=by[into]&&ids.every(function(id){var x=by[id];return x&&x.status!=="已取消";});return good?{ok:true,id:into}:null;});})
+    .then(function(){[into].concat(ids).forEach(function(id){if(ST.dcoShipQ)delete ST.dcoShipQ[id];if(ST.dcoEdit)delete ST.dcoEdit[id];});
+      DCO.busy=false;dcoRefresh();render();toast("✅ 已拆回 "+(ids.length+1)+" 張訂單，出貨單請重印");})
+    .catch(function(e){DCO.busy=false;dcoRefresh();render();toast("⚠️ 取消合併沒成功："+e.message,6000);});}
 function dcoMergeStore(st){var os=dcoOpenOf(st);if(os.length<2)return Promise.resolve(null);
   var ids=os.map(function(o){return o.id;}),base={};os.forEach(function(o){base[o.id]=o.updated;});
   return dcoWrite({action:"merge",ids:ids,into:ids[0],base:base},function(){return dcoJsonp({action:"orders",store:st,days:60}).then(function(d){if(!d||!d.ok)return null;
@@ -5446,6 +5466,7 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
   if(d("[data-dcoeladd]")){dcoEditAdd(el.getAttribute("data-dcoeladd"));return;}
   if(d("[data-dcoelrm]")){var pr=el.getAttribute("data-dcoelrm").split("|"),E=(ST.dcoEdit||{})[pr[0]];if(E){E.lines.splice(+pr[1],1);render();}return;}
   if(d("[data-dcomerge]")){dcoMergeUI(el.getAttribute("data-dcomerge"));return;}
+  if(d("[data-dcounmerge]")){ev.preventDefault();if(ST.role!=="出貨中心"&&ST.role!=="總部")return;dcoUnmergeUI(el.getAttribute("data-dcounmerge"));return;}
   if(d("[data-dcolocall]")){dcoLocSaveUI(dcoLocEdits());return;}});
 document.addEventListener("change",function(ev){var t=ev.target;if(!t||!t.getAttribute)return;var a;
   if((a=t.getAttribute("data-dcoef"))){var p=a.split("|"),E=(ST.dcoEdit||{})[p[0]];if(E)E[p[1]]=t.value;return;}
