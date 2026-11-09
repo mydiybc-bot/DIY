@@ -1,6 +1,8 @@
 /**
- * diybc-dcorder-api  v1.7（2026-11-09 取消合併）
+ * diybc-dcorder-api  v1.7.1（2026-11-09 取消合併；已寄出的單不能合併）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
+ *
+ * v1.7.1：merge 擋下「新竹托運單已交寄」的訂單（貨已寄出，只是沒按出貨完成；11/09 9 家店誤合併的原因）。
  *
  * v1.7：POST unmerge {id:<併入的那張>, base?}：把合併拆回原本的幾張（被併入的那幾張回到合併前的狀態與備註；
  *       併入那張扣掉它們的品項數量）。合併後那張已出貨就不能拆。合併時 dc_log 多記每張合併前的狀態與備註（prev），
@@ -48,7 +50,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.7-unmerge';
+var DCO_VER = 'v1.7.1-unmerge';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -598,6 +600,8 @@ function dcoEdit_(b) {
 function dcoMerge_(b) {
   var ids = (b.ids || []).map(dcoStr_).filter(function (x, i, a) { return x && a.indexOf(x) === i; });
   if (ids.length < 2) return { ok: false, error: '至少要選兩張訂單' };
+  var sent = dcoSentIds_(ids);   /* v1.7.1 */
+  if (sent.length) return { ok: false, error: sent.join('、') + ' 已經用新竹寄出（托運單已交寄），不能合併；請先按「✅ 出貨完成」結案', code: 'sent' };
   var t = dcoRead_(SH_LINE), by = {}, store = null, base = b.base || {};
   for (var i = 0; i < ids.length; i++) {
     var rs = dcoRowsOf_(t, ids[i]);
@@ -653,6 +657,17 @@ function dcoMerge_(b) {
   return { ok: true, id: into, merged: others, n: out.length, total: total, status: status, updated: dcoFmt_(now) };
 }
 
+/* v1.7.1：這些訂單裡，新竹托運單已交寄（貨已寄出）的有哪幾張；讀不到托運單表就當沒有 */
+function dcoSentIds_(ids) {
+  var out = [];
+  try {
+    hctTable_().rows.forEach(function (r) {
+      var id = dcoStr_(r['訂單號']);
+      if (ids.indexOf(id) >= 0 && dcoStr_(r['狀態']) === '已交寄' && out.indexOf(id) < 0) out.push(id);
+    });
+  } catch (e) { }
+  return out;
+}
 /* v1.7：取消合併：{id:<併入的那張>, base?:畫面上那張的更新時間}
    找出備註是「已併入 <id>」的已取消訂單（同一店）→ 各自回到合併前的狀態與備註（明細本來就保留著）；
    併入那張扣掉它們的品項數量（同品項同單位同單價），扣完剩下的就是合併前的內容。
