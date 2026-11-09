@@ -15,6 +15,7 @@ server.py 只把 /api/schedule/* 整個交給 handle()；身分用權限中心 s
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import datetime as dt
@@ -2872,6 +2873,98 @@ def _dash104_worker(dash_items, backup=False):
     _dash104_status(out)
 
 
+# ───────────────────────── 雲端自動同步 104（2026-11-09 經營者：「104 不開 API，你處理自動化的流程，不要麻煩我」） ─────────────────────────
+# 本伺服器每天 06:05（台灣）自己用無頭瀏覽器（tools/sync104/fetch104.py，Playwright）登入 104 讀 12 店班表 → sync104()（工作台＋排班分析儀表板）。
+# 104 帳號：程式專用的排班唯讀帳號，由 Mac 的排程從 secrets.env（HR104_EMAIL／HR104_PWD）用 cred104_set 送來、存硬碟 _104_cred.json；不放環境變數、不回顯。
+# 只「讀」104。帳密錯一次就停（code 2），不重試，避免被 104 鎖。狀態 _104_cloud_status.json；Mac 10:13 排程會看它決定要不要補跑。
+TW_TZ = dt.timezone(dt.timedelta(hours=8))
+CRED104 = "_104_cred.json"
+CLOUD104_STATUS = "_104_cloud_status.json"
+CLOUD104_AT = (6, 5)   # 每天台灣 06:05
+
+
+def _json_file(name, update=None):
+    p = _dir() / name
+    cur = {}
+    if p.exists():
+        try:
+            cur = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cur = {}
+    if update is not None:
+        cur.update(update)
+        atomic_write_json(p, cur)
+    return cur
+
+
+def _cred104(update=None):
+    return _json_file(CRED104, update)
+
+
+def _cloud104_status(update=None):
+    return _json_file(CLOUD104_STATUS, update)
+
+
+def _fetch104_module():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "sync104", "fetch104.py")
+    spec = importlib.util.spec_from_file_location("fetch104", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_cloud104_lock = threading.Lock()
+
+
+def cloud104_run(trigger="schedule", selftest=False):
+    """登入 104 → 讀班表 → sync104；selftest＝只確認無頭瀏覽器開得到 104 登入頁。結果寫 _104_cloud_status.json"""
+    if not _cloud104_lock.acquire(blocking=False):
+        return False
+    st = {"running": True, "started": time.time(), "trigger": trigger, "selftest": selftest, "finished": None,
+          "code": None, "msg": None, "results": None, "dash": None}
+    _cloud104_status(st)
+    try:
+        mod = _fetch104_module()
+        if selftest:
+            ok, msg = asyncio.run(mod.probe())
+            st.update(code=0 if ok else 6, msg=msg)
+        else:
+            cred = _cred104()
+            if not cred.get("email") or not cred.get("pwd"):
+                st.update(code=7, msg="還沒設定 104 排班帳號（Mac 排程會從 secrets.env 的 HR104_EMAIL／HR104_PWD 送來）")
+            else:
+                os.environ["HR104_EMAIL"], os.environ["HR104_PWD"] = cred["email"], cred["pwd"]
+                code, msg, payload = asyncio.run(mod.fetch())
+                st.update(code=code, msg=msg)
+                if code == 0:
+                    results, dash = sync104(payload)
+                    st["results"] = [{k: r.get(k) for k in ("store", "ym", "status", "adopted", "diff", "error", "template")} for r in results]
+                    st["dash"] = dash
+    except Exception as ex:  # noqa: BLE001
+        st.update(code=6, msg=f"{type(ex).__name__}: {str(ex)[:500]}")
+    finally:
+        st.update(running=False, finished=time.time())
+        _cloud104_status(st)
+        _cloud104_lock.release()
+    return True
+
+
+def _cloud104_loop():
+    while True:
+        now = dt.datetime.now(TW_TZ)
+        nxt = now.replace(hour=CLOUD104_AT[0], minute=CLOUD104_AT[1], second=0, microsecond=0)
+        if nxt <= now:
+            nxt += dt.timedelta(days=1)
+        time.sleep(max(1, (nxt - now).total_seconds()))
+        if _cred104().get("email"):
+            cloud104_run("schedule")
+
+
+if os.environ.get("SCHED_CLOUD104", "1") == "1":   # 測試時設 0 就不開背景排程
+    threading.Thread(target=_cloud104_loop, daemon=True, name="cloud104").start()
+
+
 # ───────────────────────── 營業額與日獎金（2026-10-28 經營者：班表要有營業額及日獎金、產各店日獎金表給會計） ─────────────────────────
 
 def _ssl_ctx():
@@ -3289,6 +3382,26 @@ def handle(path, body):
         results, dash = sync104(body.get("payload"), force_dash=bool(body.get("force_dash")))
         dash["has_token"] = bool(_dash104_cfg().get("token"))
         return 200, {"ok": True, "results": results, "dash104": dash}
+    if act == "cred104_set":   # 2026-11-09：Mac 排程把 104 排班唯讀帳號送來存硬碟（不回顯）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以設定"}
+        email, pwd = str(body.get("email") or "").strip(), str(body.get("pwd104") or "")
+        if not email or not pwd:
+            return 400, {"ok": False, "error": "email／pwd104 必填"}
+        _cred104({"email": email, "pwd": pwd, "set_at": time.time()})
+        return 200, {"ok": True, "email": email}
+    if act == "cloud104_status":   # 2026-11-09：雲端 06:05 自動同步的狀態
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以看"}
+        c = _cred104()
+        return 200, {"ok": True, "has_cred": bool(c.get("email")), "email": c.get("email"), "status": _cloud104_status()}
+    if act == "cloud104_run":   # 2026-11-09：立刻跑一次（selftest=true 只測無頭瀏覽器）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以觸發"}
+        if (_cloud104_status() or {}).get("running"):
+            return 409, {"ok": False, "error": "正在跑"}
+        threading.Thread(target=cloud104_run, args=("manual", bool(body.get("selftest"))), daemon=True).start()
+        return 200, {"ok": True, "started": True}
     if act == "dash104_status":   # 2026-11-09：排班分析儀表板寫入進度（push.py 等它跑完）
         if str(who) != "hq":
             return 403, {"ok": False, "error": "只有總部可以看"}

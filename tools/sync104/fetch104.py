@@ -23,6 +23,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIGNIN = "https://pro.104.com.tw/user/signin?redirectURL=%2Fhrm2%2Fm9%2FF0901"
 GRID = "https://pro.104.com.tw/hrm2/m9/F0901"
+# 2026-11-09 實測：用 Playwright 預設的 HeadlessChrome 身分，bsignin.104.com.tw 不會出現登入表單；要用一般 Chrome 的 User-Agent
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
 def load_secrets_env():
@@ -49,8 +51,7 @@ async def fetch(headed=False):
         return 7, "尚未設定 HR104_EMAIL／HR104_PWD（104 排班唯讀帳號），這次略過不登入", None
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=not headed)
-        ctx = await browser.new_context(locale="zh-TW", timezone_id="Asia/Taipei",
-                                        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        ctx = await browser.new_context(locale="zh-TW", timezone_id="Asia/Taipei", user_agent=UA)
         page = await ctx.new_page()
         try:
             await page.goto(SIGNIN, wait_until="domcontentloaded", timeout=60000)
@@ -90,13 +91,37 @@ async def fetch(headed=False):
             await browser.close()
 
 
+async def probe():
+    """自我檢查：無頭瀏覽器能不能開到 104 登入表單（不輸入任何東西）。回 (ok, 訊息)"""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as ex:
+        return False, f"沒有 playwright：{ex}"
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(locale="zh-TW", timezone_id="Asia/Taipei", user_agent=UA)   # 預設 HeadlessChrome 身分 104 不給表單
+            await page.goto(SIGNIN, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_selector("input[name=email]", timeout=45000)
+            title = await page.title()
+            await browser.close()
+            return True, f"登入頁正常（{title}）"
+    except Exception as ex:  # noqa: BLE001
+        return False, f"{type(ex).__name__}: {str(ex)[:400]}"
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--probe", action="store_true", help="只檢查無頭瀏覽器能不能開 104 登入頁")
     ap.add_argument("--out", default=os.environ.get("SYNC104_OUT") or os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "sync104_payload.txt"))
     ap.add_argument("--no-push", action="store_true")
     ap.add_argument("--headed", action="store_true")
     a = ap.parse_args()
     load_secrets_env()
+    if a.probe:
+        ok, msg = asyncio.run(probe())
+        log(("✅ " if ok else "❌ ") + msg)
+        sys.exit(0 if ok else 6)
     code, msg, payload = asyncio.run(fetch(a.headed))
     log(("✅ " if code == 0 else "⚠️ " if code == 7 else "❌ ") + msg)
     if code == 7:
