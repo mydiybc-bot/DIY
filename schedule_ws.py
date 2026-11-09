@@ -15,6 +15,7 @@ server.py 只把 /api/schedule/* 整個交給 handle()；身分用權限中心 s
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import datetime as dt
@@ -2644,9 +2645,10 @@ def _diff(st, a, b):
     return out
 
 
-def sync104(payload):
-    """收 tools/sync104/push.py 送來的 104 班表；回傳每份的處理結果"""
+def sync104(payload, force_dash=False):
+    """收 tools/sync104/push.py 送來的 104 班表；回傳 (每份的處理結果, 排班分析儀表板佇列摘要)"""
     results = []
+    dash_items, dash_skipped = [], 0
     for item in (payload or {}).get("items") or []:
         try:
             store, ym = int(item["store"]), str(item["ym"])
@@ -2702,9 +2704,265 @@ def sync104(payload):
                 st["s104"]["diff"] = len(_diff(st, st["schedule"], cells)) if has_content else None
             res.update(adopted=adopted, has_content=has_content, missing=missing, unknown=unknown,
                        diff=st["s104"].get("diff"))
+            # 2026-11-09 第一段：104 有內容 → 整月轉成排班分析儀表板的列，內容沒變就不重送
+            if has_content:
+                pk, ph = _dash104_item(item)
+                if force_dash or ph != (st.get("dash104") or {}).get("hash"):
+                    dash_items.append((k, pk, ph))
+                else:
+                    dash_skipped += 1
             _save(st)
             results.append(res)
-    return results
+    if dash_items:
+        threading.Thread(target=_dash104_worker, args=(dash_items,), daemon=True).start()
+    return results, {"queued": len(dash_items), "skipped": dash_skipped}
+
+
+# ───────────────────────── 104 → 排班分析儀表板（2026-11-09 經營者裁定第一段：儀表板改跟 104 同步） ─────────────────────────
+# 工作台同步到 104 班表後，把整月轉成「排班分析資料倉」fact_schedule 的列，POST 給同一支 GAS（REV_API）的 upsert104，
+# 再呼叫 processUploads 重算營收人效。口徑（2026-11-09 經營者同意 Claude 建議）：
+#   ①特休／補休（時段或當日標籤）：人不在店 → 那段不算工時；整天都不算就不寫 fact_schedule 列，改寫 fact_note「特休 1000-1800」讓日曆看得到。
+#   ②崗位＝別家店（支援）：那段算在被支援店（店號照 POS_STORE），備註「跨店支援（自○○店）」；跟 NUEIP 店班表、日獎金一致。
+#   ③經管會／交流會議／區會／台北內訓課：工時照寫、備註「區會 1000-1200」→ 儀表板 bonusNonWork 自己扣；事務班、備品班照算現場工時。
+#   ④崗位＝出貨中心（不是門市）：留在自己店、備註「出貨中心 1000-1800 不計現場人力」→ 儀表板整天不算。
+#   ⑤職稱 104 沒有 → GAS 用 fact_schedule 既有資料同姓名最後一次的職稱；對不到的回報 unknownRole。
+#   ⑥例假日／休息日／國定假日／空班、只有指休等當日標籤而沒時段的日子：不寫列（NUEIP 月休也是跳過）。
+# token：push.py 從 secrets.env 帶 dash_token 來，存在 _dash104_cfg.json；GAS 端放指令碼屬性 DASH104_TOKEN。
+DASH104_LEAVE = {"特休", "補休"}
+DASH104_STATUS = "_dash104_status.json"
+DASH104_CFG = "_dash104_cfg.json"
+
+
+def _dash104_cfg(update=None):
+    p = _dir() / DASH104_CFG
+    cfg = {}
+    if p.exists():
+        try:
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cfg = {}
+    if update:
+        cfg.update(update)
+        atomic_write_json(p, cfg)
+    return cfg
+
+
+def _dash104_status(update=None):
+    p = _dir() / DASH104_STATUS
+    st = {}
+    if p.exists():
+        try:
+            st = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            st = {}
+    if update is not None:
+        st.update(update)
+        atomic_write_json(p, st)
+    return st
+
+
+def _tw_dt(ms):
+    return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc) + dt.timedelta(hours=8)
+
+
+def _hhmm4(ms, base_day):
+    """104 毫秒 → 'HHMM'（fact_schedule 的班段寫法）；跨到隔天一律寫 2400"""
+    t = _tw_dt(ms)
+    if t.date() > base_day:
+        return "2400"
+    return t.strftime("%H%M")
+
+
+def _dash104_item(item):
+    """一份 104 班表 → upsert104 的 item（rows／notes）與內容雜湊"""
+    tags, pos = item.get("tags") or {}, item.get("pos") or {}
+    emps = {str(e["empId"]): e for e in item.get("emps") or []}
+    home, ym = int(item["store"]), str(item["ym"])
+    days = {}
+    for empId, base, typ, frm, to, tag_ids, pos_id, _cls in item.get("shifts") or []:
+        if str(empId) not in emps:
+            continue
+        bd = _tw_dt(base).date()
+        if f"{bd:%Y%m}" != ym:
+            continue
+        c = days.setdefault((bd, str(empId)), {"segs": [], "dtag": []})
+        names = [tags[str(t)] for t in (tag_ids or []) if tags.get(str(t))]
+        if typ == 3 and frm and to:
+            c["segs"].append((frm, to, names, pos.get(str(pos_id), "") if pos_id else ""))
+        elif typ == 2:
+            c["dtag"] += names
+    rows, notes = [], []
+    for (bd, empId), c in sorted(days.items()):
+        name, date = emps[empId]["name"], bd.isoformat()
+        day_leave = [t for t in c["dtag"] if t in DASH104_LEAVE]
+        other_dtag = [t for t in dict.fromkeys(c["dtag"]) if t not in DASH104_LEAVE]
+        by_store = {}
+        leave_notes = []
+        for frm, to, names, pname in sorted(c["segs"]):
+            label = f"{_hhmm4(frm, bd)}-{_hhmm4(to, bd)}"
+            target = POS_STORE.get(pname) or home
+            cell = label + (("「" + "、".join(names) + "」") if names else "") + (f"＠{pname}" if pname and target != home else "")
+            if pname and target == home and pname not in POS_STORE:
+                cell += f"＠{pname}"
+            leave = day_leave or [n for n in names if n in DASH104_LEAVE]
+            if leave:
+                leave_notes.append("、".join(dict.fromkeys(leave)) + " " + label)
+                continue
+            t = by_store.setdefault(target, {"segs": [], "cell": [], "note": []})
+            t["segs"].append(label)
+            t["cell"].append(cell)
+            for n in names:
+                if n != "支援":
+                    t["note"].append(f"{n} {label}")
+            if pname and target == home and pname not in POS_STORE:
+                t["note"].append(f"{pname} {label} 不計現場人力")
+            if target != home and f"跨店支援（自{STORES.get(home, home)}店）" not in t["note"]:
+                t["note"].append(f"跨店支援（自{STORES.get(home, home)}店）")
+        for target, t in sorted(by_store.items()):
+            note = "；".join(dict.fromkeys(other_dtag + t["note"] + leave_notes))
+            rows.append([date, target, empId, name, "", "|".join(t["segs"]), "\n".join(t["cell"]), note])
+        if leave_notes and not by_store:
+            notes.append([date, home, empId, name, "；".join(leave_notes), 0])
+    payload = {"store": home, "ym": ym, "source": f"104:{home}-{ym}:{item.get('id')}@{item.get('modify') or 0}",
+               "rows": rows, "notes": notes}
+    h = hashlib.sha1(json.dumps({"rows": rows, "notes": notes}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return payload, h
+
+
+def _gas_post(url, body, timeout=300):
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _gas_get(url, params, timeout=300):
+    with urllib.request.urlopen(url + "?" + urllib.parse.urlencode(params), timeout=timeout, context=_ssl_ctx()) as r:
+        t = r.read().decode("utf-8")
+    m = re.match(r"^\s*\w+\((.*)\)\s*$", t, re.S)
+    return json.loads(m.group(1) if m else t)
+
+
+def _dash104_worker(dash_items, backup=False):
+    """背景：把這批 104 班表送到排班分析儀表板，再重算；結果寫 _dash104_status.json 與各月 state 的 dash104"""
+    started = time.time()
+    keys = [k for k, _, _ in dash_items]
+    _dash104_status({"running": True, "started": started, "finished": None, "items": keys, "results": None, "process": None, "error": None})
+    token = _dash104_cfg().get("token")
+    out = {"running": False, "finished": None}
+    try:
+        if not token:
+            raise RuntimeError("工作台還沒有排班分析儀表板的 dash_token（push.py 要從 secrets.env 帶 SCHED_DASH_TOKEN 來）")
+        res = _gas_post(REV_API, {"action": "upsert104", "token": token, "backup": bool(backup),
+                                  "items": [pk for _, pk, _ in dash_items]})
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or "GAS 回傳不 ok")
+        out["results"] = res
+        for (k, _pk, ph), r in zip(dash_items, res.get("results") or []):
+            store, ym = k.split("-")
+            with _lock(k):
+                st = _load(int(store), ym)
+                st["dash104"] = {"hash": ph, "at": time.time(), "written": r.get("written"), "removedOld": r.get("removedOld"),
+                                 "unknownRole": r.get("unknownRole") or []}
+                _save(st)
+        proc = _gas_get(REV_API, {"action": "processUploads", "callback": "cb"}, timeout=420)
+        out["process"] = proc
+    except Exception as ex:   # noqa: BLE001
+        out["error"] = str(ex)
+    out["finished"] = time.time()
+    _dash104_status(out)
+
+
+# ───────────────────────── 雲端自動同步 104（2026-11-09 經營者：「104 不開 API，你處理自動化的流程，不要麻煩我」） ─────────────────────────
+# 本伺服器每天 06:05（台灣）自己用無頭瀏覽器（tools/sync104/fetch104.py，Playwright）登入 104 讀 12 店班表 → sync104()（工作台＋排班分析儀表板）。
+# 104 帳號：程式專用的排班唯讀帳號，由 Mac 的排程從 secrets.env（HR104_EMAIL／HR104_PWD）用 cred104_set 送來、存硬碟 _104_cred.json；不放環境變數、不回顯。
+# 只「讀」104。帳密錯一次就停（code 2），不重試，避免被 104 鎖。狀態 _104_cloud_status.json；Mac 10:13 排程會看它決定要不要補跑。
+TW_TZ = dt.timezone(dt.timedelta(hours=8))
+CRED104 = "_104_cred.json"
+CLOUD104_STATUS = "_104_cloud_status.json"
+CLOUD104_AT = (6, 5)   # 每天台灣 06:05
+
+
+def _json_file(name, update=None):
+    p = _dir() / name
+    cur = {}
+    if p.exists():
+        try:
+            cur = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cur = {}
+    if update is not None:
+        cur.update(update)
+        atomic_write_json(p, cur)
+    return cur
+
+
+def _cred104(update=None):
+    return _json_file(CRED104, update)
+
+
+def _cloud104_status(update=None):
+    return _json_file(CLOUD104_STATUS, update)
+
+
+def _fetch104_module():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "sync104", "fetch104.py")
+    spec = importlib.util.spec_from_file_location("fetch104", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_cloud104_lock = threading.Lock()
+
+
+def cloud104_run(trigger="schedule", selftest=False):
+    """登入 104 → 讀班表 → sync104；selftest＝只確認無頭瀏覽器開得到 104 登入頁。結果寫 _104_cloud_status.json"""
+    if not _cloud104_lock.acquire(blocking=False):
+        return False
+    st = {"running": True, "started": time.time(), "trigger": trigger, "selftest": selftest, "finished": None,
+          "code": None, "msg": None, "results": None, "dash": None}
+    _cloud104_status(st)
+    try:
+        mod = _fetch104_module()
+        if selftest:
+            ok, msg = asyncio.run(mod.probe())
+            st.update(code=0 if ok else 6, msg=msg)
+        else:
+            cred = _cred104()
+            if not cred.get("email") or not cred.get("pwd"):
+                st.update(code=7, msg="還沒設定 104 排班帳號（Mac 排程會從 secrets.env 的 HR104_EMAIL／HR104_PWD 送來）")
+            else:
+                os.environ["HR104_EMAIL"], os.environ["HR104_PWD"] = cred["email"], cred["pwd"]
+                code, msg, payload = asyncio.run(mod.fetch())
+                st.update(code=code, msg=msg)
+                if code == 0:
+                    results, dash = sync104(payload)
+                    st["results"] = [{k: r.get(k) for k in ("store", "ym", "status", "adopted", "diff", "error", "template")} for r in results]
+                    st["dash"] = dash
+    except Exception as ex:  # noqa: BLE001
+        st.update(code=6, msg=f"{type(ex).__name__}: {str(ex)[:500]}")
+    finally:
+        st.update(running=False, finished=time.time())
+        _cloud104_status(st)
+        _cloud104_lock.release()
+    return True
+
+
+def _cloud104_loop():
+    while True:
+        now = dt.datetime.now(TW_TZ)
+        nxt = now.replace(hour=CLOUD104_AT[0], minute=CLOUD104_AT[1], second=0, microsecond=0)
+        if nxt <= now:
+            nxt += dt.timedelta(days=1)
+        time.sleep(max(1, (nxt - now).total_seconds()))
+        if _cred104().get("email"):
+            cloud104_run("schedule")
+
+
+if os.environ.get("SCHED_CLOUD104", "1") == "1":   # 測試時設 0 就不開背景排程
+    threading.Thread(target=_cloud104_loop, daemon=True, name="cloud104").start()
 
 
 # ───────────────────────── 營業額與日獎金（2026-10-28 經營者：班表要有營業額及日獎金、產各店日獎金表給會計） ─────────────────────────
@@ -3119,7 +3377,35 @@ def handle(path, body):
     if act == "sync104":
         if str(who) != "hq":
             return 403, {"ok": False, "error": "只有總部可以送 104 班表"}
-        return 200, {"ok": True, "results": sync104(body.get("payload"))}
+        if body.get("dash_token"):   # 2026-11-09：排班分析儀表板寫入 token，push.py 從 secrets.env 帶來，存硬碟
+            _dash104_cfg({"token": str(body["dash_token"])})
+        results, dash = sync104(body.get("payload"), force_dash=bool(body.get("force_dash")))
+        dash["has_token"] = bool(_dash104_cfg().get("token"))
+        return 200, {"ok": True, "results": results, "dash104": dash}
+    if act == "cred104_set":   # 2026-11-09：Mac 排程把 104 排班唯讀帳號送來存硬碟（不回顯）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以設定"}
+        email, pwd = str(body.get("email") or "").strip(), str(body.get("pwd104") or "")
+        if not email or not pwd:
+            return 400, {"ok": False, "error": "email／pwd104 必填"}
+        _cred104({"email": email, "pwd": pwd, "set_at": time.time()})
+        return 200, {"ok": True, "email": email}
+    if act == "cloud104_status":   # 2026-11-09：雲端 06:05 自動同步的狀態
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以看"}
+        c = _cred104()
+        return 200, {"ok": True, "has_cred": bool(c.get("email")), "email": c.get("email"), "status": _cloud104_status()}
+    if act == "cloud104_run":   # 2026-11-09：立刻跑一次（selftest=true 只測無頭瀏覽器）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以觸發"}
+        if (_cloud104_status() or {}).get("running"):
+            return 409, {"ok": False, "error": "正在跑"}
+        threading.Thread(target=cloud104_run, args=("manual", bool(body.get("selftest"))), daemon=True).start()
+        return 200, {"ok": True, "started": True}
+    if act == "dash104_status":   # 2026-11-09：排班分析儀表板寫入進度（push.py 等它跑完）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以看"}
+        return 200, {"ok": True, "status": _dash104_status()}
     if act == "sync104_status":
         if str(who) != "hq":
             return 403, {"ok": False, "error": "只有總部可以看"}
