@@ -391,7 +391,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
     <div class="dsb-sop" id="dsbSop">
       <ol>
         <li>選門市、填申請人姓名（下次會自動記住）。</li>
-        <li>按「📷 拍照」一次拍一張（拍完按右下角「拍下一張」繼續），或按「🖼️ 選照片」一次選很多張。照片拍歪、橫的、倒的都沒關係，AI 會自己轉正。</li>
+        <li>按「📷 拍照」一次拍一張（拍完按右下角「拍下一張」繼續），或按「🖼️ 選照片／PDF」一次選很多張；電子發票的 PDF 也可以直接選，每一頁算一張。照片拍歪、橫的、倒的都沒關係，AI 會自己轉正。</li>
         <li>AI 讀完會把每張單據變成明細的一列，品項寫成「水果-繁昌青果」；同一張收據有食材也有雜費，會拆成兩列。<b>黃底</b>是 AI 沒把握的，請對照照片改正；點縮圖可以放大看，放大後按兩側箭頭（手機左右滑）換上一張、下一張。</li>
         <li>品項／用途最多 60 位元組（中文 30 字；英文、數字、符號算半個字），要直接輸入鼎新。</li>
         <li>沒有發票的請款也可以拍：<b>現金簽收單</b>（實作費用，品項會寫成「實作-王小明」）、<b>退包館訂金的 POS 截圖</b>（交易支付明細表的預收訂金、關帳小結的取出退訂；一張圖彙整成一列，例：預收訂金9/5~9/16）。</li>
@@ -413,16 +413,16 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
   </div>
 
   <div class="card">
-    <h2><span class="step">2</span>上傳收據／發票照片</h2>
+    <h2><span class="step">2</span>上傳收據／發票（照片或 PDF）</h2>
     <div class="drop" id="drop">
       <div class="picks">
         <button class="btn big" id="camBtn" type="button">📷 拍照</button>
-        <button class="btn big ghost" id="pickBtn" type="button">🖼️ 選照片</button>
+        <button class="btn big ghost" id="pickBtn" type="button">🖼️ 選照片／PDF</button>
       </div>
-      <!-- 2026-10-29：手機上 multiple 的選檔框常常只開相簿 → 拍照另開一個帶 capture 的欄位，直接開相機 -->
+      <!-- 2026-10-29：手機上 multiple 的選檔框常常只開相簿 → 拍照另開一個帶 capture 的欄位，直接開相機；2026-11-09 選檔可選 PDF -->
       <input id="fCam" type="file" accept="image/*" capture="environment" hidden>
-      <input id="fFiles" type="file" accept="image/*" multiple hidden>
-      <div class="hint" title="手機按「拍照」直接開相機，一次拍一張；「選照片」可以一次選多張（JPG、PNG）。">電腦可把照片拖進來</div>
+      <input id="fFiles" type="file" accept="image/*,application/pdf,.pdf" multiple hidden>
+      <div class="hint" title="手機按「拍照」直接開相機，一次拍一張；「選照片／PDF」可以一次選多張（JPG、PNG、PDF），PDF 每一頁算一張。">電腦可把照片或 PDF 拖進來</div>
     </div>
     <div class="photos" id="photos"></div>
   </div>
@@ -565,12 +565,51 @@ function quality(canvas) {
   return '';
 }
 
-function addFiles(list) {
-  Array.prototype.forEach.call(list || [], function (f) {
-    if (!/^image\//.test(f.type) && !/\.(jpe?g|png|webp|heic)$/i.test(f.name)) { toast(f.name + ' 不是照片，略過'); return; }
-    var p = { id: ++S.seq, name: f.name, file: f, status: 'wait', msg: '排隊中…', dups: [] };
-    S.photos.push(p); paintPhoto(p, true);
+/* PDF（電子發票、網購發票常見）：每一頁在瀏覽器畫成 JPG，當成一張照片走同一套流程（AI 辨識、轉正、查重複），後端不用改（2026-11-09 經營者） */
+var PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/', PDF_MAX_PAGES = 10;
+function isPdf(f) { return f.type === 'application/pdf' || /\.pdf$/i.test(f.name); }
+function pdfPages(f) {
+  return loadScript(PDFJS + 'pdf.min.js').then(function () {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+    return f.arrayBuffer();
+  }).then(function (buf) { return pdfjsLib.getDocument({ data: buf }).promise; }).then(function (doc) {
+    var n = Math.min(doc.numPages, PDF_MAX_PAGES), out = [], chain = Promise.resolve();
+    if (doc.numPages > PDF_MAX_PAGES) toast(f.name + ' 有 ' + doc.numPages + ' 頁，只讀前 ' + PDF_MAX_PAGES + ' 頁');
+    for (var i = 1; i <= n; i++) (function (i) {
+      chain = chain.then(function () { return doc.getPage(i); }).then(function (pg) {
+        var v0 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: 2200 / Math.max(v0.width, v0.height) });
+        var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        return pg.render({ canvasContext: g, viewport: vp }).promise.then(function () {
+          return new Promise(function (ok) { c.toBlob(ok, 'image/jpeg', 0.92); });
+        }).then(function (b) { out.push({ blob: b, name: f.name + (n > 1 ? '（第 ' + i + '／' + n + ' 頁）' : '') }); });
+      });
+    })(i);
+    return chain.then(function () { doc.destroy(); return out; });
   });
+}
+function addFiles(list) {
+  /* 一個一個排：PDF 要先轉成圖，等它轉完再排下一個，照片編號才會照選的順序 */
+  var chain = Promise.resolve();
+  Array.prototype.forEach.call(list || [], function (f) {
+    chain = chain.then(function () {
+      if (isPdf(f)) {
+        toast('PDF 轉成圖片中…');
+        return pdfPages(f).then(function (pages) {
+          if (!pages.length) toast(f.name + ' 沒有內容，略過');
+          pages.forEach(function (pg) { addPhoto(pg.blob, pg.name); });
+        }).catch(function (e) {
+          toast(f.name + ' 打不開' + (e && e.name === 'PasswordException' ? '（有設密碼）' : '') + '，請改用截圖或照片');
+        });
+      }
+      if (!/^image\//.test(f.type) && !/\.(jpe?g|png|webp|heic)$/i.test(f.name)) { toast(f.name + ' 不是照片或 PDF，略過'); return; }
+      addPhoto(f, f.name);
+    });
+  });
+}
+function addPhoto(file, name) {
+  var p = { id: ++S.seq, name: name, file: file, status: 'wait', msg: '排隊中…', dups: [] };
+  S.photos.push(p); paintPhoto(p, true);
   if (initUpload.fab) initUpload.fab();
   pump();
 }
