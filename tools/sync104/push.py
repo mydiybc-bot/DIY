@@ -50,15 +50,20 @@ def read_payload(path):
 
 
 def hq_pwd():
+    if os.environ.get("DIYBC_HQ_PWD"):   # GitHub Actions／伺服器用環境變數（2026-11-09）
+        return os.environ["DIYBC_HQ_PWD"]
     p = os.path.expanduser("~/.config/diybc/secrets.env")
-    for line in open(p, encoding="utf-8"):
-        if line.startswith("DIYBC_HQ_PWD="):
-            return line.split("=", 1)[1].strip()
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8"):
+            if line.startswith("DIYBC_HQ_PWD="):
+                return line.split("=", 1)[1].strip()
     sys.exit("secrets.env 沒有 DIYBC_HQ_PWD（總部密碼），請經營者加一行")
 
 
 def dash_token():
     """排班分析儀表板寫入通行碼（沒有就回 None，工作台會提醒）"""
+    if os.environ.get("SCHED_DASH_TOKEN"):
+        return os.environ["SCHED_DASH_TOKEN"]
     p = os.path.expanduser("~/.config/diybc/secrets.env")
     if not os.path.exists(p):
         return None
