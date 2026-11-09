@@ -300,7 +300,7 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
 <div class="ask" id="ask"></div>
 <div class="grid" id="grid"></div>
 <div class="foot"><span>店員：先選客人的語言，再點甜點。做完按左下「☰」回到這裡。中文、英文客人請用後台平板食譜。</span><a href="hub.html">⬅ 回首頁</a></div>
-<script src="tablet-recipe-view.js?v=20261104"></script>
+<script src="tablet-recipe-view.js?v=20261109"></script>
 <script>
 (function () {
   'use strict';
@@ -379,18 +379,25 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
       renderGrid(); renderDsb();
     }).catch(function (e) { if (!S.list) $('grid').innerHTML = '<div class="empty">讀不到食譜清單：' + esc(e.message || e.msg || e) + '<br><button type="button" id="retry">再試一次</button></div>'; $('dsb').textContent = '資料狀態：讀取失敗（' + (e.message || e.msg || e) + '）'; });
   }
+  /* 2026-11-09 經營者：「打開每一個食譜的時間很久，要縮短到 3 秒以內，客人是從第一頁開始看，不需要一次下載全部的頁面」
+     → 點甜點立刻開食譜畫面（開場說明、封面、注意事項、拿托盤用清單上已有的資料），步驟頁在背景向後端要，到了再補上；
+       這台平板讀過、版本沒變的照舊直接從快取開。 */
   function openRecipe(id) {
     var lg = S.lang, it = S.list.filter(function (x) { return x.id === id; })[0], ver = it && it.ver ? it.ver[lg] : '', key = 'tr:r:' + id + '|' + lg, c = lsGet(key), o = null;
+    if (!it) return;
     if (c) { try { o = JSON.parse(c); } catch (e) { o = null; } }
-    if (o && o.ver === ver && o.fmt === 3 && o.data) { show(o.data); return; }
-    var ld = document.createElement('div'); ld.className = 'load'; ld.textContent = '⏳'; document.body.appendChild(ld);
-    call({ action: 'i18nGet', id: id, lang: lg }, 90000).then(function (j) {
-      ld.parentNode.removeChild(ld);
-      if (!j.ok) { alert('打不開這支食譜：' + (j.msg || '')); loadList(); return; }
-      lsSet(key, JSON.stringify({ ver: ver, fmt: 3, data: j.data }));   /* fmt 3：2026-11-03 熊主廚開場動畫換各語言版，舊快取作廢 */
-      show(j.data);
-    }).catch(function (e) { if (ld.parentNode) ld.parentNode.removeChild(ld); alert('打不開這支食譜：' + (e.message || e.msg || e)); });
-    function show(d) { S.view = window.TRView.mount(document.body, d, lg, { onExit: function () { S.view = null; window.scrollTo(0, 0); } }); }
+    var exit = function () { S.view = null; window.scrollTo(0, 0); };
+    if (o && o.ver === ver && o.fmt === 3 && o.data) { S.view = window.TRView.mount(document.body, o.data, lg, { onExit: exit }); return; }
+    var nm = it.name.split('｜'), head = { name: ((it.local || {})[lg] || nm[0]) + (nm[1] ? '｜' + nm[1] : ''), cover: it.cover, slides: null };
+    var v = S.view = window.TRView.mount(document.body, head, lg, { onExit: exit, onRetry: load });
+    function load() {
+      call({ action: 'i18nGet', id: id, lang: lg }, 90000).then(function (j) {
+        if (!j.ok) { v.fail(j.msg || ''); loadList(); return; }
+        lsSet(key, JSON.stringify({ ver: ver, fmt: 3, data: j.data }));   /* fmt 3：2026-11-03 熊主廚開場動畫換各語言版，舊快取作廢 */
+        v.fill(j.data);
+      }).catch(function (e) { v.fail(e.message || e.msg || e); });
+    }
+    load();
   }
   document.addEventListener('click', function (e) {
     var t = e.target.closest && e.target.closest('[data-l],[data-id],#retry'); if (!t) return;

@@ -111,52 +111,82 @@
   function qtyTxt(q, u) { q = String(q == null ? '' : q); u = String(u || ''); return /\d/.test(u) ? u + ' × ' + q : (q + (u ? ' ' + u : '')); }
   function injectCss() { if (document.getElementById('trvCss')) return; var st = document.createElement('style'); st.id = 'trvCss'; st.textContent = CSS; document.head.appendChild(st); }
 
+  /* 2026-11-09 經營者：「打開每一個食譜的時間很久，要縮短到 3 秒以內，客人是從第一頁開始看，不需要一次下載全部的頁面」
+     ①先開後載：mount 時 data.slides 還沒有（null）→ 先畫開場說明、封面、注意事項、拿托盤（這幾頁不用後端資料），
+       步驟頁位置先放「讀取中」；資料到了呼叫 fill(data) 補上步驟頁，客人停在哪頁就留在哪頁。讀不到 → fail(訊息) 顯示「再讀一次」（opt.onRetry）。
+     ②圖片只載「目前頁＋前一頁＋後兩頁」：步驟大圖與內文圖片先放 data-lz，翻到附近才給 src（影片本來就只載目前頁）。 */
+  var T_LOAD = { ja: ['読み込み中…', 'レシピを読み込めませんでした', 'もう一度読み込む'], ko: ['불러오는 중…', '레시피를 불러오지 못했습니다', '다시 불러오기'],
+    vi: ['Đang tải…', 'Không tải được công thức', 'Tải lại'], id: ['Memuat…', 'Resep gagal dimuat', 'Muat ulang'], th: ['กำลังโหลด…', 'โหลดสูตรไม่สำเร็จ', 'โหลดอีกครั้ง'] };
+  Object.keys(T_LOAD).forEach(function (k) { if (T[k]) { T[k].loading = T_LOAD[k][0]; T[k].loadErr = T_LOAD[k][1]; T[k].retry = T_LOAD[k][2]; } });
+  CSS += '.trv-wait{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*4);font-size:calc(var(--u)*4.5);font-weight:800;text-align:center;padding:10%}'
+    + '.trv-wait small{font-size:calc(var(--u)*2.6);font-weight:600;color:#8a7a70}'
+    + '.trv-spin{width:calc(var(--u)*10);height:calc(var(--u)*10);border:calc(var(--u)*1.2) solid #efdfcf;border-top-color:#e7b93a;border-radius:50%;animation:trvspin 1s linear infinite}'
+    + '@keyframes trvspin{to{transform:rotate(360deg)}}';
+  function lz(h) { return String(h).replace(/<img src="/g, '<img data-lz="'); }
+
   function mount(host, data, lang, opt) {
     opt = opt || {}; injectCss();
     var L = T[lang] || T.ja, root = document.createElement('div'), slides = [], cur = 0, agreed = false, destroyed = false;
+    var state = data.slides ? 'ok' : 'wait', errMsg = '', track = null, secs = [], first = 4;
     root.className = 'trv'; root.lang = HTML_LANG[lang] || 'en';
     /* 版面 */
-    var intro = '<div class="trv-intro"><h2>' + esc(L.intro) + '</h2>' + esc(L.introBody) + '\n\n' + esc(L.ready) + '</div>';
-    slides.push({ kind: 'fix', html: intro });
-    slides.push({ kind: 'fix', html: '<div class="trv-cover" style="background-image:url(\'' + esc(abs(data.cover)) + '\')"></div><div class="trv-cname">' + esc(data.name) + '</div>' });
-    slides.push({ kind: 'notice', html: '<div class="trv-nhead">' + esc(L.noticeTitle) + '</div><div class="trv-nbody"><ol>' + L.notice.map(function (t, i) { return '<li' + (i === 1 ? ' class="r"' : '') + '>' + esc(t) + '</li>'; }).join('') + '</ol></div>'
-      + '<label class="trv-agree"><input type="checkbox" class="trv-agcb">' + esc(L.agree) + '</label>' });
-    slides.push({ kind: 'fix', html: '<div class="trv-tray">' + esc(L.tray) + '</div><div class="trv-trayimg"></div>' });
-    var N = data.slides.length, first = slides.length;
-    data.slides.forEach(function (s, i) {
-      var vid = !(s.ings && s.ings.length) && !!s.video;   /* 影片頁：重新載入鈕放標題列右邊（跟後台一樣；第 3 頁說明圖畫的就是那個位置） */
-      var head = '<div class="trv-title"><span class="n">' + (i + 1) + ' / ' + N + '</span><span class="t">' + esc(s.t) + '</span>'
-        + (vid ? '<button type="button" class="trv-reload" data-reload="1" title="' + esc(L.reload) + '">↻</button>' : '')
-        + '<button type="button" class="trv-lbtn" data-list="1">☰ ' + esc(L.steps) + '</button></div>';
-      var h = '';
-      if (s.ings && s.ings.length) {
-        h += '<div class="trv-cont"><div class="b">[ ' + esc(L.bowlP) + ' ]</div><div class="b">[ ' + esc(L.bowlC) + ' ]</div><div class="o">' + esc(L.oneBowl) + '</div></div>' + head;
-        var groups = {}, order = [];
-        s.ings.forEach(function (g) { var a = g.a || '_'; if (!groups[a]) { groups[a] = []; order.push(a); } groups[a].push(g); });
-        order.sort(function (a, b) { var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
-        order.forEach(function (a) {
-          var ar = (data.areas || {})[a] || {}, list = groups[a].slice().sort(function (x, y) { var r = function (c) { return c === 'container1' ? 1 : c === 'container2' ? 2 : 0; }; return r(x.c) - r(y.c); });
-          var ao = AREA_ORIG[a] || ['', ar.en || '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
-            + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, g.en) ? '<span class="o">' + esc(origTxt(g.zh, g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
-        });
-        h += '<div style="height:calc(var(--u)*14)"></div>';
-      } else {
-        if (s.video) h += '<div class="trv-vwrap"><video class="trv-video" controls playsinline preload="none" data-src="' + esc(s.video) + '"></video></div>';
-        else if (s.img) h += '<img class="trv-img" src="' + esc(s.img) + '" alt="" loading="lazy" data-zoom="' + esc(s.img) + '">';
-        h += head + '<div class="trv-body">' + safeHtml(s.h) + '</div>';
+    function build() {
+      slides = [];
+      var intro = '<div class="trv-intro"><h2>' + esc(L.intro) + '</h2>' + esc(L.introBody) + '\n\n' + esc(L.ready) + '</div>';
+      slides.push({ kind: 'fix', html: intro });
+      slides.push({ kind: 'fix', html: '<div class="trv-cover" style="background-image:url(\'' + esc(abs(data.cover)) + '\')"></div><div class="trv-cname">' + esc(data.name) + '</div>' });
+      slides.push({ kind: 'notice', html: '<div class="trv-nhead">' + esc(L.noticeTitle) + '</div><div class="trv-nbody"><ol>' + L.notice.map(function (t, i) { return '<li' + (i === 1 ? ' class="r"' : '') + '>' + esc(t) + '</li>'; }).join('') + '</ol></div>'
+        + '<label class="trv-agree"><input type="checkbox" class="trv-agcb">' + esc(L.agree) + '</label>' });
+      slides.push({ kind: 'fix', html: '<div class="trv-tray">' + esc(L.tray) + '</div><div class="trv-trayimg"></div>' });
+      first = slides.length;
+      if (!data.slides) {   /* 步驟還在讀：放一頁「讀取中」（或讀不到＋再讀一次） */
+        slides.push({ kind: 'wait', html: '<div class="trv-wait">' + (state === 'err'
+          ? '<div>⚠ ' + esc(L.loadErr) + '</div>' + (errMsg ? '<small>' + esc(errMsg) + '</small>' : '') + '<button type="button" class="trv-big" data-retry="1">' + esc(L.retry) + '</button>'
+          : '<div class="trv-spin"></div><div>' + esc(L.loading) + '</div>') + '</div>' });
+        return;
       }
-      slides.push({ kind: 'step', html: h, n: i });
-    });
-    if (data.pres) slides.push({ kind: 'fix', html: '<div class="trv-cover" style="height:100%;background-position:center;background-image:url(\'' + esc(abs(data.cover)) + '\')"></div><div class="trv-pres">' + esc(data.pres) + '</div>' });
-    slides.push({ kind: 'fix', html: '<div class="trv-done"><h2>🎉 ' + esc(L.done) + '</h2><p>' + esc(L.doneSub) + '</p><button type="button" class="trv-big" data-exit="1">' + esc(L.backMenu) + '</button></div>' });
-
-    root.innerHTML = '<div class="trv-track">' + slides.map(function (s) { return '<section class="trv-slide">' + s.html + '</section>'; }).join('') + '</div>'
-      + (opt.preview ? '<div class="trv-pv">PREVIEW 預覽（未放行）</div>' : '')
-      + '<div class="trv-bar"><button type="button" class="trv-menu" data-exit="1">☰ ' + esc(L.menu) + '</button><button type="button" class="trv-arrow" data-go="-1" aria-label="' + esc(L.prev) + '">‹</button><div class="trv-nums">'
-      + slides.map(function (s, i) { return s.kind === 'step' ? '<button type="button" class="trv-num" data-to="' + i + '">' + ('0' + (s.n + 1)).slice(-2) + '</button>' : ''; }).join('')
-      + '</div><button type="button" class="trv-arrow" data-go="1" aria-label="' + esc(L.next) + '">›</button></div>';
-    host.appendChild(root);
-    var track = root.querySelector('.trv-track'), secs = root.querySelectorAll('.trv-slide'), nums = root.querySelector('.trv-nums');
+      var N = data.slides.length;
+      data.slides.forEach(function (s, i) {
+        var vid = !(s.ings && s.ings.length) && !!s.video;   /* 影片頁：重新載入鈕放標題列右邊（跟後台一樣；第 3 頁說明圖畫的就是那個位置） */
+        var head = '<div class="trv-title"><span class="n">' + (i + 1) + ' / ' + N + '</span><span class="t">' + esc(s.t) + '</span>'
+          + (vid ? '<button type="button" class="trv-reload" data-reload="1" title="' + esc(L.reload) + '">↻</button>' : '')
+          + '<button type="button" class="trv-lbtn" data-list="1">☰ ' + esc(L.steps) + '</button></div>';
+        var h = '';
+        if (s.ings && s.ings.length) {
+          h += '<div class="trv-cont"><div class="b">[ ' + esc(L.bowlP) + ' ]</div><div class="b">[ ' + esc(L.bowlC) + ' ]</div><div class="o">' + esc(L.oneBowl) + '</div></div>' + head;
+          var groups = {}, order = [];
+          s.ings.forEach(function (g) { var a = g.a || '_'; if (!groups[a]) { groups[a] = []; order.push(a); } groups[a].push(g); });
+          order.sort(function (a, b) { var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+          order.forEach(function (a) {
+            var ar = (data.areas || {})[a] || {}, list = groups[a].slice().sort(function (x, y) { var r = function (c) { return c === 'container1' ? 1 : c === 'container2' ? 2 : 0; }; return r(x.c) - r(y.c); });
+            var ao = AREA_ORIG[a] || ['', ar.en || '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
+              + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, g.en) ? '<span class="o">' + esc(origTxt(g.zh, g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
+          });
+          h += '<div style="height:calc(var(--u)*14)"></div>';
+        } else {
+          if (s.video) h += '<div class="trv-vwrap"><video class="trv-video" controls playsinline preload="none" data-src="' + esc(s.video) + '"></video></div>';
+          else if (s.img) h += '<img class="trv-img" data-lz="' + esc(s.img) + '" alt="" data-zoom="' + esc(s.img) + '">';
+          h += head + '<div class="trv-body">' + lz(safeHtml(s.h)) + '</div>';
+        }
+        slides.push({ kind: 'step', html: h, n: i });
+      });
+      if (data.pres) slides.push({ kind: 'fix', html: '<div class="trv-cover" style="height:100%;background-position:center;background-image:url(\'' + esc(abs(data.cover)) + '\')"></div><div class="trv-pres">' + esc(data.pres) + '</div>' });
+      slides.push({ kind: 'fix', html: '<div class="trv-done"><h2>🎉 ' + esc(L.done) + '</h2><p>' + esc(L.doneSub) + '</p><button type="button" class="trv-big" data-exit="1">' + esc(L.backMenu) + '</button></div>' });
+    }
+    /* 畫整個畫面（第一次、步驟資料到了、讀不到時都重畫）：停在原本那一頁，不播翻頁動畫 */
+    function paint() {
+      build(); closeList();
+      root.querySelectorAll('video').forEach(function (v) { try { v.pause(); } catch (e) { } v.removeAttribute('src'); });
+      root.innerHTML = '<div class="trv-track">' + slides.map(function (s) { return '<section class="trv-slide">' + s.html + '</section>'; }).join('') + '</div>'
+        + (opt.preview ? '<div class="trv-pv">PREVIEW 預覽（未放行）</div>' : '')
+        + '<div class="trv-bar"><button type="button" class="trv-menu" data-exit="1">☰ ' + esc(L.menu) + '</button><button type="button" class="trv-arrow" data-go="-1" aria-label="' + esc(L.prev) + '">‹</button><div class="trv-nums">'
+        + slides.map(function (s, i) { return s.kind === 'step' ? '<button type="button" class="trv-num" data-to="' + i + '">' + ('0' + (s.n + 1)).slice(-2) + '</button>' : ''; }).join('')
+        + '</div><button type="button" class="trv-arrow" data-go="1" aria-label="' + esc(L.next) + '">›</button></div>';
+      track = root.querySelector('.trv-track'); secs = root.querySelectorAll('.trv-slide');
+      var cb = root.querySelector('.trv-agcb'); cb.checked = agreed;
+      cb.addEventListener('change', function () { agreed = this.checked; if (agreed) go(3); });
+      track.style.transition = 'none'; go(cur); void track.offsetWidth; track.style.transition = '';
+    }
 
     function toast(t) { var d = document.createElement('div'); d.className = 'trv-toast'; d.textContent = t; root.appendChild(d); setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 1800); }
     function blocked(to) { return to > 2 && !agreed; }   /* 注意事項（第 3 頁）沒勾不能往後 */
@@ -166,6 +196,12 @@
         if (i === cur) { if (!v.getAttribute('src')) { v.setAttribute('src', v.getAttribute('data-src')); v.load(); } }
         else if (v.getAttribute('src')) { try { v.pause(); } catch (e) { } v.removeAttribute('src'); v.load(); }   /* 釋放解碼器（後台也是這樣做，避免黑畫面） */
       });
+    }
+    function imgs() {   /* 目前頁、前一頁、後兩頁的圖片才下載（見檔頭 ②） */
+      for (var i = cur - 1; i <= cur + 2; i++) {
+        if (!secs[i]) continue;
+        secs[i].querySelectorAll('img[data-lz]').forEach(function (im) { im.setAttribute('src', im.getAttribute('data-lz')); im.removeAttribute('data-lz'); });
+      }
     }
     /* 2026-11-04：頁碼置中只捲頁碼列自己。原本用 scrollIntoView，窄螢幕（手機、8 吋 Android 平板）會連帶把整個食譜畫面往旁邊推，左邊被切、右邊露出隔壁頁 */
     function centerNum(b) {
@@ -180,7 +216,7 @@
       root.querySelectorAll('.trv-num').forEach(function (b) { var on = Number(b.getAttribute('data-to')) === cur; b.classList.toggle('on', on); if (on) centerNum(b); });
       root.querySelector('[data-go="-1"]').disabled = cur === 0;
       root.querySelector('[data-go="1"]').disabled = cur === slides.length - 1;
-      closeList(); videos();
+      closeList(); videos(); imgs();
       if (opt.onPage) opt.onPage(cur, slides.length);
     }
     var listEl = null;
@@ -199,7 +235,7 @@
       root.appendChild(d);
     }
     root.addEventListener('click', function (e) {
-      var t = e.target.closest ? e.target.closest('[data-go],[data-to],[data-exit],[data-list],[data-reload],[data-zoom]') : null;
+      var t = e.target.closest ? e.target.closest('[data-go],[data-to],[data-exit],[data-list],[data-reload],[data-zoom],[data-retry]') : null;
       if (!t || !root.contains(t)) return;
       if (t.hasAttribute('data-go')) go(cur + Number(t.getAttribute('data-go')));
       else if (t.hasAttribute('data-to')) go(Number(t.getAttribute('data-to')));
@@ -207,8 +243,8 @@
       else if (t.hasAttribute('data-list')) openList();
       else if (t.hasAttribute('data-reload')) { var v = t.closest('.trv-slide').querySelector('video'); v.setAttribute('src', v.getAttribute('data-src')); v.load(); try { v.play(); } catch (e2) { } }
       else if (t.hasAttribute('data-zoom')) zoom(t.getAttribute('data-zoom'));
+      else if (t.hasAttribute('data-retry')) { api.wait(); if (opt.onRetry) opt.onRetry(); }
     });
-    root.querySelector('.trv-agcb').addEventListener('change', function () { agreed = this.checked; if (agreed) go(3); });
     /* 2026-11-04：整個食譜畫面永遠不可被捲動（舊版 Android／iOS 不支援 overflow:clip 時的保險） */
     root.addEventListener('scroll', function () { if (root.scrollLeft || root.scrollTop) { root.scrollLeft = 0; root.scrollTop = 0; } });
     /* 左右滑動（水平明顯大於垂直才算；在影片上也可以滑） */
@@ -224,8 +260,16 @@
     /* 禁止長按存圖、右鍵（注意事項第 4 條：不可拍攝或複製；擋不住截圖，只是不方便） */
     root.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     function destroy() { if (destroyed) return; destroyed = true; document.removeEventListener('keydown', onKey); root.querySelectorAll('video').forEach(function (v) { try { v.pause(); } catch (e) { } v.removeAttribute('src'); }); if (root.parentNode) root.parentNode.removeChild(root); }
-    go(0);
-    return { destroy: destroy, go: go, count: slides.length, firstStep: first, root: root };
+    host.appendChild(root);
+    paint();
+    var api = {
+      destroy: destroy, go: go, root: root,
+      get count() { return slides.length; }, get firstStep() { return first; }, get state() { return state; },
+      fill: function (d) { if (destroyed) return; if (!d || !d.slides) { api.fail('資料不完整'); return; } data = d; state = 'ok'; errMsg = ''; paint(); },   /* 步驟資料到了 */
+      fail: function (msg) { if (destroyed || data.slides) return; state = 'err'; errMsg = String(msg || ''); paint(); },   /* 讀不到 → 「再讀一次」 */
+      wait: function () { if (destroyed || data.slides) return; state = 'wait'; errMsg = ''; paint(); }
+    };
+    return api;
   }
   window.TRView = { mount: mount, T: T, BACK: BACK, abs: abs, safeHtml: safeHtml, qtyTxt: qtyTxt, esc: esc };
 })();
