@@ -4741,6 +4741,21 @@ function dcoAct(body,expect,msg){if(DCO.busy)return;DCO.busy=true;render();
   dcoWrite(body,function(){return dcoJsonp({action:"orders",id:body.id}).then(function(d){var o=d&&d.ok&&d.orders[0];return (o&&o.status===expect)?{ok:true}:null;});})
   .then(function(){DCO.busy=false;dcoRefresh();render();toast("✅ "+msg);})
   .catch(function(e){DCO.busy=false;dcoRefresh();render();toast("⚠️ "+e.message);});}
+/* 2026-11-09 出貨中心：備貨中勾選多張，一次出貨完成（一張一張送，跟單張按「✅ 出貨完成」同一個動作） */
+function dcoShipSelIds(){ST.dcoShipSel=ST.dcoShipSel||{};var ok={};(DCO.all||[]).forEach(function(o){if(o.status==="備貨中")ok[o.id]=1;});
+  Object.keys(ST.dcoShipSel).forEach(function(k){if(!ok[k])delete ST.dcoShipSel[k];});return Object.keys(ST.dcoShipSel);}
+function dcoShipBatch(){if(DCO.busy)return;var ids=dcoShipSelIds();if(!ids.length){toast("請先在訂單前面勾選「出貨」");return;}
+  var go=(DCO.all||[]).filter(function(o){return ids.indexOf(o.id)>=0;}).sort(function(a,b){return num(a.store)-num(b.store)||(a.time<b.time?-1:1);}),sum=0,warn=0;
+  var txt=go.map(function(o){var c=dcoShipCalc(o);sum+=c.tot;if(c.short||c.zero.length)warn++;o._sc=c;
+    return "・"+storeName(o.store)+" "+o.id+"：$"+fmt(c.tot)+(c.short?"（⚠️ "+c.short+" 項實出少於訂購）":"")+(c.zero.length?"（⚠️ 單價 0："+c.zero.join("、")+"）":"");}).join("\n");
+  if(typeof confirm==="function"&&!confirm("這 "+go.length+" 張一次按「出貨完成」？\n\n"+txt+"\n\n合計 $"+fmt(sum)+"\n實出照卡片上填的數量；記數量的品項會扣出貨中心庫存。"+(warn?"\n\n有 ⚠️ 的請先確認；單價 0 的月結會算 0 元。":"")))return;
+  DCO.busy=true;render();var done=[],fail=[],i=0;
+  (function next(){if(i>=go.length){DCO.busy=false;done.forEach(function(id){delete ST.dcoShipSel[id];if(ST.dcoShipQ)delete ST.dcoShipQ[id];});
+      if(fail.length)alert("⚠️ 有 "+fail.length+" 張沒有完成：\n"+fail.join("\n")+"\n\n請按「🔄 重新整理」看狀態，再到那張卡片單獨按「✅ 出貨完成」。");
+      toast("✅ 已出貨完成 "+done.length+" 張"+(fail.length?"，"+fail.length+" 張失敗":""),5000);dcoRefresh();render();return;}
+    var o=go[i++];toast("⏳ 出貨完成中…第 "+i+"／"+go.length+" 張（"+storeName(o.store)+"）",15000);
+    dcoWrite({action:"ship",id:o.id,lines:o._sc.lines},function(){return dcoJsonp({action:"orders",id:o.id}).then(function(d){var x=d&&d.ok&&d.orders[0];return (x&&x.status==="已出貨")?{ok:true}:null;});})
+      .then(function(){done.push(o.id);},function(e){fail.push(storeName(o.store)+" "+o.id+"："+e.message);}).then(next);})();}
 function dcoSetupNote(){return '<div class="card"><b>📥 出貨中心訂單功能還沒啟用</b><div class="sub" style="line-height:1.8;margin-top:6px">啟用前各店照舊用 Shopline 叫貨。<br>系統管理備註：要先部署後端程式 <b>diybc-dcorder-api</b>（repo 的 gas/dcorder/dcOrderApi.gs），再把網頁應用程式網址填進採購系統的 DCO_API。</div></div>';}
 /* ── 出貨中心／總部：收單 ── */
 function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
@@ -4759,22 +4774,28 @@ function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
   if(seg==="撿貨單")return h+dcoPickView(all);
   if(seg==="月結")return h+dcoMonthView();
   var list=all.filter(function(o){return o.status===seg;});
-  if(seg==="待處理"||seg==="備貨中")list.sort(function(a,b){return a.time<b.time?-1:1;});   /* 先進先出 */
+  var fifo=(seg==="待處理"||seg==="備貨中");   /* 2026-11-09 出貨中心：照 1～12 店排；同一店待處理／備貨中舊的在前、已出貨新的在前 */
+  list.sort(function(a,b){var k=(a.time<b.time?-1:(a.time>b.time?1:(a.id<b.id?-1:(a.id>b.id?1:0))));return (num(a.store)-num(b.store))||(fifo?k:-k);});
   if(!list.length)return h+'<div class="card muted">現在沒有「'+seg+'」的訂單 ✅'+(seg==="待處理"?' 門市送出新訂單後會出現在這裡。':'')+'</div>';
   if(seg==="待處理"||seg==="備貨中")h+=dcoSentBar(list)+dcoMergeBar(list);   /* 2026-10-05 經營者 1005 #3：同一店多張訂單先合併再列印 */
   h+=slipBatchBar(seg);   /* cw 批：🖨 列印全部出貨單 */
   ST.dcoCardOpen=ST.dcoCardOpen||{};var nOpen=list.filter(function(o){return ST.dcoCardOpen[o.id];}).length;   /* 2026-11-02 經營者：訂單卡片預設收合，點店名才展開明細 */
   var selN=hctOn()?hctSelIds().length:0,selAble=hctOn()?list.filter(hctSelOK):[];
+  if(seg==="備貨中"){var shN=dcoShipSelIds().length;   /* 2026-11-09 出貨中心：勾選幾張一次出貨完成 */
+    h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 2px;padding:6px 8px;background:#EEF7EE;border-radius:8px">'
+      +'<label style="font-size:13px;display:flex;gap:4px;align-items:center"><input type="checkbox" data-dcsselall="1"'+(list.every(function(o){return ST.dcoShipSel&&ST.dcoShipSel[o.id];})?' checked':'')+'> 全選</label>'
+      +'<button class="btn sm" data-dcoshipbatch="1"'+(shN&&!DCO.busy?'':' disabled')+'>✅ 勾選的 '+shN+' 張出貨完成</button><span class="muted" style="font-size:12px">勾卡片上的「出貨」框；實出照卡片上填的數量</span></div>';}
   h+='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 6px">'
     +(selAble.length?'<label style="font-size:13px;display:flex;gap:4px;align-items:center"><input type="checkbox" data-dccselall="1"'+(selAble.every(function(o){return ST.dcoSel[o.id];})?' checked':'')+'> 全選</label>'
-      +'<button class="btn sm" data-hctbatch="1"'+(selN&&!DCO.busy?'':' disabled')+'>🚚 勾選的 '+selN+' 張產生托運單</button><span class="muted" style="font-size:12px">要寄新竹的才勾；不用託運的不要勾</span>':'')
+      +'<button class="btn sm" data-hctbatch="1"'+(selN&&!DCO.busy?'':' disabled')+'>🚚 勾選的 '+selN+' 張產生托運單</button><span class="muted" style="font-size:12px">要寄新竹的才勾「托運」框；不用託運的不要勾</span>':'')
     +'<span class="muted" style="font-size:13px">點店名展開明細</span><span style="flex:1"></span><button class="btn sm ghost" data-dccall="'+(nOpen===list.length?'0':'1')+'">'+(nOpen===list.length?'▴ 全部收合':'▾ 全部展開')+'</button></div>';
   list.forEach(function(o){h+=dcoCard(o);});
   /* 2026-11-09：加品項改用 dcoAddBox（搜尋＋勾選多項），不再用整頁 datalist */
   return h;}
 function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 2026-10-05 經營者 1005 #2：編輯模式 */
   var open=(o.status==="待處理"||o.status==="備貨中"),q=(ST.dcoShipQ||{})[o.id]||{},tot=0,ex=!!(ST.dcoCardOpen||{})[o.id],hl=HCT.byId&&HCT.byId[o.id];
-  var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+(hctSelOK(o)?'<input type="checkbox" title="勾選＝要寄新竹物流（一次產生托運單）" style="width:18px;height:18px" data-dccsel="'+escA(o.id)+'"'+((ST.dcoSel||{})[o.id]?' checked':'')+'>':'')+'<span data-dccexp="'+escA(o.id)+'" title="'+(ex?'收合明細':'展開明細')+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer;flex:1;min-width:240px"><span class="muted" style="width:12px">'+(ex?'▾':'▸')+'</span>'+dcoStBadgeO(o)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
+  var h='<div class="card dcocard"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+(o.status==="備貨中"?'<label title="勾選＝要一次按出貨完成" style="display:flex;align-items:center;gap:2px;font-size:13px;color:#1B5E20"><input type="checkbox" style="width:18px;height:18px" data-dcssel="'+escA(o.id)+'"'+((ST.dcoShipSel||{})[o.id]?' checked':'')+'>出貨</label>':'')
+    +(hctSelOK(o)?'<label title="勾選＝要寄新竹物流（一次產生托運單）" style="display:flex;align-items:center;gap:2px;font-size:13px;color:#8A5A00"><input type="checkbox" style="width:18px;height:18px" data-dccsel="'+escA(o.id)+'"'+((ST.dcoSel||{})[o.id]?' checked':'')+'>托運</label>':'')+'<span data-dccexp="'+escA(o.id)+'" title="'+(ex?'收合明細':'展開明細')+'" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer;flex:1;min-width:240px"><span class="muted" style="width:12px">'+(ex?'▾':'▸')+'</span>'+dcoStBadgeO(o)+'<b style="font-size:15px">'+escH(storeName(o.store))+'</b><b>'+escH(o.id)+'</b><span class="muted">下單 '+dcoTime(o.time)+'</span>'
     +(o.status==="已出貨"?'<span class="muted">出貨 '+dcoTime(o.shipTime)+'</span>':'')+(!ex&&o.note?'<span title="'+escA(o.note)+'">📝</span>':'')+(!ex&&hl&&hl.length?'<span class="muted" style="font-size:12px">🚚 '+hl.map(function(l){return escH(hctDash(l.edelno));}).join('、')+'</span>':'')+'</span><span>'+o.lines.length+' 項</span>'
     +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoedit="'+escA(o.id)+'"'+(DCO.busy?' disabled':'')+' title="改這張訂單的門市、品項、數量、單價、實出、備註、新竹貨號">✏️ 編輯</button>':'')   /* 2026-10-05 */
     +(o.status!=="已取消"?'<button class="btn sm ghost" data-dcoslip="'+escA(o.id)+'" title="印 A4 出貨單，放進箱子給門市收貨核對">🖨 出貨單</button>':'')+dcoUnmergeBtn(o)+'</div>';   /* cw 批；2026-11-09 取消合併 */
@@ -4793,10 +4814,12 @@ function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 
     +'<button class="btn sm ghost" style="color:#C0392B;border-color:#C0392B" data-dcocx="'+escA(o.id)+'" data-by="dc"'+(DCO.busy?' disabled':'')+'>取消訂單</button></div>';
   h+=hctBox(o);   /* 2026-10-21 新竹托運單 */
   return h+'</div>';}
+function dcoShipCalc(o){var q=(ST.dcoShipQ||{})[o.id]||{},lines=o.lines.map(function(l){return {line:l.line,ship:num(q[l.line]!=null?q[l.line]:l.qty)};}),tot=0,short=0,zero=[];
+  o.lines.forEach(function(l,i){tot+=lines[i].ship*l.price;if(lines[i].ship<l.qty)short++;if(!(l.price>0)&&lines[i].ship>0)zero.push(l.name);});
+  return {lines:lines,tot:tot,short:short,zero:zero};}
 function dcoShip(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o)return;
-  var q=(ST.dcoShipQ||{})[id]||{},lines=o.lines.map(function(l){return {line:l.line,ship:num(q[l.line]!=null?q[l.line]:l.qty)};}),tot=0,short=0;
-  o.lines.forEach(function(l,i){tot+=lines[i].ship*l.price;if(lines[i].ship<l.qty)short++;});
-  if(typeof confirm==="function"&&!confirm("確定「"+storeName(o.store)+"」訂單 "+id+" 已出貨？\n\n出貨金額 $"+fmt(tot)+(short?"\n⚠️ 有 "+short+" 項實出少於訂購":"")+"\n記數量的品項會扣出貨中心庫存。"))return;
+  var c=dcoShipCalc(o),lines=c.lines,tot=c.tot,short=c.short;
+  if(typeof confirm==="function"&&!confirm("確定「"+storeName(o.store)+"」訂單 "+id+" 已出貨？\n\n出貨金額 $"+fmt(tot)+(short?"\n⚠️ 有 "+short+" 項實出少於訂購":"")+(c.zero.length?"\n⚠️ 單價 0（主檔沒填）："+c.zero.join("、")+"，月結會算 0 元；要收錢請先按「✏️ 編輯」改單價":"")+"\n記數量的品項會扣出貨中心庫存。"))return;
   dcoAct({action:"ship",id:id,lines:lines},"已出貨","已出貨："+storeName(o.store)+" "+id);}
 /* 撿貨單：勾選的「待處理＋備貨中」訂單，依品項加總（依預設分區排，方便一區一區撿） */
 function dcoPickView(all){var open=all.filter(function(o){return o.status==="待處理"||o.status==="備貨中";}),off=ST.dcoPickOff||{};
@@ -5277,6 +5300,7 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
   if((b=t.closest("[data-hctselnone]"))){ev.preventDefault();ST.hctSel=ST.hctSel||{};ST.hctSel[b.getAttribute("data-hctselnone")]={};render();return;}
   if((b=t.closest("[data-hctreport]"))){ev.preventDefault();hctReport();return;}
   if((b=t.closest("[data-hctbatch]"))){ev.preventDefault();hctBatch();return;}
+  if((b=t.closest("[data-dcoshipbatch]"))){ev.preventDefault();dcoShipBatch();return;}   /* 2026-11-09 */
   if((b=t.closest("[data-hcttotal]"))){ev.preventDefault();var dt=b.getAttribute("data-hcttotal"),pt=hctPick(dt),un=pt.rows.filter(function(l){return l.status!=="已交寄";}).length;
     if(pt.n&&un)toast("勾選的 "+un+" 張還沒確認出貨（新竹還沒收到），不印在總表",5000);
     hctPrintTotal(pt.rows.filter(function(l){return l.status==="已交寄";}),dt);return;}
@@ -5290,6 +5314,8 @@ document.addEventListener("change",function(ev){var t=ev.target,a;if(!t||!t.getA
   if((a=t.getAttribute("data-hctsel"))!=null){var q=a.split("|"),S=hctSelOf(q[0]);if(t.checked)S[q[1]]=true;else delete S[q[1]];render();return;}   /* 2026-11-02 勾選托運單 */
   if((a=t.getAttribute("data-hctselall"))!=null){var S2=hctSelOf(a),on=t.checked;(HCT.day[a]||[]).filter(hctAct).forEach(function(l){if(on)S2[l.edelno]=true;else delete S2[l.edelno];});render();return;}
   if((a=t.getAttribute("data-dccsel"))!=null){ST.dcoSel=ST.dcoSel||{};if(t.checked)ST.dcoSel[a]=true;else delete ST.dcoSel[a];render();return;}   /* 2026-11-02 勾選要寄新竹的訂單 */
+  if((a=t.getAttribute("data-dcssel"))!=null){ST.dcoShipSel=ST.dcoShipSel||{};if(t.checked)ST.dcoShipSel[a]=true;else delete ST.dcoShipSel[a];render();return;}   /* 2026-11-09 勾選要一次出貨完成的訂單 */
+  if(t.getAttribute("data-dcsselall")!=null){ST.dcoShipSel=ST.dcoShipSel||{};var on3=t.checked;(DCO.all||[]).forEach(function(o){if(o.status==="備貨中"){if(on3)ST.dcoShipSel[o.id]=true;else delete ST.dcoShipSel[o.id];}});render();return;}
   if(t.getAttribute("data-dccselall")!=null){ST.dcoSel=ST.dcoSel||{};var sg2=ST.dcoSeg||"待處理",on2=t.checked;(DCO.all||[]).forEach(function(o){if(o.status===sg2&&hctSelOK(o)){if(on2)ST.dcoSel[o.id]=true;else delete ST.dcoSel[o.id];}});render();return;}
   if(t.getAttribute("data-hctcopies")!=null){lsSet("hctTotCopies",t.value);render();return;}
   if((a=t.getAttribute("data-hctcs"))!=null){var E=hctIn(a);E.cs=t.value;E.sz=null;render();return;}   /* 換計費方式：重畫填寫區（下拉選單，不影響打字） */
