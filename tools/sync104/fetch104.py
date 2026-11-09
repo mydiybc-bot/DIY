@@ -102,10 +102,21 @@ async def probe():
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(locale="zh-TW", timezone_id="Asia/Taipei", user_agent=UA)   # 預設 HeadlessChrome 身分 104 不給表單
             await page.goto(SIGNIN, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_selector("input[name=email]", timeout=45000)
+            try:
+                await page.wait_for_selector("input[name=email]", timeout=45000)
+                has_form = True
+            except Exception:  # noqa: BLE001
+                has_form = False
             title = await page.title()
+            url = page.url
+            try:
+                text = await page.evaluate("() => (document.body && document.body.innerText || '').replace(/\\s+/g,' ').trim().slice(0, 300)")
+            except Exception:  # noqa: BLE001
+                text = ""
             await browser.close()
-            return True, f"登入頁正常（{title}）"
+            if has_form and "錯誤" not in title:
+                return True, f"登入頁正常（{title}）｜{url}"
+            return has_form, f"{'有表單但' if has_form else '沒有表單，'}頁面標題「{title}」｜{url}｜{text}"
     except Exception as ex:  # noqa: BLE001
         return False, f"{type(ex).__name__}: {str(ex)[:400]}"
 
