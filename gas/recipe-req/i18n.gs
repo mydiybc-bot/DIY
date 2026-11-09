@@ -876,8 +876,9 @@ function i18nTabletAuth_(pw) {
   c.put(k, '1', 7200);
   return true;
 }
-function i18nList_(p) {
-  i18nTabletAuth_(p.tpw);
+function i18nList_(p) { i18nTabletAuth_(p.tpw); return i18nListData_(); }
+/* 平板清單本體（不驗密碼）：i18nList 與推到 Render 的快照共用（2026-11-09），兩邊的 ver 一定一樣 */
+function i18nListData_() {
   var src = i18nMeta_('i18n_src', I18N_SRC_HEAD), rc = {}, guide = i18nGuideNames_(), rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD);
   rm.rows.forEach(function (r) { rc[r.key] = r; });
   var pm = i18nPickMap_();   /* 沒勾的平板不列 */
@@ -904,16 +905,30 @@ function i18nTrName_(sh, r, ver) {
   c.put(k, nm, 21600);
   return nm;
 }
-function i18nGet_(p) {
-  i18nTabletAuth_(p.tpw);
-  var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
+function i18nGet_(p) { i18nTabletAuth_(p.tpw); return { data: i18nGetData_(p.id, p.lang) }; }
+/* 一支×語言組好的平板內容（不驗密碼）：i18nGet 與快照共用。ctx（i18nGetCtx_）＝一次推很多支時先讀好的表，不重複讀 */
+function i18nGetCtx_() {
+  var NM = {}; try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文（同 i18nBuild_） */ }
+  return { sm: i18nMeta_('i18n_src', I18N_SRC_HEAD), rm: i18nMeta_('i18n_rcp', I18N_RCP_HEAD), pm: i18nPickMap_(), D: i18nDictRows_(), NM: NM, src: {} };
+}
+function i18nGetData_(id, lang, ctx) {
+  id = String(id || '').trim().toLowerCase(); lang = String(lang || '').trim();
   if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言不對', 'bad');
-  var src = i18nSrc_(id); if (!src) throw fail_('找不到這支食譜', 'nosrc');
-  if (!i18nOn_(i18nPickMap_(), id)) throw fail_('這支食譜目前沒有開放給外國客人', 'notyet');
-  var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
+  var src;
+  if (ctx) {
+    if (!(id in ctx.src)) {
+      var sr = ctx.sm.rows.filter(function (x) { return x.id === id; })[0], so = null;
+      if (sr && sr.state === 'ok') { so = i18nReadJ_(ctx.sm.sh, sr._r, I18N_SRC_HEAD); if (so) so.fp = sr.fp; }
+      ctx.src[id] = so;
+    }
+    src = ctx.src[id];
+  } else src = i18nSrc_(id);
+  if (!src) throw fail_('找不到這支食譜', 'nosrc');
+  if (!i18nOn_(ctx ? ctx.pm : i18nPickMap_(), id)) throw fail_('這支食譜目前沒有開放給外國客人', 'notyet');
+  var m = ctx ? ctx.rm : i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
   var c = i18nLiveContent_(m.sh, r);   /* 放行過的那份（原文改版、新譯文還沒好 → 上一版） */
   if (!c) throw fail_('這支食譜這個語言還沒翻好', 'notyet');
-  return { data: i18nBuild_(src, { name: c.name, pres: c.pres, slides: i18nAlign_(c, src) }, i18nDictRows_(), lang, r) };
+  return i18nBuild_(src, { name: c.name, pres: c.pres, slides: i18nAlign_(c, src) }, ctx ? ctx.D : i18nDictRows_(), lang, r, ctx ? ctx.NM : null);
 }
 function i18nBoss_(auth) { if (!auth || auth.kind !== 'role' || ['主廚', '管理者'].indexOf(auth.role) < 0) throw fail_('要主廚或管理者的密碼', 'perm'); }
 /* 對照預覽：譯文合成＋原文英文（每頁並排看） */
@@ -951,9 +966,9 @@ function i18nApprove_(p, auth) {
   return { id: key, msg: (p.undo ? '收回 ' : '核准 ') + key, data: { key: key, state: p.undo ? (r.status === 'ok' ? 'wait' : r.status) : 'live', appr_by: o.appr_by, appr_at: o.appr_at } };
 }
 /* 合成平板要的完整內容：版面照原文，文字換譯文，食材／取放區／單位換詞典 */
-function i18nBuild_(src, tr, D, lang, row) {
-  var areas = {}, NM = {};
-  try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文 */ }
+function i18nBuild_(src, tr, D, lang, row, NM0) {
+  var areas = {}, NM = NM0 || {};
+  if (!NM0) { try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文 */ } }
   var cut = function (n) { return rbTrim_(String(n || '').replace(/^【[^】]*】\s*/, '')); };
   var slides = src.slides.map(function (s, i) {
     var t = (tr.slides || [])[i] || {}, h = String(t.h || '');
@@ -1047,6 +1062,79 @@ READS.i18nPreview = 1; NOAUTH.i18nPreview = 1;   /* 身分在函式裡驗（主�
 NOAUTH.i18nStatus = 1; NOAUTH.i18nList = 1; NOAUTH.i18nGet = 1; NOAUTH.i18nKick = 1;   /* 平板密碼在函式裡自己驗；Kick 只會做待辦，做完就沒事可做 */
 READS.i18nStatus = 1; READS.i18nList = 1; READS.i18nGet = 1;
 SELFLOCK.i18nKick = 1;   /* 一次要 1～4 分鐘，不能佔住全系統的鎖；同一件不重複做靠 i18nClaim_ */
+
+/* ================= 🚀 平板快照 → 訓練站伺服器 Render（2026-11-09 經營者：「未來如果我希望可以讓 100 人同時使用」→ 方案 A） =================
+   原本平板每開一支食譜，GAS 都要當場讀表、組內容（約 5 秒），Google 帳號同時最多跑 30 個 → 約 25～30 人同時點開就會擋。
+   改成：GAS 把「平板清單＋每支×語言組好的內容」推到訓練站伺服器存起來（DIY i18n_snap.py，存在 Render 硬碟），
+   平板先向伺服器讀（/api/i18n/list、/api/i18n/get，同一個網域），讀不到才退回這裡的 i18nList／i18nGet（照舊保留）。
+   推送：i18nSnapPush_ 先問伺服器現有哪些版本（manifest），只推 ver 變了的（ver 同 i18nList）→ 最後推清單（清單上沒有的伺服器會刪）。
+   排程：i18nSnapTick 每 15 分鐘；表的內容沒變（i18nSnapSig_）就直接結束（約 1 秒）；每天 05:00 後第一次全部重推（詞典、到店須知品名有改也會跟上）。
+   開關／立刻推：動作 i18nSnapSet（投遞通行碼 wkey）。伺服器通行碼在指令碼屬性 I18N_SNAP_KEY（伺服器端只放 SHA-256）。 */
+var I18N_SNAP_URL = 'https://diybc-training.onrender.com/api/i18n/snap';
+function i18nSnapPost_(body) {
+  var key = i18nProp_('I18N_SNAP_KEY'); if (!key) throw fail_('還沒設定伺服器通行碼 I18N_SNAP_KEY', 'off');
+  body.key = key;
+  var r = UrlFetchApp.fetch(I18N_SNAP_URL, { method: 'post', contentType: 'application/json', payload: JSON.stringify(body), muteHttpExceptions: true, followRedirects: true });
+  var j; try { j = JSON.parse(r.getContentText()); } catch (e) { throw fail_('伺服器回應看不懂（HTTP ' + r.getResponseCode() + '）', 'net'); }
+  if (!j || !j.ok) throw fail_('伺服器：' + ((j && (j.msg || j.error)) || ('HTTP ' + r.getResponseCode())), 'net');
+  return j;
+}
+/* force＝不問伺服器、全部重推；deadline＝毫秒時間點，到了就先停（清單照推；沒推到的那幾支平板會退回 GAS，下次再補） */
+function i18nSnapPush_(force, deadline) {
+  var t0 = Date.now(); deadline = deadline || t0 + 270000;
+  var L = i18nListData_().data, have = force ? {} : (i18nSnapPost_({ op: 'manifest' }).vers || {}), todo = [];
+  L.items.forEach(function (it) { I18N_LANGS.forEach(function (l) { if (it.langs[l] === 'live' && it.ver[l] && have[it.id + '|' + l] !== it.ver[l]) todo.push({ id: it.id, lang: l, ver: it.ver[l] }); }); });
+  var ctx = todo.length ? i18nGetCtx_() : null, batch = [], size = 0, pushed = 0, failed = [], cut = false;
+  var flush = function () { if (!batch.length) return; i18nSnapPost_({ op: 'put', items: batch }); pushed += batch.length; batch = []; size = 0; };
+  for (var i = 0; i < todo.length; i++) {
+    if (Date.now() > deadline) { cut = true; break; }
+    var x = todo[i], d;
+    try { d = i18nGetData_(x.id, x.lang, ctx); } catch (e) { failed.push(x.id + '|' + x.lang + '：' + errMsg_(e)); continue; }
+    batch.push({ id: x.id, lang: x.lang, ver: x.ver, data: d }); size += JSON.stringify(d).length;
+    if (size > 800000 || batch.length >= 15) flush();
+  }
+  flush();
+  var lr = i18nSnapPost_({ op: 'list', at: L.at, items: L.items });
+  return { items: L.items.length, todo: todo.length, pushed: pushed, failed: failed, left: todo.length - pushed - failed.length, cut: cut, removed: lr.removed || 0, sec: Math.round((Date.now() - t0) / 1000) };
+}
+/* 表的內容指紋：原文、譯文狀態、勾選有任何變動才推 */
+function i18nSnapSig_() {
+  var a = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.map(function (r) { return [r.id, r.name, r.upd, r.fp, r.cover, r.state].join('~'); });
+  var b = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.map(function (r) { return [r.key, r.fp, r.status, r.appr_by, r.appr_at, r.appr_fp].join('~'); });
+  return i18nHash_(JSON.stringify([a, b, i18nPickMap_()]));
+}
+function i18nSnapTick() {
+  if (!i18nProp_('I18N_SNAP_KEY')) return;
+  var now = new Date(), today = Utilities.formatDate(now, TZ, 'yyyy-MM-dd'), full = i18nProp_('I18N_SNAP_FULL') !== today && Number(Utilities.formatDate(now, TZ, 'H')) >= 5;
+  var sig = i18nSnapSig_();
+  if (!full && sig === i18nProp_('I18N_SNAP_SIG') && i18nProp_('I18N_SNAP_LEFT') !== '1') return;
+  var r;
+  try { r = i18nSnapPush_(full, Date.now() + 270000); }
+  catch (e) { i18nProp_('I18N_SNAP_LEFT', '1'); i18nLog_('排程', 'snap', '', '', 'error', errMsg_(e)); return; }
+  var left = r.left > 0 || r.failed.length > 0;
+  i18nProp_('I18N_SNAP_SIG', sig); i18nProp_('I18N_SNAP_LEFT', left ? '1' : '0');
+  if (full && !r.left) i18nProp_('I18N_SNAP_FULL', today);
+  if (r.pushed || r.failed.length || r.removed || full) i18nLog_('排程', 'snap', '', '', r.failed.length ? 'error' : 'ok', (full ? '全部重推；' : '') + '清單 ' + r.items + ' 支、推 ' + r.pushed + '/' + r.todo + '、刪 ' + r.removed + (r.left ? '、剩 ' + r.left : '') + (r.failed.length ? '；失敗 ' + r.failed.slice(0, 3).join('；') : ''), r.sec);
+}
+/* 開關：key＝設定伺服器通行碼；on:1 建排程（每 15 分鐘）／on:0 拿掉；push:1 立刻推（force:1 全部重推）；sig 會更新 */
+function i18nSnapSet_(p) {
+  i18nWriteKey_(p);
+  if (p.key) i18nProp_('I18N_SNAP_KEY', String(p.key));
+  if (p.on != null) { i18nDropTrig_('i18nSnapTick'); if (Number(p.on)) ScriptApp.newTrigger('i18nSnapTick').timeBased().everyMinutes(15).create(); }
+  var r = null;
+  if (p.push) { var sig = i18nSnapSig_(); r = i18nSnapPush_(!!p.force, Date.now() + 300000); i18nProp_('I18N_SNAP_SIG', sig); i18nProp_('I18N_SNAP_LEFT', r.left || r.failed.length ? '1' : '0'); i18nLog_('Claude Code', 'snap', '', '', r.failed.length ? 'error' : 'ok', (p.force ? '全部重推；' : '') + '清單 ' + r.items + ' 支、推 ' + r.pushed + '/' + r.todo, r.sec); }
+  var chk = null;
+  if (p.check) {   /* 驗證：一次推（ctx）組出來的內容＝平板 i18nGet 單支組出來的，一字不差 */
+    var ctx = i18nGetCtx_(), L = i18nListData_().data, n = 0, same = 0, diff = [];
+    L.items.forEach(function (it) { I18N_LANGS.forEach(function (l) { if (n >= Number(p.check) || it.langs[l] !== 'live') return; n++;
+      var x = JSON.stringify(i18nGetData_(it.id, l, ctx)), y = JSON.stringify(i18nGetData_(it.id, l)); if (x === y) same++; else diff.push(it.id + '|' + l); }); });
+    chk = { n: n, same: same, diff: diff };
+  }
+  var trig = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); }).filter(function (f) { return /^i18n/.test(f); });
+  return { data: { has_key: !!i18nProp_('I18N_SNAP_KEY'), push: r, check: chk, triggers: trig } };
+}
+ACTIONS.i18nSnapSet = function (p, a) { return i18nSnapSet_(p, a); };
+NOAUTH.i18nSnapSet = 1; SELFLOCK.i18nSnapSet = 1;
 
 /* ================= 🤝 Claude Code 投遞口（2026-10-24 經營者：用 Claude Code 翻、不花 API；主廚不看，Claude 自己檢查就放行） =================
    流程：Claude Code 呼叫 i18nPull 拿一支食譜某語言的原文＋詞典 → 自己翻 → 自己逐頁回讀 → 呼叫 i18nPut 投遞。
