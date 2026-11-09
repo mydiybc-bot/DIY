@@ -1148,7 +1148,7 @@ function doGet(e){
       var n = parseInt(e.parameter.n, 10) || 20;
       result = _getRecentImportLog(n);
     } else if(action === 'ping'){
-      result = {ok:true, time:new Date().toISOString(), version:'schedule-v5.9-cache'};
+      result = {ok:true, time:new Date().toISOString(), version:'schedule-v6.0-104'};
     } else {
       result = {ok:false, error:'unknown action: ' + action};
     }
@@ -1170,6 +1170,8 @@ function doPost(e){
 
     if(action === 'uploadSchedule'){
       result = _uploadSchedule(payload);
+    } else if(action === 'upsert104'){
+      result = _upsert104(payload);   // 2026-11-09：門市排班工作台送來的 104 班表
     } else {
       result = {ok:false, error:'unknown POST action: ' + action};
     }
@@ -1209,6 +1211,11 @@ function _uploadSchedule(payload){
 
   var base64 = String(payload.base64Data || '');
   if(!base64) return {ok:false, error:'base64Data 缺失'};
+
+  // 2026-11-09：這店這月已由 104 自動同步 → 不收手動上傳（會跟 104 的列重複；要改班請到 104 改）
+  if(_has104Rows_(storeNum, yyyymm)){
+    return {ok:false, error: storeNum + ' 店 ' + yyyymm + ' 已由 104 企業大師每天自動同步，不能再手動上傳；要改班請到 104 改，隔天自動跟上'};
+  }
 
   var mime = payload.mimeType || 'application/vnd.ms-excel';
 
@@ -3003,4 +3010,208 @@ function _dateKey_(v){
   var d = new Date(s);
   if(!isNaN(d)) return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   return '';
+}
+// ====================================================================
+// 104 班表直接寫入（2026-11-09，經營者裁定「排班分析儀表板改跟 104 同步」第一段）
+// 門市排班工作台（diybc-training schedule_ws.py）每天同步 104 之後，把整月轉成列送到這裡：
+//   doPost {action:'upsert104', token, backup?, dryRun?, items:[{store, ym:'YYYYMM', source:'104:<店>-<年月>:<班表id>@<存檔時間>',
+//          rows:[[date, store_id, employee_id, employee_name, role, shift_segments, cell_raw, personal_note]],
+//          notes:[[date, store_id, employee_id, employee_name, note, has_shift]]}]}
+// 規則：
+//   ・一份 104 班表擁有自己寫進來的所有列（source_file 以 104:<店>-<年月>: 開頭），重送時先清掉再寫；
+//     去別店支援的時段 store_id 是被支援店，但 source_file 仍是自己店的 → 跟著自己店一起換，不會被別店的同步洗掉。
+//   ・同店同月的舊 NUEIP 列（source_file 不是 104: 開頭）在第一次 104 寫入時一併清掉。
+//   ・工時、早午晚拆分、是否週末／假日、店名、職稱（沒給時用 fact_schedule 裡該姓名最後一次的職稱）都在這裡算，跟 NUEIP 解析走同一套。
+//   ・寫完驗筆數（keep＋新列＝實際列數），不符就丟錯；token 存指令碼屬性 DASH104_TOKEN。
+// ====================================================================
+var DASH104_TOKEN_PROP_ = 'DASH104_TOKEN';
+var DASH104_SRC_PREFIX_ = '104:';
+
+function _upsert104(payload){
+  var token = PropertiesService.getScriptProperties().getProperty(DASH104_TOKEN_PROP_);
+  if(!token) return {ok:false, error:'DASH104_TOKEN 尚未設定（指令碼屬性）'};
+  if(String(payload.token || '') !== token) return {ok:false, error:'token 不符'};
+  var items = payload.items || [];
+  if(!items.length) return {ok:false, error:'items 空的'};
+  var dryRun = !!payload.dryRun;
+
+  // 先驗每一份的基本欄位
+  for(var ii = 0; ii < items.length; ii++){
+    var it = items[ii];
+    var sNum = parseInt(it.store, 10), ym = String(it.ym || '');
+    if(!(sNum >= 1 && sNum <= 12) || !/^20\d{2}(0[1-9]|1[0-2])$/.test(ym)) return {ok:false, error:'第 ' + (ii+1) + ' 份 store/ym 不合法'};
+    var pre = DASH104_SRC_PREFIX_ + sNum + '-' + ym + ':';
+    if(String(it.source || '').indexOf(pre) !== 0) return {ok:false, error:'第 ' + (ii+1) + ' 份 source 應以 ' + pre + ' 開頭'};
+  }
+
+  var lock = LockService.getScriptLock();
+  if(!lock.tryLock(60000)) return {ok:false, error:'已有寫入處理中，請稍後重試'};
+  try {
+    var ss = SpreadsheetApp.openById(ANALYSIS_SS_ID);
+    var sh = ss.getSheetByName('fact_schedule');
+    if(!sh) return {ok:false, error:'fact_schedule not found'};
+    _ensureNoteHeader(sh);
+    var lastRow = sh.getLastRow();
+    var W = Math.max(17, sh.getLastColumn());
+    var data = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, W).getValues() : [];
+    var idx = _buildHeaderIdx(sh.getRange(1, 1, 1, W).getValues()[0]);
+    var before = data.length;
+
+    // 職稱對照：既有資料每個姓名最後一次的 role
+    var roleMap = {}, roleDate = {};
+    for(var i = 0; i < data.length; i++){
+      var nm = String(data[i][idx['employee_name']] || '').trim(), rl = String(data[i][idx['role']] || '').trim();
+      if(!nm || !rl) continue;
+      var dk0 = _dateKey_(data[i][idx['date']]) || '';
+      if(!roleDate[nm] || dk0 > roleDate[nm]){ roleDate[nm] = dk0; roleMap[nm] = rl; }
+    }
+
+    var backups = [];
+    if(payload.backup && !dryRun){
+      var stamp = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
+      backups.push(_backupSheetOnce_(ss, 'fact_schedule', 'fact_schedule_backup_' + stamp));
+      backups.push(_backupSheetOnce_(ss, FACT_NOTE_SHEET_, 'fact_note_backup_' + stamp));
+    }
+
+    var holidaySet = _getHolidaySet();
+    var metaCache = {};
+    var meta = function(sid){ if(!metaCache[sid]) metaCache[sid] = _getStoreMeta(sid); return metaCache[sid]; };
+
+    var keep = data.slice();
+    var results = [], allNotes = [], noteKeys = [];
+    for(var n = 0; n < items.length; n++){
+      var item = items[n];
+      var storeNum = parseInt(item.store, 10), yyyymm = String(item.ym);
+      var source = String(item.source).trim();
+      var srcPrefix = DASH104_SRC_PREFIX_ + storeNum + '-' + yyyymm + ':';
+      var next = [], removed104 = 0, removedOld = 0;
+      for(var j = 0; j < keep.length; j++){
+        var sf = String(keep[j][idx['source_file']] || '').trim();
+        if(sf.indexOf(srcPrefix) === 0){ removed104++; continue; }
+        if(sf.indexOf(DASH104_SRC_PREFIX_) !== 0 && parseInt(keep[j][idx['store_id']], 10) === storeNum){
+          var dk = (_dateKey_(keep[j][idx['date']]) || '').replace(/-/g, '').substring(0, 6);
+          if(dk === yyyymm){ removedOld++; continue; }
+        }
+        next.push(keep[j]);
+      }
+      keep = next;
+
+      var newRows = [], unknownRole = {}, badSeg = 0;
+      var inRows = item.rows || [];
+      for(var r = 0; r < inRows.length; r++){
+        var x = inRows[r];
+        var dateStr = String(x[0] || '').trim(), sid = parseInt(x[1], 10);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !(sid >= 1 && sid <= 12)){ badSeg++; continue; }
+        var empName = String(x[3] || '').trim();
+        if(!empName) continue;
+        var role = String(x[4] || '').trim() || roleMap[empName] || '';
+        if(!role) unknownRole[empName] = 1;
+        var segs = String(x[5] || '').split('|').map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+        var labels = [], hT = 0, hM = 0, hA = 0, hE = 0;
+        for(var k = 0; k < segs.length; k++){
+          var p = _parseShiftSeg(segs[k]);
+          if(!p){ badSeg++; continue; }
+          labels.push(p.label); hT += p.total; hM += p.morning; hA += p.afternoon; hE += p.evening;
+        }
+        if(labels.length === 0) continue;
+        var dow = new Date(dateStr + 'T00:00:00').getDay();
+        var sm = meta(sid);
+        var row = [dateStr, sm.id, sm.name, String(x[2] || ''), empName, role, labels.join('|'), _round2(hT),
+                   _round2(hM), _round2(hA), _round2(hE), (dow === 0 || dow === 6) ? 1 : 0, holidaySet[dateStr] ? 1 : 0,
+                   String(x[6] || ''), 'OK', source, String(x[7] || '')];
+        while(row.length < W) row.push('');
+        newRows.push(row);
+      }
+      keep = keep.concat(newRows);
+
+      var inNotes = item.notes || [];
+      for(var q = 0; q < inNotes.length; q++){
+        var y = inNotes[q];
+        var nd = String(y[0] || '').trim(), nsid = parseInt(y[1], 10);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(nd) || !(nsid >= 1 && nsid <= 12)) continue;
+        allNotes.push([nd, meta(nsid).id, meta(nsid).name, 'person', String(y[2] || ''), String(y[3] || ''), String(y[4] || ''), parseInt(y[5], 10) ? 1 : 0, source]);
+      }
+      noteKeys.push({storeNum: storeNum, yyyymm: yyyymm, srcPrefix: srcPrefix});
+
+      results.push({store: storeNum, ym: yyyymm, removed104: removed104, removedOld: removedOld, written: newRows.length,
+                    unknownRole: Object.keys(unknownRole), badSeg: badSeg,
+                    sample: dryRun ? newRows.slice(0, 3).map(function(rw){ return rw.slice(0, 17); }) : undefined});
+    }
+    var after = keep.length;
+
+    var noteRes = {removed: 0, written: 0};
+    if(!dryRun){
+      if(lastRow > 1) sh.getRange(2, 1, lastRow - 1, W).clearContent();
+      if(keep.length) sh.getRange(2, 1, keep.length, W).setValues(keep);
+      SpreadsheetApp.flush();
+      var check = sh.getLastRow() - 1;
+      if(check < 0) check = 0;
+      if(check !== after) throw new Error('寫入後筆數 ' + check + ' ≠ 預期 ' + after + '（before=' + before + '）');
+      noteRes = _upsert104Notes_(noteKeys, allNotes);
+      _schedCacheBump_('upsert104');
+      for(var z = 0; z < results.length; z++){
+        var rs = results[z];
+        _appendLog('104同步 ' + rs.store + '店 ' + rs.ym, '', rs.written, 'OK104',
+                   'removed104=' + rs.removed104 + ' removedOld=' + rs.removedOld + (rs.unknownRole.length ? ' unknownRole=' + rs.unknownRole.join(',') : ''));
+      }
+      _appendLog('upsert104', '', after, 'OK', 'items=' + items.length + ' before=' + before + ' after=' + after + ' notes=' + noteRes.written +
+                 (backups.length ? ' backup=' + backups.join(',') : ''));
+    }
+    return {ok: true, dryRun: dryRun, before: before, after: after, notes: noteRes, backups: backups, results: results};
+  } catch(err){
+    return {ok: false, error: 'upsert104: ' + String(err)};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** fact_note：清掉同 104 班表之前寫的、以及同店同月舊 NUEIP 的 person 列，再寫新列 */
+function _upsert104Notes_(keys, rows){
+  var sh = _ensureFactNoteSheet_();
+  var lastRow = sh.getLastRow();
+  var Wn = FACT_NOTE_HEADER_.length;
+  var data = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, Wn).getValues() : [];
+  var keep = [], removed = 0;
+  for(var i = 0; i < data.length; i++){
+    var sf = String(data[i][8] || '').trim();
+    var sid = parseInt(data[i][1], 10);
+    var dk = (_dateKey_(data[i][0]) || '').replace(/-/g, '').substring(0, 6);
+    var drop = false;
+    for(var k = 0; k < keys.length && !drop; k++){
+      if(sf.indexOf(keys[k].srcPrefix) === 0) drop = true;
+      else if(sf.indexOf(DASH104_SRC_PREFIX_) !== 0 && sid === keys[k].storeNum && dk === keys[k].yyyymm) drop = true;
+    }
+    if(drop){ removed++; continue; }
+    keep.push(data[i]);
+  }
+  keep = keep.concat(rows);
+  if(lastRow > 1) sh.getRange(2, 1, lastRow - 1, Wn).clearContent();
+  if(keep.length) sh.getRange(2, 1, keep.length, Wn).setValues(keep);
+  SpreadsheetApp.flush();
+  return {removed: removed, written: rows.length, total: keep.length};
+}
+
+/** fact_schedule 裡是否已有這店這月由 104 寫入的列（只讀 P 欄 source_file） */
+function _has104Rows_(storeNum, yyyymm){
+  try {
+    var sh = SpreadsheetApp.openById(ANALYSIS_SS_ID).getSheetByName('fact_schedule');
+    var last = sh.getLastRow();
+    if(last < 2) return false;
+    var col = sh.getRange(2, 16, last - 1, 1).getValues();
+    var pre = DASH104_SRC_PREFIX_ + parseInt(storeNum, 10) + '-' + yyyymm + ':';
+    for(var i = 0; i < col.length; i++){
+      if(String(col[i][0] || '').indexOf(pre) === 0) return true;
+    }
+  } catch(e){ Logger.log('_has104Rows_ err: ' + e); }
+  return false;
+}
+
+/** 備份分頁（同名已存在就不重做），回傳分頁名 */
+function _backupSheetOnce_(ss, srcName, dstName){
+  var src = ss.getSheetByName(srcName);
+  if(!src) return srcName + ':不存在';
+  if(ss.getSheetByName(dstName)) return dstName + '(已存在)';
+  var copy = src.copyTo(ss);
+  copy.setName(dstName);
+  return dstName;
 }
