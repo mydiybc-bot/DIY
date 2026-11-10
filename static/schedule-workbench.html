@@ -279,6 +279,7 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
 var API='/api/schedule/';
 var STORES={1:'精明',2:'草悟道',3:'南京',4:'士林',5:'Focus',6:'新竹',7:'板橋',8:'新店',9:'中壢',10:'藝文',11:'A13',12:'SKM'};
 var AUTH_KEY='sw_auth_v1', TTL=12*3600*1000;
+var saveOnly='';
 var auth=null, S=null, prevRaw={}, chg={}, pollT=null, edCur=null, pendingText='', formKey='';
 function $(id){return document.getElementById(id)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
@@ -343,21 +344,23 @@ function apply(j,first){
 function renderFiles(){
   var t=S.template;$('tplUp').classList.toggle('hide',!!t);$('tplInfo').innerHTML=t?('📄 '+esc(t.info.title)+'｜'+t.info.emps.length+' 人｜'+(t.source==='104'?'104 '+fmtTs(t.fetched*1000):esc(t.name))):'⚠ 這個月還沒有 104 範本：店長在 104 建好當月班表後，隔天早上會自動取得';
 }
-function inStore(pos){pos=(pos||'').trim();if(!pos)return true;return (S.template.info.title||'').indexOf(pos.replace(/店/g,''))>=0}
+function inStore(pos){pos=(pos||'').trim();if(!pos)return true;return (S.template.info.title||'').indexOf(pos.replace(/店$/,''))>=0}
 
 /* ── 設定表單（2026-10-28）：只在第一次載入、換店月、存檔成功後重建；輪詢不碰（中文輸入規則） ── */
 function formFocused(){var a=document.activeElement;return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT')&&($('cfgForm').contains(a)||$('msetForm').contains(a))}
-function renderForms(force){
+function renderForms(force,only){
   var cfg=S.cfg||{},ms=S.mset,emps=S.template?S.template.info.emps.map(function(e){return e.id}).join(','):'';
   var key=[S.store,S.ym,emps,cfg.updated||'',ms&&ms.updated||''].join('|');
   var cfgN=(cfg.shifts||[]).length;
   $('cfgSum').textContent=cfgN?('已設 '+cfgN+' 個班別'+(cfg.updated?'（'+cfg.updated.slice(0,10)+' 存）':'')):'還沒設定（先填這裡）';
   $('msetSum').textContent=S.formReady?'✅ 可以排班':(cfgN?'還缺平日／假日營收預估':'');
+  if(saveOnly){force=true;only=saveOnly}   /* 2026-11-11：存其中一張表單 → 只重建那一張（原本兩張都重建，另一張還沒存的字被洗掉） */
   if(!force&&key===formKey)return;
   if(!force&&(formFocused()||(window.__ime&&__ime.on)))return;
   formKey=key;
   if(!cfgN)$('cfgBox').open=true;
-  renderCfgForm(cfg);renderMsetForm(ms);renderMarks();
+  if(only!=='mset')renderCfgForm(cfg);
+  if(only!=='cfg'){renderMsetForm(ms);renderMarks()}
 }
 function tmIn(v){return '<input type="text" class="tm" value="'+esc(v||'')+'" placeholder="10:20" maxlength="5">'}
 /* 2026-11-10 經營者：班別只填「上班、下班、休息幾分鐘」，系統自己拆成 104 收的分段（104 不扣休息，靠中間留空檔） */
@@ -365,7 +368,7 @@ function spanOf(sg){sg=(sg||[]).filter(function(x){return x&&x[0]&&x[1]});if(!sg
   var rest=0;for(var i=1;i<sg.length;i++)rest+=mm(sg[i][0])-mm(sg[i-1][1]);return {a:sg[0][0],b:sg[sg.length-1][1],rest:rest,at:(sg.length>1&&rest)?sg[0][1]:''}}
 function spanTxt(sg){var p=spanOf(sg);return p.a?p.a+'–'+p.b+(p.rest?'（休 '+p.rest+' 分）':''):''}
 function shiftRow(r){r=r||{};var sg=r.segs||[],p=spanOf(sg),multi=sg.length>2;
-  return '<tr'+(multi?' data-segs="'+esc(JSON.stringify(sg))+'" data-init="'+esc([p.a,p.b,p.rest,p.at].join('|'))+'"':'')+'><td><input type="text" class="nm" value="'+esc(r.name||'')+'" placeholder="例：平日早班">'+(multi?'<div class="mute" style="font-size:11px">分 '+sg.length+' 段：'+esc(sg.map(function(x){return x[0]+'-'+x[1]}).join('、'))+'（時間沒改就照原樣）</div>':'')+'</td>'+
+  return '<tr data-o="'+esc([p.a,p.b,p.at].join('|'))+'"'+(multi?' data-segs="'+esc(JSON.stringify(sg))+'" data-init="'+esc([p.a,p.b,p.rest,p.at].join('|'))+'"':'')+'><td><input type="text" class="nm" value="'+esc(r.name||'')+'" placeholder="例：平日早班">'+(multi?'<div class="mute" style="font-size:11px">分 '+sg.length+' 段：'+esc(sg.map(function(x){return x[0]+'-'+x[1]}).join('、'))+'（時間沒改就照原樣）</div>':'')+'</td>'+
     '<td>'+tmIn(p.a)+'</td><td>'+tmIn(p.b)+'</td><td><input type="number" class="n" min="0" max="240" step="5" value="'+esc(r.name||sg.length?p.rest:30)+'"></td><td>'+tmIn(p.at).replace('placeholder="10:20"','placeholder="自動"')+'</td>'+
     '<td><input type="number" class="n" min="0" max="20" value="'+esc(r.wd==null?'':r.wd)+'"></td><td><input type="number" class="n" min="0" max="20" value="'+esc(r.we==null?'':r.we)+'"></td><td class="x" title="刪除這列">✕</td></tr>'}
 function carryRow(r){r=r||{};return '<tr><td><input type="text" class="nm" value="'+esc(r.name||'')+'"></td><td><select title="A＝那天本來休假卻來上班，之後要補休給夥伴；B＝那天多放了假，之後要補上班給公司"><option value="A"'+(r.type!=='B'?' selected':'')+'>休假日來上班 → 要補休給夥伴</option><option value="B"'+(r.type==='B'?' selected':'')+'>多放一天假 → 要補上班給公司</option></select></td><td><input type="text" class="nm" value="'+esc(r.date||'')+'" placeholder="2026-10-05"></td><td><input type="text" class="wide" value="'+esc(r.note||'')+'" placeholder="例：本月想補在 11/20／可補可不補"></td><td class="x" title="已補回，刪除">✕</td></tr>'}
@@ -392,13 +395,14 @@ function collectCfg(){
     var row={name:ins[0].value.trim(),wd:ins[5].value,we:ins[6].value};
     if(!v[0]&&!v[1]){if(!row.name)return;row.segs=[]}
     else if(tr.dataset.segs&&tr.dataset.init===[v[0],v[1],+v[2]||0,v[3]].join('|'))row.segs=JSON.parse(tr.dataset.segs);   /* 3 段的班別時間沒改 → 原樣保留 */
-    else{row.start=v[0];row.end=v[1];row.rest=v[2]||0;row.rest_at=v[3]}
+    else{var o=(tr.dataset.o||'||').split('|');   /* 上下班改了、「休息從幾點」沒動 → 當成自動（舊的休息時間可能落在新時段外） */
+      row.start=v[0];row.end=v[1];row.rest=v[2]||0;row.rest_at=(o[2]&&v[3]===o[2]&&(v[0]!==o[0]||v[1]!==o[1]))?'':v[3]}
     shifts.push(row)});
   var carry=[];Array.prototype.forEach.call($('carryTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input'),sel=tr.querySelector('select');carry.push({name:ins[0].value,type:sel.value,date:ins[1].value,note:ins[2].value})});
   return {shifts:shifts,max_consec:$('cMax').value,late_early_limit:$('cLate').value,support:$('cSupport').value,rules:$('cRules').value,carry:carry};
 }
 function saveCfg(){$('cfgSave').disabled=true;$('cfgMsg').textContent='存檔中…';
-  post('cfg_save',{cfg:collectCfg()}).then(function(j){$('cfgMsg').textContent='✅ 已存';apply(j);renderForms(true);setTimeout(function(){var m=$('cfgMsg');if(m)m.textContent=''},2500)})
+  post('cfg_save',{cfg:collectCfg()}).then(function(j){$('cfgMsg').textContent='✅ 已存';formKey='keep';saveOnly='cfg';apply(j);saveOnly='';setTimeout(function(){var m=$('cfgMsg');if(m)m.textContent=''},2500)})
    .catch(function(e){$('cfgSave').disabled=false;$('cfgMsg').textContent='⚠ '+e.message})}
 function specialRow(r,days){r=r||{};var o=days.map(function(d){return '<option value="'+d.d+'"'+(r.day==d.d?' selected':'')+'>'+d.d+' 日（'+d.wd+'）</option>'}).join('');
   return '<tr><td><select>'+o+'</select></td><td><input type="number" class="n" style="width:90px" min="0" value="'+esc(r.revenue==null?'':r.revenue)+'"></td><td><input type="text" class="wide" value="'+esc(r.staff||'')+'" placeholder="例：加 1 人中班／早班改 09:00 開始"></td><td><input type="text" class="wide" value="'+esc(r.note||'')+'" placeholder="例：週年慶、包館"></td><td style="text-align:center"><input type="checkbox" class="hol"'+(r.as_holiday?' checked':'')+' title="這天的人力需求、人效照假日算"></td><td class="x" title="刪除">✕</td></tr>'}
@@ -493,7 +497,7 @@ function collectMset(){
   return {base:{std_hours:$('mStd').value,off_days:$('mOff').value,holidays:$('mHol').value},revenue:{weekday:$('mWd').value,weekend:$('mWe').value},emps:emps,special:sp};
 }
 function saveMset(){$('msetSave').disabled=true;$('msetMsg').textContent='存檔中…';
-  post('mset_save',{mset:collectMset()}).then(function(j){$('msetMsg').textContent='✅ 已存';apply(j);renderForms(true);setTimeout(function(){var m=$('msetMsg');if(m)m.textContent=''},2500)})
+  post('mset_save',{mset:collectMset()}).then(function(j){$('msetMsg').textContent='✅ 已存';formKey='keep';saveOnly='mset';apply(j);saveOnly='';setTimeout(function(){var m=$('msetMsg');if(m)m.textContent=''},2500)})
    .catch(function(e){$('msetSave').disabled=false;$('msetMsg').textContent='⚠ '+e.message})}
 var MK={'指休':'k1','特休':'k2','可上':'k3'};
 function renderMarks(){
@@ -602,8 +606,8 @@ function renderTable(){
   var tail=B?'<td></td><td></td>':'<td></td>';
   h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+=tail+'</tr>';
   loadResv();
-  h+='<tr class="sum"><td class="nm" title="訂位系統目前已訂位的人數（含陪同、已取消不算）。只有今天起約 5 週內有資料'+(RESV&&RESV.built?'；資料時間 '+esc(RESV.built):'')+'">已訂位人數</td>';
-  info.days.forEach(function(d){var v=resvOf(d.d);h+='<td'+(v?' style="font-weight:600"':' class="mute"')+'>'+(resvState==='loading'?'…':v===null?'—':v)+'</td>'});h+=tail+'</tr>';
+  h+='<tr class="sum"><td class="nm" title="訂位系統目前已訂位的人數（含陪同、已取消不算）。只有今天起約 5 週內有資料；✕＝訂位資料讀不到（2 分鐘後自動再試）'+(RESV&&RESV.built?'；資料時間 '+esc(RESV.built):'')+'">已訂位人數</td>';
+  info.days.forEach(function(d){var v=resvOf(d.d);h+='<td'+(v?' style="font-weight:600"':' class="mute"')+'>'+(resvState==='loading'?'…':resvState==='fail'?'✕':v===null?'—':v)+'</td>'});h+=tail+'</tr>';
   h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+=tail+'</tr>';
   if(B&&(B.month.guests||[]).length){h+='<tr class="sum"><td class="nm">外店支援</td>';info.days.forEach(function(d){var r=B.days[d.d],g=[];if(r)for(var k in r.staff){var x=r.staff[k];if(x.guest)g.push(esc(x.name||k)+' '+x.work+'h')}h+='<td class="mute" style="font-size:11px">'+g.join('<br>')+'</td>'});h+=tail+'</tr>'}
   h+='<tr class="sum"><td class="nm">營業額</td>';info.days.forEach(function(d){var r=B&&B.days[d.d];if(r&&r.rev)h+='<td class="rv" title="'+esc(bonusTitle(r,names))+'">'+Math.round(r.rev/1000)+'k</td>';else{var ev=revOf(d.d);h+='<td class="rv est" title="預估 '+ev+'">'+(ev?'預'+Math.round(ev/1000)+'k':'')+'</td>'}});h+=tail+'</tr>';
@@ -633,22 +637,25 @@ function renderPlans(){
 var RESV_API='https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
 var RESV_STORE={1:'台中精明店',2:'台中草悟道店',3:'台北南京店',4:'台北士林店',5:'台南Focus店',6:'新竹文化店',7:'新北板橋店',8:'新北新店店',9:'桃園中壢店',10:'桃園藝文店',11:'台北遠百信義A13店',12:'高雄SKM Park店'};
 var RESV=null,resvState='';   /* RESV＝{店名:{日期:人數}}，lo／hi＝資料涵蓋的日期 */
+var resvAt=0;
 function loadResv(){
-  if(resvState)return;resvState='loading';
+  var age=Date.now()-resvAt;
+  if(resvState==='loading'||(resvState==='ok'&&age<30*60000)||(resvState==='fail'&&age<2*60000))return;
+  if(!RESV)resvState='loading';resvAt=Date.now();
   var cb='__sw_resv'+Date.now(),sc=document.createElement('script'),done=false;
   function end(){done=true;try{delete window[cb]}catch(_){window[cb]=undefined}if(sc.parentNode)sc.parentNode.removeChild(sc)}
   window[cb]=function(j){if(done)return;end();
     try{var ix={};j.cols.forEach(function(c,i){ix[c]=i});var by={},lo='9999',hi='';
       j.rows.forEach(function(r){var d=String(r[ix.date]||'').slice(0,10);if(!d)return;if(d<lo)lo=d;if(d>hi)hi=d;if(r[ix.status]==='已取消')return;
         var st=r[ix.store];(by[st]=by[st]||{})[d]=((by[st]||{})[d]||0)+(+r[ix.party_size]||0)});
-      RESV={by:by,lo:lo,hi:hi,built:j.built_at||''};resvState='ok'}catch(e){resvState='fail'}
+      RESV={by:by,lo:lo,hi:hi,built:j.built_at||''};resvState='ok'}catch(e){resvState=RESV?'ok':'fail'}
     if(S&&S.schedule)renderTable()};
-  sc.onerror=function(){if(done)return;end();resvState='fail';if(S&&S.schedule)renderTable()};
-  setTimeout(function(){if(!done){end();resvState='fail';if(S&&S.schedule)renderTable()}},60000);
+  sc.onerror=function(){if(done)return;end();resvState=RESV?'ok':'fail';if(S&&S.schedule)renderTable()};
+  setTimeout(function(){if(!done){done=true;window[cb]=function(){};if(sc.parentNode)sc.parentNode.removeChild(sc);resvState=RESV?'ok':'fail';if(S&&S.schedule)renderTable()}},60000);
   sc.src=RESV_API+'?fn=future&callback='+cb;document.head.appendChild(sc);
 }
 function resvOf(d){   /* 這個月 d 號已訂位人數；null＝資料沒涵蓋那天（已過去或太遠） */
-  if(!RESV||!S)return null;var ym=S.ym,ds=ym.slice(0,4)+'-'+ym.slice(4)+'-'+('0'+d).slice(-2);
+  if(!RESV||!S||!RESV_STORE[S.store])return null;var ym=S.ym,ds=ym.slice(0,4)+'-'+ym.slice(4)+'-'+('0'+d).slice(-2);
   if(ds<RESV.lo||ds>RESV.hi)return null;var m=RESV.by[RESV_STORE[S.store]]||{};return m[ds]||0}
 function mm(t){var nx=t.indexOf('次日')===0;t=t.replace('次日','');var p=t.split(':');return (+p[0])*60+(+p[1])+(nx?1440:0)}
 function renderCheck(){

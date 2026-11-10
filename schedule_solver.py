@@ -28,6 +28,7 @@ W_FT_HRS = 50        # 正職時數跟目標差（每分鐘）
 W_FT_LEND = 2        # 兼職優先方案：正職時數不足（每分鐘；挪到其他月份補，比多排人便宜）
 W_FT_FAIR = 3        # 兼職優先方案：同店正職裡「不足最多的那一位」的不足時數（每分鐘；讓不足平均分攤）
 W_EXTRA = 5000       # 某班多排人（每多 1 人；浪費人力）：比兼職目標時數優先，只輸給正職標準時數、兼職最低時數（2026-11-05 經營者：設定 1 人就排 1 人）
+W_PT_OVER = 20       # 兼職優先方案：兼職超過希望時數（每分鐘）。要比正職不足（2＋3）重，排滿兼職後剩下的班先給正職（2026-11-11：原本 4，實測兼職被排到希望時數的 1.5 倍、正職反而不足）
 W_PT_TGT = 4         # 兼職跟目標時數差（每分鐘）
 W_PREFER = 300       # 備註偏好的班別沒排到（每次）
 W_HOL_DATE = 1500    # 國定假日沒放在政府公告的那天（每天）
@@ -36,7 +37,8 @@ W_LEND = 1500        # 區域一起排：調去同城別家店（每人每天；
 
 # 2026-11-10 經營者：人力先滿足 週六 ＞ 國定假日 ＞ 週日 ＞ 週五 ＞ 四 ＞ 三 ＞ 二 ＞ 一
 # 缺人、某班沒人：順位越前面罰越重（人不夠時缺口留給順位後面的日子）；多排人：順位越前面罰越輕（多出來的人力先放前面的日子）。
-# 加減的幅度不跨層：缺人最高 116000 仍低於本店連上上限（120000），多排最低 3400 仍高於調店（1500）。
+# 加減的幅度不跨層：缺 1 人會同時算「人數少」＋「某班沒人」，兩項合計最高（週六）維持原本的 120000、順位越後面越低
+# （2026-11-11 修：原本用加的，合計 122400～139200 超過本店連上上限 120000，人不夠時會寧可讓人多連上一天）；多排最低 3400 仍高於調店（1500）。
 DAY_RANK = {"六": 8, "日": 6, "五": 5, "四": 4, "三": 3, "二": 2, "一": 1}
 RANK_HOL = 7
 
@@ -236,6 +238,16 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 vs += [x[kd + (s_, n_)] for s_, n_ in allowed[kd]]
             if vs:
                 m.Add(sum(vs) <= max(0, 1 - const))
+    # 2026-11-11：同一人在兩店名單各有一份目標時數會被排成兩倍 → 只認目標最高的那一份（視為主要店），
+    # 時數用各店加總去比；其他店那一份不追目標、不列入正職平均分攤、不標可支援
+    home = {}
+    for eid_, grp in same.items():
+        if len(grp) > 1:
+            hm = max(grp, key=lambda g: ((g["target"] or 0), (g["min"] or 0), 1 if g["ft"] else 0))
+            for g in grp:
+                g["alias"] = g is not hm
+            home[eid_] = hm
+    Hk, deferred = {}, []
 
     def work(k, d):
         """這天有沒有上班（含特休、固定格子）：回傳 (變數清單, 常數)"""
@@ -272,12 +284,12 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 m.Add(sum(allv) - tot_need <= extra)
                 m.Add(sum(allv) - tot_need - 1 <= extra2)
                 rk = day_rank(wd_of[d], d in u["hol_days"])
-                pen += [(short, W_SHORT + rk * 2000), (extra, W_EXTRA - rk * 200), (extra2, W_EXTRA)]
+                pen += [(short, W_SHORT - (8 - rk) * 2000), (extra, W_EXTRA - rk * 200), (extra2, W_EXTRA)]
                 for n, c in u["need"][d].items():
                     vv = [v for nn, v in got if nn == n]
                     miss = m.NewIntVar(0, c, "")
                     m.Add(sum(vv) + miss >= c)
-                    pen.append((miss, W_SHIFT + rk * 400))
+                    pen.append((miss, W_SHIFT - (8 - rk) * 400))
             for n, c in u["caps"].get(d, {}).items():
                 vv = [v for nn, v in got if nn == n]
                 if vv:
@@ -339,6 +351,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             sum(fixed.get(k + (d,), 0) for d in days)
         H = m.NewIntVar(0, 31 * 24 * 60, "")
         m.Add(H == sum(terms) + const)
+        Hk[k] = H
         # 時數目標：低於／高於目標各自的罰分（依 mode）
         if e["ft"]:
             w_under, w_over = (W_FT_LEND, W_FT_HRS) if mode == "pt" else (W_FT_HRS, W_FT_HRS)
@@ -346,9 +359,14 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         elif mode == "ft":
             w_under, w_over, goal = 0, 0, None
         elif mode == "pt":
-            w_under, w_over, goal = W_PT_MIN, W_PT_TGT, e["target"] or e["min"]
+            w_under, w_over, goal = W_PT_MIN, W_PT_OVER, e["target"] or e["min"]
         else:
             w_under, w_over, goal = W_PT_TGT, W_PT_TGT, e["target"]
+        if e.get("alias"):
+            goal = None
+        elif e["k"][1] in home:
+            deferred.append((e, w_under, w_over, goal))
+            goal = None
         if goal:
             under = m.NewIntVar(0, 31 * 24 * 60, "")
             over = m.NewIntVar(0, 31 * 24 * 60, "")
@@ -357,7 +375,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             pen += [(under, w_under), (over, w_over)]
             if e["ft"] and mode == "pt":
                 ft_under.setdefault(e["u"]["store"], []).append(under)
-        if not e["ft"] and e["min"] and mode == "std":
+        if not e["ft"] and e["min"] and mode == "std" and not e.get("alias"):
             short_min = m.NewIntVar(0, e["min"], "")
             m.Add(H + short_min >= e["min"])
             pen.append((short_min, W_PT_MIN))
@@ -452,6 +470,17 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                         m.Add(sum(va) + ca + sum(vb) + cb - 1 <= both)
                         pen.append((both, W_APART))
 
+    for e, w_under, w_over, goal in deferred:
+        if not goal:
+            continue
+        tot = sum(Hk[g["k"]] for g in same[e["k"][1]])
+        under = m.NewIntVar(0, 62 * 24 * 60, "")
+        over = m.NewIntVar(0, 62 * 24 * 60, "")
+        m.Add(tot + under >= goal)
+        m.Add(tot - over <= goal)
+        pen += [(under, w_under), (over, w_over)]
+        if e["ft"] and mode == "pt":
+            ft_under.setdefault(e["u"]["store"], []).append(under)
     # 2026-11-10：兼職優先時，正職在本店排不滿的時數要平均分給同店正職（原本只算總量，會變成一人 168h、一人 16h）
     for vs in ft_under.values():
         if len(vs) > 1:
@@ -538,10 +567,11 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         nuo = {}
         if mode == "pt":
             for e in ue:
-                if not e["ft"] or not e["target"]:
+                if not e["ft"] or not e["target"] or e.get("alias"):
                     continue
-                lack = e["target"] - int(round(hours[e["id"]]["hours"] * 60))
-                cnt = int(round(lack / 480)) if lack > 0 else 0
+                other = sum(sv.Value(Hk[g["k"]]) for g in same.get(e["id"], []) if g is not e)   # 同一人在別店名單排到的時數
+                lack = e["target"] - int(round(hours[e["id"]]["hours"] * 60)) - other
+                cnt = int(lack / 480 + 0.5) if lack > 0 else 0   # 四捨五入（原本 round() 遇 .5 取偶數：少 12h 標 2 天、少 4h 標 0 天）
                 for d in reversed(days):
                     if cnt <= 0:
                         break

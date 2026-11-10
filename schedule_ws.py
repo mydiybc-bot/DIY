@@ -146,9 +146,15 @@ def _load(store, ym):
             "check": None, "usage": [], "updated": ""}
 
 
+def _auto_report(rep):
+    """這份說明是不是程式寫的（空白、舊版「方案 A／B」、新版「排班結果／目前班表」）→ 是的話每次存檔照目前班表重寫；AI 寫的四段報告不動"""
+    rep = (rep or "").lstrip()
+    return not rep or rep.startswith(("### 方案", "### 排班結果", "### 目前班表"))
+
+
 def _save(st):
     st["updated"] = dt.datetime.now().isoformat(timespec="seconds")
-    if st.get("draft") and st.get("schedule") and st.get("check"):   # 2026-11-10：說明跟著目前班表重寫（改班、對話、復原後都一致）
+    if st.get("schedule") and st.get("check") and (st.get("draft") or _auto_report(st.get("report"))):   # 2026-11-10：說明跟著目前班表重寫（改班、對話、復原後都一致）
         try:
             if "cover" not in st["check"]:
                 st["check"] = run_check(st)
@@ -317,6 +323,8 @@ def parse_cell(v, shifts, day_types):
     m = re.match(r"^([^:：0-9]+)[:：](.+)$", v)
     if m and m.group(1).strip() in day_types:
         out["type"], v = m.group(1).strip(), m.group(2).strip()
+    if v not in shifts and v and not v[0].isdigit():   # 班別名稱有全形字（「早班（短）」）：格子已轉半形，名稱也轉了再比
+        v = next((k for k in shifts if unicodedata.normalize("NFKC", k) == v), v)
     if v in shifts:
         out["segs"] = [[a, b, "", ""] for a, b in shifts[v]]
         return out
@@ -342,7 +350,7 @@ def _elsewhere(pos, title):
     pos = (pos or "").strip()
     if not pos:
         return False
-    return pos.replace("店", "") not in (title or "")
+    return re.sub(r"店$", "", pos) not in (title or "")   # 只去結尾的「店」：「新店店」原本變成「新」，新竹店的班表會誤判成本店
 
 
 def _pos_store(pos):
@@ -351,7 +359,7 @@ def _pos_store(pos):
     if pos in POS_STORE:
         return POS_STORE[pos]
     for k, v in POS_STORE.items():
-        if k.replace("店", "") and k.replace("店", "") in pos:
+        if re.sub(r"店$", "", k) and re.sub(r"店$", "", k) in pos:
             return v
     return None
 
@@ -422,7 +430,7 @@ def split_span(start, end, rest=0, rest_at="", what="時段"):
         raise ValueError(f"{what} {a}-{b} 下班要晚於上班")
     try:
         rest = int(float(unicodedata.normalize("NFKC", str(rest if rest not in (None, "") else 0)).strip()))
-    except ValueError:
+    except (ValueError, OverflowError):
         raise ValueError(f"{what}的休息要填分鐘數（例：30；不休息填 0）")
     if rest < 0 or rest % 5:
         raise ValueError(f"{what}的休息分鐘要是 5 的倍數（104 只收 5 分鐘一格）")
@@ -437,7 +445,7 @@ def split_span(start, end, rest=0, rest_at="", what="時段"):
             raise ValueError(f"{what}的休息 {at} 起 {rest} 分鐘要落在 {a}-{b} 中間")
     else:
         r0 = ma + 240
-        if r0 + rest >= mb:
+        if r0 + rest > mb - 60:   # 休息後剩不到 1 小時 → 改放正中間
             r0 = ma + ((mb - ma - rest) // 2 + 4) // 5 * 5
     return [[a, _t(r0)], [_t(r0 + rest), b]]
 
@@ -1229,7 +1237,16 @@ def _ext(st, cfg=None):
         return form
     if not form:
         return ai
-    out = dict(form, **ai)
+    if "demand_delta" in ai:
+        # 2026-11-11：程式排的初稿只記「備註把哪幾天的人數改成多少」，其餘（每天幾人、目標時數、營收）一律讀現在的設定。
+        # 原本整份需求在排初稿當下就定住，店長事後改「每天幾人」或目標時數，檢查和摘要都不會跟著變。
+        out = dict(form, notes=ai.get("notes") or [], from_form=False)
+        out["demand"] = dict(form.get("demand") or {}, **{str(d): v for d, v in (ai.get("demand_delta") or {}).items()})
+        return out
+    if "from_form" in ai:   # 2026-11-10 以前程式排的初稿：整份設定定在排班當下 → 只保留每天需求與備註，其餘讀現在的設定
+        out = dict(form, demand=ai.get("demand") or form.get("demand") or {}, notes=ai.get("notes") or [], from_form=False)
+    else:
+        out = dict(form, **ai)
     out["shifts"] = dict(ai.get("shifts") or {}, **form["shifts"])
     # 排完之後才改「當假日」的日子：那幾天的需求改照表單（平日班↔假日班），其他天保留排班時算好的需求
     flip = set(form.get("hol_days") or []) ^ set(ai.get("hol_days") or [])
@@ -1315,7 +1332,7 @@ def _coverage(info, parsed, ext, names, stat=None):
             if not here:
                 continue
             why = next((t for t in NOFLOOR_DAY_TAGS if t in c["dtag"]), "")
-            floor = [] if why else [s for s in here if s[2] not in NOFLOOR_SEG_TAGS]
+            floor = [] if why else [s for s in here if not (set(re.split(r"[、,，]", s[2] or "")) & NOFLOOR_SEG_TAGS)]   # 104 多標籤「支援、事務班」也要認得
             if floor:
                 working.append((names.get(eid, eid), floor))
             else:
@@ -1433,7 +1450,7 @@ def run_check(st, schedule=None, guests=None):
             v = mk.get(str(d["d"]), "")
             if v == "指休" and c["segs"]:
                 errors.append(f"{names[eid]} {d['label']}：本月設定是指休，卻排了班")
-            elif v == "特休" and "特休" not in (c["type"] + c["dtag"]):
+            elif v == "特休" and "特休" not in (c["type"] + c["dtag"] + "".join(x[2] or "" for x in c["segs"])):
                 warns.append(f"{names[eid]} {d['label']}：本月設定要特休，班表沒有標特休")
             elif allow and etype.get(eid) == "兼職" and c["segs"] and d["d"] not in allow:
                 warns.append(f"{names[eid]} {d['label']}：兼職只有填「可上」的日子能排，這天沒填")
@@ -1454,7 +1471,8 @@ def run_check(st, schedule=None, guests=None):
                 warns.append(f"{names[eid]}：晚班接隔天早班 {n} 次，本店上限 {limit} 次")
     # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
     # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
-    support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]] for eid in parsed}
+    support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]]
+               for eid in parsed if etype.get(eid) != "兼職"}
     return {"ok": not errors, "errors": errors, "warns": warns, "hours": hours, "cover": cover,
             "support": {k: v for k, v in support.items() if v}}
 
@@ -1607,6 +1625,7 @@ def _draft_worker_ai(store, ym):
             st = _load(store, ym)
             if st.get("schedule"):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "AI 重排前"}]
+            st.pop("draft", None)   # 這次是 AI 排的：說明用 AI 寫的，不要被「照目前班表重寫」蓋掉
             st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],
                       chat=(st.get("chat") or []) + [{"role": "ai", "text": "✅ 初稿排好了。" + ("檢查全部通過。" if chk["ok"] else f"還有 {len(chk['errors'])} 項 ❌ 沒改掉，請看下方檢查結果或跟我說要怎麼改。"), "ts": time.time()}])
             _save(st)
@@ -1865,8 +1884,11 @@ def live_report(st):
     if not sm:
         return st.get("report", "")
     dm = st.get("draft") or {}
-    L = ["### 排班結果（兼職優先；照目前班表算，改班後會跟著更新）", PLAN_DESC["pt"],
-         "✅ 硬規則檢查全部通過" if sm["ok"] else f"❌ 還有 {sm['errors']} 項沒過（見「檢查結果」）"]
+    if dm:
+        L = ["### 排班結果（兼職優先；照目前班表算，改班後會跟著更新）", PLAN_DESC["pt"]]
+    else:   # 班表不是這一版程式排的（104 同步來的、或舊初稿）
+        L = ["### 目前班表摘要（照目前班表算，改班後會跟著更新）"]
+    L += ["✅ 硬規則檢查全部通過" if sm["ok"] else f"❌ 還有 {sm['errors']} 項沒過（見「檢查結果」）"]
     L += ["", "| 夥伴 | 正職／兼職 | 排了 | 目標 | 最低 | " + SUPPORT_TXT + " |", "|---|---|---|---|---|---|"]
     for r in sm["rows"]:
         tg = f"{float(r['target']):g}h" if r["target"] else "—"
@@ -1975,7 +1997,8 @@ def _draft_worker(store, ym):
             plans[mode] = r_
         res = plans["pt"]
         ext = _ext_from_form(st, cfg)
-        ext["demand"] = {str(d): [n for n, c in res["need"][d].items() for _ in range(c)] for d in res["need"]}
+        _dm = {str(d): [n for n, c in res["need"][d].items() for _ in range(c)] for d in res["need"]}
+        ext = {"demand_delta": {d: v for d, v in _dm.items() if sorted(v) != sorted((ext.get("demand") or {}).get(d) or [])}}
         ext["notes"] = [_rule_text(r, {e["id"]: e["name"] for e in info["emps"]}) for r in rules] + bad
         ext["from_form"] = False
         with lk:
@@ -2184,7 +2207,8 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
         for u in r["stores"]:
             s = u["store"]
             ext = _ext_from_form(sts[s], cfgs[s])
-            ext["demand"] = {str(d): [n for n, c in u["need"][d].items() for _ in range(c)] for d in u["need"]}
+            _dm = {str(d): [n for n, c in u["need"][d].items() for _ in range(c)] for d in u["need"]}
+            ext = {"demand_delta": {d: v for d, v in _dm.items() if sorted(v) != sorted((ext.get("demand") or {}).get(d) or [])}}
             names = {e["id"]: e["name"] for e in sts[s]["template"]["info"]["emps"]}
             ext["notes"] = [_rule_text(x, names) for x in rules.get(s, [])] + bad.get(s, [])
             ext["from_form"] = False
@@ -2199,6 +2223,8 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
                 rep += "".join(f"\n- {mv['day']} 號 {mv['from_name']}的 {mv['name']} 來本店支援（{mv['shift']}）" for mv in ins)
             need = [sum(u["need"][d["d"]].values()) for d in sts[s]["template"]["info"]["days"]]
             P["stores"][str(s)] = {"schedule": u["schedule"], "ext": ext, "check": chk, "report": rep, "need": need,
+                                   "draft": {"rules": [_rule_text(x, names) for x in rules.get(s, [])], "bad": list(bad.get(s, [])),
+                                             "unmet": [f"{_rule_text(x['rule'], names)}：{'、'.join(str(d) for d in x['days'])} 號沒做到" for x in u.get("unmet") or []]},
                                    "got": _region_got(sts, s, u["schedule"], P["moves"]),
                                    "summary": _plan_summary(u, chk), "names": names}
         out[mode] = P
@@ -2400,6 +2426,8 @@ def _region_chat_worker(rg, ym, mode, text):
                             prev = h.pop()
                             for k, sch in prev["schedules"].items():
                                 P["stores"][k]["schedule"] = sch
+                            if "extra_rules" in prev:   # 復原「加條件重排」：條件也要退回去，不然下次重排又套用
+                                data["extra_rules"] = prev["extra_rules"]
                             _region_eval(rg, ym, sts, P)
                             out = "已復原。\n" + _rg_check_text(rg, P)
                     elif b.name == "rg_apply":
@@ -2426,10 +2454,11 @@ def _region_chat_worker(rg, ym, mode, text):
                         out = "已改。\n" + _rg_check_text(rg, P)
                     else:
                         new = [_rg_rule_check(rg, r, sts) for r in b.input.get("rules") or []]
+                        hist = (P.get("history") or []) + [{"schedules": {k: copy.deepcopy(v["schedule"]) for k, v in P["stores"].items()}, "why": "重排前",
+                                                            "extra_rules": list(data.get("extra_rules") or [])}]
                         data["extra_rules"] = (data.get("extra_rules") or []) + new
                         rules = {int(k): v for k, v in (data.get("rules") or {}).items()}
                         bad = {int(k): v for k, v in (data.get("bad") or {}).items()}
-                        hist = (P.get("history") or []) + [{"schedules": {k: copy.deepcopy(v["schedule"]) for k, v in P["stores"].items()}, "why": "重排前"}]
                         P2 = _region_solve(rg, ym, ctx, _merge_rules(rules, data["extra_rules"]), bad, 0, (mode,), jk)[mode]
                         P2["history"] = hist[-20:]
                         data["plans"][mode] = P = P2
@@ -2513,6 +2542,10 @@ def _region_pick(rg, ym, mode):
     P = (data.get("plans") or {}).get(mode)
     if not P:
         return 400, {"ok": False, "error": "沒有這個方案"}
+    with _glock:   # 2026-11-11：某家店的 AI 還在跑（對話、排初稿）時採用，會被它結束時整份存回的舊班表蓋掉
+        busy = [_sname(s) for s in REGIONS[rg] if (_jobs.get(_key(s, ym)) or {}).get("status") == "running"]
+    if busy:
+        return 409, {"ok": False, "error": "這幾家店的 AI 還在處理（對話或排初稿），等它完成再採用：" + "、".join(busy)}
     now = dt.datetime.now().isoformat(timespec="seconds")
     for s in REGIONS[rg]:          # 先把整區的班表都寫進去，再逐店重算檢查（外店支援要讀到別家新的班表）
         x = P["stores"].get(str(s))
@@ -2524,7 +2557,7 @@ def _region_pick(rg, ym, mode):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "區域排班前"}]
             st.update(schedule=copy.deepcopy(x["schedule"]), ext=x["ext"], report=x["report"], plans={}, plan=None,
                       region={"name": rg, "mode": mode, "at": now},
-                      draft={"mode": mode, "at": time.time(), "rules": list((x.get("ext") or {}).get("notes") or []), "bad": [], "unmet": [], "region": rg})
+                      draft=dict(x.get("draft") or {"rules": list((x.get("ext") or {}).get("notes") or []), "bad": [], "unmet": []}, mode=mode, at=time.time(), region=rg))
             st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(),
                                                     "text": f"魔導師用「{PLAN_NAME[mode]}」排好整區（{rg}）的班表，本店班表已換成這一版（調店的格子標「支援＋店名」）。要改哪裡直接跟我說；換錯可按「復原上一步」。"}]
             _save(st)
@@ -2585,8 +2618,8 @@ def _apply(st, changes, why):
             raise ValueError(f"這個月沒有 {c.get('day')} 號")
         parse_cell(c.get("value", ""), shifts, dtypes)
     st["history"] = (st.get("history") or [])[-19:] + [{"schedule": copy.deepcopy(st["schedule"]), "why": why}]
-    for c in changes:
-        st["schedule"][c["emp"]][str(int(c["day"]))] = c.get("value", "")
+    for c in changes:   # 全形「１０：００－１９：００」存成半形（畫面與之後的比對都用半形）
+        st["schedule"].setdefault(c["emp"], {})[str(int(c["day"]))] = unicodedata.normalize("NFKC", c.get("value", "") or "").strip()
     st["check"] = run_check(st)
     return st["check"]
 
@@ -3476,6 +3509,19 @@ def bonus_xlsx(stores, ym):
 
 # ───────────────────────── 給前端的狀態 ─────────────────────────
 
+def _check_stale(st):
+    """本店存檔之後，同區別店的班表或本店的店別基本設定有沒有改過（有＝存著的檢查結果可能過期）"""
+    try:
+        own = (_dir() / f"{_key(st['store'], st['ym'])}.json").stat().st_mtime
+        others = [_cfg_path(st["store"])]
+        rg = _region_of(st["store"])
+        if rg:
+            others += [_dir() / f"{_key(s, st['ym'])}.json" for s in REGIONS[rg] if s != int(st["store"])]
+        return any(p.exists() and p.stat().st_mtime > own for p in others)
+    except OSError:
+        return False
+
+
 def _public(st):
     k = _key(st["store"], st["ym"])
     with _glock:
@@ -3511,9 +3557,13 @@ def _public(st):
                 "diff": x.get("diff"), "diffs": diffs, "missing": x.get("missing") or [], "emps": x.get("emps") or [],
                 "unknown": x.get("unknown") or 0}
     chk = st.get("check")
-    if chk and tpl and st.get("schedule") and "cover" not in chk:   # 舊存檔的檢查結果沒有每天人數 → 現算一次（不存檔）
+    report = st.get("report", "")
+    if chk and tpl and st.get("schedule") and ("cover" not in chk or _check_stale(st)):
+        # 舊存檔沒有每天人數；或同區別店的班表（調店格子）、店別基本設定在本店存檔之後改過 → 現算一次（不存檔）
         try:
             chk = run_check(st)
+            if st.get("draft") or _auto_report(report):
+                report = live_report(dict(st, check=chk))
         except Exception:   # noqa: BLE001
             pass
     return {
@@ -3523,7 +3573,7 @@ def _public(st):
         "note": st.get("note", ""), "s104": s104,
         "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
                       "fetched": tpl.get("fetched")} if tpl else None),
-        "ext": ext or None, "schedule": st.get("schedule"), "cells": cells, "report": st.get("report", ""),
+        "ext": ext or None, "schedule": st.get("schedule"), "cells": cells, "report": report,
         "check": chk, "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
         "plans": {}, "plan": st.get("plan"),   # 2026-11-10：只排兼職優先，不再回兩個方案
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
@@ -3655,6 +3705,10 @@ def handle(path, body):
         with lk:
             return 200, _public(_load(store, ym))
 
+    # 2026-11-11：這道擋原本放在 cfg_save／mset_save／mark 後面，AI 處理中存的設定會被 AI 存檔整份蓋掉
+    if act in ("upload", "draft", "edit", "undo", "chat", "note", "cfg_save", "mset_save", "mark", "plan_pick", "remove_settings", "export") and running:
+        return 409, {"ok": False, "error": "AI 還在處理上一個動作，請等它完成"}
+
     if act == "cfg_save":
         try:
             cfg = cfg_clean(body.get("cfg") or {})
@@ -3747,9 +3801,6 @@ def handle(path, body):
             return 400, {"ok": False, "error": "這個月還沒有班表，沒辦法算日獎金"}
         return 200, {"ok": True, "b64": base64.b64encode(out).decode("ascii"), "stores": n,
                      "filename": f"日獎金表_{ym}_{label}_{dt.datetime.now():%Y%m%d}.xlsx"}
-
-    if act in ("upload", "draft", "edit", "undo", "chat", "note", "cfg_save", "mset_save", "mark") and running:
-        return 409, {"ok": False, "error": "AI 還在處理上一個動作，請等它完成"}
 
     if act == "upload":
         b64 = str(body.get("b64") or "")
