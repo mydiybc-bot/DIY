@@ -2228,9 +2228,31 @@ function blankHead(){return {brand:BRAND_DEFAULT,date:today(),period:'',name:'',
 function newLine(){var o={m:'',q:'',u:'',zone:'',cat:'',id:'',pin:false,nopin:false,conv:'',simok:'',og:'',oo:'',op:'',mc:'',txt:'',sp:''};NI_KEYS.forEach(function(k){o[k]=''});return o}   /* pin：主檔有、但填寫人按「加到新增表」手動加進表二（2026-09-18 經營者直接指示） */
 /* 2026-10-18 經營者：主檔「停售」或「過季」的品項（不含不盤點等其他狀態）自動列進表二「新增食材/器模具」，提醒門市備料；
    填寫人按「✕ 移出」＝nopin（這張單不再自動列），再按「↓ 加到新增表」可加回。 */
+/* 2026-11-10 經營者：聖誕同好夜兩支用的「小紅烤盤」（以前用過、現在沒在用；主檔狀態不盤點）沒列進表二 → 加一條：
+   器具／模具主檔有，但「目前在賣的甜點」BOM 都沒用到、只有已下架甜點用過＝門市可能已收起來 → 自動列進表二（標「沒在用」），提醒門市備料。
+   在賣＝產品名稱對照表（B 欄手動對應名稱，空白用 A 欄）起始有效日 ≤ 今天 ≤ 結束有效日（空白＝不限），同名多列有一列在賣就算在賣；
+   BOM 甜點對不到對照表的當「在賣」（不確定就不列，避免誤報）；這張單自己的甜點不算；從沒進過任何 BOM 的通用器具（放涼架、夾子…）不列。
+   只是提醒，核准寫入時不改主檔狀態、不寫標配。 */
+var DESS_LIVE=null,_toolUse=null;   /* DESS_LIVE：甜點名 → {live:是否在賣, end:最晚結束有效日}；對照表讀回才有 */
+function dlKey(n){return String(n||'').replace(/＆/g,'&').replace(/[（(][^）)]*[）)]/g,'').replace(/[\s　]/g,'').toLowerCase()}   /* BOM「愛的抱抱 (單)」對照表「愛的抱抱」：去括號說明、全形＆、空白再比 */
+function setDessLive(rows){var now=new Date();now.setHours(0,0,0,0);var m={};
+  rows.forEach(function(x){var s=gvDate(x[2]),e=gvDate(x[3]),live=(!s||s<=now)&&(!e||e>=now);
+    [String(x[1]||'').trim(),String(x[0]||'').trim()].forEach(function(nm){nm=dlKey(nm);if(!nm)return;var o=m[nm]||(m[nm]={live:false,end:null});
+      if(live)o.live=true;if(e&&(!o.end||e>o.end))o.end=e})});
+  DESS_LIVE=m;_toolUse=null}
+function toolUse(){if(_toolUse)return _toolUse;var b=R.bom&&R.bom();if(!b||!Object.keys(b).length)return null;var t={};
+  Object.keys(b).forEach(function(d){(b[d]||[]).forEach(function(it){var s=skuOf(it.m),k=s?s.name:String(it.m||'').trim();if(k)(t[k]=t[k]||{})[d]=1})});
+  return _toolUse=t}
+function idleOf(l){if(!DESS_LIVE||!isToolLine(l))return null;var s=skuOf(l.m);if(!s)return null;var tu=toolUse();if(!tu)return null;
+  var ds=Object.keys(tu[s.name]||{}),me=dessName(),last=null;
+  for(var i=0;i<ds.length;i++){var d=ds[i];if(d===me)continue;var lv=DESS_LIVE[dlKey(d)];if(!lv||lv.live)return null;
+    if(!last||(lv.end&&(!last.e||lv.end>last.e)))last={d:d,e:lv.end}}
+  return last}
+function idleTxt(l){var x=idleOf(l);return x?'目前在賣的甜點都沒用（上次用：'+x.d+(x.e?'，'+ymd(x.e)+' 下架':'')+'）':''}
 function autoT2(l){if(!String(l.m||'').trim()||isNewItem(l))return '';var s=skuOf(l.m);if(!s)return '';
-  var st=String(EXTRA.status[s.name]||'').trim();if(st)return st.indexOf('停售')>=0?'停售':'';
+  var st=String(EXTRA.status[s.name]||'').trim();if(st)return st.indexOf('停售')>=0?'停售':(idleOf(l)?'沒在用':'');
   var q=EXTRA.last[s.name];if(q){var lim=new Date();lim.setDate(lim.getDate()-7);if(q<lim)return '過季'}
+  if(idleOf(l))return '沒在用';
   return ''}
 function inTable2(l){if(lineSemi(l))return false;return isNewItem(l)||!!l.pin||(!l.nopin&&!!autoT2(l))}
 /* 表二／摘要／複製新增食材表 的列＝🆕（自動）＋ pin（手動）；dim_sku 新品項列仍只有 🆕 */
@@ -2560,9 +2582,9 @@ function openNameHelp(i){var l=AP.lines[i];if(!l)return;
 function zoneByCat(name,cat){if(COLD.test(name||''))return '冰箱';return ''}
 function defaultZone(name,cat){var s=skuOf(name);var z=s?mapZone(EXTRA.zone[s.name]||''):'';return z||zoneByCat(name,cat)}
 function staleOf(l){var s=skuOf(l.m);if(!s)return '';
-  var st=String(EXTRA.status[s.name]||'').trim();if(st)return '主檔狀態：'+st;
+  var st=String(EXTRA.status[s.name]||'').trim();if(st)return '主檔狀態：'+st+(idleOf(l)?'；'+idleTxt(l):'');
   var q=EXTRA.last[s.name];if(q){var lim=new Date();lim.setDate(lim.getDate()-7);if(q<lim)return '過季（最後有效日 '+ymd(q)+'）'}
-  return ''}
+  return idleTxt(l)}
 /* 單位可否換算：同採購系統地雷 25 口徑——填 BOM 常見寫法（匙／滴…）要靠 dim_unitconv，換不到就紅字 */
 function unitOK(l){var s=skuOf(l.m);var u=String(l.u||'').trim();if(!u||!s)return true;
   var uu=String(s.useUnit||'g').trim();if(u===uu)return true;
@@ -3555,7 +3577,7 @@ function t2RowHTML(l,i){var u=String(l.u||'').trim(),bq=buyQty(l),nw=isNewItem(l
   function ro(v,cls){return '<td class="ap-rocell'+(cls?' '+cls:'')+'" title="'+esc(v)+'">'+esc(v||'—')+'</td>'}
   var sem=isSemiItem(l)?AP.semis.filter(function(x){return x.items.indexOf(l)>=0})[0]:null;
   var h='<tr data-n2="'+i+'">';
-  h+='<td class="ap-rocell ap-t2name" title="'+esc(l.m)+'">'+esc(l.m||'—')+(sem?'<div class="ap-hint" style="color:#2E6B8A">⤷ 半成品「'+esc(String(sem.name||sem.link||'').trim())+'」的材料</div>':'')+(!nw&&!l.pin&&autoT2(l)?'<div class="ap-hint" style="color:#8A5A00" title="主檔狀態停售或已過最後有效日，自動列進來提醒門市備料；核准寫入時停售的會改回在用">主檔'+autoT2(l)+'・自動列入</div>':'')+(nw?'':'<button class="ap-x ap-unpin" data-unpin="'+i+'" title="從新增表移出（「🧾 用料」表那一列保留）">✕ 移出</button>')+'<div class="ap-hint ap-bad" data-lossname="'+i+'">'+lossNameTxt(l)+'</div>'+(nw&&simPending(l).length?simGoHTML(l,i):'')+(nimemFor(l)&&!lockedReq()?'<button class="ap-btn2 ap-mini" data-nimem="'+i+'" title="這個品項在這台電腦的其他申請單填過；按一下把空白的欄位帶進來（已經填的不會蓋掉）">↺ 帶入上次填的</button>':'')+'</td>';   /* 品項（唯讀鏡像）；手動加入的列可移出 */
+  h+='<td class="ap-rocell ap-t2name" title="'+esc(l.m)+'">'+esc(l.m||'—')+(sem?'<div class="ap-hint" style="color:#2E6B8A">⤷ 半成品「'+esc(String(sem.name||sem.link||'').trim())+'」的材料</div>':'')+(!nw&&!l.pin&&autoT2(l)?'<div class="ap-hint" style="color:#8A5A00" title="'+esc(autoT2(l)==='沒在用'?idleTxt(l)+'，門市可能已收起來，自動列進來提醒門市備料（核准時不改主檔）':'主檔狀態停售或已過最後有效日，自動列進來提醒門市備料；核准寫入時停售的會改回在用')+'">主檔'+autoT2(l)+'・自動列入</div>':'')+(nw?'':'<button class="ap-x ap-unpin" data-unpin="'+i+'" title="從新增表移出（「🧾 用料」表那一列保留）">✕ 移出</button>')+'<div class="ap-hint ap-bad" data-lossname="'+i+'">'+lossNameTxt(l)+'</div>'+(nw&&simPending(l).length?simGoHTML(l,i):'')+(nimemFor(l)&&!lockedReq()?'<button class="ap-btn2 ap-mini" data-nimem="'+i+'" title="這個品項在這台電腦的其他申請單填過；按一下把空白的欄位帶進來（已經填的不會蓋掉）">↺ 帶入上次填的</button>':'')+'</td>';   /* 品項（唯讀鏡像）；手動加入的列可移出 */
   /* 2026-10-07 晚：類別（🆕 才能選：影響採購系統分類與編號開頭 F／C／T／M）＋每店要幾個（只有新的器具／模具：核准後寫成各店標配） */
   h+=nw?('<td><select data-nf="cat" title="新品項的類別：食材／耗材／器具／模具">'+CATS.map(function(x){return '<option value="'+x+'"'+(lineCat(l)===x?' selected':'')+'>'+x+'</option>'}).join('')+'</select></td>'):ro(lineCat(l),'');
   h+=(nw&&isToolLine(l))?('<td><input type="number" step="1" min="0" data-nf="perStore" value="'+esc(l.perStore)+'" placeholder="個" title="每家店要放幾個（核准後自動寫成各店標配，店長在採購系統看得到）"></td>'):'<td class="ap-rocell" title="只有新的器具／模具要填">—</td>';
@@ -5638,7 +5660,7 @@ function loadExtra(){
       var z=String(x[1]||'').trim();if(z)EXTRA.zone[n]=z;var st=String(x[2]||'').trim();if(st)EXTRA.status[n]=st;var q=gvDate(x[3]);if(q)EXTRA.last[n]=q})}).catch(function(){});
   /* 2026-10-01 需求 7：POS 分類改選「主類別」（產品名稱對照表 G 欄，直讀 BOM 本＝最新，不等鏡像）；次類別＝檔期名稱由系統帶（C 階段寫入時） */
   /* 2026-10-04 效能 1-5：和 📚 BOM 管理第一次讀的對照表共用同一次（同為 BOM 本；G／H＝索引 4／5）。成本引擎讀的是專用檔 A,B（不同檔），維持各讀各的 */
-  var p2=R.gqShared(R.readIdOf('BOM表'),'產品名稱對照表','select A,B,E,F,G,H').then(function(r){var seen={},arr=[],sub={},sarr=[];r.rows.forEach(function(x){x=[x[4],x[5]];var m=String(x[0]||'').trim(),s2=String(x[1]||'').trim();
+  var p2=R.gqShared(R.readIdOf('BOM表'),'產品名稱對照表','select A,B,E,F,G,H').then(function(r){setDessLive(r.rows);var seen={},arr=[],sub={},sarr=[];r.rows.forEach(function(x){x=[x[4],x[5]];var m=String(x[0]||'').trim(),s2=String(x[1]||'').trim();
       if(m&&!seen[m]){seen[m]=1;arr.push(m)}if(s2&&s2!=='無'&&!sub[m+'|'+s2]){sub[m+'|'+s2]=1;sarr.push({main:m,sub:s2})}});
       arr.sort(function(a,b){return a==='限定甜點'?-1:b==='限定甜點'?1:a.localeCompare(b,'zh-Hant')});if(arr.length)POSMAINS=arr;if(sarr.length)POSCAT=sarr}).catch(function(){});
   return Promise.all([p1,p2])}
