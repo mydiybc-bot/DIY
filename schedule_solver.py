@@ -150,7 +150,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             mn = v.get("min_hours")
             mv = v.get("move")   # 2026-11-09 本月設定「調店」：沒填的正職可、兼職否
             emps.append({"k": (u["store"], e["id"]), "id": e["id"], "name": e["name"], "u": u, "ft": typ == "正職",
-                         "move": (mv == "可") if mv in ("可", "否") else typ == "正職",
+                         "move": (mv == "可") if mv in ("可", "否") else typ == "正職", "dflt": bool(v.get("_default")),
                          "target": int(round(tgt * 60)) if tgt else None,
                          "min": int(round(float(mn) * 60)) if mn not in (None, "") else None})
     E = {e["k"]: e for e in emps}
@@ -238,15 +238,18 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 vs += [x[kd + (s_, n_)] for s_, n_ in allowed[kd]]
             if vs:
                 m.Add(sum(vs) <= max(0, 1 - const))
-    # 2026-11-11：同一人在兩店名單各有一份目標時數會被排成兩倍 → 只認目標最高的那一份（視為主要店），
-    # 時數用各店加總去比；其他店那一份不追目標、不列入正職平均分攤、不標可支援
+    # 同一人掛在兩店名單（2026-11-11 經營者：兩家店的店長會各自設定他的時數，照店長的設定排）：
+    # ・店長在本月設定存過這位夥伴的那幾份 → 各照各店設定的目標／最低時數排
+    # ・沒存過（只有系統預設值）的那幾份 → 不追時數、不列入正職平均分攤、不標可支援
+    # ・每一份都沒存過 → 只認第一份，時數用各店加總去比
     home = {}
     for eid_, grp in same.items():
         if len(grp) > 1:
-            hm = max(grp, key=lambda g: ((g["target"] or 0), (g["min"] or 0), 1 if g["ft"] else 0))
+            setd = [g for g in grp if not g["dflt"]]
             for g in grp:
-                g["alias"] = g is not hm
-            home[eid_] = hm
+                g["alias"] = (g["dflt"] if setd else g is not grp[0])
+            if not setd:
+                home[eid_] = grp[0]
     Hk, deferred = {}, []
 
     def work(k, d):
@@ -297,16 +300,23 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
 
     for e in emps:
         k, u = e["k"], e["u"]
-        tail = int(u["prev_tail"].get(e["id"]) or 0)
+        grp = same.get(e["id"]) or [e]              # 2026-11-11 經營者：同一人掛兩店名單，連上天數要各店合起來算
+        tail = max(int(g["u"]["prev_tail"].get(g["id"]) or 0) for g in grp)
         seq = [None] * min(tail, 6) + days          # None＝上個月最後幾天（都在上班）
 
         def wv(i):
             if seq[i] is None:
                 return [], 1
-            return work(k, seq[i])
+            vs_, cs_ = [], 0
+            for g in grp:
+                a_, b_ = work(g["k"], seq[i])
+                vs_ += a_
+                cs_ += b_
+            return vs_, min(cs_, 1)
 
-        # 七休一＋本店連上上限
-        for L, wgt, lim in ((7, W_REST7, 6), (u["max_consec"] + 1, W_CONSEC, u["max_consec"])):
+        # 七休一＋本店連上上限（跨店的人只算一次，上限取各店最嚴的）
+        mc = min(g["u"]["max_consec"] for g in grp)
+        for L, wgt, lim in (() if e is not grp[0] else ((7, W_REST7, 6), (mc + 1, W_CONSEC, mc))):
             if L > 7 and lim >= 6:
                 continue
             for i in range(0, len(seq) - L + 1):
@@ -569,7 +579,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             for e in ue:
                 if not e["ft"] or not e["target"] or e.get("alias"):
                     continue
-                other = sum(sv.Value(Hk[g["k"]]) for g in same.get(e["id"], []) if g is not e)   # 同一人在別店名單排到的時數
+                other = sum(sv.Value(Hk[g["k"]]) for g in same.get(e["id"], []) if g is not e) if e["id"] in home else 0   # 各店都沒設定時：扣掉別店名單排到的時數
                 lack = e["target"] - int(round(hours[e["id"]]["hours"] * 60)) - other
                 cnt = int(lack / 480 + 0.5) if lack > 0 else 0   # 四捨五入（原本 round() 遇 .5 取偶數：少 12h 標 2 天、少 4h 標 0 天）
                 for d in reversed(days):

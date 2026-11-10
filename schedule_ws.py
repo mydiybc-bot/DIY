@@ -378,7 +378,8 @@ def _hhmm(v):
     v = unicodedata.normalize("NFKC", str(v or "")).strip()
     if not v:
         return ""
-    m = re.match(r"^([0-9]{1,2}):?([0-9]{2})$", v)
+    # 沒有冒號一定要 4 位數（1030）；3 位數「100」分不出是 1:00 還是少打一個 0 的 10:00（原本讀成 01:00）
+    m = re.match(r"^([0-9]{1,2}):([0-9]{2})$", v) or re.match(r"^([0-9]{2})([0-9]{2})$", v)
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         raise ValueError(f"時間「{v}」要寫成 10:20")
     if int(m.group(2)) % 5:
@@ -471,6 +472,23 @@ def cell_from_span(sp):
     return ",".join(f"{a}-{b}" for a, b in segs)
 
 
+def _carry_date(v, name=""):
+    """挪假未補的日期一律存成西元 YYYY-MM-DD（2026-11-11 經營者）。沒寫年份的（11/3）程式分不出是哪一年，
+    會被當成工作台以前的舊帳、跟班表上的挪假重複算一次 → 擋下請店長補年份；民國年自動換成西元"""
+    v = unicodedata.normalize("NFKC", str(v or "")).strip()
+    m = re.fullmatch(r"(\d{2,4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?", v)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 100 <= y <= 200:
+            y += 1911
+        try:
+            if y >= 2000:
+                return dt.date(y, mo, d).isoformat()
+        except ValueError:
+            pass
+    raise ValueError(f"挪假未補「{name}」的日期要寫西元年月日，例：2026-10-05（現在填的是「{v or '空白'}」）")
+
+
 def cfg_clean(body):
     """店別基本設定：檢查＋整理（寫錯丟 ValueError）"""
     out = {"shifts": [], "carry": []}
@@ -509,7 +527,7 @@ def cfg_clean(body):
         if not name:
             continue
         out["carry"].append({"name": name, "type": ("B" if str(r.get("type") or "").strip().upper() == "B" else "A"),
-                             "date": str(r.get("date") or "").strip()[:12], "note": str(r.get("note") or "").strip()[:100]})
+                             "date": _carry_date(r.get("date"), name), "note": str(r.get("note") or "").strip()[:100]})
     return out
 
 
@@ -1366,7 +1384,37 @@ def _coverage(info, parsed, ext, names, stat=None):
     return errors, warns
 
 
-def run_check(st, schedule=None, guests=None):
+def _other_store_days(store, ym, ids, override=None):
+    """這些工號在「別家店的名單」上有排班的日子 → {工號: {日: 店名}}（不含 @支援 調店：那是寫在自己店的班表上）"""
+    out = {}
+    for s in STORES:
+        if int(s) == int(store):
+            continue
+        p = _dir() / f"{_key(s, ym)}.json"
+        if not p.exists():
+            continue
+        try:
+            st2 = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        sch, tpl = st2.get("schedule") or {}, st2.get("template")
+        if override and s in override:   # 還沒採用的區域方案：用方案裡的班表，不讀存檔
+            sch = override[s] or {}
+        hit = [e for e in ids if e in sch]
+        if not hit or not tpl:
+            continue
+        shifts, dtypes = (_ext(st2) or {}).get("shifts") or {}, set(tpl["info"]["dayTypes"])
+        for eid in hit:
+            for dd, v in (sch.get(eid) or {}).items():
+                try:
+                    if v and parse_cell(v, shifts, dtypes)["segs"]:
+                        out.setdefault(eid, {})[int(dd)] = _sname(s) + "店"
+                except (ValueError, TypeError):
+                    continue
+    return out
+
+
+def run_check(st, schedule=None, guests=None, sibs=None):
     """檢查程式：104 格式＋勞基法（check_104）＋本店需求人數／正職時數／晚接早。回傳 dict
     guests：同區外店調來本店的夥伴（_guest_cells）；None＝讀同區各店存檔（2026-11-06 區域一起排）"""
     schedule = schedule if schedule is not None else st["schedule"]
@@ -1376,6 +1424,7 @@ def run_check(st, schedule=None, guests=None):
     dtypes = set(info["dayTypes"])
     errors, warns = [], []
     parsed = {}
+    badcells = set()
     names = {e["id"]: e["name"] for e in info["emps"]}
     for e in info["emps"]:
         row = (schedule or {}).get(e["id"]) or {}
@@ -1386,10 +1435,12 @@ def run_check(st, schedule=None, guests=None):
             except ValueError as ex:
                 errors.append(f"{names[e['id']]} {d['label']}：{ex}")
                 parsed[e["id"]][d["d"]] = {"type": "", "segs": [], "dtag": ""}
+                badcells.add((e["id"], str(d["d"])))
     hours = []
-    if not errors:
+    if True:   # 2026-11-11 經營者：有格子讀不懂時，那格當空白，其他人的時數與檢查照算（原本整份時數都不顯示）
         raw_t = base64.b64decode(st["template"]["b64"])
-        out = fill(st, schedule)
+        sched_ok = schedule if not badcells else {eid: {dd: ("" if (eid, str(dd)) in badcells else v) for dd, v in (row or {}).items()} for eid, row in (schedule or {}).items()}
+        out = fill(st, sched_ok)
         tpl = io.BytesIO(raw_t)
         tmp_dir = _dir() / "_tmp"
         tmp_dir.mkdir(exist_ok=True)
@@ -1469,6 +1520,30 @@ def run_check(st, schedule=None, guests=None):
                     n += 1
             if n > int(limit):
                 warns.append(f"{names[eid]}：晚班接隔天早班 {n} 次，本店上限 {limit} 次")
+    # 2026-11-11 經營者：同一人掛在別家店名單也有排班 → 連上天數要兩邊合起來算、同一天不可以兩家店都有班
+    try:
+        mc = int(ext.get("max_consec") or 5)
+        for eid, od in _other_store_days(st["store"], st["ym"], set(parsed), sibs).items():
+            own = {d["d"] for d in info["days"] if parsed[eid][d["d"]]["segs"]}
+            both = sorted(own & set(od))
+            if both:
+                errors.append(f"{names[eid]}：{'、'.join(str(x) for x in both)} 號同一天在{'、'.join(sorted({od[x] for x in both}))}也有排班")
+            def _run(ds):
+                best, cur, st0 = (0, 0, 0), 0, 0
+                for dd in [x["d"] for x in info["days"]]:
+                    if dd in ds:
+                        cur += 1
+                        st0 = st0 or dd
+                        best = max(best, (cur, st0, dd))
+                    else:
+                        cur, st0 = 0, 0
+                return best
+            n, a, b = _run(own | set(od))
+            if n > _run(own)[0] and n > min(mc, 6):
+                msg = f"{names[eid]}：加上在{'、'.join(sorted(set(od.values())))}的班，{a}～{b} 號連續上班 {n} 天"
+                (errors if n > 6 else warns).append(msg + ("，超過 6 天（七休一）" if n > 6 else f"，超過本店上限 {mc} 天"))
+    except Exception:   # noqa: BLE001 — 讀別店存檔失敗不影響本店檢查
+        pass
     # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
     # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
     support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]]
@@ -2167,7 +2242,7 @@ def _region_eval(rg, ym, sts, P):
     for k, v in P["stores"].items():
         s = int(k)
         tmp = dict(sts[s], ext=v["ext"], schedule=v["schedule"])
-        chk = run_check(tmp, guests=_guest_cells(s, ym, scheds))
+        chk = run_check(tmp, guests=_guest_cells(s, ym, scheds), sibs=scheds)
         v["check"] = chk
         v["got"] = _region_got(sts, s, v["schedule"], P["moves"])
         sm = v.get("summary") or {}
@@ -2213,7 +2288,7 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
             ext["notes"] = [_rule_text(x, names) for x in rules.get(s, [])] + bad.get(s, [])
             ext["from_form"] = False
             tmp = dict(sts[s], ext=ext, schedule=u["schedule"])
-            chk = run_check(tmp, guests=_guest_cells(s, ym, scheds))
+            chk = run_check(tmp, guests=_guest_cells(s, ym, scheds), sibs=scheds)
             rep = _solver_report(tmp, dict(u, stats=r["stats"]), rules.get(s, []), bad.get(s, []), chk, secs_ai)
             outs = [mv for mv in P["moves"] if mv["store"] == s]
             ins = [mv for mv in P["moves"] if mv["to"] == s]
@@ -3234,7 +3309,7 @@ def _emp_day_work(c, title=""):
     回 (work, why, away)；away=[{store, hours, span}]：崗位填別店且不是會議／假別的時段 → 日獎金算在被支援店（2026-10-28 經營者裁定）"""
     if not c["segs"]:
         return 0.0, "", []
-    if c["type"]:
+    if c["type"] and c["type"] not in ("休息日", "國定假日"):   # 2026-11-11 經營者：休息日／國定假日有來上班的要算日獎金（會議等標籤的時段照樣不算）
         return 0.0, f"班表寫「{c['type']}」", []
     dtag = c.get("dtag") or ""
     if BONUS_NOFLOOR_RE.search(dtag):
