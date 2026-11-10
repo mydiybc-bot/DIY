@@ -1022,9 +1022,9 @@ function patchReq_(p, auth) {
     if (!pl || typeof pl !== 'object') return;
     var nm = str_(pl.name).trim(), idx = findLine_(lines, pl);
     if (idx < 0) { skipped.push('找不到品項「' + nm + '」（可能被主廚改名或刪掉）'); return; }
-    var L = lines[idx], f = pl.fields || {};
+    var L = lines[idx], f = pl.fields || {}, zst = (f.store !== undefined && ok('lines.store')) ? f.store : L.store;
     Object.keys(f).forEach(function (k) {
-      if (!ok('lines.' + k)) { skipped.push(nm + '.' + k); return; }
+      if (!ok('lines.' + k) && !(k === 'zone' && zoneOpen_(zst))) { skipped.push(nm + '.' + k); return; }
       if (!sameVal_(L[k], f[k])) { L[k] = f[k]; changed.push(nm + '.' + k); }
     });
   });
@@ -1035,9 +1035,9 @@ function patchReq_(p, auth) {
     var nm = str_(ps.name).trim(), S = null;
     for (var i = 0; i < sn.length; i++) if (sn[i] && str_(sn[i].name).trim() === nm) { S = sn[i]; break; }
     if (!S) { skipped.push('找不到半成品材料「' + nm + '」（可能被主廚改名或刪掉）'); return; }
-    var f = ps.fields || {};
+    var f = ps.fields || {}, zs2 = (f.store !== undefined && ok('lines.store')) ? f.store : S.store;
     Object.keys(f).forEach(function (k) {
-      if (!ok('lines.' + k)) { skipped.push(nm + '.' + k); return; }
+      if (!ok('lines.' + k) && !(k === 'zone' && zoneOpen_(zs2))) { skipped.push(nm + '.' + k); return; }
       if (!sameVal_(S[k], f[k])) { S[k] = f[k]; changed.push(nm + '.' + k); }
     });
   });
@@ -1050,6 +1050,8 @@ function patchReq_(p, auth) {
   return { id: rid, data: { changed: changed, skipped: skipped, updated_at: now, updated_by: auth.role, payload: pl2 },
     msg: '改 ' + changed.length + ' 欄' + (skipped.length ? '｜略過：' + skipped.join('、') : '') };
 }
+/* 2026-11-10 經營者：表二存放方式＝「模具」時，區域任何人都可以改（各單位身分、104 申請表連結都行；前端 zoneOpen／canLine 同一條） */
+function zoneOpen_(store) { return str_(store).trim() === '模具'; }
 function findLine_(lines, pl) {
   var nm = str_(pl.name).trim(), s = parseInt(pl.seq, 10);
   if (s > 0 && lines[s - 1] && str_(lines[s - 1].name).trim() === nm) return s - 1;

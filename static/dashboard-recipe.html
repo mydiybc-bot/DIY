@@ -2276,12 +2276,16 @@ function zoneHintHTML(l){var zb=zoneBan(l.store,l.zone);
   if(_zClr.indexOf(l)>=0&&!l.zone)return '<div class="ap-hint" style="color:#8A5A00">存放方式改了，原本的區域不能放，已清空，請重選</div>';
   return ''}
 function zoneCellHTML(l){return '<select data-nf="zone">'+zoneOptsHTML(l)+'</select><div data-zhint>'+zoneHintHTML(l)+'</div>'}
+/* 2026-11-10 經營者：表二存放方式選「模具」時，後面的「區域」任何人都可以改（各單位身分、104 申請表連結都行；伺服器 patchReq_ 同一條）。
+   送簽中／已核准整張唯讀照舊 */
+function zoneOpen(l){return !!l&&String(l.store||'').trim()==='模具'}
+function canLine(l,pk){return (pk==='zone'&&zoneOpen(l))||canDo('P:lines.'+pk)}
 /* 表二存放方式／區域改了：衝突就清空區域、選單重排灰色項、更新提示（只動這一格，不整塊重畫） */
 function zoneSync(tr,l,k){var i=_zClr.indexOf(l);
   if(k==='store'&&zoneBan(l.store,l.zone)){l.zone='';if(i<0)_zClr.push(l)}
   else if(k==='zone'&&i>=0)_zClr.splice(i,1);
   var sel=tr.querySelector('select[data-nf="zone"]'),hn=tr.querySelector('[data-zhint]');
-  if(sel&&k==='store'){sel.innerHTML=zoneOptsHTML(l);sel.value=l.zone||''}
+  if(sel&&k==='store'){sel.innerHTML=zoneOptsHTML(l);sel.value=l.zone||'';if(unitMode()&&!lockedReq()){var zo=canLine(l,'zone');sel.disabled=!zo;sel.classList.toggle('ap-mine',zo)}}
   if(hn)hn.innerHTML=zoneHintHTML(l)}
 /* 原包裝規格 → 換算成使用單位的數字：取第一個數字；數字後面的單位含 kg／公斤／L／公升（非 ml）×1000；
    數字後面接的是包裝單位（包／袋／箱／盒／罐／瓶／桶／組／件／套／盤／打／入）或抽不到數字 → 回 null（畫面顯示「估？」） */
@@ -4375,7 +4379,7 @@ function rolePatch(){var base;try{base=JSON.parse(AP.base||'')}catch(e){base=nul
   Object.keys(blankHead()).forEach(function(k){if(!canDo('P:head.'+k))return;if(!sameish(AP.head[k],bh[k])){out.head[k]=AP.head[k];out.n++}});
   AP.lines.forEach(function(l){var nm=String(l.m||'').trim();if(!nm||!inTable2(l))return;var nw=isNewItem(l);
     var b=null,seq=0;for(var k=0;k<bl.length;k++){if(String((bl[k]||{}).name||'').trim()===nm){b=bl[k];seq=k+1;break}}if(!b)return;
-    var f={},n=0;Object.keys(NF2P).forEach(function(nk){var pk=NF2P[nk];if(!nw&&MASTER_RO[pk])return;if(!canDo('P:lines.'+pk))return;
+    var f={},n=0;Object.keys(NF2P).forEach(function(nk){var pk=NF2P[nk];if(!nw&&MASTER_RO[pk])return;if(!canLine(l,pk))return;
       var v=linePayVal(l,pk);if(!sameish(v,b[pk])){f[pk]=v;n++}});
     if(f.pkg_spec!==undefined)f.pack=linePayVal(l,'pack');
     if(n){out.lines.push({seq:seq,name:nm,fields:f});out.n+=n}});
@@ -4383,7 +4387,7 @@ function rolePatch(){var base;try{base=JSON.parse(AP.base||'')}catch(e){base=nul
   var bs=base.semi_items_new||[];out.semi_items=[];
   semiT2List().forEach(function(x){var l=x.o,nm=String(l.m||'').trim();if(!nm)return;var nw=isNewItem(l);
     var b=null;for(var k=0;k<bs.length;k++){if(String((bs[k]||{}).name||'').trim()===nm){b=bs[k];break}}if(!b)return;
-    var f={},n=0;Object.keys(NF2P).forEach(function(nk){var pk=NF2P[nk];if(!nw&&MASTER_RO[pk])return;if(!canDo('P:lines.'+pk))return;
+    var f={},n=0;Object.keys(NF2P).forEach(function(nk){var pk=NF2P[nk];if(!nw&&MASTER_RO[pk])return;if(!canLine(l,pk))return;
       var v=linePayVal(l,pk);if(!sameish(v,b[pk])){f[pk]=v;n++}});
     if(f.pkg_spec!==undefined)f.pack=linePayVal(l,'pack');
     if(n){out.semi_items.push({name:nm,fields:f});out.n+=n}});
@@ -5387,6 +5391,7 @@ function applyRoleLock(root){if(!unitMode()||lockedReq())return;
   root.querySelectorAll('input,select,textarea,button').forEach(function(el){
     if(keep[el.id]||el.hasAttribute('data-lmgo')||el.hasAttribute('data-copy')||el.hasAttribute('data-savejson')||el.hasAttribute('data-loadjson'))return;
     if(el.closest&&el.closest('#apStInline')){if(LM||canDo('C:參與門市')){el.classList.add('ap-mine');return}el.disabled=true;return}   /* 2026-11-05 參與門市：104 申請表連結都能勾；身分登入看 dim_role.fields 有沒有 C:參與門市（行銷設計有） */
+    if(el.dataset.nf==='zone'){var zt=el.closest&&el.closest('tr[data-n2]');if(zt&&zoneOpen(t2Obj(zt.dataset.n2))&&!el.disabled){el.classList.add('ap-mine');return}}   /* 2026-11-10 存放方式＝模具：區域人人可改 */
     var k=null;if(el.dataset.hf)k='P:head.'+el.dataset.hf;else if(el.dataset.nf)k='P:lines.'+(NF2P[el.dataset.nf]||el.dataset.nf);
     else if(el.dataset.uf)k='U:'+el.dataset.uf;else if(el.dataset.cf2)k='C:'+el.dataset.cf2;
     if(k&&canDo(k)&&!el.disabled){el.classList.add('ap-mine');return}
