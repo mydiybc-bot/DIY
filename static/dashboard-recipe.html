@@ -8285,7 +8285,7 @@ window.TrMod=(function(){
 /* 打開網址就是 #translate 時，分頁切換比本模組早跑 → 這裡補叫一次 */
 (function(){var p=document.getElementById('tab-translate');if(p&&p.classList.contains('active'))TrMod.ensureInit()})();
 </script>
-<!-- ===== 🏷 命名小幫手（NameMod，2026-11-10）：放進新食材／耗材／器具／模具 → AI 照品項命名辦法一次給 5 個建議名稱，可一直再要 5 個 ===== -->
+<!-- ===== 🏷 命名小幫手（NameMod，2026-11-10）：放進新食材／耗材／器具／模具（一行一個、可多個）→ AI 照品項命名辦法每個給 5 個建議名稱，可一直再要 5 個；不問密碼（申請單 API nameSuggest） ===== -->
 <style>
   #tab-naming .nh-box{background:#fff;border:1px solid #EADFD3;border-radius:12px;padding:14px 16px;max-width:860px}
   #tab-naming label.nh-lb{display:block;font-size:13px;font-weight:700;color:#4A3F39;margin:12px 0 5px}
@@ -8303,9 +8303,9 @@ window.TrMod=(function(){
   #tab-naming .nh-btn2{font-size:13px;padding:6px 12px;border:1px solid #D8C8BF;background:#fff;color:#6F4E45;border-radius:9px;cursor:pointer;font-family:inherit}
   #tab-naming .nh-muted{color:#7A6A60;font-size:13px}
   #tab-naming .nh-err{color:#B3261E;font-size:13px}
-  #tab-naming .nh-pick{margin-top:14px;max-width:860px;padding:12px 16px;background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;font-size:14px;line-height:1.8}
+  #tab-naming .nh-pick{margin:0 0 8px;max-width:860px;padding:12px 16px;background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;font-size:14px;line-height:1.8}
   #tab-naming .nh-pick b{font-size:18px;color:#1B5E20}
-  #tab-naming .nh-batch{margin-top:16px;max-width:860px}
+  #tab-naming .nh-batch{margin-top:6px;max-width:860px}
   #tab-naming .nh-bh{font-size:13px;color:#7A6A60;margin-bottom:6px}
   #tab-naming .nh-card{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid #EADFD3;border-radius:10px;padding:10px 14px;margin-bottom:8px}
   #tab-naming .nh-card.on{border-color:#2E7D32;background:#F1F8F2}
@@ -8319,144 +8319,123 @@ window.TrMod=(function(){
   #tab-naming .nh-card.on .nh-sel{background:#2E7D32}
   #tab-naming details.nh-rule{max-width:860px;margin-top:18px;font-size:13px;color:#5E564F}
   #tab-naming details.nh-rule summary{cursor:pointer;color:#6F4E45}
-  .nh-modal{position:fixed;inset:0;z-index:1000;background:rgba(46,35,32,.45);display:flex;align-items:flex-start;justify-content:center;padding:8vh 16px;overflow:auto}
-  .nh-mbox{background:#fff;border-radius:12px;width:100%;max-width:420px;padding:16px 18px;box-shadow:0 12px 32px rgba(0,0,0,.22);box-sizing:border-box}
-  .nh-mbox label{display:block;font-size:13px;color:#5E564F;margin:8px 0 3px}
-  .nh-mbox select,.nh-mbox input{width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:7px 9px;border:1px solid #D6CCC4;border-radius:8px}
-  .nh-mbox .nh-mact{display:flex;gap:8px;margin-top:14px}
+  #tab-naming .nh-item{max-width:860px;margin-top:18px;padding-top:14px;border-top:2px solid #EADFD3}
+  #tab-naming .nh-ih{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  #tab-naming .nh-no{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;border-radius:12px;background:#6F4E45;color:#fff;font-size:13px;font-weight:700}
+  #tab-naming .nh-desc{font-size:15px;font-weight:700;color:#2A2320}
+  #tab-naming .nh-tag{font-size:12px;padding:2px 8px;border-radius:10px;background:#E0F2F1;color:#00695C}
+  #tab-naming .nh-again:disabled{opacity:.5;cursor:default}
+  #tab-naming .nh-sum{max-width:860px;margin-top:18px;padding:12px 16px;background:#FBF8F3;border:1px solid #EADFD3;border-radius:12px;font-size:14px;line-height:1.9}
 </style>
 <script>
 window.NameMod=(function(){
   'use strict';
-  var AI_URL='/api/recipe/translate';   /* 訓練站的 Claude 代理（身分密碼驗證），同 🌐 食譜翻譯；後端沒有改 */
-  var MODEL='claude-sonnet-5-5',N_SHOW=5,N_ASK=8;
-  var CRED_KEY='rcp:cred',ROLES=['管理者','主廚','出貨中心','採購','行銷設計','營運POS'];
-  var CATS=[['食材','🥚 食材'],['耗材','🧻 耗材'],['器具','🥄 器具'],['模具','🧁 模具']];
-  var S={inited:false,built:false,cat:'',busy:false,key:'',batches:[],seen:{},pick:'',err:''};
+  /* 2026-11-10 晚：①產出不問身分密碼 → 改呼叫申請單 API 的 nameSuggest（免驗身分、只讀；給 AI 的規則寫在 gas/recipe-req/nh_name.gs）
+     ②一次可放多個品項（一行一個），每個品項各給 5 個、各自可以再要 5 個；類別預設由 AI 自動判斷 */
+  var API='https://script.google.com/macros/s/AKfycbz7JhcgUxC0fLMTc2sk6EcN_XwNyLSdPiWE-Z0pP7IeumMZ_IaPVp7PM8sEekS-jtwm/exec';
+  var N_SHOW=5,MAX_ITEMS=20,PAR=3;
+  var CATS=[['','🤖 自動判斷'],['食材','🥚 食材'],['耗材','🧻 耗材'],['器具','🥄 器具'],['模具','🧁 模具']];
+  var S={inited:false,built:false,cat:'',key:'',items:[],busy:false,err:'',done:0,total:0};
   function $(id){return document.getElementById(id)}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
   function nm(){return window.ApplyMod&&ApplyMod._nm}
   function nkey(s){return String(s||'').replace(/【[^】]*】/g,'').replace(/\s+/g,'')}
+  function nonFood(c){return c==='耗材'||c==='器具'||c==='模具'}
 
-  /* 身分密碼：跟新品申請表、食譜翻譯共用這個分頁記住的（sessionStorage rcp:cred），沒有才問 */
-  function getCred(){try{var o=JSON.parse(sessionStorage.getItem(CRED_KEY)||'null');if(o&&o.role&&o.pw)return o}catch(e){}return null}
-  function setCred(o){try{if(o){sessionStorage.setItem(CRED_KEY,JSON.stringify(o));sessionStorage.setItem(CRED_KEY+':'+o.role,o.pw)}else{var c=getCred();if(c)sessionStorage.removeItem(CRED_KEY+':'+c.role);sessionStorage.removeItem(CRED_KEY)}}catch(e){}}
-  function askCred(why){return new Promise(function(res){
-    var d=document.createElement('div');d.className='nh-modal';
-    d.innerHTML='<div class="nh-mbox" role="dialog" aria-modal="true"><div style="font-weight:800;font-size:15px">🔑 輸入身分密碼</div><div style="color:#7A6A60;font-size:13px;margin-top:4px">'+esc(why)+' 密碼只記在這個分頁。</div>'
-      +'<label>身分</label><select id="nhCr">'+ROLES.map(function(r){return '<option>'+esc(r)+'</option>'}).join('')+'</select>'
-      +'<label>密碼</label><input type="password" id="nhCp" autocomplete="new-password">'
-      +'<div class="nh-mact"><button type="button" class="nh-go" id="nhCok" style="font-size:13px;padding:7px 14px">確定</button><button type="button" class="nh-btn2" id="nhCno">取消</button></div></div>';
-    $('tab-naming').appendChild(d);$('nhCr').value='主廚';setTimeout(function(){$('nhCp').focus()},30);
-    $('nhCno').onclick=function(){d.remove();res(null)};
-    var ok=function(){var p=$('nhCp').value,role=$('nhCr').value;if(!p){$('nhCp').focus();return}d.remove();setCred({role:role,pw:p});res(getCred())};
-    $('nhCok').onclick=ok;$('nhCp').onkeydown=function(e){if(e.key==='Enter')ok()};
-  })}
+  /* 申請單 API（Google）：回錯動作／逾時 → 再試一次 */
+  function post(body,ms){var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms):0;
+    return fetch(API,{method:'POST',body:JSON.stringify(body),redirect:'follow',signal:ctl?ctl.signal:undefined}).then(function(r){return r.text()}).then(function(t){
+      clearTimeout(tm);var j;try{j=JSON.parse(t)}catch(e){var e1=new Error('系統回應看不懂，請再按一次');e1.retry=true;throw e1}
+      if(!j||j.act!==body.action){var e2=new Error('系統忙碌，請再按一次');e2.retry=true;throw e2}
+      if(!j.ok){var e4=new Error(j.msg||'失敗，請再按一次');e4.retry=j.code==='ai';throw e4}return j.data},
+      function(e){clearTimeout(tm);var e3=new Error(e&&e.name==='AbortError'?'等太久沒有回應，請再按一次':'連線失敗，請再按一次');e3.retry=true;throw e3})}
+  function ask(body){var n=0,go=function(){n++;return post(body,75000).catch(function(e){if(e.retry&&n<2)return new Promise(function(r){setTimeout(r,1500)}).then(go);throw e})};return go()}
 
-  /* ---- 命名辦法（給 AI 的規則；與 🏷 取名小幫手同一份字典 NM_KINDS、大小外號 NM_NICK） ---- */
-  function buildSystem(cat){
-    var K=nm().kinds.filter(function(k){return k.cat===cat&&k.k}).map(function(k){return k.k+'（'+k.d+'）'}).join('、');
-    var food=cat==='食材';
-    return '你是「自己做烘焙聚樂部」（DIY 烘焙店，客人含小朋友，自己照平板食譜到各取放區拿材料與工具）的品項命名小幫手。請照公司「品項命名辦法」替一個新的「'+cat+'」取名。\n\n'
-      +'【命名辦法】\n'
-      +'1. 品名＝辨識詞＋種類詞。種類詞優先從字典選：'+K+'。字典沒有合適的，才用一個簡短、常見的種類詞。\n'
-      +'2. 「紙墊」「餅乾模」這兩個詞停用，不可出現。\n'
-      +(food
-        ?'3. 食材：一個名字只能有一個形態詞，形態詞要照字典定義（果泥＝沒加糖煮、果漿＝加糖煮過會流動、果醬＝濃稠可以抹…）。牛奶、雞蛋這種本身就是名字的，不必硬加種類詞。品牌、產地只有在需要跟既有品項區分時才放。\n'
-        :'3. 名字不寫尺寸數字（公分、cm、mm、幾號、幾格）也不寫大／中／小；只有「吋」可以保留（例：4吋圓模）。如果說明提到它跟店裡既有的同一種東西只差大小，辨識詞改用「大小外號」（由小到大：'+nm().nick.join('、')+'），挑還沒被用掉、大小順序合理的。\n')
-      +'4. 名字裡不放括號、說明文字、單位、「已下架」、舊進貨代號（像 B06）、區號。一律繁體中文、台灣用語。\n'
-      +(food?'':'5. 不可以跟「既有品項」前兩個字相同，也不可以互相包住（例：已有「貓咪壓模」就不能取「貓咪模片」「貓咪」開頭的名字）；辨識詞改用甜點名、角色名或造型特徵。\n')
-      +'6. 不可以跟既有品項同名。\n'
-      +'7. 要短（2～8 個字最好），小朋友一眼看懂、唸得出來、不會拿錯。\n\n'
-      +'【輸出】一次給 '+N_ASK+' 個，彼此要明顯不同（從造型、甜點名、角色、用途、材質等不同角度取辨識詞）。只輸出 JSON，不要其他文字：\n'
-      +'{"names":[{"name":"名字","why":"15 字以內，白話說明為什麼這樣取"}]}';
-  }
-  /* 既有品項：非食材給同類＋其他非食材（開頭不能撞）；食材只給跟說明有共同字的 */
-  function existing(cat,desc){
-    var all=nm().skuNames(),out=[];
-    if(cat==='食材'){var bi={},d=String(desc||'').replace(/[\s，。、,.（）()]/g,'');for(var i=0;i<d.length-1;i++)bi[d.substr(i,2)]=1;
-      all.forEach(function(o){if(o.cat!=='食材'&&o.cat)return;var c=nkey(o.n);for(var j=0;j<c.length-1;j++)if(bi[c.substr(j,2)]){out.push(o.n);return}});return out.slice(0,120)}
-    all.forEach(function(o){if(o.cat===cat)out.push(o.n)});
-    all.forEach(function(o){if(o.cat!==cat&&(o.cat==='耗材'||o.cat==='器具'||o.cat==='模具'))out.push(o.n)});
-    return out.slice(0,500)}
-  function buildUser(cat,desc,zone,more){
-    var ex=existing(cat,desc),seen=Object.keys(S.seen).map(function(k){return S.seen[k]});
-    return '類別：'+cat+'\n這個東西的說明：'+desc+'\n放置區：'+(zone||'還不知道')+(more?'\n使用者希望的方向：'+more:'')
-      +'\n\n既有品項（不可同名'+(cat==='食材'?'；同一種東西的其他形態請避免混淆':'、前兩個字不可相同、不可互相包住')+'）：\n'+(ex.length?ex.join('、'):'（沒有相近的）')
-      +(seen.length?'\n\n之前已經建議過、使用者不滿意，不要再給一樣或只差一兩個字的：\n'+seen.join('、'):'')}
-  function aiCall(system,user){
-    var cr=getCred();if(!cr){var e0=new Error('請先輸入身分密碼');e0.code='auth';return Promise.reject(e0)}
-    var body={model:MODEL,max_tokens:1500,system:system,messages:[{role:'user',content:user}]};
-    var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},60000):0;
-    return fetch(AI_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:cr.role,password:cr.pw,payload:body}),signal:ctl?ctl.signal:undefined})
-      .then(function(r){clearTimeout(tm);return r.text().then(function(t){var j=null;try{j=JSON.parse(t)}catch(e){}
-        if(r.status===401){var e1=new Error((j&&j.error)||'身分密碼不對');e1.code=/連不到/.test(e1.message)?'':'auth';throw e1}
-        if(!r.ok)throw new Error('AI 回應錯誤 '+r.status+'：'+JSON.stringify(j&&j.error||j||t).slice(0,200));
-        var txt=((j&&j.content)||[]).filter(function(c){return c.type==='text'}).map(function(c){return c.text}).join('');
-        var a=txt.indexOf('{'),b=txt.lastIndexOf('}'),o=null;try{o=JSON.parse(txt.slice(a,b+1))}catch(e){}
-        if(!o||!Array.isArray(o.names))throw new Error('AI 的回答看不懂，請再按一次');
-        return o.names.map(function(x){return {name:String(x&&x.name||'').replace(/\s+/g,'').slice(0,30),why:String(x&&x.why||'').slice(0,60)}}).filter(function(x){return x.name})})},
-        function(e){clearTimeout(tm);throw new Error(e&&e.name==='AbortError'?'等太久沒有回應，請再按一次':'連線失敗，請再按一次')})}
-  function withCred(fn){var c=getCred();var p=c?Promise.resolve(c):askCred('產生建議名稱要用 AI，請輸入你在新品申請表用的身分密碼（任何身分都可以）。');
-    return p.then(function(c2){if(!c2)throw new Error('沒有輸入身分密碼');return fn().catch(function(e){if(e.code==='auth'){setCred(null);return askCred('密碼不對，請重新輸入身分密碼。').then(function(c3){if(!c3)throw new Error('沒有輸入身分密碼');return fn()})}throw e})})}
+  /* 給 AI 參考的既有品項：耗材／器具／模具全部（開頭不能撞）；食材只給跟說明有共同兩個字的 */
+  function existing(cat,desc){var all=nm().skuNames(),nf=[],fd=[];
+    if(cat!=='食材'){all.forEach(function(o){if(o.cat===cat)nf.push(o.n)});all.forEach(function(o){if(o.cat!==cat&&nonFood(o.cat))nf.push(o.n)})}
+    if(!nonFood(cat)){var bi={},d=String(desc||'').replace(/[\s，。、,.（）()]/g,'');for(var i=0;i<d.length-1;i++)bi[d.substr(i,2)]=1;
+      all.forEach(function(o){if(nonFood(o.cat))return;var c=nkey(o.n);for(var j=0;j<c.length-1;j++)if(bi[c.substr(j,2)]){fd.push(o.n);return}})}
+    return nf.slice(0,cat?500:380).concat(fd.slice(0,120))}
 
-  /* 一批：AI 給 N_ASK 個 → 用 🏷 取名小幫手的同一套檢查（nmIssues）去掉撞名、違規、重複的 → 留 5 個；不夠再要一輪 */
-  function oneBatch(cat,desc,zone,more){var got=[],round=0;
-    function go(){round++;return aiCall(buildSystem(cat),buildUser(cat,desc,zone,more)).then(function(list){
-      list.forEach(function(x){var k=nkey(x.name);if(!k||S.seen[k])return;S.seen[k]=x.name;
-        var is=nm().issues(x.name,cat,zone);if(is.some(function(i){return i.lv==='bad'}))return;
-        if(got.length<N_SHOW)got.push({name:x.name,why:x.why,warn:is.filter(function(i){return i.lv==='warn'}).map(function(i){return i.t})})});
+  /* 一個品項的一批：AI 給 8 個 → 用 🏷 取名小幫手同一套檢查（nmIssues）去掉撞名、違規、重複的 → 留 5 個；不夠再要一輪（最多 3 輪） */
+  function oneBatch(it,zone,more){var got=[],round=0;
+    function go(){round++;return ask({action:'nameSuggest',cat:it.cat||S.cat,desc:it.desc,zone:zone,more:more,existing:existing(it.cat||S.cat,it.desc),
+        seen:Object.keys(it.seen).map(function(k){return it.seen[k]}).slice(-120)}).then(function(d){
+      if(!it.cat)it.cat=d.cat||'食材';
+      (d.names||[]).forEach(function(x){var name=String(x.name||'').replace(/\s+/g,''),k=nkey(name);if(!k||it.seen[k])return;it.seen[k]=name;
+        var is=nm().issues(name,it.cat,zone);if(is.some(function(i){return i.lv==='bad'}))return;
+        if(got.length<N_SHOW)got.push({name:name,why:String(x.why||''),warn:is.filter(function(i){return i.lv==='warn'}).map(function(i){return i.t})})});
       if(got.length<N_SHOW&&round<3)return go();return got})}
     return go()}
+  function runItem(it,zone,more){it.busy=true;it.err='';paintOut();
+    return oneBatch(it,zone,more).then(function(got){it.busy=false;if(got.length)it.batches.push(got);else it.err='這一輪想不到通過檢查的名字，請把說明寫詳細一點（造型、用在哪個甜點）再按一次';},
+      function(e){it.busy=false;it.err=e.message||'失敗，請再按一次'}).then(function(){S.done++;paintOut()})}
+  function runAll(list){if(!list.length)return;var zone=$('nhZone').value,more=$('nhMore').value.trim(),q=list.slice(),act=0;
+    S.busy=true;S.err='';S.done=0;S.total=list.length;list.forEach(function(it){it.busy=true;it.err=''});paintOut();
+    (function next(){if(!q.length&&!act){S.busy=false;paintOut();return}
+      while(act<PAR&&q.length){act++;runItem(q.shift(),zone,more).then(function(){act--;next()})}})()}
 
-  function gen(){if(S.busy)return;var n=nm();if(!n||!ApplyMod.ready){S.err='主檔還在讀取，等幾秒再按一次';paintOut();return}
-    var desc=$('nhDesc').value.trim(),zone=$('nhZone').value,more=$('nhMore').value.trim();
-    if(!S.cat){S.err='請先選類別';paintOut();return}
-    if(!desc){S.err='請先寫這是什麼東西';paintOut();$('nhDesc').focus();return}
-    var key=S.cat+'\n'+desc+'\n'+zone;if(key!==S.key){S.key=key;S.batches=[];S.seen={};S.pick=''}   /* 換了東西 → 重新開始 */
-    S.busy=true;S.err='';paintOut();
-    withCred(function(){return oneBatch(S.cat,desc,zone,more)}).then(function(got){S.busy=false;
-      if(!got.length)S.err='這一輪想不到通過檢查的名字，請把說明寫詳細一點（造型、用在哪個甜點）再按一次';else S.batches.push(got);paintOut();
-      var bs=$('nhOut').querySelectorAll('.nh-batch');if(got.length&&bs.length)try{bs[bs.length-1].scrollIntoView({block:'nearest',behavior:'smooth'})}catch(e){}
-    },function(e){S.busy=false;S.err=e.message||'失敗，請再按一次';paintOut()})}
+  function lines(){var seen={},out=[];$('nhDesc').value.split(/\n/).forEach(function(l){l=l.replace(/^\s*(?:[-－・•*]|\d+[.、)）])\s*/,'').trim().slice(0,300);if(l&&!seen[l]){seen[l]=1;out.push(l)}});return out}
+  /* 上面的大按鈕：新的品項 → 各給 5 個；都已經有了 → 還沒選的全部再給 5 個 */
+  function gen(){if(S.busy)return;if(!nm()||!ApplyMod.ready){S.err='主檔還在讀取，等幾秒再按一次';paintOut();return}
+    var L=lines();if(!L.length){S.err='請先寫品項（一行一個）';paintOut();$('nhDesc').focus();return}
+    if(L.length>MAX_ITEMS){S.err='一次最多 '+MAX_ITEMS+' 個品項（現在 '+L.length+' 個），請分兩次';paintOut();return}
+    var key=S.cat+'\n'+$('nhZone').value;if(key!==S.key){S.key=key;S.items=[]}   /* 換了類別或區域 → 全部重新開始 */
+    var old={};S.items.forEach(function(it){old[it.desc]=it});
+    S.items=L.map(function(d){return old[d]||{desc:d,cat:S.cat,batches:[],seen:{},pick:'',busy:false,err:''}});
+    var fresh=S.items.filter(function(it){return !it.batches.length});
+    var todo=fresh.length?fresh:S.items.filter(function(it){return !it.pick});
+    if(!todo.length){S.err='每個品項都選好了。想換哪一個，按它下面的「再給我 5 個」';paintOut();return}
+    runAll(todo)}
 
   /* 只重畫結果區與按鈕文字；輸入框只建一次（中文輸入不會被打斷） */
   function paintOut(){var go=$('nhGo'),o=$('nhOut');if(!go||!o)return;
-    go.disabled=S.busy;go.textContent=S.busy?'⏳ 想名字中…（約 10 秒）':S.batches.length?'🔄 再給我 5 個':'✨ 產出 5 個名稱';
+    var hasAll=S.items.length&&S.items.every(function(it){return it.batches.length});
+    go.disabled=S.busy;go.textContent=S.busy?'⏳ 想名字中…（'+S.done+'／'+S.total+'，每個約 15 秒）':hasAll?'🔄 還沒選的，全部再給 5 個':'✨ 產出名稱（每個品項 5 個）';
     $('nhMsg').innerHTML=S.err?'<span class="nh-err">'+esc(S.err)+'</span>':'';
     var zt=nm()?nm().zoneTag($('nhZone').value):'',h='';
-    if(S.pick)h+='<div class="nh-pick">✅ 選好了：<b>'+esc(S.pick)+'</b> <button type="button" class="nh-btn2" id="nhCopy">📋 複製</button>'
-      +(zt&&S.cat!=='食材'?'<div>門市食譜後台的名字：<b style="font-size:15px">'+esc(zt+S.pick)+'</b>（放模具櫃，前面加區號）</div>':'')
-      +'<div class="nh-muted">到「📝 新品申請表」的用料表填這個名字；食譜檔（Word）裡也用同一個名字。</div></div>';
-    S.batches.forEach(function(b,bi){h+='<div class="nh-batch"><div class="nh-bh">第 '+(bi+1)+' 批</div>'+b.map(function(x){
-      return '<div class="nh-card'+(x.name===S.pick?' on':'')+'"><div class="nh-main"><div class="nh-name">'+esc(x.name)+'</div><div class="nh-why">'+esc(x.why)+'</div>'
-        +(x.warn.length?'<div class="nh-chk warn">⚠ '+esc(x.warn[0])+'</div>':'<div class="nh-chk ok">✓ 沒有撞名、符合命名辦法</div>')
-        +'</div><button type="button" class="nh-sel" data-nhp="'+esc(x.name)+'">'+(x.name===S.pick?'✓ 已選':'選這個')+'</button></div>'}).join('')+'</div>'});
-    if(S.batches.length)h+='<div class="nh-act" style="max-width:860px"><button type="button" class="nh-go" id="nhAgain"'+(S.busy?' disabled':'')+'>'+(S.busy?'⏳ 想名字中…（約 10 秒）':'🔄 都不滿意，再給我 5 個')+'</button><span class="nh-muted">想換方向，先在上面「還想要怎樣」寫一句再按。</span></div>';
+    S.items.forEach(function(it,ix){
+      h+='<div class="nh-item"><div class="nh-ih"><span class="nh-no">'+(ix+1)+'</span><span class="nh-desc">'+esc(it.desc)+'</span>'+(it.cat?'<span class="nh-tag">'+esc(it.cat)+'</span>':'')+'</div>';
+      if(it.pick)h+='<div class="nh-pick">✅ 選好了：<b>'+esc(it.pick)+'</b> <button type="button" class="nh-btn2" data-nhcp="'+ix+'">📋 複製</button>'
+        +(zt&&it.cat!=='食材'?'<div>門市食譜後台的名字：<b style="font-size:15px">'+esc(zt+it.pick)+'</b>（放模具櫃，前面加區號）</div>':'')+'</div>';
+      it.batches.forEach(function(b,bi){h+='<div class="nh-batch">'+(it.batches.length>1?'<div class="nh-bh">第 '+(bi+1)+' 批</div>':'')+b.map(function(x){
+        return '<div class="nh-card'+(x.name===it.pick?' on':'')+'"><div class="nh-main"><div class="nh-name">'+esc(x.name)+'</div><div class="nh-why">'+esc(x.why)+'</div>'
+          +(x.warn.length?'<div class="nh-chk warn">⚠ '+esc(x.warn[0])+'</div>':'<div class="nh-chk ok">✓ 沒有撞名、符合命名辦法</div>')
+          +'</div><button type="button" class="nh-sel" data-nhp="'+ix+'" data-nhn="'+esc(x.name)+'">'+(x.name===it.pick?'✓ 已選':'選這個')+'</button></div>'}).join('')+'</div>'});
+      if(it.err)h+='<div class="nh-err" style="margin:6px 0">'+esc(it.err)+'</div>';
+      if(it.busy)h+='<div class="nh-muted" style="margin:6px 0">⏳ 想名字中…</div>';
+      else if(it.batches.length||it.err)h+='<div class="nh-act" style="margin-top:6px"><button type="button" class="nh-btn2 nh-again" data-nha="'+ix+'"'+(S.busy?' disabled':'')+'>🔄 這個再給我 5 個</button></div>';
+      h+='</div>'});
+    var picked=S.items.filter(function(it){return it.pick});
+    if(picked.length&&S.items.length>1)h+='<div class="nh-sum"><b>已選 '+picked.length+'／'+S.items.length+' 個</b> <button type="button" class="nh-btn2" id="nhCopyAll">📋 複製全部選好的名字</button><div class="nh-muted">到「📝 新品申請表」的用料表填這些名字；食譜檔（Word）裡也用同一個名字。</div></div>';
+    else if(picked.length)h+='<div class="nh-muted" style="margin-top:8px">到「📝 新品申請表」的用料表填這個名字；食譜檔（Word）裡也用同一個名字。</div>';
+    if(S.items.length&&!S.busy)h+='<div class="nh-muted" style="margin-top:8px">想換方向，先在上面「還想要怎樣」寫一句，再按「再給我 5 個」。</div>';
     o.innerHTML=h;
-    Array.prototype.forEach.call(o.querySelectorAll('[data-nhp]'),function(b){b.onclick=function(){S.pick=b.dataset.nhp;copy(S.pick);paintOut()}});
-    var ag=$('nhAgain');if(ag)ag.onclick=gen;
-    var c=$('nhCopy');if(c)c.onclick=function(){copy(S.pick);c.textContent='✓ 已複製'}}
+    Array.prototype.forEach.call(o.querySelectorAll('[data-nhp]'),function(b){b.onclick=function(){var it=S.items[+b.dataset.nhp];if(!it)return;it.pick=b.dataset.nhn;copy(it.pick);paintOut()}});
+    Array.prototype.forEach.call(o.querySelectorAll('[data-nha]'),function(b){b.onclick=function(){var it=S.items[+b.dataset.nha];if(it&&!S.busy)runAll([it])}});
+    Array.prototype.forEach.call(o.querySelectorAll('[data-nhcp]'),function(b){b.onclick=function(){var it=S.items[+b.dataset.nhcp];if(it){copy(it.pick);b.textContent='✓ 已複製'}}});
+    var ca=$('nhCopyAll');if(ca)ca.onclick=function(){copy(picked.map(function(it){return it.desc+' → '+it.pick}).join('\n'));ca.textContent='✓ 已複製'}}
   function copy(t){try{if(navigator.clipboard)navigator.clipboard.writeText(t).catch(function(){})}catch(e){}}
 
   function build(){if(S.built)return;S.built=true;var n=nm();
     $('nhRoot').innerHTML='<div class="nh-box">'
-      +'<label class="nh-lb">① 這是哪一類？</label><div class="nh-cats" id="nhCats">'+CATS.map(function(c){return '<button type="button" class="nh-cat" data-nhc="'+c[0]+'">'+c[1]+'</button>'}).join('')+'</div>'
-      +'<label class="nh-lb" for="nhDesc">② 它是什麼？（長什麼樣、用在哪個甜點、怎麼用）</label><textarea id="nhDesc" placeholder="例：熊熊造型的餅乾壓模，直徑 6 公分，做熊熊餅乾用"></textarea>'
-      +'<div class="nh-row"><div><label class="nh-lb" for="nhZone">③ 放哪一區？（可不選）</label><select id="nhZone"><option value="">（還不知道）</option>'+n.zones.map(function(z){return '<option>'+esc(z)+'</option>'}).join('')+'</select></div>'
+      +'<label class="nh-lb" for="nhDesc">① 要取名的品項（一行一個，可以一次放很多個）</label><textarea id="nhDesc" rows="5" placeholder="例：\n熊熊造型的餅乾壓模，直徑 6 公分\n屏東芒果打成的泥，沒加糖，冷凍\n裝馬卡龍的透明小盒子"></textarea>'
+      +'<label class="nh-lb">② 類別</label><div class="nh-cats" id="nhCats">'+CATS.map(function(c){return '<button type="button" class="nh-cat'+(c[0]===''?' on':'')+'" data-nhc="'+c[0]+'">'+c[1]+'</button>'}).join('')+'</div>'
+      +'<div class="nh-row"><div><label class="nh-lb" for="nhZone">③ 放哪一區？（可不選；全部放同一區才選）</label><select id="nhZone"><option value="">（還不知道）</option>'+n.zones.map(function(z){return '<option>'+esc(z)+'</option>'}).join('')+'</select></div>'
       +'<div><label class="nh-lb" for="nhMore">還想要怎樣？（可不寫）</label><input type="text" id="nhMore" autocomplete="off" placeholder="例：短一點、用甜點名、可愛一點"></div></div>'
-      +'<div class="nh-act"><button type="button" class="nh-go" id="nhGo">✨ 產出 5 個名稱</button><span id="nhMsg"></span></div></div>'
+      +'<div class="nh-act"><button type="button" class="nh-go" id="nhGo">✨ 產出名稱（每個品項 5 個）</button><span id="nhMsg"></span></div></div>'
       +'<div id="nhOut"></div>'
       +'<details class="nh-rule"><summary>ⓘ 名字是照什麼規則取的</summary><div style="margin-top:6px;line-height:1.8">品名＝辨識詞＋種類詞（種類詞照公司字典）；器具、模具、耗材不寫尺寸數字，只差大小用大小外號（'+esc(n.nick.join('、'))+'）；同類的東西前兩個字不重複；不放括號、已下架、舊代號。每個建議都會自動跟採購主檔比對，撞名的不會出現。這裡只給建議，不會寫進任何系統。</div></details>';
     Array.prototype.forEach.call($('nhCats').querySelectorAll('[data-nhc]'),function(b){b.onclick=function(){S.cat=b.dataset.nhc;
       Array.prototype.forEach.call($('nhCats').children,function(x){x.classList.toggle('on',x===b)})}});
-    $('nhGo').onclick=gen;$('nhZone').onchange=function(){if(S.pick)paintOut()};
+    $('nhGo').onclick=gen;$('nhZone').onchange=function(){if(S.items.length)paintOut()};
     paintOut()}
   function ensureInit(){if(S.inited)return;S.inited=true;
     if(!window.ApplyMod){$('nhLoading').textContent='⚠ 申請表程式沒有載入，請重新整理';return}
     ApplyMod.ensureInit();
     var t=setInterval(function(){if(ApplyMod.ready&&nm()){clearInterval(t);$('nhLoading').style.display='none';$('nhRoot').style.display='';build()}},300)}
-  return {ensureInit:ensureInit,_S:S,_sys:buildSystem,_user:buildUser};
+  return {ensureInit:ensureInit,_S:S,_existing:existing};
 })();
 (function(){var p=document.getElementById('tab-naming');if(p&&p.classList.contains('active'))NameMod.ensureInit()})();
 </script>
