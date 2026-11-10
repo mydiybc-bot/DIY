@@ -1384,6 +1384,74 @@ def _coverage(info, parsed, ext, names, stat=None):
     return errors, warns
 
 
+_POS_WARN_RE = re.compile(r"^(.+?)\(\d+\) \d+/\d+ 第\d+段：崗位填了本店「(.+?)」")
+
+
+def _merge_pos_warn(warns):
+    """「崗位填了本店」每個時段一條，士林／板橋／A13 一個月 150～190 條，把其他提醒都淹沒了
+    → 合併成一條（2026-11-11 經營者）：幾個時段、哪幾位夥伴。其他提醒順序不變，合併的那條放在第一次出現的位置"""
+    hit = [(i, m) for i, m in ((i, _POS_WARN_RE.match(x)) for i, x in enumerate(warns)) if m]
+    if len(hit) < 2:
+        return list(warns)
+    names = list(dict.fromkeys(m.group(1) for _, m in hit))
+    pos = hit[0][1].group(2)
+    one = (f"有 {len(hit)} 個時段的崗位填了本店「{pos}」（{'、'.join(names[:6])}{' 等 ' + str(len(names)) + ' 位' if len(names) > 6 else ''}）："
+           f"在本店上班的時段崗位要留空，只有去別家店才填。不影響時數與匯入，之後排班留空即可")
+    skip = {i for i, _ in hit}
+    out = []
+    for i, x in enumerate(warns):
+        if i == hit[0][0]:
+            out.append(one)
+        if i not in skip:
+            out.append(x)
+    return out
+
+
+def _tail_merged(store, ym, ids):
+    """排初稿用的「上個月底已連上幾天」：本店算的與各店名單合起來算的取大的"""
+    out = dict(_prev_tail(store, ym))
+    try:
+        for eid, n in _prev_tail_all(ym, ids).items():
+            out[eid] = max(int(out.get(eid) or 0), n)
+    except Exception:   # noqa: BLE001
+        pass
+    return out
+
+
+def _prev_tail_all(ym, ids):
+    """這些工號上個月底「連續上班到月底」幾天（各店名單合起來算）→ {工號: 天數}；上個月沒班表就沒有"""
+    pym = _prev_ym(ym)
+    worked, last = {}, 0
+    for s in STORES:
+        p = _dir() / f"{_key(s, pym)}.json"
+        if not p.exists():
+            continue
+        try:
+            st2 = json.loads(p.read_text(encoding="utf-8"))
+            tpl, sch = st2.get("template"), st2.get("schedule") or {}
+            if not tpl or not sch:
+                continue
+            shifts, dtypes = (_ext(st2) or {}).get("shifts") or {}, set(tpl["info"]["dayTypes"])
+            last = max(last, max(d["d"] for d in tpl["info"]["days"]))
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            continue
+        for eid in ids:
+            for dd, v in (sch.get(eid) or {}).items():
+                try:
+                    if v and parse_cell(v, shifts, dtypes)["segs"]:
+                        worked.setdefault(eid, set()).add(int(dd))
+                except (ValueError, TypeError):
+                    continue
+    out = {}
+    for eid, ds in worked.items():
+        n, d = 0, last
+        while d in ds:
+            n, d = n + 1, d - 1
+        if n:
+            out[eid] = n
+    return out
+
+
 def _other_store_days(store, ym, ids, override=None):
     """這些工號在「別家店的名單」上有排班的日子 → {工號: {日: 店名}}（不含 @支援 調店：那是寫在自己店的班表上）"""
     out = {}
@@ -1457,7 +1525,7 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                 except OSError:
                     pass
         errors += rep.err
-        warns += rep.warn
+        warns += _merge_pos_warn(rep.warn)
         for emp, _, inf in rows:
             tot = sum(b - a for _, segs, _ in inf for a, b in segs) / 60
             # 104 把休息日、國定假日出勤列為加班，不算進總工時 → 跟正職標準時數比的是「正常工時」
@@ -1520,27 +1588,38 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                     n += 1
             if n > int(limit):
                 warns.append(f"{names[eid]}：晚班接隔天早班 {n} 次，本店上限 {limit} 次")
-    # 2026-11-11 經營者：同一人掛在別家店名單也有排班 → 連上天數要兩邊合起來算、同一天不可以兩家店都有班
+    # 2026-11-11 經營者：同一人掛在別家店名單也有排班 → 連上天數要兩邊合起來算、同一天不可以兩家店都有班；
+    # 上個月底連續上班的天數（本店＋別店）也要接上來算
     try:
         mc = int(ext.get("max_consec") or 5)
-        for eid, od in _other_store_days(st["store"], st["ym"], set(parsed), sibs).items():
+        others = _other_store_days(st["store"], st["ym"], set(parsed), sibs)
+        tails = _prev_tail_all(st["ym"], set(parsed))
+        dlist = [x["d"] for x in info["days"]]
+
+        def _run(ds, tail=0):
+            best, cur, st0 = (0, 0, 0), tail, (dlist[0] if tail else 0)
+            for dd in dlist:
+                if dd in ds:
+                    cur += 1
+                    st0 = st0 or dd
+                    best = max(best, (cur, st0, dd))
+                else:
+                    cur, st0 = 0, 0
+            return best
+        for eid in parsed:
+            od, tail = others.get(eid) or {}, int(tails.get(eid) or 0)
+            if not od and not tail:
+                continue
             own = {d["d"] for d in info["days"] if parsed[eid][d["d"]]["segs"]}
             both = sorted(own & set(od))
             if both:
                 errors.append(f"{names[eid]}：{'、'.join(str(x) for x in both)} 號同一天在{'、'.join(sorted({od[x] for x in both}))}也有排班")
-            def _run(ds):
-                best, cur, st0 = (0, 0, 0), 0, 0
-                for dd in [x["d"] for x in info["days"]]:
-                    if dd in ds:
-                        cur += 1
-                        st0 = st0 or dd
-                        best = max(best, (cur, st0, dd))
-                    else:
-                        cur, st0 = 0, 0
-                return best
-            n, a, b = _run(own | set(od))
+            n, a, b = _run(own | set(od), tail)
             if n > _run(own)[0] and n > min(mc, 6):
-                msg = f"{names[eid]}：加上在{'、'.join(sorted(set(od.values())))}的班，{a}～{b} 號連續上班 {n} 天"
+                used_tail = bool(tail) and a == dlist[0]
+                used_other = any(a <= x <= b for x in od)
+                why = "、".join(([f"上個月底已連上 {tail} 天"] if used_tail else []) + ([f"在{'、'.join(sorted({od[x] for x in od if a <= x <= b}))}的班"] if used_other else []))
+                msg = f"{names[eid]}：加上{why}，到 {b} 號連續上班 {n} 天" if used_tail else f"{names[eid]}：加上{why}，{a}～{b} 號連續上班 {n} 天"
                 (errors if n > 6 else warns).append(msg + ("，超過 6 天（七休一）" if n > 6 else f"，超過本店上限 {mc} 天"))
     except Exception:   # noqa: BLE001 — 讀別店存檔失敗不影響本店檢查
         pass
@@ -2062,7 +2141,7 @@ def _draft_worker(store, ym):
         y, mth = int(ym[:4]), int(ym[4:])
         hol = [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))]
         # 2026-11-06 經營者：同一份規則排兩種（A 正職優先、B 兼職優先），同時給店長看、選一個採用
-        tail = _prev_tail(store, ym)
+        tail = _tail_merged(store, ym, {e["id"] for e in info["emps"]})
         plans = {}
         for mode in ("pt",):
             r_ = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=tail,
@@ -2267,7 +2346,7 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
         fixed[s] = fx
         units.append({"store": s, "pos": _region_pos(rg, s), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules.get(s, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _prev_tail(s, ym), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
+                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
     out = {}
     for i, mode in enumerate(modes):
         _job(jk, status="running", step=f"程式正在排整區（{PLAN_NAME[mode]}，{i + 1}／{len(modes)}，約 1～3 分鐘）")
