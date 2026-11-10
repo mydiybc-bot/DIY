@@ -1005,6 +1005,9 @@ function loadData() {
     // net 口徑：直接信任後端。後端 syncDailySales/buildWeekKPI 已用 daily_discount J 欄
     // 白名單合計（401萬口徑，與 POS 儀表板一致）算好 net_revenue / total_net_revenue。
     // 不再前端覆蓋（舊版呼叫 getFactDiscount 全折扣 986萬覆蓋，導致 net 偏低）。
+    /* 2026-11-11：上傳後重讀只重畫，不再重跑 initUI()（原本下拉選項重複、事件綁兩次） */
+    if (window.__schedUiReady) { renderAll(); return; }
+    window.__schedUiReady = true;
     initUI();
   };
   const scriptEl = document.createElement('script');
@@ -1092,7 +1095,8 @@ function initUI() {
   });
   // 預設選最新月(自動跟隨資料,跨年也適用)
   // months 已 sort().reverse(),所以 [0] 就是最新月
-  if (months.length > 0) dailyMonthSel.value = months[0];
+  /* 2026-11-11：預設改選「本月」（104 同步下個月班表後，最新月是還沒營收的未來月）；沒有本月才用最新月 */
+  if (months.length > 0) { const nowYm = _dateStr(new Date()).substring(0, 7); dailyMonthSel.value = months.includes(nowYm) ? nowYm : months[0]; }
 
   // 綁定事件
   bindSliders();
@@ -1203,14 +1207,18 @@ function buildMultiDropdown(kind, items, selectedSet, onChange) {
   });
 
   // 觸發按鈕展開/收合
-  trigger.addEventListener('click', e => {
-    e.stopPropagation();
-    if (trigger.classList.contains('disabled')) return;
-    document.querySelectorAll('.multi-dropdown').forEach(other => {
-      if (other.id !== dropdownId) other.classList.remove('open');
+  /* 2026-11-11：開合事件每顆按鈕只綁一次（原本每次重建下拉就多綁一個，選過區域後門市下拉開了又馬上關） */
+  if (!trigger._ddBound) {
+    trigger._ddBound = true;
+    trigger.addEventListener('click', e => {
+      e.stopPropagation();
+      if (trigger.classList.contains('disabled')) return;
+      document.querySelectorAll('.multi-dropdown').forEach(other => {
+        if (other.id !== dropdownId) other.classList.remove('open');
+      });
+      dd.classList.toggle('open');
     });
-    dd.classList.toggle('open');
-  });
+  }
 
   updateMultiSummary(kind, items, selectedSet);
 }
@@ -1346,10 +1354,15 @@ function computeFlags(row) {
   const weAvg = row.weekend_hours / 2;
   if (weAvg > thresholds.weHours) flags.push({ k: 'we_over', label: '假日工時過高', sev: 'red' });
 
-  if (row.rev_per_hour_net < thresholds.rph && row.total_hours > 0) {
+  /* 2026-11-11：還沒過完的本週，人效改用「到昨天」的 rev/h、週營收下限不判（原本整週工時÷一兩天營收，12 店天天全紅旗） */
+  if (_effKpiCurrentYW === null) _effKpiCurrentYW = _currentYearWeek();
+  const isCur = row.year_week === _effKpiCurrentYW;
+  const eff = isCur ? _effectiveKPI(row) : null;
+  const rph = isCur ? (eff.truncated ? eff.rph : null) : row.rev_per_hour_net;
+  if (rph !== null && rph < thresholds.rph && row.total_hours > 0) {
     flags.push({ k: 'low_rph', label: '人效偏低', sev: 'orange' });
   }
-  if (row.total_net_revenue < thresholds.rev) {
+  if (!isCur && row.total_net_revenue < thresholds.rev) {
     flags.push({ k: 'low_rev', label: '營收偏低', sev: 'yellow' });
   }
 
@@ -1384,6 +1397,7 @@ function renderKPI() {
   let totalHours = 0, totalRev = 0;
   rows.forEach(r => {
     const e = _effectiveKPI(r);
+    if (!(e.rev > 0)) return;   /* 2026-11-11：還沒有營收的週（未來週）不列入，否則平均 rev/h 被拉低 */
     totalHours += e.hours;
     totalRev   += e.rev;
   });
@@ -1714,7 +1728,7 @@ function renderHeatmap() {
     // 近 4 週紅旗數標籤(僅當該店有紅旗時顯示)
     const fc = flagCountMap[sid] || 0;
     const flagBadge = fc > 0 ? ' <span class="store-flag-badge">⚑ ' + fc + '</span>' : '';
-    html += '<tr><td class="store-col">' + sid + ' ' + meta.store_name + flagBadge + '<br><span style="font-size:12px;color:var(--muted);font-weight:500;">' + zoneName + '</span></td>';
+    html += '<tr><td class="store-col">' + sid + ' ' + _escNote(meta.store_name) + flagBadge   /* 2026-11-11：店名跳脫 */ + '<br><span style="font-size:12px;color:var(--muted);font-weight:500;">' + zoneName + '</span></td>';
     weeks.forEach(w => {
       if (w === null) { html += '<td class="week-empty"><div style="color:var(--muted);text-align:center;padding:20px 0;">—</div></td>'; return; }
       const r = idx[w + '|' + sid];
@@ -1785,8 +1799,10 @@ function renderZones() {
     const z = r.zone || '未分區';
     if (!zoneAgg[z]) zoneAgg[z] = { hours: 0, rev: 0, count: 0, stores: new Set() };
     const e = _effectiveKPI(r);
-    zoneAgg[z].hours += e.hours;
-    zoneAgg[z].rev   += e.rev;
+    if (e.rev > 0) {   /* 2026-11-11：還沒有營收的週（未來週）工時不列入分區 rev/h */
+      zoneAgg[z].hours += e.hours;
+      zoneAgg[z].rev   += e.rev;
+    }
     zoneAgg[z].count += 1;
     zoneAgg[z].stores.add(r.store_id);
   });
@@ -1848,7 +1864,7 @@ function renderFlagList() {
     const truncMark = e.truncated ? ' <span style="font-size:12px;color:var(--accent);">📡迄今</span>' : '';
     return '<div class="flag-item">'
     + '<div class="wk">' + weekLabel(it.row.year_week, it.row.week_start) + truncMark + '</div>'
-    + '<div class="store">' + it.row.store_id + ' ' + it.row.store_name + '<br><span style="font-size:12px;color:var(--muted);font-weight:500;">' + getZone(it.row.store_id) + '</span></div>'
+    + '<div class="store">' + it.row.store_id + ' ' + _escNote(it.row.store_name) + '<br><span style="font-size:12px;color:var(--muted);font-weight:500;">' + getZone(it.row.store_id) + '</span></div>'
     + '<div class="flags">' + it.flags.map(f => '<span class="flag-chip ' + f.sev + '">' + f.label + '</span>').join('') + '</div>'
     + '<div class="rev">$' + Math.round(e.rev).toLocaleString() + ' · ' + (Math.round(e.hours*10)/10) + 'h · rev/h $' + Math.round(e.rph) + '</div>'
     + '</div>';
@@ -1964,7 +1980,7 @@ function dailyFlags(d, baseline) {
     flags.push({ sev: 'orange', label: '工時↑', reason: '假日工時 ' + d.hours + 'h,超過閾值 ' + thresholds.weHours + 'h' });
   }
   // 黃:工時 / 營收不成比例(工時遠超均值但營收不足)
-  if (baseline && baseline.avg_hours > 0 && d.hours > 0) {
+  if (baseline && baseline.avg_hours > 0 && d.hours > 0 && d.revenue > 0) {   /* 2026-11-11：營收還沒進來的日子（未來、今天）不判人效落差 */
     const hRatio = d.hours / baseline.avg_hours;
     const rRatio = baseline.avg_revenue > 0 ? d.revenue / baseline.avg_revenue : 0;
     if (hRatio > 1.2 && rRatio < hRatio * 0.7) {
@@ -2257,10 +2273,11 @@ function buildTooltipHtml(d) {
     html += '<div class="tt-empty">無排班</div>';
   } else {
     d.employees.forEach(e => {
-      const shift = e.shift ? '<span class="tt-emp-shift">' + e.shift + '</span>' : '<span class="tt-emp-shift">(無時段)</span>';
+      /* 2026-11-11：姓名、時段跳脫後才放進畫面 */
+      const shift = e.shift ? '<span class="tt-emp-shift">' + _escNote(e.shift) + '</span>' : '<span class="tt-emp-shift">(無時段)</span>';
       const bs = (d.bonus && d.bonus.staff) ? d.bonus.staff.find(x => x.name === e.name && x.hours === (Number(e.hours) || 0)) : null;
       const bTxt = !bs ? '' : (bs.trainee ? ' <span style="color:#6F4E45">實作夥伴・不發</span>' : (bs.leave ? ' <span style="color:#6F4E45">請假／會議・不計（' + _escNote(bs.why) + '）</span>' : ((bs.off > 0 ? ' <span style="color:#6F4E45">計 ' + bs.work + 'h（' + _escNote(bs.why) + '）</span>' : '') + (bs.bonus > 0 ? ' <b style="color:#7A4A00">🎁$' + bs.bonus + '</b>' : ''))));
-      html += '<div class="tt-emp-row">' + e.name + '(' + e.hours + 'h) ' + shift + bTxt + '</div>';
+      html += '<div class="tt-emp-row">' + _escNote(e.name) + '(' + e.hours + 'h) ' + shift + bTxt + '</div>';
       if (e.note) {
         html += '<div class="tt-emp-note">📌 ' + _escNote(e.note) + '</div>';
       }
@@ -2456,7 +2473,7 @@ function renderUploadList() {
     }[statusCls] || statusCls;
     html += '<div class="upload-file-item">'
       + '<span class="file-icon">📄</span>'
-      + '<span class="file-name">' + item.file.name + '</span>'
+      + '<span class="file-name">' + _escNote(item.file.name) + '</span>'   /* 2026-11-11：檔名跳脫 */
       + '<span class="file-size">' + fmtSize(item.file.size) + '</span>'
       + '<span class="file-status ' + statusCls + '">' + statusText + '</span>'
       + (item.validationMsg && !item.isValid ? '<span class="file-error">' + item.validationMsg + '</span>' : '')
@@ -2835,7 +2852,7 @@ function toggleCollapse(key) {
 // ============ 📈 月度工時 × 營收趨勢 (2026-07-21 新增，純前端聚合 DATA，零後端) ============
 function _trendAllMonths() {
   const s = new Set();
-  (DATA.daily_sales || []).forEach(d => s.add(d.date.substring(0, 7)));
+  /* 2026-11-11：月份只取有工時的月（營收從 2024-12 起、工時 2026-03 才有，原本平均 rev/h＝23 個月營收÷9 個月工時） */
   (DATA.daily_hours || []).forEach(d => s.add(d.date.substring(0, 7)));
   return [...s].sort();
 }
@@ -2861,13 +2878,17 @@ function _trendMonthsInRange() {
 // 聚合單店在指定月清單 → [{ ym, hours, revenue, rph }]
 function _trendAggStore(storeId, months) {
   const mset = new Set(months);
-  const hMap = {}, rMap = {};
-  months.forEach(m => { hMap[m] = 0; rMap[m] = 0; });
+  /* 2026-11-11：rev/h 只用「該店最後一筆營收日以前」的工時 hoursDone（本月班表排到月底、營收只到昨天，原本本月被算低亮紅燈）；長條仍是整月工時 */
+  const hMap = {}, hDone = {}, rMap = {};
+  months.forEach(m => { hMap[m] = 0; hDone[m] = 0; rMap[m] = 0; });
+  let lastSales = '';
+  (DATA.daily_sales || []).forEach(d => { if (Number(d.store_id) === Number(storeId) && d.date > lastSales) lastSales = d.date; });
   (DATA.daily_hours || []).forEach(d => {
     if (Number(d.store_id) !== Number(storeId)) return;
     const m = d.date.substring(0, 7);
     if (!mset.has(m)) return;
     hMap[m] += Number(d.hours) || 0;
+    if (d.date <= lastSales) hDone[m] += Number(d.hours) || 0;
   });
   (DATA.daily_sales || []).forEach(d => {
     if (Number(d.store_id) !== Number(storeId)) return;
@@ -2877,7 +2898,7 @@ function _trendAggStore(storeId, months) {
   });
   return months.map(m => {
     const h = hMap[m], r = rMap[m];
-    return { ym: m, hours: h, revenue: r, rph: h > 0 ? r / h : 0 };
+    return { ym: m, hours: h, hoursDone: hDone[m], revenue: r, rph: hDone[m] > 0 ? r / hDone[m] : 0 };
   });
 }
 
@@ -2923,7 +2944,8 @@ function renderMonthlyTrend() {
     if (!series.some(p => p.hours > 0 || p.revenue > 0)) return '';   // 該店期間無資料則略過
     const totH = series.reduce((a, p) => a + p.hours, 0);
     const totR = series.reduce((a, p) => a + p.revenue, 0);
-    const avgRph = totH > 0 ? Math.round(totR / totH) : 0;
+    const totHDone = series.reduce((a, p) => a + p.hoursDone, 0);   /* 2026-11-11：平均 rev/h 的分母只算已有營收那幾天的工時 */
+    const avgRph = totHDone > 0 ? Math.round(totR / totHDone) : 0;
     return '<div class="trend-card">'
       + '<div class="trend-card-head">'
       +   '<span class="trend-card-title">' + sid + ' ' + (nameMap[sid] || '') + '</span>'

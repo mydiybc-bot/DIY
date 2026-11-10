@@ -446,8 +446,6 @@ cursor: pointer; transition: background .15s;
 <div class="card-icon">🛒</div>
 <div class="card-title">採購系統 <span class="upd upd-auto">🟢 自動</span></div>
 <div class="card-desc">盤點、建議叫貨量、訂貨單</div>
-<div class="card-stat" id="statPurchase">—</div>
-<div class="card-stat-label" id="statPurchaseLabel">本週建議採購</div>
 <div class="card-fresh wait" data-fresh="purchase">🕒 最後更新讀取中…</div>
 <div class="card-arrow">→</div>
 </div>
@@ -464,7 +462,7 @@ cursor: pointer; transition: background .15s;
 
 <!-- 口語應對訓練站（2026-10-07 經營者指示加入，第 2 張）：網站根目錄 /（static/index.html），員工語音練習應對話術；
      登入用訓練站自己的員工編號＋密碼（不走權限中心）；決策中心 action=fresh 沒有這一項，所以不放「最後更新」列 -->
-<div class="hub-card training" onclick="goTo('/')">
+<div class="hub-card training" onclick="goTo('https://diybc-training.onrender.com/')">
 <div class="card-icon">🎤</div>
 <div class="card-title" title="題庫、帳號、成績報表在站內「後台管理」">口語應對訓練站 <span class="upd upd-auto">🟢 即時</span></div>
 <div class="card-desc">開口練應對，AI 評分，10 分過關</div>
@@ -507,8 +505,6 @@ cursor: pointer; transition: background .15s;
 <div class="card-icon">💰</div>
 <div class="card-title">POS 銷售 <span class="upd upd-auto">🟢 自動</span></div>
 <div class="card-desc">各店營收、客單價、品項排行</div>
-<div class="card-stat" id="statPos"><span class="spin-sm"></span></div>
-<div class="card-stat-label" id="statPosLabel">資料載入中</div>
 <div class="card-fresh wait" data-fresh="pos">🕒 最後更新讀取中…</div>
 <div class="card-arrow">→</div>
 </div>
@@ -844,38 +840,26 @@ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
 
 // ── Google 評論：本月平均星等＋負評數（2026-10-04：兩個都成功且有平均星等才暫存；10 分鐘內有暫存就不查）──
 if (!hubStatUse('reviews', ['statReviews', 'statReviewsLabel'])) {
-const _revAvg = gvizQuery(REVIEWS_SHEET,
-`SELECT AVG(H) WHERE G = '${curYM}' LABEL AVG(H) 'avg'`,
-'工作表1'
-).then(res => {
-const rows = parseRows(res);
-if (rows.length && rows[0].c && rows[0].c[0] && rows[0].c[0].v !== null) {
-const avg = rows[0].c[0].v;
+/* 2026-11-11：改讀評論儀表板同一個讀取端點（原本用試算表查詢，「月份」欄被當成日期、7 月後的新評論查不到，卡片一直顯示沒有資料、負評 0 則）。
+   rows＝[門市, 評論者, 時間, 年月, 星等, …]；負評＝1～4 星（跟評論儀表板同口徑）。第一次叫醒要 10 多秒，逾時給 30 秒 */
+const REV_API = 'https://script.google.com/macros/s/AKfycbwoOqVB03froYy4frO4dUDUEPN3YfURH4bx1H71PWIYyoN5C0Pk16rBX-TblKxWgN91/exec';
+const revCb = 'hub_rev_cb_' + Date.now(), revSc = document.createElement('script');
+const revFail = () => { document.getElementById('statReviews').textContent = '— ★'; document.getElementById('statReviewsLabel').textContent = '無法取得'; };
+const revTo = setTimeout(() => { window[revCb] = function(){}; revFail(); }, 30000);
+window[revCb] = function(res) {
+clearTimeout(revTo); try { delete window[revCb]; document.head.removeChild(revSc); } catch (e) {}
+if (!res || !res.ok || !Array.isArray(res.rows)) return revFail();
+const m = res.rows.filter(r => String(r[3]) === curYM && Number(r[4]) > 0);
+if (!m.length) { document.getElementById('statReviews').textContent = '— ★'; document.getElementById('statReviewsLabel').textContent = curYM + ' 暫無資料'; return; }
+const avg = m.reduce((a, r) => a + Number(r[4]), 0) / m.length;
+const neg = m.filter(r => Number(r[4]) <= 4).length;
 document.getElementById('statReviews').textContent = avg.toFixed(2) + ' ★';
-document.getElementById('statReviewsLabel').textContent = curYM + ' 平均星等';
-return true;
-} else {
-document.getElementById('statReviews').textContent = '— ★';
-document.getElementById('statReviewsLabel').textContent = curYM + ' 暫無資料';
-}
-}).catch(() => {
-document.getElementById('statReviews').textContent = '— ★';
-document.getElementById('statReviewsLabel').textContent = '無法取得';
-});
-
-// ── Google 評論：本月負評數 ──
-const _revNeg = gvizQuery(REVIEWS_SHEET,
-`SELECT COUNT(A) WHERE G = '${curYM}' AND K = '負評' LABEL COUNT(A) 'cnt'`,
-'工作表1'
-).then(res => {
-const rows = parseRows(res);
-const cnt = (rows.length && rows[0].c && rows[0].c[0]) ? (rows[0].c[0].v || 0) : 0;
-document.getElementById('statReviewsLabel').textContent =
-(document.getElementById('statReviewsLabel').textContent.includes('平均') ? document.getElementById('statReviewsLabel').textContent : curYM + ' 平均星等') +
-` 負評 ${cnt} 則`;
-return true;
-}).catch(() => {});
-Promise.all([_revAvg, _revNeg]).then(([a, b]) => { if (a && b) hubStatSave('reviews', ['statReviews', 'statReviewsLabel']); });
+document.getElementById('statReviewsLabel').textContent = curYM + ' 平均星等 負評 ' + neg + ' 則';
+hubStatSave('reviews', ['statReviews', 'statReviewsLabel']);
+};
+revSc.onerror = () => { clearTimeout(revTo); revFail(); };
+revSc.src = REV_API + '?action=recent&callback=' + revCb;
+document.head.appendChild(revSc);
 }
 
 // ── 自己人：本月新增會員 ──
@@ -897,8 +881,7 @@ document.getElementById('statMemberLabel').textContent = '無法取得';
 
 // POS：暫無直接 gviz 來源，顯示佔位
 // TODO: 接 POS Sheet 後更新
-document.getElementById('statPos').textContent = '—';
-document.getElementById('statPosLabel').textContent = '待接 POS 資料源';
+/* 2026-11-11：POS 卡沒有接統計數字，拿掉永遠是「—／待接 POS 資料源」的佔位字 */
 
 // ── 排班:本週總工時 vs 上週 ±% ──
 loadScheduleStat();
@@ -970,7 +953,9 @@ document.getElementById('statScheduleLabel').textContent = '無資料';
 return;
 }
 // 按 week_start 排序,取最新與次新
-const sorted = [...res.week_kpi].sort((a,b) => b.week_start.localeCompare(a.week_start));
+/* 2026-11-11：班表已排到月底，只看「今天以前開始的週」，不然會抓到還沒排完的未來週 */
+const _t = new Date(), _today = _t.getFullYear() + '-' + String(_t.getMonth()+1).padStart(2,'0') + '-' + String(_t.getDate()).padStart(2,'0');
+const sorted = res.week_kpi.filter(r => String(r.week_start).slice(0,10) <= _today).sort((a,b) => String(b.week_start).localeCompare(String(a.week_start)));
 const weeks = [...new Set(sorted.map(r => r.week_start))];
 if (weeks.length < 1) {
 document.getElementById('statSchedule').textContent = '—';

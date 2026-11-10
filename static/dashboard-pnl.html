@@ -1451,6 +1451,8 @@ async function initApp() {
     const sr = await callApi('get_stores');
     const ar = await callApi('get_accounts');
     const yr = await callApi('get_yms');
+    /* 2026-11-11：後台回錯誤（{error:…}）時直接報錯，不要當成空資料繼續畫 */
+    [sr, ar, yr].forEach(x => { if (!x || x.error) throw new Error((x && x.error) || '後台沒有回資料'); });
     STORES = sr.stores||[];
     ACCOUNTS = ar.accounts||[];
     buildSignMap();
@@ -1550,7 +1552,7 @@ function buildFilters() {
   updateAreaButton();
 
   /* 趨勢圖店別 chips:預設全部開啟 */
-  TREND_STORE_ON = new Set(STORES.filter(s=>s['營運狀態']!=='已關増').map(s=>s['店號']));
+  TREND_STORE_ON = new Set(STORES.filter(s=>s['營運狀態']!=='已關閉').map(s=>s['店號']));
   renderTrendStoreChips();
 }
 
@@ -1609,8 +1611,13 @@ async function loadData() {
   const _gen = ++_loadGen;
   showLoad(true);
   try {
-    const ymS=document.getElementById('f-ym-start').value;
-    const ymE=document.getElementById('f-ym-end').value;
+    let ymS=document.getElementById('f-ym-start').value;
+    let ymE=document.getElementById('f-ym-end').value;
+    if (Number(ymS) > Number(ymE)) {   /* 2026-11-11：期間起訖選反 → 自動對調，不要整頁空白 */
+      [ymS, ymE] = [ymE, ymS];
+      document.getElementById('f-ym-start').value = ymS;
+      document.getElementById('f-ym-end').value = ymE;
+    }
     const sv=document.getElementById('f-store').value;
 
     let ids;
@@ -1630,6 +1637,7 @@ async function loadData() {
 
     const r = await callApi('get_fact_data',{store_ids:ids, ym_min:ymS, ym_max:ymE});
     if (_gen !== _loadGen) return;            /* 已有較新一輪,本輪作廢 */
+    if (!r || r.error) throw new Error((r && r.error) || '後台沒有回資料');   /* 2026-11-11：後台回錯誤時報錯，不要畫成全 0 */
     DATA = r.data||[];
 
     /* 0514：抓比較期。
@@ -2091,11 +2099,12 @@ async function openLedgerModal(accountName) {
     if (rows.length === 0) {
       // 區分：選到尚未匯入的年度 vs 該範圍真的無分錄
       // fact_ledger 目前涵蓋 113-114；115 以後尚未匯入
-      const LEDGER_MAX_YM = 11412; // fact_ledger 已匯入的最大年月（補 115 後請更新此值）
+      /* 2026-11-11：不再寫死 11412（115 年總分類帳已匯入）；跟著損益資料最新月份走 */
+      const LEDGER_MAX_YM = (typeof LATEST_YM === 'number') ? LATEST_YM : 99999;
       const startYm = Number(ymS);
       let emptyMsg;
       if (startYm > LEDGER_MAX_YM) {
-        emptyMsg = '<span title="目前明細只有 113～114 年度，115 年度還沒匯入">所選期間（' + rangeTxt + '）的總分類帳還沒匯入</span>';
+        emptyMsg = '<span title="這段期間晚於目前已匯入的損益月份">所選期間（' + rangeTxt + '）的總分類帳還沒匯入</span>';
       } else {
         emptyMsg = '<span title="可能是加盟店 9／10 店，或這家店這段期間沒有這個科目的帳">這個範圍沒有明細</span>';
       }
@@ -2170,7 +2179,7 @@ function fillAccountOptgroup() {
   });
 
   /* 按 L1_ORDER 排序,每組內按 account_code 排序 */
-  const fullOrder = [...L1_ORDER, '行銷費用'];
+  const fullOrder = L1_ORDER;   /* 2026-11-11：L1_ORDER 本來就有「行銷費用」，原本多補一次讓下拉重複 */
   fullOrder.forEach(l1 => {
     const list = byL1[l1];
     if (!list || !list.length) return;
@@ -2332,7 +2341,9 @@ function renderTrend() {
   }
 
   const gLabel = {month:'月',quarter:'季',half:'半年',year:'年'}[granularity];
-  const accumLabel = accumMode === 'cumulative' ? '(年累計)' : '';
+  /* 2026-11-11：期間不是從 1 月開始時，第一個年度只從起始月累計 → 標題註明 */
+  const _firstM = (keys.length && granularity === 'month') ? keys[0] % 100 : 1;
+  const accumLabel = accumMode === 'cumulative' ? (_firstM > 1 ? '(年累計；' + Math.floor(keys[0]/100) + ' 年只從 ' + _firstM + ' 月起算)' : '(年累計)') : '';
   const metricLabel = getMetricLabel(metric);
   document.getElementById('trend-title').textContent =
     `📈 各店 ${metricLabel} ${gLabel}趨勢${accumLabel}(${visibleSids.length} 家店)`;
@@ -2746,13 +2757,11 @@ adminHtmlEl.innerHTML = `
           <summary style="cursor:pointer; color:var(--text2); font-size:13px;">展開救援工具</summary>
           <div style="margin-top:12px; font-size:13px; line-height:1.8; color:var(--text2);">
             <strong>↶ 還原備份</strong>：把損益資料回復到某一次寫入之前的狀態。
-            每次寫入前系統都會自動備份，選日期最接近的那一份即可。<br>
-            <strong>✗ 清空待確認區</strong>：把還沒寫入的暫存資料清掉，重新拖檔再來。
-            <span style="color:#c62828;">已經寫進去的資料不會被清掉。</span>
+            每次寫入前系統都會自動備份，選日期最接近的那一份即可。
           </div>
           <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
             <button class="admin-btn admin-btn-danger" onclick="adminAskRollback()">↶ 還原備份</button>
-            <button class="admin-btn admin-btn-secondary" onclick="adminCancel()">✗ 清空待確認區</button>
+            <!-- 2026-11-11：拿掉「✗ 清空待確認區」——它其實沒清後台暫存，還會把這一區（含還原鈕）藏起來 -->
           </div>
         </details>
         <button id="admin-commit-btn" style="display:none;"></button>
@@ -4445,7 +4454,7 @@ function adminCancel() {
   const decEl = document.getElementById('admin-decision-section');
   const newAccEl = document.getElementById('admin-new-account-section');
   if (sumEl) sumEl.style.display = 'none';
-  if (decEl) decEl.style.display = 'none';
+  /* 2026-11-11：救援工具區（含還原備份）是常駐區塊，不再藏起來 */
   if (newAccEl) newAccEl.style.display = 'none';  /* 2026-06-09 新增 */
   /* 重新啟用一鍵按鈕 */
   const btn = document.getElementById('admin-oneclick-btn');
@@ -4481,12 +4490,13 @@ async function adminRollbackDo(backupName) {
   const msg = document.getElementById('admin-decision-msg');
   showAdminMsg(msg, 'info', '還原中...');
   try {
-    const r = await callApi('admin_rollback', { backupName: backupName, adminToken: _adminToken });
+    /* 2026-11-11：還原改用長逾時；結果欄位照後端（rowsRestored／errors） */
+    const r = await callApiLong('admin_rollback', { backupName: backupName, adminToken: _adminToken });
     if (!r || !r.ok) {
-      showAdminMsg(msg, 'err', '還原失敗: ' + ((r && r.error) || '未知'));
+      showAdminMsg(msg, 'err', '還原失敗: ' + ((r && r.errors && r.errors.length) ? r.errors.join(' / ') : ((r && r.error) || '未知')));
       return;
     }
-    showAdminMsg(msg, 'ok', '✅ 還原完成: ' + (r.restored_rows || '?') + ' 筆');
+    showAdminMsg(msg, 'ok', '✅ 還原完成: ' + (r.rowsRestored != null ? r.rowsRestored : (r.restored_rows || '?')) + ' 筆' + (r.factPnlBefore != null && r.factPnlAfter != null ? '（損益資料 ' + r.factPnlBefore + ' → ' + r.factPnlAfter + ' 筆）' : ''));
     _cacheClearFact();   /* 2026-08-13 還原成功→清 fact/yms 快取 */
   } catch(e) {
     showAdminMsg(msg, 'err', '還原異常: ' + e.message);
@@ -4805,7 +4815,7 @@ function renderAccountBreakdown(d) {
       <td><span class="bg-l1-tag">${r.L1 || '-'}</span>${r.account_name}${noBudgetTag}</td>
       <td class="num">${fmtMoney(r.budget)}${pctB}</td>
       <td class="num">${fmtMoney(r.actual)}${pctA}</td>
-      <td class="num" style="color: ${r.diff > 0 ? 'var(--bg-red)' : (r.diff < 0 ? 'var(--bg-green)' : 'var(--bg-gray)')}">${r.diff > 0 ? '+' : ''}${fmtMoney(r.diff)}</td>
+      <td class="num" style="color: ${r.diff === 0 ? 'var(--bg-gray)' : ((r.sign === '支出' ? r.diff < 0 : r.diff > 0) ? 'var(--bg-green)' : 'var(--bg-red)')}">${r.diff > 0 ? '+' : ''}${fmtMoney(r.diff)}</td>
       <td class="num">${pctDisplay}</td>
     </tr>`;
   }).join('');
@@ -4828,7 +4838,9 @@ function renderStoreRanking(d) {
   </div>`).join('');
 }
 
+let _bgGen = 0;   /* 2026-11-11：連點切換時，較早那輪晚到的回應不可蓋掉新的 */
 async function loadAll() {
+  const gen = ++_bgGen;
   const params = {
     year: state.year || '',
     denominator: state.denominator,
@@ -4841,15 +4853,23 @@ async function loadAll() {
       jsonp('get_account_breakdown', params),
       jsonp('get_store_ranking', { year: params.year, denominator: params.denominator })  // ranking 永遠顯示全部 12 店
     ]);
+    if (gen !== _bgGen) return;
     if (summary.error)  throw new Error('summary: ' + summary.error);
     if (trend.error)    throw new Error('trend: ' + trend.error);
     if (acc.error)      throw new Error('acc: ' + acc.error);
     if (ranking.error)  throw new Error('ranking: ' + ranking.error);
     renderSummary(summary);
     renderTrend(trend);
+    /* 2026-11-11：已過的月份如果還沒有實際數（損益表還沒到或還沒同步），預算卻已算進「已過月」→ 達成率偏低，要提醒 */
+    const noAct = (trend.series || []).filter(s => s.is_passed && !(s.revenue_actual > 0)).map(s => String(s.month).split('-')[1] + ' 月');
+    if (state.denominator === 'passed' && summary.actual_data_available && noAct.length) {
+      document.getElementById('bg-actual-notice').innerHTML =
+        `<div class="bg-notice">⚠️ <strong>${noAct.join('、')}還沒有實際數</strong>（損益表還沒匯入，或匯入後還沒按右上「🔄 同步實際數」），但這幾個月的預算已算進「已過月」，下面的達成率會偏低。</div>`;
+    }
     renderAccountBreakdown(acc);
     renderStoreRanking(ranking);
   } catch (e) {
+    if (gen !== _bgGen) return;
     document.getElementById('bg-kpi-grid').innerHTML = `<div class="bg-loading" style="grid-column: 1/-1; color: var(--bg-red);">載入失敗:${e.message}<br>
        <button onclick="BudgetTab.loadAll()" style="margin-top:10px;padding:8px 18px;border-radius:8px;border:1px solid var(--bg-red);background:#fff;color:var(--bg-red);font-weight:700;cursor:pointer">🔄 重試</button></div>`;
     console.error(e);

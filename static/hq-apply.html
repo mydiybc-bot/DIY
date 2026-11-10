@@ -537,7 +537,8 @@ function renderCards() {
         var q = p.quota[sub || '_'], used = q.scope === 'person' ? (who ? (q.usedBy[who] || 0) : null) : q.used;
         var ok = q.max === 0 || (used != null && used < q.max);
         if (ok) can = true;
-        var txt = q.max === 0 ? '不限次數' : (q.scope === 'person' ? (who ? who + '：本期已申請 ' + used + '／' + q.max + ' 次' : '每人每期 ' + q.max + ' 次，請先選申請人') : '本期已申請 ' + used + '／' + q.max + ' 次');
+        /* 2026-11-11：申請人姓名先跳脫再放進畫面 */
+        var txt = q.max === 0 ? '不限次數' : (q.scope === 'person' ? (who ? esc(who) + '：本期已申請 ' + used + '／' + q.max + ' 次' : '每人每期 ' + q.max + ' 次，請先選申請人') : '本期已申請 ' + used + '／' + q.max + ' 次');
         lines.push('<div class="qu' + (!ok && used != null ? ' full' : '') + '">' + (sub ? sub + '：' : '') + txt + '</div>');
       });
       var mine = me.apps.filter(function (a) { return a.type === k && a.period === p.key; });
@@ -616,7 +617,8 @@ function paintQuota() {
   if (!S.me) { box.innerHTML = head; $('sendBtn').disabled = true; return; }
   var p = S.me.periods[S.type], who = curWho(), sub = S.type === 'vendor' ? S.sub : '', q = p.quota[sub || '_'];
   var used = q.scope === 'person' ? (who ? (q.usedBy[who] || 0) : null) : q.used, ok = q.max === 0 || (used != null && used < q.max);
-  var txt = q.max === 0 ? (sub ? sub + '：' : '') + '不限次數' : q.scope === 'person' ? (who ? who + '：本期已申請 ' + used + '／' + q.max + ' 次' : '每人每期 ' + q.max + ' 次，請選申請人') : (sub ? sub + '：' : '') + esc(S.unit) + ' 本期已申請 ' + used + '／' + q.max + ' 次';
+  /* 2026-11-11：申請人姓名先跳脫再放進畫面 */
+  var txt = q.max === 0 ? (sub ? sub + '：' : '') + '不限次數' : q.scope === 'person' ? (who ? esc(who) + '：本期已申請 ' + used + '／' + q.max + ' 次' : '每人每期 ' + q.max + ' 次，請選申請人') : (sub ? sub + '：' : '') + esc(S.unit) + ' 本期已申請 ' + used + '／' + q.max + ' 次';
   var mine = S.me.apps.filter(function (a) { return a.type === S.type && a.period === p.key && (!sub || a.sub === sub); });
   var chips = mine.map(function (a) { return '<span class="chip ' + a.status + '">' + esc(a.statusLabel) + ' ' + esc(a.who) + '</span>'; }).join(' ');
   box.innerHTML = head + '<br><b style="color:' + (ok ? '#2F5D50' : '#A3321F') + '">' + txt + '</b>' + (chips ? '　' + chips : '') + (ok ? '' : '<br><span style="color:#A3321F">這一期已經申請過了；要改內容請到首頁「我的申請」刪掉原本那一筆再重送。</span>');
@@ -645,7 +647,8 @@ function openForm(type, app) {
   $('rowsFoot').innerHTML = '<tr><td colspan="' + (amtIdx + 1) + '" style="text-align:right">合計</td><td id="sumCell" style="text-align:right">0</td><td colspan="' + (t.cols.length - amtIdx + (t.photos ? 1 : 0)) + '" id="cntCell"></td></tr>';
   $('addRowBtn').textContent = t.photos ? '＋ 手動加一筆' : '＋ 加一列';
   show('vForm'); refreshTotals(); paintQuota();
-  if (app) { (pl.rows || []).forEach(function (r) { addRow(r); }); }
+  /* 2026-11-11：帶回舊明細時清掉舊的照片編號、群組碼加 e 字頭，免得跟這次新拍照片的流水號撞號（刪新照片會連舊明細一起刪） */
+  if (app) { (pl.rows || []).forEach(function (r) { var g = String(r.grp || ''); addRow(Object.assign({}, r, { photo: 0, grp: g ? (g.charAt(0) === 'e' ? g : 'e' + g) : '' })); }); }
   else if (!t.photos) addRow({});
 }
 function initForm() {
@@ -996,7 +999,7 @@ function submit() {
     var msg = e.message || String(e);
     $('sendMsg').textContent = '';
     alert(msg.indexOf('已經申請') >= 0 ? msg : '送出失敗：' + msg);
-  }).finally(function () { busyBtn(btn, false, '📤 送出申請並下載 Excel'); });
+  }).finally(function () { busyBtn(btn, false, S.edit ? '📤 儲存修改並下載 Excel' : '📤 送出申請並下載 Excel'); });   /* 2026-11-11：修改模式失敗後按鈕字維持「儲存修改」 */
 }
 function busyBtn(btn, on, label) { btn.disabled = on; btn.textContent = on ? '處理中…' : label; }
 function saveBlob(blob, name) { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
@@ -1064,7 +1067,7 @@ function buildExpense(wb, m, type) {
   cell(2, 6, d[0] + ' 年  ' + Number(d[1]) + ' 月  ' + Number(d[2]) + ' 日', F, { horizontal: 'right' });
   var heads = type === 'vendor' ? ['廠商／單據', '編碼', '發票號碼', '金額', '付款對象', '備註'] : type === 'training' ? ['課程／活動', '編碼', '發票號碼', '金額', '參加人', '備註'] : ['付款內容摘要', '編碼', '發票號碼', '金額', '付款對象', '備註'];
   heads.forEach(function (x, i) { cell(3, i + 1, x, B, { horizontal: 'center' }); });
-  var row = 4, total = 0, isAdv = type === 'advance';
+  var row = 4, total = 0, isAdv = type === 'advance' && m.rows.length <= 19;   /* 2026-11-11：代墊款超過 19 列放不進固定版型（第 23 列起是固定文字與 SUM(D4:D22)），改用往下延伸的版型 */
   m.rows.forEach(function (r, k) {
     var desc = type === 'vendor' ? (r.vendor + '｜' + r.items) : type === 'training' ? (r.items + (r.vendor ? '-' + r.vendor : '') + (r.date ? '（' + r.date + '）' : '')) : r.items;
     var payee = type === 'vendor' ? r.vendor : (r.payee || m.who);
@@ -1091,7 +1094,8 @@ function buildExpense(wb, m, type) {
     cell(row, 5, m.rows.length + ' 筆', F, { horizontal: 'center' }); bd(row, 6);
     var n1 = row + 1;
     ws.mergeCells(n1, 1, n1, 6); cell(n1, 1, '註: 1.單據請務必於右上角編碼（從 1 開始），以利辨識', F, {}, false);
-    ws.mergeCells(n1 + 1, 1, n1 + 1, 6); cell(n1 + 1, 1, type === 'vendor' ? '      2.廠商款於每月15日統一發放；需要其他付款日期請寫在備註。' + (m.subReason ? '　非常態原因：' + m.subReason : '') : '      2.專業訓練費每季每人申請一次，下一季第一個月 15 日前送出。', F, {}, false);
+    /* 2026-11-11：代墊款超過 19 列走這個延伸版型時，第 2 點用代墊款的說明 */
+    ws.mergeCells(n1 + 1, 1, n1 + 1, 6); cell(n1 + 1, 1, type === 'vendor' ? '      2.廠商款於每月15日統一發放；需要其他付款日期請寫在備註。' + (m.subReason ? '　非常態原因：' + m.subReason : '') : type === 'advance' ? '      2.個人請款於每月25日統一發放；不需填寫付款時間。' : '      2.專業訓練費每季每人申請一次，下一季第一個月 15 日前送出。', F, {}, false);
     if (m.note) { ws.mergeCells(n1 + 2, 1, n1 + 2, 6); cell(n1 + 2, 1, '申請人附註：' + m.note, F, { wrapText: true }, false); }
     ws.pageSetup.printArea = 'A1:F' + (n1 + 2);
   }

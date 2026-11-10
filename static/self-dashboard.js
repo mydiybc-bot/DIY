@@ -65,7 +65,9 @@ async function fetchDashboardData() {
     syncControls();
     renderDashboard();
 
-    const generatedAt = state.payload.generated_at ? dateFormatter.format(new Date(state.payload.generated_at)) : "剛剛";
+    /* 2026-11-11：伺服器回的時間是 UTC 但沒帶時區，補上 Z 才會換成台灣時間（原本少 8 小時） */
+    const generatedIso = state.payload.generated_at && !/(Z|[+-]\d{2}:?\d{2})$/.test(state.payload.generated_at) ? state.payload.generated_at + "Z" : state.payload.generated_at;
+    const generatedAt = generatedIso ? dateFormatter.format(new Date(generatedIso)) : "剛剛";
     refreshStatus.textContent = `已載入網頁儀表板，更新時間 ${generatedAt}。`;
     sourcePath.textContent = state.payload.source_path || "";
   } catch (error) {

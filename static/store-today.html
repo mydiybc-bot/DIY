@@ -285,7 +285,7 @@ function load(skipDay){
   if (!skipDay) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(j){
     if (gen !== (S.dayGen || 0)) return;   /* 送出後有人打勾／取消 → 這份是舊的，不蓋畫面（讀完會再讀一次） */
     if (!j.ok){ if (j.code === 'auth'){ if (EMB){ relogin(j.msg); throw 'stop'; } ls('st_pw_' + S.sid, null); S.pw = ''; renderLogin(j.msg); throw 'stop'; } S.err.day = j.msg; return; }
-    S.day = j.data; paint('todo'); paint('grp');
+    S.day = j.data; paint('todo'); paint('grp'); paint('dt');   /* 2026-11-11：跨過午夜後右上角日期也跟著更新 */
   }, function(e){ if (e !== 'stop'){ S.err.day = e.message; paint('todo'); paint('grp'); } }));
   jobs.push(jsonpRetry(SNAP_API + '?action=live&store=' + S.sid).then(function(j){ if (j && j.ok){ S.live = j; } else S.err.live = (j && j.error) || '讀取失敗'; paint('week'); paint('grp'); },
     function(e){ S.err.live = e.message; paint('week'); }));
@@ -319,7 +319,7 @@ function refreshRsv(){
     var liveOld = !S.live || !S.live.fut || String(S.live.fut.at || '') < String(j.built || '');
     var jobs = [];
     var gen = S.dayGen || 0;
-    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(r){ if (r.ok && gen === (S.dayGen || 0)){ S.day = r.data; paint('todo'); paint('grp'); } }));
+    if (j.refreshed) jobs.push(post({ action: 'storeDay', store: S.sid, spw: S.hq ? '' : S.pw, hpw: S.hq ? S.pw : '' }).then(function(r){ if (r.ok && gen === (S.dayGen || 0)){ S.day = r.data; paint('todo'); paint('grp'); paint('dt'); } }));
     if ((j.refreshed || liveOld) && j.built) jobs.push(jsonp(SNAP_API + '?action=live&store=' + S.sid + '&minFut=' + encodeURIComponent(j.built), 90000).then(function(r){ if (r && r.ok){ S.live = r; paint('week'); paint('grp'); } }));
     Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){ paint('grpAt'); paint('weekAt'); });
   }, function(){ S.rsvBusy = false; paint('grpAt'); paint('weekAt'); });
@@ -332,7 +332,7 @@ function renderMain(){
   document.title = '門市今日｜' + shortOf(S.sid);
   var t = today();
   $app.innerHTML = '<div class="wrap">' +
-    '<div class="top"><h1>🏪 ' + esc(shortOf(S.sid)) + '店</h1><div class="dt">' + md(t) + '（' + WK[dObj(t).getDay()] + '）</div><button class="rf" id="rf" title="重新整理">↻</button></div>' +
+    '<div class="top"><h1>🏪 ' + esc(shortOf(S.sid)) + '店</h1><div class="dt" id="dt">' + md(t) + '（' + WK[dObj(t).getDay()] + '）</div><button class="rf" id="rf" title="重新整理">↻</button></div>' +
     '<div class="fresh" id="fresh"></div>' +
     '<div class="sec"><h2>✅ 今天要做 <span class="n" id="todoN" style="display:none"></span></h2><div id="todo"></div></div>' +
     '<div class="sec" id="negSec" style="display:none"><h2>😟 這 3 天的負評 <span class="n" id="negN"></span></h2><div id="neg"></div></div>' +
@@ -364,6 +364,7 @@ function paint(k){
   else if (k === 'ann') el.innerHTML = annHtml();
   else if (k === 'neg') { var nh = negHtml(); el.innerHTML = nh; document.getElementById('negSec').style.display = nh ? '' : 'none'; }
   else if (k === 'camp') { var ch = campHtml(); el.innerHTML = ch; document.getElementById('campSec').style.display = ch ? '' : 'none'; bindCamp(); }
+  else if (k === 'dt') { var t0 = today(); el.textContent = md(t0) + '（' + WK[dObj(t0).getDay()] + '）'; }   /* 2026-11-11：右上角日期（頁面開著跨日要重畫） */
   else if (k === 'grpAt') el.textContent = atLine(S.day && S.day.groups && S.day.groups.at);
   else if (k === 'weekAt') el.textContent = atLine(S.live && S.live.fut && S.live.fut.at);
 }
@@ -515,6 +516,7 @@ function campHtml(){
   var C = S.camp; if (!C) return '';
   var t = today(), list = (C.camps || []).map(function(c){
     if (String(c.status || '') !== '啟用') return null;
+    var ps = String(c['參與門市'] || '').split(',').map(Number).filter(Boolean); if (ps.length && ps.indexOf(S.sid) < 0) return null;   /* 2026-11-11：檔期有勾「參與門市」→ 只給參加的店看（空白＝全部門市） */
     var st = String(c['起'] || ''), en = String(c['迄'] || ''), ea = String(c['自己人搶先開賣日'] || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(st)) return null;
     var first = (ea && ea < st) ? ea : st;

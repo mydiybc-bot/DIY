@@ -857,6 +857,7 @@ const POS_API   = 'https://script.google.com/macros/s/AKfycbxvD8dQdWJdaK9Ih9ZZc3
 const SCHED_API = 'https://script.google.com/macros/s/AKfycbwTE1H-uh6mtsoZP_HKscF8XGgpv8Mxu6lH1M8Xrbp0kjd8M2OR1sUtPZrnSVBAJkF6Og/exec';
 const ZJ_SHEET  = '1hZ8hpzrCNycrpm64Ge0fVxWDV-L__bxiagXk0btrBBQ';
 const REV_SHEET = '1kzJEBP0CVR7LL2Jeoxd1L2AdF345z_zTe5ytG_djOTw';
+const REV_API   = 'https://script.google.com/macros/s/AKfycbwoOqVB03froYy4frO4dUDUEPN3YfURH4bx1H71PWIYyoN5C0Pk16rBX-TblKxWgN91/exec';   /* 2026-11-11：評論 GAS 讀取端點（同 google-reviews.html GAS_REVIEWS_URL） */
 
 const STORES = [
   {id:1,name:'台中精明'},{id:2,name:'台中草悟道'},{id:3,name:'台北南京'},{id:4,name:'台北士林'},
@@ -866,7 +867,8 @@ const STORES = [
 const ZONES = [ ['北一區',[3,4,8]], ['北二區',[7,11]], ['北三區',[9,10]], ['中南區',[1,2,5,6,12]] ];
 /* 各來源店名 → 店號（關鍵字比對，順序重要：先比對較特殊者） */
 const NAME_KEYS = [['A13',11],['信義',11],['SKM',12],['Focus',5],['精明',1],['草悟道',2],['文化',6],['新竹',6],['板橋',7],['中壢',9],['藝文',10],['南京',3],['士林',4],['新店',8],['高雄',12]];
-function nameToId(n){ n=String(n||''); for(const [k,id] of NAME_KEYS){ if(n.indexOf(k)>=0) return id; } return null; }
+/* 2026-11-11：店名比對不分大小寫（評論資料寫「台南focus店」，原本對不到 5 號店） */
+function nameToId(n){ n=String(n||'').toLowerCase(); for(const [k,id] of NAME_KEYS){ if(n.indexOf(k.toLowerCase())>=0) return id; } return null; }
 /* 2026 自己人年度目標（來源 zijiren.html TARGETS_2026），月目標＝÷12 */
 const MEMBER_TARGET_Y = {1:4580,2:7190,3:10116,4:7409,5:6838,6:5434,7:7084,8:3854,9:4774,10:3971,11:6693,12:4584};
 const HR_EXCLUDE_CODES = ['C005','C006','C007','C008','C009'];   /* 與 dashboard-pnl.html 一致（0713：加入勞健退 C005~C007） */
@@ -982,7 +984,8 @@ async function initApp(){
     pos:    jsonp(POS_API,{},120000).then(r=>{ RAW.pos=r; }),
     sched:  jsonp(SCHED_API,{action:'getWeekKpiData'},60000).then(r=>{ RAW.sched=r; }),
     zjKpi:  gvizJsonp(ZJ_SHEET,'agg_store_kpi_365').then(r=>{ RAW.zjKpi=r; }),
-    reviews:gvizJsonp(REV_SHEET,'工作表1',30000,'SELECT A, G, H WHERE A IS NOT NULL').then(r=>{ RAW.reviews=r; })
+    /* 2026-11-11：評論改讀評論儀表板的 GAS 讀取端點（rows＝[門市, 評論者, 'YYYY-MM', 星等數字, …]）；原本用 gviz 讀，月份欄是文字的新資料會變空白，2026-07 以後的負評率全部算不出來 */
+    reviews:jsonp(REV_API,{},90000).then(r=>{ if(!r||!r.ok||!Array.isArray(r.rows)) throw new Error((r&&r.error)||'評論讀取失敗'); RAW.reviews=r; })
   };
   Object.keys(jobs).forEach(k=>{
     MR_PEND.add(k);
@@ -997,7 +1000,7 @@ async function initApp(){
     buildMonthSel();
   }catch(e){
     showErr('連不上損益資料：'+e.message+'（營收達成率、店損益、毛利率、人事費率這幾欄會沒有資料）');
-    const d=new Date(); d.setMonth(d.getMonth()-1);
+    const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);   /* 2026-11-11：先設成 1 號再減一個月（29～31 日直接減會跳錯月） */
     SEL_YM=(d.getFullYear()-1911)*100+(d.getMonth()+1);
     AVAILABLE_YMS=[SEL_YM]; buildMonthSel();
   }
@@ -1131,11 +1134,12 @@ function compute(wYm, year, lyYm){
   }); }
   /* 評論：當月 每店 */
   const revAgg={};
-  if(RAW.reviews){ gvRows(RAW.reviews).forEach(r=>{
-    if(!r.c) return;
-    const sid=nameToId(gv(r.c[0])); if(!sid) return;
-    if(parseYM(gv(r.c[1]))!==wYm) return;
-    const stars=(r.c[2]&&r.c[2].v!==null&&r.c[2].v!==undefined)?Number(r.c[2].v):null; if(stars===null||isNaN(stars)) return;
+  /* 2026-11-11：改讀 GAS 端點的 rows（r[0] 門市、r[2] 月份 'YYYY-MM'、r[3] 星等數字） */
+  if(RAW.reviews&&Array.isArray(RAW.reviews.rows)){ RAW.reviews.rows.forEach(r=>{
+    if(!r) return;
+    const sid=nameToId(r[0]); if(!sid) return;
+    if(String(r[2]==null?'':r[2]).slice(0,7)!==wYm) return;
+    const stars=(r[3]===null||r[3]===undefined||r[3]==='')?null:Number(r[3]); if(stars===null||isNaN(stars)) return;
     if(!revAgg[sid]) revAgg[sid]={n:0,neg:0,sum:0};
     revAgg[sid].n++; revAgg[sid].sum+=stars; if(stars<=4) revAgg[sid].neg++;
   }); }
@@ -2370,9 +2374,10 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     }).catch(function(e){ CAMP.st = 'err'; CAMP.err = e.message || String(e); }).then(function(){ if (B) renderSm(); });
   }
   function dayDiff(a, b){ return Math.round((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 86400000); }
-  function campList(today){
+  function campList(today, sid){
     return CAMP.camps.map(function(c){
       if (String(c.status || '') !== '啟用') return null;
+      var ps = String(c['參與門市'] || '').split(',').map(Number).filter(Boolean); if (sid && ps.length && ps.indexOf(Number(sid)) < 0) return null;   /* 2026-11-11：檔期有勾「參與門市」→ 只給參加的店看（空白＝全部門市） */
       var st = String(c['起'] || ''), en = String(c['迄'] || ''), ea = String(c['自己人搶先開賣日'] || '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(st)) return null;
       var first = (ea && ea < st) ? ea : st;
@@ -2409,10 +2414,10 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
     });
     return h;
   }
-  function smCampHtml(){
+  function smCampHtml(sid){   /* 2026-11-11：帶店號，依參與門市過濾 */
     if (CAMP.st === 'err' && !CAMP.at) return '<div class="dz-panel sm-camp" id="smCamp"><h2>🆕 新品・檔期</h2><div class="sm-err">⚠ ' + esc(CAMP.err) + '<button class="camp-re" type="button">重試</button></div></div>';
     if (!CAMP.at) return '<div class="dz-panel sm-camp" id="smCamp"><h2>🆕 新品・檔期<span class="upd">讀取中…</span></h2></div>';
-    var today = liveToday(), ls = campList(today);
+    var today = liveToday(), ls = campList(today, sid);
     if (!ls.length) return '';
     return '<div class="dz-panel sm-camp" id="smCamp"><h2 title="點一列看期間、新品、新增食材和器具">🆕 新品・檔期<span class="upd live">更新 ' + hmOf(CAMP.at) + '</span></h2>'
       + ls.map(function(x){
@@ -2534,7 +2539,7 @@ window.__mrInit = function(){ if (window.__mrStarted) return; window.__mrStarted
       + '每一塊右上角都有資料時間：標「快照」的是每天 11:00 算好的數字；訂位、團體、公告是打開這頁時即時抓的，按「↻ 重新整理」可以再抓一次。'
       + '</div></details>');
     h.push(smFreshHtml());
-    h.push('<div class="smw"><div class="sm-l">' + smTodoHtml(sid) + smCampHtml() + smPromoHtml(sid) + smAnnHtml() + smKpiHtml(sid) + smRevHtml(sid) + '</div><div class="sm-r">' + smCalHtml(sid) + smGbHtml(sid) + '</div></div>');
+    h.push('<div class="smw"><div class="sm-l">' + smTodoHtml(sid) + smCampHtml(sid) + smPromoHtml(sid) + smAnnHtml() + smKpiHtml(sid) + smRevHtml(sid) + '</div><div class="sm-r">' + smCalHtml(sid) + smGbHtml(sid) + '</div></div>');
     h.push('<div class="dz-panel" id="smDet" style="display:none"></div>');
     el.innerHTML = h.join('');
     wirePick(el); wireTasks(el); wireCells(el); wireTrkBar(el);

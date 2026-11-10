@@ -730,7 +730,7 @@ async function callClaude(systemPrompt, userMessage, conversationHistory = [], m
       },
       body: JSON.stringify({
         model: model,
-        max_tokens: 8192,
+        max_tokens: 16000,   /* 2026-11-11：8192 → 16000，步驟多的食譜不被截斷（後端 /api/recipe/claude 原樣轉送、沒有上限） */
         system: fullSystem,
         messages: messages
       })
@@ -749,7 +749,11 @@ async function callClaude(systemPrompt, userMessage, conversationHistory = [], m
     }
     
     const data = await response.json();
-    return data.content[0].text;
+    /* 2026-11-11：空內容／拒答時給看得懂的訊息；記下是否被截斷（原本 data.content[0].text 會直接出錯） */
+    const txt = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+    callClaude.lastStop = data.stop_reason || '';
+    if (!txt) throw new Error('小幫手沒有回內容（' + (data.stop_reason || '原因不明') + '），請再試一次');
+    return txt;
   } catch (e) {
     console.error('API call failed:', e);
     throw e;
@@ -773,7 +777,8 @@ async function runConvert() {
       const cleaned = result.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      resultBox.innerHTML = '<div style="color:var(--warn)">⚠️ 回傳非 JSON 格式,原文如下:</div><pre>' + escapeHtml(result) + '</pre>';
+      /* 2026-11-11：被截斷時先講原因 */
+      resultBox.innerHTML = '<div style="color:var(--warn)">⚠️ ' + (callClaude.lastStop === 'max_tokens' ? '回覆太長被截斷：請把食譜分段，或減少一次貼的內容。<br>' : '') + '回傳非 JSON 格式,原文如下:</div><pre>' + escapeHtml(result) + '</pre>';
       return;
     }
     
@@ -784,12 +789,13 @@ async function runConvert() {
 }
 
 function renderConvertResult(d, originalInput) {
+  window._convLast = d;   /* 2026-11-11：下載鈕改讀這個變數（見下方下載鈕） */
   const archInfo = V3_CTX.archetypes[d.matched_archetype];
   const archName = archInfo ? (archInfo.name || archInfo._meta?.archetype_name || '') : '(未匹配)';
   
   let html = `
-    <div><strong>對應 Archetype:</strong> <span class="feedback-tag tag-have">${d.matched_archetype}</span> ${archName}</div>
-    <div style="margin-top:6px;font-size:12px;color:var(--ink-soft)">${d.matched_reason || ''}</div>
+    <div><strong>對應 Archetype:</strong> <span class="feedback-tag tag-have">${escapeHtml(d.matched_archetype || '')}</span> ${archName}</div>
+    <div style="margin-top:6px;font-size:12px;color:var(--ink-soft)">${escapeHtml(d.matched_reason || '')}</div><!-- 2026-11-11：這兩行補 escape -->
     
     <div class="json-section">
       <div class="json-section-title">食譜基本資訊</div>
@@ -878,8 +884,9 @@ function renderConvertResult(d, originalInput) {
   
   html += `
     <div class="download-row">
-      <button class="btn btn-sec" onclick='downloadJSON(${JSON.stringify(JSON.stringify(d))}, "${(d.recipe_name||"recipe").replace(/[^a-zA-Z0-9一-龥]/g,"_")}.json")'>📥 下載 JSON</button>
-      <button class="btn btn-sec" onclick='downloadDocx(${JSON.stringify(JSON.stringify(d))})'>📄 下載文字版</button>
+      <!-- 2026-11-11：下載鈕改讀 window._convLast（原本把整份結果塞進單引號 onclick，內容有 ' 就壞掉） -->
+      <button class="btn btn-sec" onclick="downloadJSON(JSON.stringify(window._convLast), '${(d.recipe_name||"recipe").replace(/[^a-zA-Z0-9一-龥]/g,"_")}.json')">📥 下載 JSON</button>
+      <button class="btn btn-sec" onclick="downloadDocx(JSON.stringify(window._convLast))">📄 下載文字版</button>
     </div>
   `;
   
@@ -907,7 +914,8 @@ async function runFeasibility() {
       const cleaned = result.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      resultBox.innerHTML = '<div style="color:var(--warn)">⚠️ 回傳非 JSON 格式:</div><pre>' + escapeHtml(result) + '</pre>';
+      /* 2026-11-11：被截斷時先講原因 */
+      resultBox.innerHTML = '<div style="color:var(--warn)">⚠️ ' + (callClaude.lastStop === 'max_tokens' ? '回覆太長被截斷：請把食譜分段，或減少一次貼的內容。<br>' : '') + '回傳非 JSON 格式:</div><pre>' + escapeHtml(result) + '</pre>';
       return;
     }
     renderFeasibilityResult(parsed);
@@ -937,6 +945,7 @@ function renderFeasibilityResult(d) {
   }
   
   // 完整評估模式
+  window._feasLast = d;   /* 2026-11-11：下載鈕改讀這個變數（原本塞進單引號 onclick，內容有 ' 就壞掉） */
   const verdictColor = d.recommendation?.verdict?.includes('不建議') ? 'var(--warn)' : 
                        d.recommendation?.verdict?.includes('修改') ? 'var(--gold)' : 'var(--green)';
   
@@ -959,7 +968,8 @@ function renderFeasibilityResult(d) {
       <div><span class="feedback-tag tag-have">已在編號表</span>${(d.ingredients_needed?.have_existing || []).map(escapeHtml).join('、') || '無'}</div>
       ${d.ingredients_needed?.need_new?.length ?
         `<div style="margin-top:6px"><span class="feedback-tag tag-need">需新增</span></div>` +
-        d.ingredients_needed.need_new.map(i => `<div style="margin:4px 0 4px 12px">· <strong>${escapeHtml(i.name)}</strong> <span style="color:var(--ink-soft);font-size:12px">${escapeHtml(i.reason || '')} ${i.estimated_consumption ? '· 預估用量 ' + escapeHtml(i.estimated_consumption) : ''}</span></div>`).join('')
+        /* 2026-11-11：AI 回純文字陣列時也能顯示（原本直接讀 i.name 會出現 undefined） */
+        d.ingredients_needed.need_new.map(x => { const i = (x && typeof x === 'object') ? x : { name: x }; return `<div style="margin:4px 0 4px 12px">· <strong>${escapeHtml(i.name || '')}</strong> <span style="color:var(--ink-soft);font-size:12px">${escapeHtml(i.reason || '')} ${i.estimated_consumption ? '· 預估用量 ' + escapeHtml(i.estimated_consumption) : ''}</span></div>`; }).join('')
         : ''}
     </div>
     
@@ -1022,7 +1032,7 @@ function renderFeasibilityResult(d) {
     </div>
     
     <div class="download-row">
-      <button class="btn btn-sec" onclick='downloadJSON(${JSON.stringify(JSON.stringify(d))}, "feasibility_report.json")'>📥 下載 JSON</button>
+      <button class="btn btn-sec" onclick="downloadJSON(JSON.stringify(window._feasLast), 'feasibility_report.json')">📥 下載 JSON</button>
     </div>
   `;
   
