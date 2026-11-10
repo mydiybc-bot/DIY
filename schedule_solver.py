@@ -33,6 +33,18 @@ W_HOL_DATE = 1500    # 國定假日沒放在政府公告的那天（每天）
 W_SWITCH = 30        # 前後兩天早晚班交換（讓班表穩定一點）
 W_LEND = 1500        # 區域一起排：調去同城別家店（每人每天；比多排、缺人便宜，比沒事調店貴）
 
+# 2026-11-10 經營者：人力先滿足 週六 ＞ 國定假日 ＞ 週日 ＞ 週五 ＞ 四 ＞ 三 ＞ 二 ＞ 一
+# 缺人、某班沒人：順位越前面罰越重（人不夠時缺口留給順位後面的日子）；多排人：順位越前面罰越輕（多出來的人力先放前面的日子）。
+# 加減的幅度不跨層：缺人最高 116000 仍低於本店連上上限（120000），多排最低 3400 仍高於調店（1500）。
+DAY_RANK = {"六": 8, "日": 6, "五": 5, "四": 4, "三": 3, "二": 2, "一": 1}
+RANK_HOL = 7
+
+
+def day_rank(wd, is_hol):
+    """這天的人力順位（8 最優先）：週六 8、國定假日（政府公告放假的平日）7、週日 6、週五～週一 5～1"""
+    r = DAY_RANK.get(wd, 1)
+    return max(r, RANK_HOL) if is_hol else r
+
 
 def _mins(t):
     t = str(t)
@@ -236,12 +248,13 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 m.Add(sum(allv) + short >= tot_need)
                 m.Add(sum(allv) - tot_need <= extra)
                 m.Add(sum(allv) - tot_need - 1 <= extra2)
-                pen += [(short, W_SHORT), (extra, W_EXTRA), (extra2, W_EXTRA)]
+                rk = day_rank(wd_of[d], d in u["hol_days"])
+                pen += [(short, W_SHORT + rk * 2000), (extra, W_EXTRA - rk * 200), (extra2, W_EXTRA)]
                 for n, c in u["need"][d].items():
                     vv = [v for nn, v in got if nn == n]
                     miss = m.NewIntVar(0, c, "")
                     m.Add(sum(vv) + miss >= c)
-                    pen.append((miss, W_SHIFT))
+                    pen.append((miss, W_SHIFT + rk * 400))
             for n, c in u["caps"].get(d, {}).items():
                 vv = [v for nn, v in got if nn == n]
                 if vv:

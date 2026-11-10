@@ -399,6 +399,63 @@ def cfg_load(store):
     return {"shifts": [], "max_consec": 5, "late_early_limit": 0, "support": "", "rules": "", "carry": [], "updated": ""}
 
 
+def _t(m):
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def split_span(start, end, rest=0, rest_at="", what="時段"):
+    """2026-11-10 經營者：店長只填「上班、下班、休息幾分鐘」，系統自己拆成 104 收的分段（104 時間排班不扣休息，
+    只能靠中間留空檔；空檔不算工時、不會變加班）。休息從幾點開始可指定；沒指定＝上班滿 4 小時後，
+    剩下不到 4 小時又放不下就放正中間（5 分鐘一格）。回 [[起,迄], …]；寫錯丟 ValueError"""
+    a, b = _hhmm(start), _hhmm(end)
+    if not a or not b:
+        raise ValueError(f"{what}要填上班和下班時間")
+    ma, mb = _mins(a), _mins(b)
+    if mb <= ma:
+        raise ValueError(f"{what} {a}-{b} 下班要晚於上班")
+    try:
+        rest = int(float(unicodedata.normalize("NFKC", str(rest if rest not in (None, "") else 0)).strip()))
+    except ValueError:
+        raise ValueError(f"{what}的休息要填分鐘數（例：30；不休息填 0）")
+    if rest < 0 or rest % 5:
+        raise ValueError(f"{what}的休息分鐘要是 5 的倍數（104 只收 5 分鐘一格）")
+    if not rest:
+        return [[a, b]]
+    if mb - ma - rest < 10:
+        raise ValueError(f"{what} {a}-{b} 扣掉休息 {rest} 分鐘就沒有上班時間了")
+    at = _hhmm(rest_at)
+    if at:
+        r0 = _mins(at)
+        if r0 <= ma or r0 + rest >= mb:
+            raise ValueError(f"{what}的休息 {at} 起 {rest} 分鐘要落在 {a}-{b} 中間")
+    else:
+        r0 = ma + 240
+        if r0 + rest >= mb:
+            r0 = ma + ((mb - ma - rest) // 2 + 4) // 5 * 5
+    return [[a, _t(r0)], [_t(r0 + rest), b]]
+
+
+def span_of(segs):
+    """分段 → (上班, 下班, 休息分鐘, 休息從幾點)；一段班休息 0"""
+    segs = [x for x in segs or [] if x and x[0] and x[1]]
+    if not segs:
+        return "", "", 0, ""
+    rest = sum(_mins(segs[i][0]) - _mins(segs[i - 1][1]) for i in range(1, len(segs)))
+    return segs[0][0], segs[-1][1], rest, (segs[0][1] if len(segs) > 1 and rest else "")
+
+
+def span_txt(segs):
+    """給人看的寫法：10:30–19:00（休 30 分）"""
+    a, b, rest, _ = span_of(segs)
+    return f"{a}–{b}" + (f"（休 {rest} 分）" if rest else "") if a else ""
+
+
+def cell_from_span(sp):
+    """改班視窗填的「上班／下班／休息」→ 格子文字（10:30-14:30,15:00-19:00）"""
+    segs = split_span(sp.get("start"), sp.get("end"), sp.get("rest"), sp.get("rest_at") or "", "自訂時段")
+    return ",".join(f"{a}-{b}" for a, b in segs)
+
+
 def cfg_clean(body):
     """店別基本設定：檢查＋整理（寫錯丟 ValueError）"""
     out = {"shifts": [], "carry": []}
@@ -406,6 +463,8 @@ def cfg_clean(body):
     for r in (body.get("shifts") or [])[:20]:
         name = str(r.get("name") or "").strip()[:20]
         segs = []
+        if r.get("start") or r.get("end"):   # 2026-11-10：新表單填「上班／下班／休息」→ 自動拆段
+            r = dict(r, segs=split_span(r.get("start"), r.get("end"), r.get("rest"), r.get("rest_at") or "", f"班別「{name}」"))
         for a, b in (r.get("segs") or [])[:3]:
             a, b = _hhmm(a), _hhmm(b)
             if a and b:
@@ -1559,7 +1618,7 @@ RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班�
 - {"type":"demand","shift":"班別","days":[…],"count":人數}：這幾天這班要幾人（取代原本人數，例：週三晚班只排 1 人）
 - {"type":"extra","shift":"班別","days":[…],"count":人數}：這幾天這班多加幾人（特殊日加人）
 - {"type":"fixed_cell","emp":"工號","day":日期,"cell":"格子"}：那天固定用這個格子（上課、會議、跨店支援、包館等自訂時段）
-格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@交流會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@交流會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。
+格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@交流會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@交流會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。自訂上班時間超過 4 小時的，中間要留 30 分鐘休息、拆成兩段（上班滿 4 小時後開始休，例：店長說「10:30 到 19:00」→「10:30-14:30,15:00-19:00」；104 不會自動扣休息，寫成一段會把休息也算進工時）；店長明講不休息或指定休息時間才照他說的。
 店長用語對照：上課／南京上課／內訓→時段標籤「@台北內訓課」＋那段的崗位（例 10:20-12:00,12:30-15:00@台北內訓課#南京店）；店長會議／區會→@區會；交流會→@交流會議；事務→@事務班；經管會→@經管會；包館→@包館；到別家店支援→那幾段 #那家店＋@支援。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、彈性挪假、挪假補班、整天支援）。
 朝會、巡店、消毒這類日常筆記不用翻，也不用列進 unapplied。看不懂或沒辦法用上面規則表達的，原文放進 unapplied 並說明原因。不要自己發明規則。"""
 
@@ -3652,7 +3711,8 @@ def handle(path, body):
             if not st.get("schedule"):
                 return 400, {"ok": False, "error": "還沒有班表"}
             try:
-                _apply(st, body.get("changes") or [], "店長在日曆上改")
+                chs = [dict(c, value=cell_from_span(c["span"])) if isinstance(c.get("span"), dict) else c for c in body.get("changes") or []]
+                _apply(st, chs, "店長在日曆上改")
             except ValueError as ex:
                 return 400, {"ok": False, "error": str(ex)}
             _save(st)

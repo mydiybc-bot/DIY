@@ -262,7 +262,10 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
   <div class="mute" id="edNow"></div>
   <label>改成</label>
   <select id="edSel"></select>
-  <label>或自訂（進階）：例 10:20-12:00,12:30-15:00@交流會議</label>
+  <label>或自己填上下班時間（休息不算工時，系統自動拆成 104 的兩段）</label>
+  <div class="row" style="gap:6px;align-items:center;flex-wrap:nowrap"><input type="text" id="edA" placeholder="上班 10:30" maxlength="5" inputmode="numeric"><span>–</span><input type="text" id="edB" placeholder="下班 19:00" maxlength="5" inputmode="numeric"><span style="white-space:nowrap">休息</span><input type="number" id="edR" min="0" max="240" step="5" placeholder="自動" style="max-width:76px"><span>分</span></div>
+  <div class="mute" id="edPrev" style="font-size:12px;min-height:16px"></div>
+  <label>或自訂（進階，有會議／支援才用）：例 10:20-12:00,12:30-15:00@交流會議</label>
   <input type="text" id="edTxt">
   <div class="err" id="edErr"></div>
   <div class="row" style="justify-content:flex-end">
@@ -357,15 +360,21 @@ function renderForms(force){
   renderCfgForm(cfg);renderMsetForm(ms);renderMarks();
 }
 function tmIn(v){return '<input type="text" class="tm" value="'+esc(v||'')+'" placeholder="10:20" maxlength="5">'}
-function shiftRow(r){r=r||{};var sg=r.segs||[];
-  return '<tr><td><input type="text" class="nm" value="'+esc(r.name||'')+'" placeholder="例：平日早班"></td>'+[0,1,2].map(function(i){return '<td>'+tmIn(sg[i]&&sg[i][0])+'–'+tmIn(sg[i]&&sg[i][1])+'</td>'}).join('')+
+/* 2026-11-10 經營者：班別只填「上班、下班、休息幾分鐘」，系統自己拆成 104 收的分段（104 不扣休息，靠中間留空檔） */
+function spanOf(sg){sg=(sg||[]).filter(function(x){return x&&x[0]&&x[1]});if(!sg.length)return {a:'',b:'',rest:0,at:''};
+  var rest=0;for(var i=1;i<sg.length;i++)rest+=mm(sg[i][0])-mm(sg[i-1][1]);return {a:sg[0][0],b:sg[sg.length-1][1],rest:rest,at:(sg.length>1&&rest)?sg[0][1]:''}}
+function spanTxt(sg){var p=spanOf(sg);return p.a?p.a+'–'+p.b+(p.rest?'（休 '+p.rest+' 分）':''):''}
+function shiftRow(r){r=r||{};var sg=r.segs||[],p=spanOf(sg),multi=sg.length>2;
+  return '<tr'+(multi?' data-segs="'+esc(JSON.stringify(sg))+'" data-init="'+esc([p.a,p.b,p.rest,p.at].join('|'))+'"':'')+'><td><input type="text" class="nm" value="'+esc(r.name||'')+'" placeholder="例：平日早班">'+(multi?'<div class="mute" style="font-size:11px">分 '+sg.length+' 段：'+esc(sg.map(function(x){return x[0]+'-'+x[1]}).join('、'))+'（時間沒改就照原樣）</div>':'')+'</td>'+
+    '<td>'+tmIn(p.a)+'</td><td>'+tmIn(p.b)+'</td><td><input type="number" class="n" min="0" max="240" step="5" value="'+esc(r.name||sg.length?p.rest:30)+'"></td><td>'+tmIn(p.at).replace('placeholder="10:20"','placeholder="自動"')+'</td>'+
     '<td><input type="number" class="n" min="0" max="20" value="'+esc(r.wd==null?'':r.wd)+'"></td><td><input type="number" class="n" min="0" max="20" value="'+esc(r.we==null?'':r.we)+'"></td><td class="x" title="刪除這列">✕</td></tr>'}
 function carryRow(r){r=r||{};return '<tr><td><input type="text" class="nm" value="'+esc(r.name||'')+'"></td><td><select title="A＝那天本來休假卻來上班，之後要補休給夥伴；B＝那天多放了假，之後要補上班給公司"><option value="A"'+(r.type!=='B'?' selected':'')+'>休假日來上班 → 要補休給夥伴</option><option value="B"'+(r.type==='B'?' selected':'')+'>多放一天假 → 要補上班給公司</option></select></td><td><input type="text" class="nm" value="'+esc(r.date||'')+'" placeholder="2026-10-05"></td><td><input type="text" class="wide" value="'+esc(r.note||'')+'" placeholder="例：本月想補在 11/20／可補可不補"></td><td class="x" title="已補回，刪除">✕</td></tr>'}
 function renderCfgForm(cfg){
   var sh=(cfg.shifts&&cfg.shifts.length)?cfg.shifts:[{name:'平日早班',segs:[['10:20','12:00'],['12:30','18:50']],wd:1,we:0},{name:'平日晚班',segs:[['13:00','15:00'],['15:30','21:30']],wd:1,we:0},{name:'假日早班',segs:[['09:50','12:00'],['12:30','18:20']],wd:0,we:1},{name:'假日中班',segs:[['12:00','15:00'],['15:30','20:30']],wd:0,we:1},{name:'假日晚班',segs:[['13:30','15:30'],['16:00','22:00']],wd:0,we:1}];
   var h=(cfg.shifts||[]).length?'':'<div class="warn" style="font-size:13px">⚠ 下面是預設範例，請改成本店實際的班別</div>';
-  h+='<div class="sub">班別與每天需要的人數</div><div class="tblwrap"><table class="frm" id="shiftTbl"><thead><tr><th>班別名稱</th><th>第 1 段</th><th>第 2 段</th><th>第 3 段</th><th>平日每天<br>幾人</th><th>假日每天<br>幾人</th><th></th></tr></thead><tbody>'+sh.map(shiftRow).join('')+'</tbody></table></div>';
-  h+='<button class="btn ghost sm" id="shiftAdd" type="button">＋ 加一個班別</button><span class="mute">　名稱要含早／中／晚、分平日／假日</span>';
+  h+='<div class="sub">班別與每天需要的人數</div><div class="tblwrap"><table class="frm" id="shiftTbl"><thead><tr><th>班別名稱</th><th>上班</th><th>下班</th><th>休息<br>幾分鐘</th><th>休息<br>從幾點</th><th>平日每天<br>幾人</th><th>假日每天<br>幾人</th><th></th></tr></thead><tbody>'+sh.map(shiftRow).join('')+'</tbody></table></div>';
+  h+='<button class="btn ghost sm" id="shiftAdd" type="button">＋ 加一個班別</button><span class="mute">　名稱要含早／中／晚、分平日／假日</span>'+
+     '<div class="mute" style="font-size:12px;margin-top:4px">只要填上班、下班和休息幾分鐘（不休息填 0）。休息時間不算工時；匯入 104 時系統會自動拆成兩段。「休息從幾點」不填＝上班滿 4 小時後開始休。</div>';
   h+='<div class="sub">規則</div><label class="fld">連續上班最多 <input type="number" id="cMax" min="1" max="12" value="'+esc(cfg.max_consec==null?5:cfg.max_consec)+'"> 天</label>'+
      '<label class="fld">晚班接隔天早班最多 <input type="number" id="cLate" min="0" max="31" value="'+esc(cfg.late_early_limit==null?0:cfg.late_early_limit)+'"> 次</label>';
   h+='<div class="sub">跨店支援夥伴</div><textarea id="cSupport" rows="2" placeholder="誰、哪家店、通常什麼時候來">'+esc(cfg.support||'')+'</textarea>';
@@ -379,8 +388,12 @@ function renderCfgForm(cfg){
   $('cfgSave').onclick=saveCfg;
 }
 function collectCfg(){
-  var shifts=[];Array.prototype.forEach.call($('shiftTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');var segs=[];for(var i=0;i<3;i++){var a=ins[1+i*2].value.trim(),b=ins[2+i*2].value.trim();if(a||b)segs.push([a,b])}
-    shifts.push({name:ins[0].value.trim(),segs:segs,wd:ins[7].value,we:ins[8].value})});
+  var shifts=[];Array.prototype.forEach.call($('shiftTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');var v=[1,2,3,4].map(function(i){return ins[i].value.trim()});
+    var row={name:ins[0].value.trim(),wd:ins[5].value,we:ins[6].value};
+    if(!v[0]&&!v[1]){if(!row.name)return;row.segs=[]}
+    else if(tr.dataset.segs&&tr.dataset.init===[v[0],v[1],+v[2]||0,v[3]].join('|'))row.segs=JSON.parse(tr.dataset.segs);   /* 3 段的班別時間沒改 → 原樣保留 */
+    else{row.start=v[0];row.end=v[1];row.rest=v[2]||0;row.rest_at=v[3]}
+    shifts.push(row)});
   var carry=[];Array.prototype.forEach.call($('carryTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input'),sel=tr.querySelector('select');carry.push({name:ins[0].value,type:sel.value,date:ins[1].value,note:ins[2].value})});
   return {shifts:shifts,max_consec:$('cMax').value,late_early_limit:$('cLate').value,support:$('cSupport').value,rules:$('cRules').value,carry:carry};
 }
@@ -554,7 +567,10 @@ function short(raw){
   if((S.template.info.dayTypes||[]).indexOf(raw)>=0)return {main:raw.replace('假日','').replace('日','')||raw,dt:dt,typ:raw};
   var mv=raw.match(/@支援#([^,@#]+)/);   /* 2026-11-06 區域排班：整天調去別店 → 顯示「→南京」 */
   if(mv&&raw.split(',').every(function(x){return x.indexOf('#'+mv[1])>=0}))return {main:'→'+mv[1].replace(/店$/,''),dt:dt,typ:typ};
-  var main=sh[raw]?raw.replace(/^(平日|假日)/,''):(raw?raw.split(',')[0].split('@')[0].split('#')[0]+'…':'');
+  var main=sh[raw]?raw.replace(/^(平日|假日)/,''):'';
+  if(!main&&raw){var ps=raw.split(',');   /* 純休息空檔（沒有標籤、崗位）的自訂時段 → 顯示成一段「10:30–19:00」 */
+    if(ps.every(function(x){return /^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(x.trim())}))main=ps[0].split('-')[0].trim()+'–'+ps[ps.length-1].split('-')[1].trim();
+    else main=ps[0].split('@')[0].split('#')[0]+'…'}
   return {main:main,dt:dt,typ:typ};
 }
 function revOf(d){var r=(S.ext&&S.ext.revenue)||{};if(r.special&&r.special[d])return +r.special[d];return isWk(d)?+(r.weekend||0):+(r.weekday||0)}
@@ -698,13 +714,22 @@ $('tblWrap').addEventListener('click',function(e){var td=e.target.closest('td.c'
   $('edNow').textContent='現在：'+(raw||'（空白）');
   var sh=Object.keys((S.ext&&S.ext.shifts)||{}),wk=isWk(d);
   sh.sort(function(a,b){var pa=(a.indexOf(wk?'假日':'平日')===0)?0:1,pb=(b.indexOf(wk?'假日':'平日')===0)?0:1;return pa-pb});
-  var o='<option value="__keep">（選一個）</option>';sh.forEach(function(x){var t=S.ext.shifts[x].map(function(s){return s[0]+'-'+s[1]}).join('、');o+='<option value="'+esc(x)+'">'+esc(x)+'　'+t+'</option>'});
+  var o='<option value="__keep">（選一個）</option>';sh.forEach(function(x){var t=spanTxt(S.ext.shifts[x]);o+='<option value="'+esc(x)+'">'+esc(x)+'　'+t+'</option>'});
   ['例假日','休息日','國定假日'].forEach(function(x){o+='<option value="'+x+'">'+x+'（不上班）</option>'});o+='<option value="">空白（沒排）</option>';
-  $('edSel').innerHTML=o;$('edTxt').value='';$('edErr').textContent='';$('edModal').style.display='flex'});
+  $('edSel').innerHTML=o;$('edTxt').value='';$('edA').value=$('edB').value=$('edR').value='';$('edPrev').textContent='';$('edErr').textContent='';$('edModal').style.display='flex'});
 $('edCancel').onclick=function(){$('edModal').style.display='none'};
-$('edOk').onclick=function(){var v=$('edTxt').value.trim()||($('edSel').value==='__keep'?null:$('edSel').value);
-  if(v===null){$('edErr').textContent='請選一個或自訂';return}
-  $('edOk').disabled=true;post('edit',{changes:[{emp:edCur.eid,day:edCur.d,value:v}]}).then(function(j){$('edOk').disabled=false;$('edModal').style.display='none';apply(j)})
+function tmNorm(v){v=(v||'').trim().replace('：',':');var m=v.match(/^(\d{1,2}):?(\d{2})$/);return m?('0'+m[1]).slice(-2)+':'+m[2]:''}
+function edSpan(){var a=tmNorm($('edA').value),b=tmNorm($('edB').value);if(!a||!b)return null;
+  var r=$('edR').value.trim();if(r==='')r=(mm(b)-mm(a)>240)?30:0;return {start:a,end:b,rest:+r}}
+function edPreview(){var sp=edSpan(),el=$('edPrev');if(!sp){el.textContent='';return}
+  var w=mm(sp.end)-mm(sp.start)-sp.rest;if(w<=0){el.textContent='⚠ 下班要晚於上班';return}
+  el.textContent='→ '+sp.start+'–'+sp.end+(sp.rest?'，休息 '+sp.rest+' 分':'，不休息')+'，算 '+Math.round(w/6)/10+' 小時'+(!sp.rest&&w>240?'（超過 4 小時沒休息，104 會整段算工時）':'')}
+['edA','edB','edR'].forEach(function(k){$(k).addEventListener('input',edPreview)});
+$('edOk').onclick=function(){var txt=$('edTxt').value.trim(),sp=txt?null:edSpan(),v=txt||(sp?'':($('edSel').value==='__keep'?null:$('edSel').value));
+  if(!txt&&!sp&&($('edA').value.trim()||$('edB').value.trim())){$('edErr').textContent='上班、下班時間要寫成 10:30';return}
+  if(v===null){$('edErr').textContent='請選一個，或填上下班時間';return}
+  var ch={emp:edCur.eid,day:edCur.d,value:v};if(sp)ch.span=sp;
+  $('edOk').disabled=true;post('edit',{changes:[ch]}).then(function(j){$('edOk').disabled=false;$('edModal').style.display='none';apply(j)})
    .catch(function(e){$('edOk').disabled=false;$('edErr').textContent=e.message})};
 
 auth=loadAuth();if(auth)enter();else showLogin('');
