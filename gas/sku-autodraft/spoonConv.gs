@@ -53,7 +53,7 @@ function spoonConvSync_(ss, dry) {
   var sv = ss.getSheetByName(AD_SKU_TAB).getDataRange().getValues(), sh0 = sv[0].map(function (x) { return String(x || '').trim(); });
   var iN = sh0.indexOf('品名'), iU = sh0.indexOf('使用單位'), iA = sh0.indexOf('BOM別名'), useU = {};
   sv.slice(1).forEach(function (r) {
-    var u = String(r[iU] || '').trim(), names = [String(r[iN] || '').trim()].concat(iA >= 0 ? String(r[iA] || '').split(/[;；]/) : []);
+    var u = String(r[iU] || '').trim(), names = [String(r[iN] || '').trim()].concat(iA >= 0 ? String(r[iA] || '').split(/[;；,，、]/) : []);
     names.forEach(function (n) { n = String(n).trim(); if (n && !useU[n]) useU[n] = u; });
   });
 

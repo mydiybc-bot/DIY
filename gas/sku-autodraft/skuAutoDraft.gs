@@ -91,6 +91,7 @@ function adRun_(dry) {
       rows.push(rec);
       exact[nm] = rec; rec.aliases.forEach(function (a) { exact[a] = rec; });
       var nn = adNorm_(nm); if (!normIdx[nn]) normIdx[nn] = rec;
+      rec.aliases.forEach(function (a) { var an = adNorm_(a); if (an && !normIdx[an]) normIdx[an] = rec; });   /* 2026-11-10：別名也做寫法比對（只差空白／全半形括號就不另建草稿） */
       var sn = adStripCode_(nm); if (sn && sn !== nn && !stripIdx[sn]) stripIdx[sn] = rec;
       var m = id.match(/^([FCT])(\d+)$/); if (m && +m[2] > maxNum[m[1]]) maxNum[m[1]] = +m[2];
     }

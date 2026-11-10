@@ -816,7 +816,8 @@ function gvCore(url,key,tag){
     var j=JSON.parse(t.substring(t.indexOf('{'),t.lastIndexOf('}')+1));
     var cols=((j.table&&j.table.cols)||[]).map(function(c){return (c.label||c.id);});
     var rows=((j.table&&j.table.rows)||[]).map(function(r){var o={};(r.c||[]).forEach(function(c,i){o[cols[i]]=c?c.v:null;});return o;});
-    if(j.status!=="error")gvcSet(key,rows);   /* 2026-10-04 效能 1-1：Google 回錯誤（例：重算逾時）時不拿空結果蓋掉上次的好暫存；回傳值照舊 */
+    if(j.status==="error")return {ok:false,soft:true};   /* 2026-11-10：Google 回錯誤（例：重算逾時）→ 有上次的暫存就用暫存並亮警示；沒暫存（本來就不存在的表／欄）照舊回空、不亮 */
+    gvcSet(key,rows);
     return {ok:true,rows:rows};
   }).catch(function(e){console.warn('gviz '+tag+' 失敗',e);return {ok:false};});
   var to=new Promise(function(res){setTimeout(function(){res({ok:false,timeout:true});},GV.TIMEOUT);});
@@ -824,6 +825,7 @@ function gvCore(url,key,tag){
     if(r.ok){delete GV.bad[key];gvBanner();return r.rows;}
     return gvcGet(key).then(function(c){var rows;
       if(c){rows=c.d;rows.__cached=c.t;GV.bad[key]={cached:c.t,tag:tag};}
+      else if(r.soft){delete GV.bad[key];gvBanner();return [];}
       else{rows=[];rows.__failed=true;GV.bad[key]={cached:false,tag:tag};}
       console.warn('gviz '+tag+(r.timeout?' 逾時':' 失敗')+(c?'，改用 '+new Date(c.t).toLocaleString()+' 的快取':'，且無快取'));
       gvBanner();return rows;
@@ -863,13 +865,18 @@ var RF={busy:false};
    店長按「🔄 更新」只重讀：盤點／店別參數的改動前端即時生效，不需要重算；12 店各自按會把後端打爆，且 07:00–07:45 與每日排程撞寫。
    noRebuild=true（重算完成後的自動重讀）不再觸發重算，避免無限迴圈。 */
 function rbInWindow(){var d=new Date(),m=d.getHours()*60+d.getMinutes();return m>=7*60&&m<7*60+45;}
+function invRedraft(){DIRTY={};DRAFTED={};try{if(ST.storeId)mergeDraft(ST.storeId);}catch(e){console.warn(e);}}   /* 2026-11-10：整批重讀後 INV 是試算表的值，要把本機還沒存的盤點草稿併回去（不然會把舊數字當成這次盤點存出去） */
 function refreshAll(noRebuild){
-  if(RF.busy)return;RF.busy=true;
+  if(RF.busy)return;
+  if(typeof SAVEALL!=="undefined"&&!SAVEALL.busy&&typeof paramDirty==="function"&&paramDirty().length){   /* 2026-11-10：重讀會把畫面換回試算表的值，還沒存的店別參數修改要先講清楚 */
+    if(typeof confirm==="function"&&!confirm("還有 "+paramDirty().length+" 項店別參數改了沒存，更新後會不見。\n\n【確定】丟掉這些修改並更新\n【取消】先不更新（回店別參數按「儲存並更新」）"))return;
+    paramDiscard();}
+  RF.busy=true;
   var el=$("#upd");if(el)el.textContent="更新中…";
   Object.keys(GV.bad).forEach(function(k){delete GV.bad[k];});
   ANMAP=null;ANBOM=null;AN_FAILED=false;SHIST={};FLOWST="";PLATOWN={};CAMP=null;SUPC={};WMED=null;dcohReset();
   return bootstrap(true).then(function(){
-    RF.busy=false;stampUpd();
+    RF.busy=false;stampUpd();invRedraft();
     try{render();}catch(e){console.warn(e);}
     loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});
     if(!noRebuild&&ST.role==="總部"){
@@ -992,7 +999,7 @@ function gvizStore(sheet,sc){
 function scopeReload(){   /* 全域資料只有本店（店長開頁），現在身分是總部／出貨中心 → 重抓整張；抓完 BOOT.scope 歸 ""，render 才真的畫 */
   if(BOOT.scoping)return BOOT.scoping;
   var u=$("#upd");if(u)u.textContent="讀取全公司資料…";
-  BOOT.scoping=bootstrap(true).then(function(){BOOT.scoping=null;BOOT.scope="";stampUpd();
+  BOOT.scoping=bootstrap(true).then(function(){BOOT.scoping=null;BOOT.scope="";stampUpd();invRedraft();
     try{render();}catch(e){console.warn(e);}
     if(FLOWST!==String(ST.storeId))loadStoreFlow(ST.storeId).then(function(){try{render();}catch(e){}});},
     function(e){BOOT.scoping=null;BOOT.scope="";console.warn("scopeReload",e);try{render();}catch(e2){}});
@@ -1538,25 +1545,33 @@ function writeWarnBanner(){
   if(!ST.writeWarn||!ST.writeWarn.length)return "";
   var items=ST.writeWarn.slice(0,8).map(function(w){return w.name+'（'+w.label+'→'+w.val+'）';}).join("、");
   return alertBig("stop","⛔ 設定沒有寫進去，請重做一次",'<b>'+shEsc(items)+(ST.writeWarn.length>8?(' 等 '+ST.writeWarn.length+' 項'):'')+'</b><br>畫面上的數值是暫時的，重新整理後會恢復原值。請確認網路後再操作一次；若持續失敗請通知體驗中心。');}
-function verifySave(store,expect,attempt,btn){
+function verifySave(store,expect,attempt,btn,meta){
   var d=VERIFY_DELAYS[Math.min(attempt,VERIFY_DELAYS.length-1)],n=Object.keys(expect).length;
   setTimeout(function(){
     fetchFreshWhere('fact_inventory',store,Object.keys(expect)).then(function(rows){   /* 2026-10-04 效能 1-5：只讀該店（比對邏輯不變） */
-      var latest={},ts={};
+      var latest={},ts={},lastEn={};
       rows.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"];
         if(st!==String(store)||!(id in expect))return;
         var dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;
-        if(!(id in ts)||t>=ts[id]){ts[id]=t;latest[id]=num(r["現有量"]);}});
-      var bad=Object.keys(expect).filter(function(id){return !(id in latest)||Math.abs(latest[id]-expect[id])>1e-6;});
-      if(!bad.length){ // 確認落地，草稿才可清
-        DIRTY[store]={};clearDraft(store);ST.saveWarn=null;if(btn)btn.disabled=false;
+        if(!(id in ts)||t>=ts[id]){ts[id]=t;latest[id]=num(r["現有量"]);lastEn[id]=num(r["足夠"]!=null?r["足夠"]:r["破損量"])===1?1:0;}});
+      /* 2026-11-10：除了現有量，還要比「足夠」與寫入時間（這次按儲存之後才算；容許裝置時鐘差 15 分鐘）——不然沒寫進去、數字剛好跟上一筆一樣時會誤報成功 */
+      var bad=Object.keys(expect).filter(function(id){return !(id in latest)||Math.abs(latest[id]-expect[id])>1e-6||(meta&&(lastEn[id]!==meta.en[id]||!(ts[id]>=meta.at-15*60000)));});
+      if(!bad.length){ // 確認落地，草稿才可清（只清這次送出、之後沒再改的；回讀期間新填的留著）
+        var left=0,dd=DIRTY[store]||{},im=INV[store]||{},draft={};
+        if(meta){try{draft=JSON.parse(lsGet("invDraft_"+store)||"{}")||{};}catch(e){draft={};}
+          Object.keys(expect).forEach(function(id){if(!im[id]||im[id].t===meta.t[id]){delete dd[id];delete draft[id];}});
+          left=Object.keys(dd).length;
+          if(Object.keys(draft).length)lsSet("invDraft_"+store,JSON.stringify(draft));else clearDraft(store);}
+        else{DIRTY[store]={};clearDraft(store);}
+        ST.saveWarn=null;if(btn)btn.disabled=false;
+        if(left){toast("已確認寫入 "+n+" 筆；剛剛又填的 "+left+" 筆還沒存，請再按一次儲存");render();return;}
         toast("已確認寫入 "+n+" 筆盤點");
         ST.tab=(TABS_BY_ROLE[ST.role].indexOf("訂貨單")>=0?"訂貨單":"建議");render();return;}
-      if(attempt<VERIFY_DELAYS.length-1){verifySave(store,expect,attempt+1,btn);return;}
+      if(attempt<VERIFY_DELAYS.length-1){verifySave(store,expect,attempt+1,btn,meta);return;}
       ST.saveWarn={bad:bad.length,total:n,net:false};if(btn)btn.disabled=false;
       toast("寫入未確認，草稿已保留");render();
     }).catch(function(){
-      if(attempt<VERIFY_DELAYS.length-1){verifySave(store,expect,attempt+1,btn);return;}
+      if(attempt<VERIFY_DELAYS.length-1){verifySave(store,expect,attempt+1,btn,meta);return;}
       ST.saveWarn={bad:n,total:n,net:true};if(btn)btn.disabled=false;
       toast("無法確認寫入，草稿已保留");render();});
   },d);}
@@ -1834,7 +1849,7 @@ function nwOrdersOf(st){var hq=ST.role!=="店長";if(!dcoOn())return [];var a=hq
 /* 已下單：出貨中心訂單＋大平台紀錄，自 since 起；回 null＝資料還在讀 */
 function nwOrdered(st,s,since){if(!s)return {n:0,last:"",src:""};var dco=nwOrdersOf(st),sh=(ST.role!=="店長")?SHIST.ALL:(SHIST[String(st)]||(NW.shFail[String(st)]?[]:null));
   if(dco===null||!sh)return null;var n=0,last="",src=[];
-  dco.forEach(function(o){var t=String(o.time||"").slice(0,10);if(t&&t<since)return;(o.lines||[]).forEach(function(l){if(l.sku_id===s.id&&num(l.qty)>0){n+=num(l.qty);if(t>last)last=t;if(src.indexOf("出貨中心訂單")<0)src.push("出貨中心訂單");}});});
+  dco.forEach(function(o){var t=String(o.time||"").slice(0,10);if(t&&t<since)return;(o.lines||[]).forEach(function(l){if((l.sku_id===s.id||PACKOF[l.sku_id]===s.id)&&num(l.qty)>0){n+=num(l.qty);if(t>last)last=t;if(src.indexOf("出貨中心訂單")<0)src.push("出貨中心訂單");}});});
   sh.forEach(function(r){if(String(r.st)!==String(st)||r.date<since||!anPlatMatch(r.name,s))return;n+=num(r.qty);if(r.date>last)last=r.date;if(src.indexOf("大平台")<0)src.push("大平台");});
   return {n:n,last:last,src:src.join("＋")};}
 /* 2026-10-07：這個料在 agg_newitem 有沒有任何一店的列（開賣前 14 天起才有）——沒有時「本檔專屬／共用」改用配方判斷（同器具模具 durExcl） */
@@ -2370,7 +2385,11 @@ function invZoneCardHtml(store,gp,hit){
 function invRowWire(root){root=root||document;
   Array.prototype.forEach.call(root.querySelectorAll("[data-tailord]"),function(el){el.onchange=function(){var v=num(el.value);if(v>0)ST.orderEdit[el.dataset.tailord]=v;else delete ST.orderEdit[el.dataset.tailord];};});   /* av 批：清貨尾手動填量，不重繪免失焦 */
   Array.prototype.forEach.call(root.querySelectorAll("[data-adj]"),function(el){el.onclick=function(){ST.adjSku=el.dataset.adj;ST.adjVal="";ST.adjNote="";render();};});
-  Array.prototype.forEach.call(root.querySelectorAll("[data-inv]"),function(el){el.onchange=function(){var id=el.dataset.inv,f=el.dataset.f;INV[ST.storeId]=INV[ST.storeId]||{};INV[ST.storeId][id]=INV[ST.storeId][id]||{};INV[ST.storeId][id][f]=el.value===""?null:+el.value;INV[ST.storeId][id].t=Date.now();DIRTY[ST.storeId]=DIRTY[ST.storeId]||{};DIRTY[ST.storeId][id]=true;saveDraft(ST.storeId,id);if(SKU[id]&&okOf(ST.storeId,SKU[id]))okSet(ST.storeId,id,false);if(ST.tab==="盤點"){if(!invPatch(ST.storeId,id))render();}};});
+  Array.prototype.forEach.call(root.querySelectorAll("[data-inv]"),function(el){el.onchange=function(){var id=el.dataset.inv,f=el.dataset.f;
+    var raw=String(el.value).replace(/[０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-65248);}).replace(/．/g,".").replace(/[\s,，]/g,"");   /* 2026-11-10：全形數字轉半形；不是數字或負數就不收（原本會被當成已盤、現有 0） */
+    if(raw!==""&&(!/^\d*\.?\d+$|^\d+\.$/.test(raw)||!isFinite(+raw))){var pv=((INV[ST.storeId]||{})[id]||{})[f];el.value=(pv==null||pv!==pv)?"":pv;toast("現有量請只填數字（例：3 或 1.5）",3000);return;}
+    el.value=raw;
+    INV[ST.storeId]=INV[ST.storeId]||{};INV[ST.storeId][id]=INV[ST.storeId][id]||{};INV[ST.storeId][id][f]=raw===""?null:+raw;INV[ST.storeId][id].t=Date.now();DIRTY[ST.storeId]=DIRTY[ST.storeId]||{};DIRTY[ST.storeId][id]=true;saveDraft(ST.storeId,id);if(SKU[id]&&okOf(ST.storeId,SKU[id]))okSet(ST.storeId,id,false);if(ST.tab==="盤點"){if(!invPatch(ST.storeId,id))render();}};});
   Array.prototype.forEach.call(root.querySelectorAll("[data-ok-btn]"),function(el){el.onclick=function(){var id=el.getAttribute("data-ok-btn"),st=ST.storeId,s=SKU[id];if(!s)return;
     if(sessStart(st)==null){toast("請先選擇「延續」或「新的一週」");return;}
     var on=!okOf(st,s);okSet(st,id,on);
@@ -2534,8 +2553,8 @@ function dcohLoad(key,from,to){   /* key＝店號或 "ALL"；給 from/to＝查�
   if(DCOH.rows[key])return Promise.resolve(DCOH.rows[key]);
   if(DCOH.ld[key])return DCOH.ld[key];
   var box=DCOH;   /* 讀到一半被 dcohReset 換掉的話，舊結果不寫進新的暫存 */
-  box.ld[key]=dcoJsonp(p).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到出貨中心訂單");delete box.fail[key];return dcohRows(d.orders);})
-    .catch(function(){box.fail[key]=1;return [];}).then(function(r){box.rows[key]=r;delete box.ld[key];return r;});
+  box.ld[key]=dcoJsonp(p).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"讀不到出貨中心訂單");delete box.fail[key];delete GV.bad["dcoh:"+key];gvBanner();return dcohRows(d.orders);})
+    .catch(function(){box.fail[key]=1;GV.bad["dcoh:"+key]={cached:false,tag:"出貨中心訂單"};gvBanner();toast("⚠️ 讀不到出貨中心訂單，「已出貨／已下單」會偏低，請按右上「🔄 更新」",6000);return [];}).then(function(r){box.rows[key]=r;delete box.ld[key];return r;});
   return box.ld[key];}
 function dcohOf(st){st=String(st);if(DCOH.rows[st])return DCOH.rows[st];if(st!=="ALL"&&DCOH.rows.ALL)return DCOH.rows.ALL.filter(function(r){return r.st===st;});return dcoOn()?null:[];}
 function dcohReady(st){return dcohOf(st)!==null;}
@@ -3052,7 +3071,7 @@ function campOf(s){
 function campWeeks(c){
   var d0=new Date(c.from+"T00:00:00"),d1=new Date(c.to+"T00:00:00");
   var tot=Math.max(1,Math.round((d1-d0)/864e5)+1);
-  var pass=Math.min(tot,Math.max(0,Math.round((TODAY-d0)/864e5)+1));
+  var pass=Math.min(tot,Math.max(0,Math.round((nwToday()-d0)/864e5)+1));
   return {totD:tot,passD:pass,leftD:tot-pass,totW:tot/7,passW:pass/7,leftW:(tot-pass)/7};}
 function campOrdered(st,s,c){   /* 2026-10-18 Shopline 停用專案：大平台＋出貨中心訂單（10/20 起門市只在系統下單，只算大平台會誤報「可能不足」） */
   var rows=SHIST[String(st)];if(!rows||!dcohReady(st))return null;
@@ -3150,7 +3169,7 @@ function viewOrder(){var store=ST.storeId,live=liveItems(store);
   html+='<div class="summary"><div class="stat"><div class="n">$'+fmt(total)+'</div><div class="l">本單預估金額</div></div></div><div class="toolbar"><button class="btn" id="copyOrder">複製訂貨單</button></div><div class="card"><div class="muted">預覽</div><pre id="ot" style="white-space:pre-wrap;font-size:12.5px;margin:6px 0 0">'+orderText(store)+'</pre></div>'+(ST.adjSku?adjModal(store):'');return html;}
 function orderText(store){var need=orderTodo(store).filter(function(x){return !nwIsSemi(store,x.s);});   /* 2026-10-30：已下單的不再複製；2026-11-05：店內自製（半成品）不用叫貨，不複製 */
   var byV={};need.forEach(function(x){var vd=vendorOf(store,x.s);(byV[vd]=byV[vd]||[]).push(x);});var lines=["【"+storeName(store)+" 訂貨單】 "+new Date().toLocaleDateString("zh-TW")];
-  Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,pk=packSel(store,s);if(pk){lines.push("　"+pk.name+" × "+packQtyOf(s)+" "+pk.buyUnit);return;}lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+(x.tail?"(清貨尾・手動)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?("（"+fmt(pqOf(store,s))+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
+  Object.keys(byV).sort().forEach(function(vd){lines.push("","◆ "+(vd||"未指定廠商"));byV[vd].forEach(function(x){var s=x.s,r=x.r,dur=isDur(s),def=dur?r.suggested:r.packs,qty=ST.orderEdit[s.id]!=null?ST.orderEdit[s.id]:def,pk=packSel(store,s);if(pk){lines.push("　"+pk.name+" × "+packQtyOf(s)+" "+pk.buyUnit);return;}if(!(num(qty)>0))return;lines.push("　"+dispName(store,s)+(statusOf(store,s)==="即將上市"?"(新品)":"")+(x.tail?"(清貨尾・手動)":"")+" × "+qty+" "+(dur?s.useUnit:s.buyUnit)+((!dur&&pqEff(store,s)>0&&!pqNoise(store,s))?("（"+fmt(pqOf(store,s))+" "+s.useUnit+"/"+s.buyUnit+"）"):""));});});return lines.join("\n");}
 
 /* ===== 查詢 ===== */
 function skuById(id){for(var i=0;i<SKUS.length;i++)if(SKUS[i].id===id)return SKUS[i];return {useUnit:"",buyUnit:"",packQty:0};}
@@ -3903,7 +3922,7 @@ function viewQuery(){var store=ST.storeId;
   if(ST.qmode==="期間統計")return html+viewPeriodStats();
   var stPick=(ST.role==="店長")?storeChip(store):'<select class="sm" id="qStore" style="max-width:190px">'+STORES.map(function(s2){return '<option value="'+s2.id+'"'+(String(s2.id)===String(store)?' selected':'')+'>'+escH(storeLabel(s2.id))+'</option>';}).join('')+'</select>';   /* 2026-10-06 #3：總部在查詢頁用這個選分店 */
   html+='<div class="note">門市：'+stPick+'</div>';
-  html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週","近8週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
+  html+='<div style="margin-bottom:8px"><span class="seg">'+["上週","近4週"].map(function(pp){return '<div class="'+(pp==ST.qperiod?"on":"")+'" data-qperiod="'+pp+'">'+PLABEL[pp]+'</div>';}).join("")+'</span></div>';
   html+=catChips();var rows=SKUS.filter(function(s){return ST.cat==="全部"||s.cat===ST.cat;}).map(function(s){var a=aggOf(store,s);return {s:s,avg:a.avg4,wk:a.week};}).filter(function(x){return x.avg>0||x.wk>0;}).sort(function(a,b){return b.avg-a.avg;});
   html+='<div class="card"><table><tr><th>品項</th><th>類別</th><th class="right">週平均</th></tr>';
   rows.forEach(function(x){var s=x.s,v=ST.qperiod==="上週"?x.wk:x.avg;html+='<tr><td><b>'+s.name+'</b>'+(statusOf(store,s)==="已停售"?' <span class="muted">(已停售)</span>':'')+'</td><td><span class="badge b-'+s.cat+'">'+s.cat+'</span></td><td class="right"><b>'+dec(v/s.packQty)+'</b> '+s.buyUnit+'/週<div class="muted" style="font-size:12px">'+fmt(v)+' '+s.useUnit+'</div></td></tr>';});
@@ -4528,8 +4547,10 @@ function refCellM(s,ed){var rp=REFP[s.id];
 }
 /* 2026-09-03 y 批 ①：新增品項的編號改自動流水號（不必開 Sheet 查）。
    規則＝看同品類別現有 sku_id 最常見的英文前綴，取該前綴最大號 +1，補到同樣位數；撞號自動往後跳。 */
-function nextSkuId(cat){
+function skuIdsOnline(){return fetchFresh("dim_sku").then(function(rows){var m={};rows.forEach(function(r){var k=String(r["sku_id"]||"").trim();if(k)m[k]=1;});return m;}).catch(function(){return null;});}   /* 線上主檔現有的編號；讀不到回 null（照本機配號） */
+function nextSkuId(cat,on){
   var pfx={},maxN={},wid={};
+  if(on)Object.keys(on).forEach(function(k){var m=k.match(/^([A-Za-z]+)(\d+)$/);if(!m)return;var pp=m[1].toUpperCase(),nn=+m[2];if(!(maxN[pp]>=nn))maxN[pp]=nn;});
   SKUS.forEach(function(s){var m=String(s.id||"").match(/^([A-Za-z]+)(\d+)$/);if(!m)return;
     var pp=m[1].toUpperCase(),nn=+m[2];
     if(s.cat===cat)pfx[pp]=(pfx[pp]||0)+1;
@@ -4538,7 +4559,7 @@ function nextSkuId(cat){
   var best="",bc=-1;Object.keys(pfx).forEach(function(pp){if(pfx[pp]>bc){bc=pfx[pp];best=pp;}});
   if(!best)best=({"食材":"F","耗材":"C","器具":"T","模具":"T"})[cat]||"X";
   var w=wid[best]||3,n=(maxN[best]||0)+1,id="";
-  for(var i=0;i<9999;i++){var t=String(n+i);while(t.length<w)t="0"+t;id=best+t;if(!SKU[id])break;}
+  for(var i=0;i<9999;i++){var t=String(n+i);while(t.length<w)t="0"+t;id=best+t;if(!SKU[id]&&!(on&&on[id]))break;}
   return id;}
 /* 2026-09-03 y 批 ②：使用單位開放編輯。地雷 25：使用單位必須＝dim_unitconv 的基準單位，否則建議量整組錯 → 不一致就當場標紅。 */
 function convBaseOf(s){var names=[s.name].concat(s.aliases||[]);
@@ -4580,16 +4601,16 @@ function dcoLoadStore(st){DCO.storeLd[st]=true;dcohReset();   /* 2026-10-07：�
   return dcoJsonp({action:"orders",store:st,days:45}).then(function(d){DCO.store[st]=(d&&d.ok)?d.orders:[];})
     .catch(function(){DCO.store[st]=DCO.store[st]||[];}).then(function(){DCO.storeLd[st]=false;if(ST.tab==="訂貨單")render();});}
 function dcoLoadAll(){DCO.allLd=true;dcohReset();
-  return dcoJsonp({action:"orders",days:30}).then(function(d){DCO.all=(d&&d.ok)?d.orders:[];if(!(d&&d.ok))toast("⚠️ 讀不到出貨中心訂單："+((d&&d.error)||""));})
-    .catch(function(e){DCO.all=DCO.all||[];toast("⚠️ 讀不到出貨中心訂單（"+e.message+"）");}).then(function(){DCO.allLd=false;if(ST.tab==="訂單"||ST.tab==="庫存")render();});}
+  return dcoJsonp({action:"orders",days:30}).then(function(d){DCO.all=(d&&d.ok)?d.orders:[];DCO.allErr=(d&&d.ok)?"":((d&&d.error)||"後端沒有回應");if(!(d&&d.ok))toast("⚠️ 讀不到出貨中心訂單："+((d&&d.error)||""));})
+    .catch(function(e){DCO.all=DCO.all||[];DCO.allErr=e.message||"連線失敗";toast("⚠️ 讀不到出貨中心訂單（"+e.message+"）");}).then(function(){DCO.allLd=false;if(ST.tab==="訂單"||ST.tab==="庫存")render();});}
 function dcoLoadStock(){DCO.stockLd=true;
   return dcoJsonp({action:"stock"}).then(function(d){DCO.stock=(d&&d.ok)?d.stock:[];
       if(d&&d.ok&&Array.isArray(d.locs)){var m={};d.locs.forEach(function(x){if(x&&x.sku_id&&x.loc)m[x.sku_id]=x.loc;});DCO.loc=m;DCO.locOK=true;}})   /* 2026-10-05：後端 v1.2 才有 locs */
     .catch(function(){DCO.stock=DCO.stock||[];}).then(function(){DCO.stockLd=false;if(ST.tab==="訂貨單"||ST.tab==="訂單"||ST.tab==="庫存")render();});}
 function dcoLoadMonth(ym){DCO.monthLd[ym]=true;
   return dcoJsonp({action:"orders",sfrom:ym+"-01",sto:ym+"-31"}).then(function(d){DCO.month[ym]=(d&&d.ok)?d.orders.filter(function(o){return o.status==="已出貨";}):[];})
-    .catch(function(e){DCO.month[ym]=[];toast("⚠️ 讀不到 "+ym+" 的訂單（"+e.message+"）");}).then(function(){DCO.monthLd[ym]=false;if(ST.tab==="訂單")render();});}
-function dcoRefresh(){DCO.store={};DCO.storeLd={};DCO.all=null;DCO.month={};DCO.stock=null;hctReset();VM.store={};VM.ld={};}   /* 2026-10-30：已叫貨標記一起重讀 */   /* 2026-10-21：新竹托運單一起重讀 */
+    .catch(function(e){delete DCO.month[ym];DCO.monthErr=DCO.monthErr||{};DCO.monthErr[ym]=1;toast("⚠️ 讀不到 "+ym+" 的訂單（"+e.message+"），月結先不要照畫面的數字；請按重新整理",6000);}).then(function(){DCO.monthLd[ym]=false;if(ST.tab==="訂單")render();});}
+function dcoRefresh(){DCO.store={};DCO.storeLd={};DCO.all=null;DCO.allErr="";DCO.monthErr={};DCO.month={};DCO.stock=null;hctReset();VM.store={};VM.ld={};}   /* 2026-10-30：已叫貨標記一起重讀 */   /* 2026-10-21：新竹托運單一起重讀 */
 function dcoOrderable(s){return dcAny(s)&&String(s.status||"").trim()!=="停售"&&!skuExpired(s);}
 function dcoStockOf(id){var a=DCO.stock||[];for(var i=0;i<a.length;i++)if(a[i].sku_id===id)return a[i];return null;}
 function dcoPending(id){var n=0;(DCO.all||[]).forEach(function(o){if(o.status==="待處理"||o.status==="備貨中")o.lines.forEach(function(l){if(l.sku_id===id)n+=l.qty;});});return n;}
@@ -4754,7 +4775,7 @@ function dcoShipBatch(){if(DCO.busy)return;var ids=dcoShipSelIds();if(!ids.lengt
       if(fail.length)alert("⚠️ 有 "+fail.length+" 張沒有完成：\n"+fail.join("\n")+"\n\n請按「🔄 重新整理」看狀態，再到那張卡片單獨按「✅ 出貨完成」。");
       toast("✅ 已出貨完成 "+done.length+" 張"+(fail.length?"，"+fail.length+" 張失敗":""),5000);dcoRefresh();render();return;}
     var o=go[i++];toast("⏳ 出貨完成中…第 "+i+"／"+go.length+" 張（"+storeName(o.store)+"）",15000);
-    dcoWrite({action:"ship",id:o.id,lines:o._sc.lines},function(){return dcoJsonp({action:"orders",id:o.id}).then(function(d){var x=d&&d.ok&&d.orders[0];return (x&&x.status==="已出貨")?{ok:true}:null;});})
+    dcoWrite({action:"ship",id:o.id,lines:o._sc.lines,base:o.updated||""},function(){return dcoJsonp({action:"orders",id:o.id}).then(function(d){var x=d&&d.ok&&d.orders[0];return (x&&x.status==="已出貨")?{ok:true}:null;});})
       .then(function(){done.push(o.id);},function(e){fail.push(storeName(o.store)+" "+o.id+"："+e.message);}).then(next);})();}
 function dcoSetupNote(){return '<div class="card"><b>📥 出貨中心訂單功能還沒啟用</b><div class="sub" style="line-height:1.8;margin-top:6px">啟用前各店照舊用 Shopline 叫貨。<br>系統管理備註：要先部署後端程式 <b>diybc-dcorder-api</b>（repo 的 gas/dcorder/dcOrderApi.gs），再把網頁應用程式網址填進採購系統的 DCO_API。</div></div>';}
 /* ── 出貨中心／總部：收單 ── */
@@ -4776,6 +4797,7 @@ function viewDcOrders(){if(!dcoOn())return dcoSetupNote();
   var list=all.filter(function(o){return o.status===seg;});
   var fifo=(seg==="待處理"||seg==="備貨中");   /* 2026-11-09 出貨中心：照 1～12 店排；同一店待處理／備貨中舊的在前、已出貨新的在前 */
   list.sort(function(a,b){var k=(a.time<b.time?-1:(a.time>b.time?1:(a.id<b.id?-1:(a.id>b.id?1:0))));return (num(a.store)-num(b.store))||(fifo?k:-k);});
+  if(DCO.allErr&&!list.length)return h+alertBig("stop","⛔ 讀不到出貨中心訂單","不是沒有訂單，是這次沒讀到（"+shEsc(DCO.allErr)+"）。請按右上「🔄 更新」或頁面上的重新整理再試一次。");   /* 2026-11-10 */
   if(!list.length)return h+'<div class="card muted">現在沒有「'+seg+'」的訂單 ✅'+(seg==="待處理"?' 門市送出新訂單後會出現在這裡。':'')+'</div>';
   if(seg==="待處理"||seg==="備貨中")h+=dcoSentBar(list)+dcoMergeBar(list);   /* 2026-10-05 經營者 1005 #3：同一店多張訂單先合併再列印 */
   h+=slipBatchBar(seg);   /* cw 批：🖨 列印全部出貨單 */
@@ -4802,7 +4824,7 @@ function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 
   if(!ex)return h+'</div>';   /* 收合：只留標題列（店名、單號、項數、編輯、出貨單） */
   if(o.note)h+='<div class="banner" style="margin:6px 0 0;padding:5px 8px">📝 '+escH(o.note)+'</div>';
   h+='<div style="overflow-x:auto"><table class="dcot" style="margin-top:6px"><tr><th></th><th>品名</th><th class="right">訂購</th><th class="right">實出</th><th class="right">單價</th><th class="right">小計</th><th class="right" title="記數量的品項：庫存－其他待出貨">庫存</th></tr>';
-  o.lines.forEach(function(l){var s=SKU[l.sku_id],sv=(q[l.line]!=null)?q[l.line]:(l.ship!=null?l.ship:l.qty),amt=num(sv)*l.price;tot+=amt;
+  o.lines.forEach(function(l){var s=SKU[l.sku_id],sv=(q[l.line]!=null)?q[l.line]:(l.ship!=null?l.ship:l.qty),amt=Math.round(num(sv)*l.price);tot+=amt;
     var stk=dcoStockOf(l.sku_id),stTxt=stk?(dec(stk.qty)+(open?'<div class="muted" style="font-size:12px">待出 '+dec(dcoPending(l.sku_id))+'</div>':'')):'<span class="muted">無限量</span>';
     h+='<tr><td>'+(s?skuThumb(s,"m"):'')+'</td><td>'+escH(l.name)+dcoLocTag(l.sku_id)+(s&&s.defZone?' <span class="muted" style="font-size:12px">'+escH(zoneAlias(s.defZone))+'</span>':'')+'</td><td class="right">'+dec(l.qty)+' '+escH(l.unit)+'</td>'
       +'<td class="right">'+(open?'<input class="sm" type="number" min="0" style="width:64px" data-dcoq="'+escA(o.id)+'|'+l.line+'" value="'+sv+'">':'<span'+(l.ship!=null&&l.ship<l.qty?' style="color:#B3261E;font-weight:700"':'')+'>'+(l.ship==null?'—':dec(l.ship))+'</span>')+'</td>'
@@ -4815,12 +4837,12 @@ function dcoCard(o){if(ST.dcoEdit&&ST.dcoEdit[o.id])return dcoEditCard(o);   /* 
   h+=hctBox(o);   /* 2026-10-21 新竹托運單 */
   return h+'</div>';}
 function dcoShipCalc(o){var q=(ST.dcoShipQ||{})[o.id]||{},lines=o.lines.map(function(l){return {line:l.line,ship:num(q[l.line]!=null?q[l.line]:l.qty)};}),tot=0,short=0,zero=[];
-  o.lines.forEach(function(l,i){tot+=lines[i].ship*l.price;if(lines[i].ship<l.qty)short++;if(!(l.price>0)&&lines[i].ship>0)zero.push(l.name);});
+  o.lines.forEach(function(l,i){tot+=Math.round(lines[i].ship*l.price);if(lines[i].ship<l.qty)short++;if(!(l.price>0)&&lines[i].ship>0)zero.push(l.name);});
   return {lines:lines,tot:tot,short:short,zero:zero};}
 function dcoShip(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o)return;
   var c=dcoShipCalc(o),lines=c.lines,tot=c.tot,short=c.short;
   if(typeof confirm==="function"&&!confirm("確定「"+storeName(o.store)+"」訂單 "+id+" 已出貨？\n\n出貨金額 $"+fmt(tot)+(short?"\n⚠️ 有 "+short+" 項實出少於訂購":"")+(c.zero.length?"\n⚠️ 單價 0（主檔沒填）："+c.zero.join("、")+"，月結會算 0 元；要收錢請先按「✏️ 編輯」改單價":"")+"\n記數量的品項會扣出貨中心庫存。"))return;
-  dcoAct({action:"ship",id:id,lines:lines},"已出貨","已出貨："+storeName(o.store)+" "+id);}
+  dcoAct({action:"ship",id:id,lines:lines,base:o.updated||""},"已出貨","已出貨："+storeName(o.store)+" "+id);}
 /* 撿貨單：勾選的「待處理＋備貨中」訂單，依品項加總（依預設分區排，方便一區一區撿） */
 function dcoPickView(all){var open=all.filter(function(o){return o.status==="待處理"||o.status==="備貨中";}),off=ST.dcoPickOff||{};
   if(!open.length)return '<div class="card muted">目前沒有要撿貨的訂單 ✅（待處理、備貨中的單才會出現在這裡）</div>';
@@ -4851,6 +4873,7 @@ function dcoPrintPick(){var D=ST.dcoPickData;if(!D||!D.rows.length){toast("沒�
     +'<table>'+cols+th+tb+'</table></body></html>');}
 /* 月結：出貨日在該月的「已出貨」訂單，依實出×下單當時單價 */
 function dcoMonthView(){var ym=ST.dcoMonth||ymd(new Date()).slice(0,7);
+  if(DCO.monthErr&&DCO.monthErr[ym])return h+alertBig("stop","⛔ 讀不到 "+ym+" 的訂單","這次沒讀到，不是 0 元。請按頁面上的重新整理再試一次。")+'</div>';   /* 2026-11-10 */
   if(DCO.month[ym]===undefined&&!DCO.monthLd[ym])dcoLoadMonth(ym);
   var h='<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>💰 月結</b><input type="month" id="dcoMonth" value="'+ym+'"><span class="muted">選月份看各店這個月出了多少貨、多少錢。照<b>出貨日</b>算月份，金額＝實出數量 × 下單時單價；還沒出貨、已取消的不算。</span></div>';
   var list=DCO.month[ym];if(list===undefined)return h+'<div class="loading">讀取中…</div></div>';
@@ -5439,7 +5462,8 @@ function dcoPrintSeg(seg){
   DCO.busy=true;render();toast("⏳ 正在合併訂單，完成後會自動跳出出貨單列印…",15000);var p=Promise.resolve();
   multi.forEach(function(st){p=p.then(function(){return dcoMergeStore(st);});});
   p.then(function(){return dcoLoadAll();}).then(function(){DCO.busy=false;render();
-      var list=stores.map(function(st){return dcoOpenOf(st)[0];}).filter(Boolean).sort(function(a,b){return a.time<b.time?-1:1;});
+      var mset={};multi.forEach(function(st){mset[String(st)]=1;});var now={};(DCO.all||[]).forEach(function(o){now[o.id]=o;});
+      var list=multi.map(function(st){return dcoOpenOf(st)[0];}).concat(L.filter(function(o){return !mset[String(o.store)];}).map(function(o){return now[o.id];})).filter(function(o){return o&&o.status!=="已取消";}).sort(function(a,b){return a.time<b.time?-1:1;});
       toast("✅ 已合併 "+multi.length+" 家門市的訂單",2500);slipPrint(list);})
     .catch(function(e){DCO.busy=false;dcoRefresh();render();toast("⚠️ 合併沒成功，沒有列印："+e.message,6000);});}
 function dcoPrintOne(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];
@@ -5954,7 +5978,7 @@ function rbNow(){if(RB.busy)return;RB.busy=true;rbBtnEnable(false);rbSet("⏳ �
 function rbPoll(){rbJsonp("status",function(err,res){RB.pollN++;
   var match=!err&&res&&res.id===RB.id;
   if(match&&res.status==="done"){RB.busy=false;rbBtnEnable(true);
-    if(RB.fromRefresh){RB.fromRefresh=false;rbSet("✅ 重算完成，正在載入最新資料…","ok");refreshAll(true).then(function(){var u=$("#upd");if(u)u.textContent=u.textContent+"（含重算）";RB.msg="";RB.cls="";toast("✅ 重算完成，已載入最新資料");});return;}
+    if(RB.fromRefresh){RB.fromRefresh=false;rbSet("✅ 重算完成，正在載入最新資料…","ok");Promise.resolve(refreshAll(true)).then(function(){var u=$("#upd");if(u)u.textContent=u.textContent+"（含重算）";RB.msg="";RB.cls="";toast("✅ 重算完成，已載入最新資料");});return;}
     rbSet("✅ 重算完成！請重新整理頁面載入最新資料。","ok");toast("✅ 重算完成，請重新整理");return;}
   if(match&&res.status==="error"){RB.busy=false;rbBtnEnable(true);
     rbSet("❌ 重算失敗："+(res.msg||"詳見 GAS 執行紀錄"),"err");RB.fromRefresh=false;return;}
@@ -6227,7 +6251,7 @@ function rcWire(){
   var re=$("#rcExport");if(re)re.onclick=rcExport;}
 /* ===== 元件 ===== */
 function inN(sc,id,f,v,w){return '<input class="sm" style="width:'+(w||56)+'px" type="number" step="0.1" data-'+sc+'="'+id+'" data-f="'+f+'" value="'+v+'">';}
-function inT(sc,id,f,v,w,ph,ti){return '<input class="tx" style="width:'+(w||80)+'px" type="text" data-'+sc+'="'+id+'" data-f="'+f+'" value="'+v+'"'+(ph?' placeholder="'+escA(ph)+'"':'')+(ti?' title="'+escA(ti)+'"':'')+'>';}
+function inT(sc,id,f,v,w,ph,ti){return '<input class="tx" style="width:'+(w||80)+'px" type="text" data-'+sc+'="'+id+'" data-f="'+f+'" value="'+escA(v==null?"":v)+'"'+(ph?' placeholder="'+escA(ph)+'"':'')+(ti?' title="'+escA(ti)+'"':'')+'>';}
 
 /* ===== 事件 ===== */
 var EDIT={}; // 暫存店別參數編輯
@@ -6676,7 +6700,7 @@ async function srApprove(gk){
       if(shf&&!ex.shelf){sf["效期"]=shf;ex.shelf=shf;}   /* ci 批：主檔沒效期才補，不蓋出貨中心填的 */
       if(Object.keys(sf).length){await post({type:"sku",sku_id:id,fields:sf},true);exp.push({k:"sku",f:sf});}
     }else{
-      id=nextSkuId(cat);
+      id=nextSkuId(cat,await skuIdsOnline());
       if(SKUS.some(function(s){return s.name===name;})){throw new Error("品名已存在");}
       var fields={"品名":name,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu,"每採購單位內容量":pq,"單價":(pr>0?pr:0)};   /* cg6：不寫適用店＝全部門市 */
       if(shf)fields["效期"]=shf;   /* ci 批 */
@@ -7046,13 +7070,15 @@ function wire(){
   var mrt=$("#mRefTgl");if(mrt)mrt.onclick=function(){ST.mRef=!ST.mRef;render();};
   var nc=$("#nsCat");if(nc)nc.onchange=function(){var v=nextSkuId(nc.value),a=$("#nsId"),b=$("#nsIdTxt");if(a)a.value=v;if(b)b.textContent=v;};
   var na=$("#nsAdd");if(na)na.onclick=function(){var id=($("#nsId").value||"").trim(),nm=($("#nsName").value||"").trim(),cat=$("#nsCat").value,uu=($("#nsUse").value||"g").trim(),vd=($("#nsVendor").value||"").trim(),bu=($("#nsBuy").value||"").trim(),pq=+$("#nsPq").value,pr=+$("#nsPrice").value;
-    if(!id)id=nextSkuId(cat);
     if(!nm){toast("品名必填");return;}
-    if(SKU[id]){toast("編號已存在："+SKU[id].name);return;}
+    if(na.disabled)return;na.disabled=true;
+    skuIdsOnline().then(function(on){na.disabled=false;   /* 2026-11-10：配號前先看線上主檔，避免用到別人剛建的編號（會蓋掉那一列） */
+    if(!id)id=nextSkuId(cat,on);
+    if(SKU[id]||(on&&on[id])){toast("編號已存在："+(SKU[id]?SKU[id].name:id+"（別人剛建的，請按 🔄 更新）"));return;}
     var dupNm=SKUS.some(function(s){return s.name===nm;});if(dupNm){toast("品名已存在");return;}
     post({type:"sku",sku_id:id,fields:{"品名":nm,"品類別":cat,"廠商":vd,"使用單位":uu,"採購單位":bu||uu,"每採購單位內容量":(pq>0?pq:1),"單價":(pr>0?pr:0)}});
-    var ns={id:id,name:nm,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu||uu,packQty:(pq>0?pq:1),price:(pr>0?pr:0),defZone:""};
-    SKUS.push(ns);SKU[id]=ns;toast("已新增 "+nm+"（記得到店別參數頁設定啟用店）");render();};
+    var ns={id:id,name:nm,cat:cat,vendor:vd,useUnit:uu,buyUnit:bu||uu,xfer:"",packQty:(pq>0?pq:1),price:(pr>0?pr:0),defZone:"",src:"",stores:[],status:"",lastValid:"",shelf:"",img:"",aliases:[]};   /* 2026-11-10：欄位補齊（少了 src 主檔頁會整頁壞掉） */
+    SKUS.push(ns);SKU[id]=ns;toast("已新增 "+nm+"（記得到店別參數頁設定啟用店）");render();});};
   Array.prototype.forEach.call(document.querySelectorAll(".why[data-why]"),function(el){el.onclick=function(){ST.exp[el.dataset.why]=!ST.exp[el.dataset.why];render();};});
   var tg=$('[data-toggleexcl]');if(tg)tg.onclick=function(){ST.showExcl=!ST.showExcl;render();};
   Array.prototype.forEach.call(document.querySelectorAll("[data-chexcl]"),function(el){el.onclick=function(){ST.chExclOnly=(el.dataset.chexcl==="1");render();};});   /* 2026-09-10 bp 批 */
@@ -7069,13 +7095,16 @@ function wire(){
     }
     if(!stWriteOK(store))return;   /* co 批 */
     if(typeof confirm==="function"&&!confirm("確定把這 "+ids.length+" 筆盤點存到「"+storeLabel(store)+"」？\n（不是這一店請按取消）"))return;
+    var blank=ids.filter(function(id){return !iv[id]||(iv[id].onHand==null&&num(iv[id].enough)!==1);});   /* 2026-11-10：沒填數字又不是足夠的，存進去會變成「現有 0」（別台裝置會建議叫滿）→ 先擋下 */
+    if(blank.length){alert("有 "+blank.length+" 項還沒填現有量：\n"+blank.slice(0,8).map(function(id){return "・"+(SKU[id]?dispName(store,SKU[id]):id);}).join("\n")+(blank.length>8?"\n…等 "+blank.length+" 項":"")+"\n\n請填數字，或按「✓ 足夠」，再按儲存。");return;}
     var expect={};ids.forEach(function(id){expect[id]=iv[id]?num(iv[id].onHand):0;});
+    var meta={at:Date.now(),t:{},en:{}};ids.forEach(function(id){meta.t[id]=iv[id]?iv[id].t:null;meta.en[id]=(iv[id]&&num(iv[id].enough)===1)?1:0;});
     sc.disabled=true;ST.saveWarn=null;toast("送出中… "+ids.length+" 筆");
     /* 2026-09-05 ap 批：整批一次送（type invBatch，GAS 端一次 setValues 寫兩個檔）。
        原本每項一個請求、5 個並行：一店 100 項＝100 個請求，6 店同時存就撞 GAS 30 並行上限。現在一店＝1 個請求。
        verifySave 回讀對帳邏輯不變——沒對上就保留草稿。 */
     var items=ids.map(function(id){return {sku_id:id,onHand:iv[id]?iv[id].onHand:null,breakage:(iv[id]&&num(iv[id].enough)===1)?1:0};});   /* ay 批：破損欄已移除。bb 批：第 5 欄改承載「足夠」旗標（GAS 端 Number(it.breakage)||0，送 1/0 即可） */
-    post({type:"invBatch",store:store,user:ST.role,items:items},true).then(function(){toast("送出完成，確認寫入中…");verifySave(store,expect,0,sc);});};
+    post({type:"invBatch",store:store,user:ST.role,items:items},true).then(function(){toast("送出完成，確認寫入中…");verifySave(store,expect,0,sc,meta);});};
   // 店別參數
   var pSt0=String(ST.storeId);   /* cp 批：這批輸入框是哪一店的頁面畫出來的 */
   Array.prototype.forEach.call(document.querySelectorAll("[data-p]"),function(el){el.onchange=function(){if(String(ST.storeId)!==pSt0||el._cpNo)return;   /* cp 批：畫面已換店（輸入框被重畫掉時瀏覽器才補發 change）→ 不收，免得 A 店的值記到 B 店 */
@@ -7102,7 +7131,7 @@ function wire(){
   var ss=$("#saveSeason");if(ss)ss.onclick=function(){for(var m=1;m<=12;m++)post({type:"season",month:m,idx:SIDX[m]});var lo=$("#sfLow"),hi=$("#sfHigh");if(lo&&+lo.value>0){SFACT.low=+lo.value;post({type:"season",month:"淡季係數",idx:SFACT.low});}if(hi&&+hi.value>0){SFACT.high=+hi.value;post({type:"season",month:"旺季係數",idx:SFACT.high});}toast("已送出季節指數與淡旺季係數");};
   // 單位對照
   cvWire();
-  Array.prototype.forEach.call(document.querySelectorAll("[data-cvi]"),function(el){el.onchange=function(){var u=UNITCONV[+el.dataset.cvi];u.amt=+el.value;u._dirty=1;};});
+  Array.prototype.forEach.call(document.querySelectorAll("[data-cvi]"),function(el){el.onchange=function(){var u=UNITCONV[+el.dataset.cvi],v=+el.value;if(!(v>0)){el.value=u.amt;toast("換算量要大於 0（不要這一列請按 🗑）",3000);return;}u.amt=v;u._dirty=1;};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-cvdel]"),function(el){el.onclick=function(){convDelete(+el.dataset.cvdel);};});
   var scv=$("#saveConv");if(scv)scv.onclick=function(){var n=0;UNITCONV.forEach(function(u){if(u._dirty){post({type:"conv",item:u.item,unit:u.unit,base:u.base,amt:u.amt},true);delete u._dirty;n++;}});  // 2026-07-27 修：勿再命名 var sc（會覆蓋 saveCount 閉包捕捉的 sc，盤點頁按儲存會拋錯）
     var it=($("#cvItem").value||"").trim(),un=($("#cvUnit").value||"").trim(),am=+$("#cvAmt").value,ba=($("#cvBase").value||"g").trim();
@@ -7255,7 +7284,7 @@ function shWin(all){
     var f=ST.shFrom||"",t=ST.shTo||"";
     return {from:f||null,to:t||null,label:"自訂 "+(f||"最早")+" ～ "+(t||mx||"最新")};}
   if(ST.shPer==="all"||!mx)return {from:null,to:null,label:"全部歷史"};
-  var d=new Date(mx+"T00:00:00");d.setMonth(d.getMonth()-(+ST.shPer)+1);d.setDate(1);
+  var d=new Date(mx+"T00:00:00");d.setDate(1);d.setMonth(d.getMonth()-(+ST.shPer)+1);
   return {from:ymd(d),to:null,label:"近 "+ST.shPer+" 個月"};}
 function shRows(){
   var all=shScopeRows();
