@@ -193,8 +193,8 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
   </div>
 
   <div class="card hide" id="planCard">
-    <h2>兩個方案比較</h2>
-    <div class="mute" style="font-size:13px">同一份設定排兩種，選一個按「採用」，下面的班表就換成那一個（換錯可按「↩ 復原上一步」）。淺藍格＝兩個方案排的不一樣。</div>
+    <h2>排班結果摘要</h2>
+    <div class="mute" style="font-size:13px">照目前班表算，改班後自動更新。</div>
     <div id="planWrap"></div>
   </div>
 
@@ -594,13 +594,16 @@ function renderTable(){
       if(chg[e.id+'|'+d.d])cls+=' chg';
       var onsite=(c.segs||[]).filter(function(s){return inStore(s[3])});
       if(onsite.length){dayN[d.d]=(dayN[d.d]||0)+1;dayHrs[d.d]=(dayHrs[d.d]||0)+onsite.reduce(function(a,s){return a+(mm(s[1])-mm(s[0]))/60},0)}
-      var tags=(c.segs||[]).map(function(s){return s[2]}).filter(function(t,i,a){return t&&a.indexOf(t)===i});if(c.dtag)tags.unshift(c.dtag);
+      var tags=(c.segs||[]).map(function(s){return s[2]}).filter(function(t,i,a){return t&&a.indexOf(t)===i});if(c.dtag)tags.unshift((c.dtag==='彈性挪假'&&!(c.segs||[]).length)?'可支援':c.dtag);   /* 沒排班的彈性挪假日＝本店排不滿，可支援其他店 */
       h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw)+'">'+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
     });
     var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td>'+(B?'<td><b>'+money((B.month.by_emp||{})[e.id]||0)+'</b></td>':'')+'</tr>';
   });
   var tail=B?'<td></td><td></td>':'<td></td>';
   h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+=tail+'</tr>';
+  loadResv();
+  h+='<tr class="sum"><td class="nm" title="訂位系統目前已訂位的人數（含陪同、已取消不算）。只有今天起約 5 週內有資料'+(RESV&&RESV.built?'；資料時間 '+esc(RESV.built):'')+'">已訂位人數</td>';
+  info.days.forEach(function(d){var v=resvOf(d.d);h+='<td'+(v?' style="font-weight:600"':' class="mute"')+'>'+(resvState==='loading'?'…':v===null?'—':v)+'</td>'});h+=tail+'</tr>';
   h+='<tr class="sum"><td class="nm">現場工時</td>';info.days.forEach(function(d){h+='<td>'+(dayHrs[d.d]?Math.round(dayHrs[d.d]*10)/10:0)+'</td>'});h+=tail+'</tr>';
   if(B&&(B.month.guests||[]).length){h+='<tr class="sum"><td class="nm">外店支援</td>';info.days.forEach(function(d){var r=B.days[d.d],g=[];if(r)for(var k in r.staff){var x=r.staff[k];if(x.guest)g.push(esc(x.name||k)+' '+x.work+'h')}h+='<td class="mute" style="font-size:11px">'+g.join('<br>')+'</td>'});h+=tail+'</tr>'}
   h+='<tr class="sum"><td class="nm">營業額</td>';info.days.forEach(function(d){var r=B&&B.days[d.d];if(r&&r.rev)h+='<td class="rv" title="'+esc(bonusTitle(r,names))+'">'+Math.round(r.rev/1000)+'k</td>';else{var ev=revOf(d.d);h+='<td class="rv est" title="預估 '+ev+'">'+(ev?'預'+Math.round(ev/1000)+'k':'')+'</td>'}});h+=tail+'</tr>';
@@ -612,31 +615,41 @@ function renderTable(){
     else h+='<td class="bn'+(r.cross?' x2':'')+'" title="'+tt+'">'+money(r.total)+(r.cross?'<br>×2':'')+'</td>'});h+='<td></td><td><b>'+money(B.month.total)+'</b></td></tr>'}
   h+='</tbody></table>';$('tblWrap').innerHTML=h;
 }
-/* ── 2026-11-06 經營者：排兩種班表（A 正職優先、B 兼職優先）同時顯示給店長選；只在方案內容變了才重畫（兩段確認鍵才不會被輪詢洗掉） ── */
-var planKey='';
+/* ── 2026-11-10 經營者：只留兼職優先；摘要、檢查、說明都讀同一份「目前班表」的檢查結果（原本方案比較是排班當時的數字，改班後對不起來） ── */
 function renderPlans(){
-  var P=(S&&S.plans)||{},order=['ft','pt'].filter(function(m){return P[m]});
-  if(!order.length||!S.template){$('planCard').classList.add('hide');planKey='';return}
-  var key=[S.store,S.ym,S.plan,JSON.stringify(order.map(function(m){return P[m].summary}))].join('|');
-  if(key===planKey)return;planKey=key;$('planCard').classList.remove('hide');
-  var info=S.template.info,other=function(m){return order.filter(function(x){return x!==m})[0]};
-  var h='<div class="tblwrap"><table class="frm"><thead><tr><th>夥伴</th>'+order.map(function(m){return '<th>'+esc(P[m].name)+'</th>'}).join('')+'</tr></thead><tbody>';
-  info.emps.forEach(function(e){h+='<tr><td>'+esc(e.name)+'</td>'+order.map(function(m){var sm=P[m].summary,n=(sm.nuo[e.id]||[]).length;return '<td>'+(sm.hours[e.id]!=null?sm.hours[e.id]+'h':'—')+(n?'<span class="mute">（挪假 '+n+' 天）</span>':'')+'</td>'}).join('')+'</tr>'});
-  [['缺人（人次）','gaps'],['比設定多排（人次）','extras']].forEach(function(r){h+='<tr><td>'+r[0]+'</td>'+order.map(function(m){return '<td>'+P[m].summary[r[1]]+'</td>'}).join('')+'</tr>'});
-  h+='<tr><td>檢查</td>'+order.map(function(m){var sm=P[m].summary;return '<td>'+(sm.ok?'✅ 通過':'❌ '+sm.errors+' 項')+(sm.warns?'　⚠ '+sm.warns:'')+'</td>'}).join('')+'</tr></tbody></table></div>';
-  order.forEach(function(m){var sc=P[m].schedule,os=(P[other(m)]||{}).schedule||{};
-    h+='<div class="row" style="margin-top:14px;align-items:center"><b>'+esc(P[m].name)+'</b><span class="mute" style="font-size:13px">'+esc(P[m].desc)+'</span><span class="sp" style="flex:1"></span>'+
-      (S.plan===m?'<span class="tag ok">✅ 採用中</span>':'<button class="btn sm" data-plan="'+m+'" type="button">採用這個方案</button>')+'</div>';
-    h+='<div class="tblwrap"><table class="sch mini"><thead><tr><th class="nm">夥伴</th>'+info.days.map(function(d){return '<th class="'+(isWk(d.d)?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'}).join('')+'</tr></thead><tbody>';
-    info.emps.forEach(function(e){var row=sc[e.id]||{},orow=os[e.id]||{};h+='<tr><td class="nm">'+esc(e.name)+'</td>';
-      info.days.forEach(function(d){var raw=row[d.d]||'',sh=short(raw),cls=(isWk(d.d)?'wk':'')+(/例假日|休息日/.test(raw)?' rest':'')+((orow[d.d]||'')!==raw?' df':'');
-        h+='<td class="'+cls+'" title="'+esc(raw)+'">'+esc(sh.main||'—')+(sh.dt?'<span class="t">'+esc(sh.dt)+'</span>':'')+'</td>'});h+='</tr>'});
-    var cnt=info.days.map(function(d){return info.emps.filter(function(e){var r=(sc[e.id]||{})[d.d]||'';var sh=short(r);return r&&!sh.typ&&sh.dt!=='特休'}).length});
-    h+='<tr class="sum"><td class="nm">在店人數</td>'+cnt.map(function(n){return '<td>'+n+'</td>'}).join('')+'</tr></tbody></table></div>'});
+  var sm=S&&S.summary;if(!sm||!S.template){$('planCard').classList.add('hide');return}
+  $('planCard').classList.remove('hide');
+  var h='<div class="tblwrap"><table class="frm"><thead><tr><th>夥伴</th><th>排了</th><th>目標</th><th>最低</th><th>可支援其他店</th></tr></thead><tbody>';
+  sm.rows.forEach(function(r){h+='<tr><td>'+esc(r.name)+(r.type?' <span class="mute">'+esc(r.type)+'</span>':'')+'</td><td>'+r.hours+'h</td><td>'+(r.target?(+r.target)+'h':'—')+'</td><td>'+(r.min?(+r.min)+'h':'—')+'</td><td>'+(r.support.length?r.support.length+' 天<span class="mute">（'+r.support.join('、')+' 號）</span>':'—')+'</td></tr>'});
+  h+='</tbody></table></div>';
+  function days(a){return a.map(function(c){return c.label+'（'+c.wd+'）'}).join('、')}
+  if(sm.has_demand){
+    h+='<div style="margin-top:8px">缺人：<b>'+sm.gap_n+'</b> 人次'+(sm.gap_n?'<span class="mute">　'+esc(days(sm.gaps))+'</span>':'')+'</div>';
+    h+='<div>比設定多排：<b>'+sm.extra_n+'</b> 人次'+(sm.extra_n?'<span class="mute">　'+esc(days(sm.extras))+'</span>':'')+'</div>'}
+  h+='<div>檢查：'+(sm.ok?'✅ 通過':'❌ '+sm.errors+' 項一定要改')+(sm.warns?'　⚠ '+sm.warns+' 項請確認':'')+'</div>';
   $('planWrap').innerHTML=h;
-  Array.prototype.forEach.call($('planWrap').querySelectorAll('button[data-plan]'),function(b){
-    twoStep(b,'再按一次確認（換掉目前班表）',function(){b.disabled=true;post('plan_pick',{plan:b.dataset.plan}).then(function(j){planKey='';apply(j)}).catch(function(e){b.disabled=false;alert(e.message)})})});
 }
+/* ── 2026-11-10 經營者：排班時要看到每天已經訂位的人數。直接讀訂位儀表板同一個來源（未來訂位，今天起約 5 週；已取消不算），每次開頁抓一次 ── */
+var RESV_API='https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
+var RESV_STORE={1:'台中精明店',2:'台中草悟道店',3:'台北南京店',4:'台北士林店',5:'台南Focus店',6:'新竹文化店',7:'新北板橋店',8:'新北新店店',9:'桃園中壢店',10:'桃園藝文店',11:'台北遠百信義A13店',12:'高雄SKM Park店'};
+var RESV=null,resvState='';   /* RESV＝{店名:{日期:人數}}，lo／hi＝資料涵蓋的日期 */
+function loadResv(){
+  if(resvState)return;resvState='loading';
+  var cb='__sw_resv'+Date.now(),sc=document.createElement('script'),done=false;
+  function end(){done=true;try{delete window[cb]}catch(_){window[cb]=undefined}if(sc.parentNode)sc.parentNode.removeChild(sc)}
+  window[cb]=function(j){if(done)return;end();
+    try{var ix={};j.cols.forEach(function(c,i){ix[c]=i});var by={},lo='9999',hi='';
+      j.rows.forEach(function(r){var d=String(r[ix.date]||'').slice(0,10);if(!d)return;if(d<lo)lo=d;if(d>hi)hi=d;if(r[ix.status]==='已取消')return;
+        var st=r[ix.store];(by[st]=by[st]||{})[d]=((by[st]||{})[d]||0)+(+r[ix.party_size]||0)});
+      RESV={by:by,lo:lo,hi:hi,built:j.built_at||''};resvState='ok'}catch(e){resvState='fail'}
+    if(S&&S.schedule)renderTable()};
+  sc.onerror=function(){if(done)return;end();resvState='fail';if(S&&S.schedule)renderTable()};
+  setTimeout(function(){if(!done){end();resvState='fail';if(S&&S.schedule)renderTable()}},60000);
+  sc.src=RESV_API+'?fn=future&callback='+cb;document.head.appendChild(sc);
+}
+function resvOf(d){   /* 這個月 d 號已訂位人數；null＝資料沒涵蓋那天（已過去或太遠） */
+  if(!RESV||!S)return null;var ym=S.ym,ds=ym.slice(0,4)+'-'+ym.slice(4)+'-'+('0'+d).slice(-2);
+  if(ds<RESV.lo||ds>RESV.hi)return null;var m=RESV.by[RESV_STORE[S.store]]||{};return m[ds]||0}
 function mm(t){var nx=t.indexOf('次日')===0;t=t.replace('次日','');var p=t.split(':');return (+p[0])*60+(+p[1])+(nx?1440:0)}
 function renderCheck(){
   var c=S.check;if(!c){$('chk').className='mute';$('chk').textContent='還沒有班表';return}

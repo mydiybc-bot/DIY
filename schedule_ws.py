@@ -148,6 +148,13 @@ def _load(store, ym):
 
 def _save(st):
     st["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    if st.get("draft") and st.get("schedule") and st.get("check"):   # 2026-11-10：說明跟著目前班表重寫（改班、對話、復原後都一致）
+        try:
+            if "cover" not in st["check"]:
+                st["check"] = run_check(st)
+            st["report"] = live_report(st)
+        except Exception:   # noqa: BLE001 — 說明寫不出來不可以擋住存檔
+            pass
     atomic_write_json(_dir() / f"{_key(st['store'], st['ym'])}.json", st)
 
 
@@ -1292,7 +1299,7 @@ def _m2hm(t):
     return ("次日" if t >= 1440 else "") + f"{t % 1440 // 60:02d}:{t % 60:02d}"
 
 
-def _coverage(info, parsed, ext, names):
+def _coverage(info, parsed, ext, names, stat=None):
     """每天需要幾人／哪些班有沒有人顧（只算在本店現場的時段）。回傳 (errors, warns)"""
     errors, warns = [], []
     demand = ext.get("demand") or {}
@@ -1314,6 +1321,8 @@ def _coverage(info, parsed, ext, names):
             else:
                 away.append(f"{names.get(eid, eid)}{why or next((s[2] for s in here if s[2]), '')}")
         note = f"（{'、'.join(away)}不算現場人力）" if away else ""
+        if stat is not None:
+            stat.append({"d": d["d"], "label": d["label"], "wd": d["wd"], "need": len(need), "got": len(working)})
         if len(working) < len(need):
             errors.append(f"{d['label']} 需要 {len(need)} 人（{'、'.join(need)}），只排了 {len(working)} 人{note}")
             continue
@@ -1398,7 +1407,8 @@ def run_check(st, schedule=None, guests=None):
     for gk, g in (guests or {}).items():
         p2[gk] = {d["d"]: g["days"].get(d["d"], {"type": "", "segs": [], "dtag": ""}) for d in info["days"]}
         n2[gk] = g["name"]
-    e2, w2 = _coverage(info, p2, ext, n2)
+    cover = []
+    e2, w2 = _coverage(info, p2, ext, n2, cover)
     errors += e2
     warns += w2
     late_starts = set(ext.get("late_shift_ends") or [])
@@ -1442,7 +1452,11 @@ def run_check(st, schedule=None, guests=None):
                     n += 1
             if n > int(limit):
                 warns.append(f"{names[eid]}：晚班接隔天早班 {n} 次，本店上限 {limit} 次")
-    return {"ok": not errors, "errors": errors, "warns": warns, "hours": hours}
+    # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
+    # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
+    support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]] for eid in parsed}
+    return {"ok": not errors, "errors": errors, "warns": warns, "hours": hours, "cover": cover,
+            "support": {k: v for k, v in support.items() if v}}
 
 
 def check_text(chk):
@@ -1776,9 +1790,10 @@ def _prev_tail(store, ym):
     return out
 
 
-PLAN_NAME = {"ft": "方案 A｜正職優先", "pt": "方案 B｜兼職優先"}
+# 2026-11-10 經營者：只保留兼職優先（兼職排到希望的時數；正職本店排不滿的去別店支援）。ft 留著只為了讀舊存檔。
+PLAN_NAME = {"ft": "正職優先（已停用）", "pt": "兼職優先"}
 PLAN_DESC = {"ft": "正職先排滿標準時數，兼職只補剩下的班（兼職最低時數不保證）。",
-             "pt": "兼職先排到目標時數（沒填就用最低時數），正職不夠的時數挪到之後月份補（標「彈性挪假」）。"}
+             "pt": "兼職先排到希望的時數（沒填就用最低時數）；正職在本店排不滿的天數列為「可支援其他店」，可以去別店上班補時數。"}
 
 
 def _solver_report(st, res, rules, bad, chk, secs_ai):
@@ -1805,7 +1820,7 @@ def _solver_report(st, res, rules, bad, chk, secs_ai):
         L += ["", f"**比設定多排的（共 {n} 人次）**：正職要排滿標準時數、兼職要排到最低時數，班不夠分才多出來。可以把這幾天改成特休、補休或事務班，或下修目標時數。"]
         L += [f"- {g['day']} 號：設定 {g['need']} 人、排了 {g['got']} 人（多在{'、'.join(g['shifts'])}）" for g in res["extras"]]
     if res.get("nuo"):
-        L += ["", "**正職挪到之後月份補的（標「彈性挪假」，之後月份排班時補上班、標「挪假補班」）**"]
+        L += ["", f"**正職{SUPPORT_TXT}的日子（本店排不滿；沒去別店的話這天標「彈性挪假」）**"]
         for eid, ds in res["nuo"].items():
             h = res["hours"][eid]
             L.append(f"- {names.get(eid)}：{'、'.join(str(d) for d in sorted(ds))} 號（共 {len(ds)} 天，本月 {h['hours']:g}h／目標 {h['target']:g}h）")
@@ -1816,6 +1831,88 @@ def _solver_report(st, res, rules, bad, chk, secs_ai):
         L += ["", "**照備註／店規套用的**"] + ["- " + _rule_text(r, names) for r in rules]
     if bad:
         L += ["", "**備註裡沒辦法自動套用的（請看班表確認，要改就在下方對話框跟 AI 說）**"] + ["- " + b for b in bad]
+    led = nuo_ledger(st)
+    if any(r["open_rest"] or r["open_work"] for r in led):
+        L += ["", "**挪假還沒補的（程式沒有自動補，要補哪天請跟 AI 說）**"]
+        L += [f"- {r['name']}：{NUO_REST} {_nuo_txt(r['open_rest'], r['open_rest_h'])}、{NUO_WORK} {_nuo_txt(r['open_work'], r['open_work_h'])}" for r in led if r["open_rest"] or r["open_work"]]
+    return "\n".join(L)
+
+
+SUPPORT_TXT = "可支援其他店"   # 2026-11-10 經營者：「挪假 N 天」改叫「可支援其他店 N 天」（本店排不滿，可以去別店上班補時數）
+
+
+def live_summary(st, chk=None):
+    """目前班表的摘要（每人時數／目標、可支援其他店、缺人、多排、檢查）：一律從檢查結果算，改班後跟著變"""
+    chk = chk or st.get("check")
+    if not chk or not st.get("schedule") or not st.get("template"):
+        return None
+    ext = _ext(st)
+    typ = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
+    sup = chk.get("support") or {}
+    rows = [{"id": h["id"], "name": h["name"], "type": typ.get(h["id"], ""), "hours": h["hours"], "days": h["days"],
+             "target": h.get("target"), "min": h.get("min"), "support": sup.get(h["id"]) or []} for h in chk.get("hours") or []]
+    cover = chk.get("cover") or []
+    return {"rows": rows, "has_demand": bool(cover),
+            "gaps": [c for c in cover if c["got"] < c["need"]], "extras": [c for c in cover if c["got"] > c["need"]],
+            "gap_n": sum(c["need"] - c["got"] for c in cover if c["got"] < c["need"]),
+            "extra_n": sum(c["got"] - c["need"] for c in cover if c["got"] > c["need"]),
+            "ok": chk["ok"], "errors": len(chk["errors"]), "warns": len(chk["warns"])}
+
+
+def live_report(st):
+    """排班結果說明：數字全部照「目前班表」重算（每次存檔都重寫），排初稿當時 AI 讀備註的結果附在後面"""
+    sm = live_summary(st)
+    if not sm:
+        return st.get("report", "")
+    dm = st.get("draft") or {}
+    L = ["### 排班結果（兼職優先；照目前班表算，改班後會跟著更新）", PLAN_DESC["pt"],
+         "✅ 硬規則檢查全部通過" if sm["ok"] else f"❌ 還有 {sm['errors']} 項沒過（見「檢查結果」）"]
+    L += ["", "| 夥伴 | 正職／兼職 | 排了 | 目標 | 最低 | " + SUPPORT_TXT + " |", "|---|---|---|---|---|---|"]
+    for r in sm["rows"]:
+        tg = f"{float(r['target']):g}h" if r["target"] else "—"
+        mn = f"{float(r['min']):g}h" if r["min"] else "—"
+        L.append(f"| {r['name']} | {r['type'] or '—'} | {r['hours']:g}h | {tg} | {mn} | {str(len(r['support'])) + ' 天' if r['support'] else '—'} |")
+    if sm["gaps"]:
+        L += ["", f"**缺人的日子（共 {sm['gap_n']} 人次）**"]
+        L += [f"- {c['label']}（{c['wd']}）：要 {c['need']} 人、排了 {c['got']} 人" for c in sm["gaps"]]
+        L.append("可以：請兼職多填可上日、調整指休、請同區正職來支援，或在下方對話框跟 AI 說。")
+    if sm["extras"]:
+        L += ["", f"**比設定多排的日子（共 {sm['extra_n']} 人次）**"]
+        L += [f"- {c['label']}（{c['wd']}）：設定 {c['need']} 人、排了 {c['got']} 人" for c in sm["extras"]]
+    sup = [r for r in sm["rows"] if r["support"]]
+    if sup:
+        L += ["", f"**正職{SUPPORT_TXT}的日子**（本店這幾天不缺人，可以排去別店上班補時數；沒去的話，匯入 104 時這天標「彈性挪假」）"]
+        for r in sup:
+            tg = f"／目標 {float(r['target']):g}h" if r["target"] else ""
+            L.append(f"- {r['name']}：{'、'.join(str(d) for d in r['support'])} 號（共 {len(r['support'])} 天；本月 {r['hours']:g}h{tg}）")
+    try:   # 調店：去別店的看本店班表（崗位填別店的格子），來本店的看同區各店班表
+        info = st["template"]["info"]
+        names = {e["id"]: e["name"] for e in info["emps"]}
+        shifts, dtypes = (_ext(st).get("shifts") or {}), set(info["dayTypes"])
+        outs = []
+        for e in info["emps"]:
+            for d in info["days"]:
+                c = parse_cell((st["schedule"].get(e["id"]) or {}).get(str(d["d"]), ""), shifts, dtypes)
+                away = [x for x in c["segs"] if _elsewhere(x[3], info["title"]) and not BONUS_MEET_RE.search(x[2] or "")]
+                if away:
+                    outs.append(f"- {d['label']}（{d['wd']}）{names[e['id']]} 去{away[0][3]}（{away[0][0]}–{away[-1][1]}）")
+        ins = []
+        for g in (_guest_cells(st["store"], st["ym"]) or {}).values():
+            for dd, c in sorted(g["days"].items()):
+                if c.get("segs"):
+                    ins.append(f"- {dd} 號 {g['name']} 來本店（{c['segs'][0][0]}–{c['segs'][-1][1]}）")
+        if outs:
+            L += ["", f"**去別店上班的（{len(outs)} 人次）**"] + outs
+        if ins:
+            L += ["", f"**別店來本店支援的（{len(ins)} 人次）**"] + ins
+    except Exception:   # noqa: BLE001
+        pass
+    if dm.get("unmet"):
+        L += ["", "**⚠ 排初稿時沒做到的備註／店規（人手不夠才破例）**"] + ["- " + x for x in dm["unmet"]]
+    if dm.get("rules"):
+        L += ["", "**排初稿時照備註／店規套用的**"] + ["- " + x for x in dm["rules"]]
+    if dm.get("bad"):
+        L += ["", "**備註裡沒辦法自動套用的（請看班表確認，要改就在下方對話框跟 AI 說）**"] + ["- " + x for x in dm["bad"]]
     led = nuo_ledger(st)
     if any(r["open_rest"] or r["open_work"] for r in led):
         L += ["", "**挪假還沒補的（程式沒有自動補，要補哪天請跟 AI 說）**"]
@@ -1870,13 +1967,13 @@ def _draft_worker(store, ym):
         # 2026-11-06 經營者：同一份規則排兩種（A 正職優先、B 兼職優先），同時給店長看、選一個採用
         tail = _prev_tail(store, ym)
         plans = {}
-        for mode in ("ft", "pt"):
+        for mode in ("pt",):
             r_ = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=tail,
                                        fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode)
             for (eid, d), (cell, _) in fixed.items():
                 r_["schedule"][eid][str(d)] = cell
             plans[mode] = r_
-        res = plans["ft"]
+        res = plans["pt"]
         ext = _ext_from_form(st, cfg)
         ext["demand"] = {str(d): [n for n, c in res["need"][d].items() for _ in range(c)] for d in res["need"]}
         ext["notes"] = [_rule_text(r, {e["id"]: e["name"] for e in info["emps"]}) for r in rules] + bad
@@ -1889,11 +1986,15 @@ def _draft_worker(store, ym):
                 chk_ = run_check(tmp)
                 saved[mode] = {"schedule": r_["schedule"], "check": chk_, "report": _solver_report(tmp, r_, rules, bad, chk_, secs_ai),
                                "summary": _plan_summary(r_, chk_)}
-            sched, chk, report = saved["ft"]["schedule"], saved["ft"]["check"], saved["ft"]["report"]
+            sched, chk, report = saved["pt"]["schedule"], saved["pt"]["check"], saved["pt"]["report"]
             if st.get("schedule"):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "重排前"}]
-            st["plans"], st["plan"] = saved, "ft"
-            msg = "✅ 排好兩個方案（A 正職優先、B 兼職優先），班表先顯示方案 A，上面可以比較、按「採用」換。" + ("硬規則全部通過。" if chk["ok"] else f"方案 A 有 {len(chk['errors'])} 項沒過（多半是人不夠），請看檢查結果。")
+            names_ = {e["id"]: e["name"] for e in info["emps"]}
+            st["plans"], st["plan"] = {}, "pt"   # 只排一個方案，不再有「兩個方案比較」
+            st["draft"] = {"mode": "pt", "at": time.time(), "rules": [_rule_text(r, names_) for r in rules], "bad": list(bad),
+                           "unmet": [f"{_rule_text(u['rule'], names_)}：{'、'.join(str(d) for d in u['days'])} 號沒做到" for u in res.get("unmet") or []]}
+            nsup = sum(len(v) for v in (chk.get("support") or {}).values())
+            msg = "✅ 排好了（兼職優先）。" + ("硬規則全部通過。" if chk["ok"] else f"有 {len(chk['errors'])} 項沒過（多半是人不夠），看「檢查結果」。") + (f"正職共有 {nsup} 人天{SUPPORT_TXT}，列在排班結果裡。" if nsup else "")
             if res.get("extras"):
                 msg += f"有 {sum(g['got'] - g['need'] for g in res['extras'])} 人次比設定多（正職時數要排滿、班不夠分），列在報告裡。"
             if bad:
@@ -2078,7 +2179,8 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
                 u["schedule"][eid][str(d)] = cell
         scheds = {u["store"]: u["schedule"] for u in r["stores"]}
         P = {"stats": r["stats"], "moves": [dict(mv, from_name=_sname(mv["store"]), to_name=_sname(mv["to"])) for mv in r["moves"]],
-             "stores": {}, "history": []}
+             "stores": {}, "history": [],
+             "pos_block": [{"from": a, "to": b, "from_name": _sname(a), "to_name": _sname(b), "pos": _region_pos(rg, b)} for a, b in r.get("pos_block") or []]}
         for u in r["stores"]:
             s = u["store"]
             ext = _ext_from_form(sts[s], cfgs[s])
@@ -2142,7 +2244,7 @@ def _region_worker(rg, ym):
         old = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
         extra = old.get("extra_rules") or []      # 魔導師在對話框加的條件，重排時照樣套
         rules, bad, secs_ai = _region_rules(rg, ym, ctx, jk)
-        plans = _region_solve(rg, ym, ctx, _merge_rules(rules, extra), bad, secs_ai, ("ft", "pt"), jk)
+        plans = _region_solve(rg, ym, ctx, _merge_rules(rules, extra), bad, secs_ai, ("pt",), jk)
         out = {"region": rg, "ym": ym, "at": dt.datetime.now().isoformat(timespec="seconds"), "secs_ai": round(secs_ai, 1),
                "stores": stores, "plans": plans, "picked": None, "rules": {str(s): v for s, v in rules.items()},
                "bad": {str(s): v for s, v in bad.items()}, "extra_rules": extra, "chat": old.get("chat") or []}
@@ -2155,7 +2257,7 @@ def _region_worker(rg, ym):
 # ── 魔導師對話框（2026-11-06 經營者：魔導師也要有 AI 對話框提出調整）：改的是「目前這個方案」，按「採用」才寫進各店 ──
 RG_CHAT_RULES = """
 ## 這次的工作：魔導師在「區域排班」對話框要你調整整區的方案
-- 你看到的是某個方案（A 正職優先或 B 兼職優先）的整區班表（同區每家店），還沒寫進各店；魔導師按「採用」才會寫進去。
+- 你看到的是整區排好的班表（兼職優先：兼職排到希望的時數，正職本店排不滿的去同區別店支援）（同區每家店），還沒寫進各店；魔導師按「採用」才會寫進去。
 - 工具：
  1. rg_apply：直接改某店某人某天的格子（一次可改多格、可跨店）。調去別家店上班＝在夥伴「自己店」的格子寫那家店的班別時段，每段加「@支援#崗位」（崗位見下方各店的調店崗位），例「13:00-15:00@支援#台南店,15:30-21:30@支援#台南店」；原本被調走的那天改回自己店上班就寫自己店的班別名稱。
  2. rg_rerun：加條件後讓程式整區重排這個方案（約 1～3 分鐘），適合「某人整月不要調店」「某人某幾天一定要調去某店」「某人某幾天不能上班」「某店某天某班要幾人」這類條件。條件會記住，之後按「整區排初稿」也會照樣套。
@@ -2371,7 +2473,7 @@ def _region_public(rg, ym):
                 meta[str(s)] = {}
     plans = {}
     for mode, P in ((data or {}).get("plans") or {}).items():
-        plans[mode] = {"name": PLAN_NAME[mode], "desc": PLAN_DESC[mode], "stats": P["stats"], "moves": P["moves"],
+        plans[mode] = {"name": PLAN_NAME[mode], "desc": PLAN_DESC[mode], "stats": P["stats"], "moves": P["moves"], "pos_block": P.get("pos_block") or [],
                        "stores": {k: {"schedule": v["schedule"], "need": v["need"], "got": v["got"], "summary": v["summary"],
                                       "names": v["names"], "ok": v["check"]["ok"], "errors": v["check"]["errors"][:20],
                                       "warns": len(v["check"]["warns"]),
@@ -2421,7 +2523,8 @@ def _region_pick(rg, ym, mode):
             if st.get("schedule"):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "區域排班前"}]
             st.update(schedule=copy.deepcopy(x["schedule"]), ext=x["ext"], report=x["report"], plans={}, plan=None,
-                      region={"name": rg, "mode": mode, "at": now})
+                      region={"name": rg, "mode": mode, "at": now},
+                      draft={"mode": mode, "at": time.time(), "rules": list((x.get("ext") or {}).get("notes") or []), "bad": [], "unmet": [], "region": rg})
             st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(),
                                                     "text": f"魔導師用「{PLAN_NAME[mode]}」排好整區（{rg}）的班表，本店班表已換成這一版（調店的格子標「支援＋店名」）。要改哪裡直接跟我說；換錯可按「復原上一步」。"}]
             _save(st)
@@ -3407,16 +3510,22 @@ def _public(st):
         s104 = {"name": x.get("name"), "status": x.get("status"), "modify": x.get("modify"), "fetched": x.get("fetched"),
                 "diff": x.get("diff"), "diffs": diffs, "missing": x.get("missing") or [], "emps": x.get("emps") or [],
                 "unknown": x.get("unknown") or 0}
+    chk = st.get("check")
+    if chk and tpl and st.get("schedule") and "cover" not in chk:   # 舊存檔的檢查結果沒有每天人數 → 現算一次（不存檔）
+        try:
+            chk = run_check(st)
+        except Exception:   # noqa: BLE001
+            pass
     return {
+        "summary": live_summary(st, chk),
         "ok": True, "store": st["store"], "storeName": _sname(st["store"]), "ym": st["ym"],
         "settingsFiles": [{"name": f["name"], "chars": len(f["text"])} for f in st.get("settings_files") or []],
         "note": st.get("note", ""), "s104": s104,
         "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
                       "fetched": tpl.get("fetched")} if tpl else None),
         "ext": ext or None, "schedule": st.get("schedule"), "cells": cells, "report": st.get("report", ""),
-        "check": st.get("check"), "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
-        "plans": {m: {"schedule": p["schedule"], "summary": p["summary"], "name": PLAN_NAME.get(m, m), "desc": PLAN_DESC.get(m, "")}
-                  for m, p in (st.get("plans") or {}).items()}, "plan": st.get("plan"),
+        "check": chk, "chat": (st.get("chat") or [])[-80:], "canUndo": bool(st.get("history")),
+        "plans": {}, "plan": st.get("plan"),   # 2026-11-10：只排兼職優先，不再回兩個方案
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
         "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
         "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES}, "nuo": nuo_ledger(st, cfg) if tpl else [],

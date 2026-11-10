@@ -26,6 +26,7 @@ W_LATE = 6000        # 晚接早超過本店上限（每次）
 W_PT_MIN = 60        # 兼職低於最低時數（每分鐘）
 W_FT_HRS = 50        # 正職時數跟目標差（每分鐘）
 W_FT_LEND = 2        # 兼職優先方案：正職時數不足（每分鐘；挪到其他月份補，比多排人便宜）
+W_FT_FAIR = 3        # 兼職優先方案：同店正職裡「不足最多的那一位」的不足時數（每分鐘；讓不足平均分攤）
 W_EXTRA = 5000       # 某班多排人（每多 1 人；浪費人力）：比兼職目標時數優先，只輸給正職標準時數、兼職最低時數（2026-11-05 經營者：設定 1 人就排 1 人）
 W_PT_TGT = 4         # 兼職跟目標時數差（每分鐘）
 W_PREFER = 300       # 備註偏好的班別沒排到（每次）
@@ -125,7 +126,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         base = ms.get("base") or {}
         late_limit = cfg.get("late_early_limit")
         U.append({"store": u["store"], "pos": u.get("pos") or "", "info": info, "ms": ms, "rules": rules, "shifts": shifts,
-                  "need": need, "caps": caps, "hol_days": set(u.get("hol_days") or ()), "prev_tail": u.get("prev_tail") or {},
+                  "need": need, "caps": caps, "positions": set(info.get("positions") or ()), "hol_days": set(u.get("hol_days") or ()), "prev_tail": u.get("prev_tail") or {},
                   "fixed_minutes": u.get("fixed_minutes") or {},
                   "std_min": int(round(float(base.get("std_hours") or 0) * 60)), "off_days": base.get("off_days"),
                   "holidays": int(base.get("holidays") or 0), "max_consec": int(cfg.get("max_consec") or 5),
@@ -154,6 +155,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
 
     # 每人每天能上哪些（店, 班別）
     allowed, pto, fixed = {}, {}, {}
+    pos_block = set()
     for u in U:
         rules = u["rules"]
         u["off_rule"] = {(r["emp"], dd) for r in rules if r["type"] == "off" for dd in r["days"]}
@@ -196,6 +198,10 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 # 兼職這天指定了班別（例：只能晚班）→ 別家店也只排同一種（早／中／晚；看不出種類就要同名）
                 want = u["shifts"].get(avail.get(str(d))) if (not e["ft"] and can) else None
                 for o in U:
+                    # 2026-11-10：來源店的 104 範本要有那家店的崗位才能調（沒有的話寫得進班表、匯不進 104）
+                    if o["store"] != u["store"] and o["pos"] and u["positions"] and o["pos"] not in u["positions"]:
+                        pos_block.add((u["store"], o["store"]))
+                        continue
                     if o["store"] != u["store"]:
                         opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n) and (
                             not want or (o["shifts"][n]["kind"] == want["kind"] if want["kind"] else n == avail.get(str(d))))]
@@ -213,6 +219,23 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             for (s, n) in allowed[e["k"] + (d,)]:
                 x[e["k"] + (d, s, n)] = m.NewBoolVar("")
     pen = []
+    ft_under = {}
+    # 2026-11-10：同一個工號掛在同區兩家店的名單（跨店支援的夥伴）＝同一個人，同一天只能在一家店上班
+    same = {}
+    for e in emps:
+        same.setdefault(e["k"][1], []).append(e)
+    for grp in same.values():
+        if len(grp) < 2:
+            continue
+        for d in days:
+            vs, const = [], 0
+            for e in grp:
+                kd = e["k"] + (d,)
+                if kd in pto or kd in fixed:
+                    const += 1
+                vs += [x[kd + (s_, n_)] for s_, n_ in allowed[kd]]
+            if vs:
+                m.Add(sum(vs) <= max(0, 1 - const))
 
     def work(k, d):
         """這天有沒有上班（含特休、固定格子）：回傳 (變數清單, 常數)"""
@@ -332,6 +355,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             m.Add(H + under >= goal)
             m.Add(H - over <= goal)
             pen += [(under, w_under), (over, w_over)]
+            if e["ft"] and mode == "pt":
+                ft_under.setdefault(e["u"]["store"], []).append(under)
         if not e["ft"] and e["min"] and mode == "std":
             short_min = m.NewIntVar(0, e["min"], "")
             m.Add(H + short_min >= e["min"])
@@ -426,6 +451,14 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                         both = m.NewBoolVar("")
                         m.Add(sum(va) + ca + sum(vb) + cb - 1 <= both)
                         pen.append((both, W_APART))
+
+    # 2026-11-10：兼職優先時，正職在本店排不滿的時數要平均分給同店正職（原本只算總量，會變成一人 168h、一人 16h）
+    for vs in ft_under.values():
+        if len(vs) > 1:
+            mx = m.NewIntVar(0, 31 * 24 * 60, "")
+            for v in vs:
+                m.Add(mx >= v)
+            pen.append((mx, W_FT_FAIR))
 
     m.Minimize(sum(v * w for v, w in pen))
     sv = cp_model.CpSolver()
@@ -542,7 +575,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     unmet.append({"rule": r, "days": miss})
         out.append({"store": st_, "schedule": sched, "gaps": gaps, "extras": extras, "nuo": nuo, "mode": mode,
                     "hours": hours, "need": u["need"], "unmet": unmet, "guests": guests})
-    return {"stores": out, "moves": moves,
+    return {"pos_block": sorted(pos_block), "stores": out, "moves": moves,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(status), "objective": sv.ObjectiveValue()}}
 
 
