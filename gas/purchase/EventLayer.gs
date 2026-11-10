@@ -862,10 +862,12 @@ function evFest_(evName, year) {
   for (var i = 0; i < cand.length; i++) {
     var t = EV_FEST[cand[i]]; if (t && t[year]) return evDate_(t[year]);
   }
+  if (/七夕/.test(String(evName))) { var q7 = EV_FEST['父親七夕']; if (q7 && q7[year]) return evDate_(q7[year]); }   /* 2026-11-11：名稱含七夕一律用登錄的農曆七夕 */
   for (var j = 0; j < cand.length; j++) {
     for (var r = 0; r < EV_FEST_RULE.length; r++) {
       var ru = EV_FEST_RULE[r];
       if (String(cand[j]).indexOf(ru.key) < 0) continue;
+      if (ru.key === '情人節' && /七夕/.test(String(cand[j]))) continue;   /* 2026-11-11：「七夕情人節」是農曆，不可對到 2/14（農曆日期登錄在 EV_FEST 的七夕） */
       if (ru.md) return new Date(year, ru.md[0] - 1, ru.md[1]);
       var d = new Date(year, ru.nthSun[0] - 1, 1);
       d = evAddDays_(d, (7 - d.getDay()) % 7);

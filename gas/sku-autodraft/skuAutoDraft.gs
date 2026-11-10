@@ -157,7 +157,7 @@ function adRun_(dry) {
     drafts.sort(function (a, b) { return b.n - a.n; });
     var newRows = [];
     drafts.forEach(function (d) {
-      var pf = AD_PREFIX[d.cat] || 'F'; maxNum[pf]++; var id = pf + ('000' + maxNum[pf]).slice(-3);
+      var pf = AD_PREFIX[d.cat] || 'F'; maxNum[pf]++; var id = pf + (maxNum[pf] >= 1000 ? String(maxNum[pf]) : ('000' + maxNum[pf]).slice(-3));   /* 2026-11-11：到 1000 號不再截成 000 撞號 */
       var row = []; for (var k = 0; k <= cSrc; k++) row.push('');
       row[cId] = id; row[cName] = d.name; row[cCat] = d.cat; row[cUse] = d.unit;
       if (cBuy >= 0) row[cBuy] = d.unit; if (cPq >= 0) row[cPq] = 1; if (cPrice >= 0) row[cPrice] = 0;

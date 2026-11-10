@@ -85,13 +85,15 @@ function srSubmit_(r) {
   var sheets = srSheets_();
   var bom = sheets[0];
   var ids = srColVals_(bom, 1);
-  if (ids.indexOf(id) >= 0) return { ok: true, dup: true, id: id };   // 前端重送＝冪等
-  if (ids.length >= SR.MAX_ROWS) return { ok: false, err: 'full' };
+  var dup = ids.indexOf(id) >= 0;
+  if (!dup && ids.length >= SR.MAX_ROWS) return { ok: false, err: 'full' };
 
   var row = [id, srNow_(), st, req.who, req.name, req.cat, req.use, req.useNote, req.freq, req.others,
              req.vendor, req.useUnit, req.buyUnit, pq, price, qty, req.need, req.link, '待審', '', '', ''];
-  sheets.forEach(function (sh) { srAppend_(sh, row); });
-  return { ok: true, id: id };
+  /* 2026-11-11：逐檔檢查——上次只寫進其中一個檔（另一個失敗）時，重送要把缺的那個檔補上（原本直接回「重複」，總部永遠看不到這張） */
+  var added = 0;
+  sheets.forEach(function (sh, k) { if (k === 0 ? dup : srColVals_(sh, 1).indexOf(id) >= 0) return; srAppend_(sh, row); added++; });
+  return added ? { ok: true, id: id, repaired: dup || undefined } : { ok: true, dup: true, id: id };
 }
 
 /* ---------- 處理結果（總部）：只改 待審 的列 ---------- */

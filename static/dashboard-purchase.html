@@ -931,7 +931,7 @@ async function bootstrap(keep,pre){ try {   /* pre＝已經開始的讀取（1-1
   /* 2026-08-31 t 批：單位對照頁「網頁上刪除」走獨立 GAS 專案 diybc-conv-api（與 shelfApi 同模式）。網址貼在 dim_unitconv 第 1 列任一空白表頭格（建議 F1），這裡從表頭鍵名偵測。 */
   CONV_API="";if(dU[0]){Object.keys(dU[0]).forEach(function(k){if(String(k).trim().indexOf("https://script.google.com/")===0)CONV_API=String(k).trim();});}
   // fact_inventory：取每店每料最新一筆
-  INV={};var ts={};fInv.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"],dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;var k=st+"|"+id;if(!(k in ts)||t>=ts[k]){ts[k]=t;((INV[st]=INV[st]||{})[id]={onHand:num(r["現有量"]),enough:num(r["足夠"]!=null?r["足夠"]:r["破損量"]),t:(t||null)});}});
+  INV={};var ts={};fInv.forEach(function(r){var st=String(r["店號"]),id=r["sku_id"],dt=gvDate(r["時間戳"])||gvDate(r["盤點日"]),t=dt?dt.getTime():0;var k=st+"|"+id;if(!(k in ts)||t>=ts[k]){ts[k]=t;var _en=num(r["足夠"]!=null?r["足夠"]:r["破損量"]),_oh=r["現有量"];((INV[st]=INV[st]||{})[id]={onHand:((_oh==null||_oh==="")&&_en!==1)?null:num(_oh),enough:_en,t:(t||null)});   /* 2026-11-11：現有量空白且不是足夠＝這筆是「清掉數字／取消足夠」→ 算沒盤（主程式同日改成空白寫空白） */}});
   /* 2026-08-20 p 批：13 號店已結束營業，全站排除（來源含歷史資料仍會帶出該店號）。 */
   delete storeSet["13"];
   STORES=Object.keys(storeSet).sort(function(a,b){var na=+a,nb=+b;if(!isNaN(na)&&!isNaN(nb))return na-nb;return String(a).localeCompare(String(b));}).map(function(id){return {id:id,name:id+"號店"};});
@@ -4754,7 +4754,8 @@ function dcoSubmit(){var store=ST.storeId;if(DCO.busy||!dcoOn())return;
   DCO.busy=true;render();
   dcoWrite({action:"create",store:store,cid:cid,note:String(ST.dcoNote||"").trim(),items:lines.map(function(l){return {sku_id:l.sku_id,name:l.name,unit:l.unit,qty:l.qty,price:l.price};})},
     function(){return dcoJsonp({action:"orders",cid:cid}).then(function(d){var o=d&&d.ok&&d.orders[0];return o?{ok:true,id:o.id}:null;});})
-  .then(function(r){DCO.busy=false;ST.dcExtra=ST.dcExtra||{};ST.dcExtra[store]={};ST.dcoNote="";ST.dcoExp=ST.dcoExp||{};ST.dcoExp[r.id]=true;
+  .then(function(r){DCO.busy=false;ST.dcExtra=ST.dcExtra||{};ST.dcExtra[store]={};ST.dcoNote="";
+      lines.forEach(function(l){var m=PACKOF[l.sku_id]||l.sku_id;delete ST.orderEdit[m];delete ST.orderEdit[l.sku_id];if(ST.orderPack)delete ST.orderPack[m];if(ST.orderPackQty)delete ST.orderPackQty[m];});   /* 2026-11-11：送出的品項，手改的數量不留到下次 */ST.dcoExp=ST.dcoExp||{};ST.dcoExp[r.id]=true;
       delete DCO.store[store];DCO.all=null;render();toast("✅ 已送出 "+r.id);})
   .catch(function(e){DCO.busy=false;render();toast("⚠️ 送出失敗："+e.message);});}
 /* 訂單動作（門市取消／出貨中心備貨、出貨、取消）：寫完回讀這張單的狀態 */
@@ -5041,7 +5042,8 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
    A4 橫式、每個客代一張、一式兩份）；後端有開派遣就同時通知新竹來收件。測試帳號時頁面頂部會提示。 */
 var HCT={rows:null,ld:false,env:"",cfg:null,byId:{},day:{},dayLd:{}};
 var HCT_SZ=[60,90,120,150];
-function hctReset(){HCT.rows=null;HCT.byId={};HCT.day={};HCT.dayLd={};}
+function hctReset(){HCT.rows=null;HCT.err="";HCT.byId={};HCT.day={};HCT.dayLd={};}
+document.addEventListener("click",function(e){var b=e.target&&e.target.closest&&e.target.closest("[data-hctretry]");if(b){hctReset();render();}});
 function hctToday(){return ymd(new Date()).replace(/-/g,"");}
 function hctDash(no){no=String(no||"");return /^\d{10}$/.test(no)?no.slice(0,3)+"-"+no.slice(3,6)+"-"+no.slice(6):no;}
 function hctAct(l){return l&&(l.status==="已建單"||l.status==="已交寄");}
@@ -5052,12 +5054,13 @@ function hctCsList(){return (HCT.cfg&&HCT.cfg.cs&&HCT.cfg.cs.length)?HCT.cfg.cs:
 function hctCsOf(code){var L=hctCsList();for(var i=0;i<L.length;i++)if(L[i].code===String(code||""))return L[i];return L[0];}
 function hctQty(l){return (l.mode==="S")?(l.weight+" 公分"):(l.weight+" 公斤");}
 function hctLoad(){HCT.ld=true;
-  return dcoJsonp({action:"hct",days:14}).then(function(d){if(d&&d.ok){HCT.rows=d.labels||[];HCT.env=d.env||"";HCT.cfg=d.cfg||null;HCT.byId=hctIndex(HCT.rows);}else{HCT.rows=[];HCT.env="old";}})   /* 後端還沒更新到 v1.3 → 回「未知的 action」 */
-    .catch(function(){HCT.rows=HCT.rows||[];}).then(function(){HCT.ld=false;if(ST.tab==="訂單")render();});}
+  return dcoJsonp({action:"hct",days:30}).then(function(d){HCT.err="";if(d&&d.ok){HCT.rows=d.labels||[];HCT.env=d.env||"";HCT.cfg=d.cfg||null;HCT.byId=hctIndex(HCT.rows);}else{HCT.rows=[];HCT.env="old";}})   /* 後端還沒更新到 v1.3 → 回「未知的 action」 */
+    .catch(function(e){HCT.rows=HCT.rows||[];HCT.err=(e&&e.message)||"連線失敗";}).then(function(){HCT.ld=false;if(ST.tab==="訂單")render();});}   /* 2026-11-11：失敗要講（原本整個新竹功能默默消失） */
 function hctLoadDay(day){HCT.dayLd[day]=true;
   return dcoJsonp({action:"hct",date:day}).then(function(d){HCT.day[day]=(d&&d.ok)?(d.labels||[]):[];if(d&&d.cfg)HCT.cfg=d.cfg;})
     .catch(function(e){HCT.day[day]=[];toast("⚠️ 讀不到 "+day+" 的托運單（"+e.message+"）");}).then(function(){HCT.dayLd[day]=false;if(ST.tab==="訂單")render();});}
-function hctEnvBanner(){if(HCT.env==="test")return '<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00">🧪 新竹托運單目前接的是<b>新竹測試帳號</b>：資料只進新竹的測試系統，不能真的寄。新竹開正式帳號、系統管理員設定好後這行會消失。</div>';
+function hctEnvBanner(){if(HCT.err)return alertBig("stop","⛔ 讀不到新竹托運單資料","這次沒讀到（"+shEsc(HCT.err)+"），所以托運單、貨號、「已寄出」的提醒暫時都看不到。<b>先不要合併訂單、也不要重開托運單</b>，按 <button class=\"btn sm\" data-hctretry=\"1\">🔄 重讀托運單</button> 再試一次。");
+  if(HCT.env==="test")return '<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00">🧪 新竹托運單目前接的是<b>新竹測試帳號</b>：資料只進新竹的測試系統，不能真的寄。新竹開正式帳號、系統管理員設定好後這行會消失。</div>';
   return "";}   /* 後端還沒更新到 v1.3（env＝old）：整個新竹功能不顯示，畫面跟舊版一樣 */
 function hctOn(){return !!HCT.env&&HCT.env!=="old";}
 /* 收件人：門市名稱＋SLIP_SHIP 電話地址（地址去掉「台灣」、郵遞區號和空白，新竹上限 100 字） */
@@ -5237,7 +5240,7 @@ function hctDispatch(){if(DCO.busy)return;
   dcoPostRaw({action:"hctDispatch",date:hctToday()}).then(function(r){DCO.busy=false;if(!(r&&r.ok))throw dcoApiErr(r);hctReset();render();
       if(r.fail&&r.fail.length)alert("⚠️ 有 "+r.fail.length+" 張沒叫到：\n"+r.fail.map(function(f){return hctDash(f.edelno)+"："+f.err;}).join("\n")+(r.msg?"\n\n新竹回覆："+r.msg:""));
       toast(r.done?"✅ 已通知新竹來收 "+r.done+" 張":"ℹ️ "+(r.msg||"沒有要通知的托運單"));})
-    .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ "+e.message);});}
+    .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ 沒收到回應（"+e.message+"）。可能已經通知成功：等畫面重讀後看「叫收件」欄，已經是 Y 的就不用再按",9000);});}
 /* 🚚 新竹托運：今天（或選的那天）的托運單、批次補印、確認出貨＋託運總表、叫收件 */
 /* 2026-11-02 經營者：出貨後要能勾選托運單，補印標籤、印託運總表（格式照 1028.docx：兩行一筆、A4 橫式）。
    勾選存在 ST.hctSel[出貨日]（{貨號:true}）；沒勾＝這天全部。總表只印已確認出貨（已交寄）的，勾到未交寄的會提醒並略過。 */
@@ -5280,7 +5283,12 @@ function hctReport(){if(DCO.busy)return;var day=hctToday(),list=(HCT.day[day]||[
       if(r.dispatch&&(r.dispatch.fail.length||!r.dispatch.done))msg.push("⚠️ 通知新竹來收件沒有全部成功（成功 "+r.dispatch.done+" 張）"+(r.dispatch.msg?"：\n"+r.dispatch.msg:"")+"\n請在這頁按「📞 通知新竹來收件」再試，或打電話給站所。");
       if(msg.length)alert(msg.join("\n\n"));
       hctPrintTotal(r.labels.filter(function(l){return l.status==="已交寄";}),day);toast("✅ 已確認出貨 "+r.done+" 張"+(r.dispatch&&r.dispatch.done?"，已通知新竹收件 "+r.dispatch.done+" 張":""));})
-    .catch(function(e){DCO.busy=false;hctReset();render();toast("⚠️ 確認出貨沒有完成："+e.message+"（請按 🔄 重新整理看狀態，不要重複按）",8000);});}
+    .catch(function(e){   /* 2026-11-11：回應沒收到不代表沒做 → 回讀這天的托運單；都已交寄就照樣印總表 */
+      dcoJsonp({action:"hct",date:day}).then(function(d){var L=(d&&d.ok&&d.labels)||[],sent=L.filter(function(l){return l.status==="已交寄";}),left=L.filter(function(l){return l.status==="已建單";});
+        DCO.busy=false;hctReset();render();
+        if(sent.length&&!left.length){hctPrintTotal(sent,day);toast("✅ 回應晚到，但新竹已確認出貨 "+sent.length+" 張（總表已跳出）。"+(dsp?"叫收件有沒有成功請看「叫收件」欄，沒有 Y 再按「📞 通知新竹來收件」":""),9000);return;}
+        toast("⚠️ 確認出貨沒有完成："+e.message+"（還有 "+left.length+" 張沒確認，可以再按一次）",8000);})
+      .catch(function(){DCO.busy=false;hctReset();render();toast("⚠️ 確認出貨沒有完成："+e.message+"（請按 🔄 重新整理看狀態，不要重複按）",8000);});});}
 /* 託運總表（2026-11-04 經營者：原本格線版太複雜，改照新竹官方簡式總表）：A4 橫式，不畫格線，只在表頭上下與表尾前畫橫線
    每筆兩行——上行：項次｜查貨號碼｜到著站｜收貨人名稱（縮成「N店(地區)」）｜收貨人電話｜件數｜訂單編號；下行：收貨人地址｜內容物/備註｜代收貨款｜重/材/長
    每個客代分開印；份數照「總表每個客代印」（預設 2 份）。表尾：貨件總數、訂單總筆數、收貨日期、司機／客戶簽收。 */
@@ -6254,6 +6262,7 @@ function inN(sc,id,f,v,w){return '<input class="sm" style="width:'+(w||56)+'px" 
 function inT(sc,id,f,v,w,ph,ti){return '<input class="tx" style="width:'+(w||80)+'px" type="text" data-'+sc+'="'+id+'" data-f="'+f+'" value="'+escA(v==null?"":v)+'"'+(ph?' placeholder="'+escA(ph)+'"':'')+(ti?' title="'+escA(ti)+'"':'')+'>';}
 
 /* ===== 事件 ===== */
+var MEDIT_G={}; // 主檔頁改了還沒存的值（sku_id → {欄:值}）
 var EDIT={}; // 暫存店別參數編輯
 var EDIT_ST="",EDIT_ORIG={};   // cp 批：EDIT 是哪一店的修改／各格改之前的值（丟掉修改時還原畫面用，見 paramMark／paramDiscard）
 /* ===== 2026-08-29 r 批：搜尋框中文輸入法（IME）與焦點還原統一處理 =====
@@ -6879,7 +6888,7 @@ function wire(){
     var msg="確定要對「"+storeLabel(st)+"」開始新的一週嗎？\n盤點欄位會清空重新清點（歷史紀錄完整保留）。";
     if(mine&&mine!==st)msg="⚠️ 你正在「"+storeLabel(st)+"」，不是本機門市「"+storeLabel(mine)+"」。\n\n"+msg;
     if(typeof confirm==="function"&&!confirm(msg))return;
-    setSess(st,Date.now());clearDraft(st);okClearAll(st);DIRTY[st]={};render();};
+    setSess(st,Date.now());clearDraft(st);okClearAll(st);DIRTY[st]={};ST.orderEdit={};ST.orderOff={};ST.orderPack={};ST.orderPackQty={};render();};   /* 2026-11-11：上週手改的數量、取消的勾不帶到新的一週 */
   var sRs=$("#sessReset");if(sRs)sRs.onclick=function(){var dnn=Object.keys(DIRTY[ST.storeId]||{}).length;
     var msg=dnn>0?("尚有 "+dnn+" 筆已填未送出，重新盤點將捨棄這些數值並重新載入頁面。確定開始新的一週？"):"確定開始新的一週嗎？欄位將清空重新清點（歷史紀錄完整保留）。";
     if(!confirm(msg))return;setSess(ST.storeId,Date.now());clearDraft(ST.storeId);okClearAll(ST.storeId);
@@ -7033,8 +7042,10 @@ function wire(){
     EVENTS.push({name:nm,from:new Date(f),to:new Date(t),coef:c,scope:sc2,on:true});
     toast("已新增事件");render();};
   // 主檔編輯
-  var MEDIT={};
-  Array.prototype.forEach.call(document.querySelectorAll("[data-m]"),function(el){el.onchange=function(){var id=el.dataset.m,f2=el.dataset.f;
+  var MEDIT=MEDIT_G;   /* 2026-11-11：改了還沒按「存」的值放全域，篩選／搜尋／貼圖重畫後帶回輸入框（原本每次重畫就不見） */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-m]"),function(el){var _e=MEDIT[el.dataset.m];
+    if(_e&&(el.dataset.f in _e)){el.value=_e[el.dataset.f];el.style.outline="2px solid #F0B35A";el.title="改了還沒存，請按這列的「存」";}
+    el.onchange=function(){el.style.outline="2px solid #F0B35A";var id=el.dataset.m,f2=el.dataset.f;
     MEDIT[id]=MEDIT[id]||{};MEDIT[id][f2]=(f2==="packQty"||f2==="price")?(el.value===""?"":+el.value):el.value;};});
   Array.prototype.forEach.call(document.querySelectorAll("[data-msave]"),function(el){el.onclick=function(){var id=el.dataset.msave,e=MEDIT[id]||{},sk=SKU[id];if(!sk)return;
     var fields={};
@@ -7095,8 +7106,7 @@ function wire(){
     }
     if(!stWriteOK(store))return;   /* co 批 */
     if(typeof confirm==="function"&&!confirm("確定把這 "+ids.length+" 筆盤點存到「"+storeLabel(store)+"」？\n（不是這一店請按取消）"))return;
-    var blank=ids.filter(function(id){return !iv[id]||(iv[id].onHand==null&&num(iv[id].enough)!==1);});   /* 2026-11-10：沒填數字又不是足夠的，存進去會變成「現有 0」（別台裝置會建議叫滿）→ 先擋下 */
-    if(blank.length){alert("有 "+blank.length+" 項還沒填現有量：\n"+blank.slice(0,8).map(function(id){return "・"+(SKU[id]?dispName(store,SKU[id]):id);}).join("\n")+(blank.length>8?"\n…等 "+blank.length+" 項":"")+"\n\n請填數字，或按「✓ 足夠」，再按儲存。");return;}
+    /* 2026-11-11：沒填數字又不是足夠的＝「這項沒盤」。主程式已改成空白寫空白（不再寫成 0），各裝置讀到都算沒盤，所以不必擋（11/10 曾暫時擋下） */
     var expect={};ids.forEach(function(id){expect[id]=iv[id]?num(iv[id].onHand):0;});
     var meta={at:Date.now(),t:{},en:{}};ids.forEach(function(id){meta.t[id]=iv[id]?iv[id].t:null;meta.en[id]=(iv[id]&&num(iv[id].enough)===1)?1:0;});
     sc.disabled=true;ST.saveWarn=null;toast("送出中… "+ids.length+" 筆");
@@ -7521,7 +7531,8 @@ function shUploadCard(){
       +(u.unmapped.length?'<br><span style="color:#B45309">⚠️ 歸不了戶（收件人沒有「N店」）：'+u.unmapped.slice(0,8).map(shEsc).join('、')+(u.unmapped.length>8?' …共 '+u.unmapped.length+' 種':'')+'，這些列不會上傳</span>':'')
       +'</div><div style="margin-top:8px"><button class="btn" id="shUpGo">確認上傳 '+fmt(u.rows.length)+' 筆</button> <button class="btn" id="shUpCancel" style="background:#eee;color:#333">取消</button></div>';
   }
-  if(u.stage==="done")h+='<div class="note" style="background:#eef8ee;margin-top:8px">✅ 已上傳 '+fmt(u.total)+' 筆（'+fmt(u.orders)+' 張訂單）'+(u.verified===true?'，已回讀確認':(u.verified===false?'，<span style="color:#B45309">回讀尚未看到，請 1 分鐘後重新整理確認</span>':''))+'。頁面資料已重新載入。</div>';
+  if(u.stage==="done"&&u.failAt!=null)h+='<div class="note" style="background:#FDECEC;margin-top:8px">⚠️ 只送出 '+fmt(u.failAt)+'／'+fmt(u.total)+' 筆就斷線了，請同一個檔案再上傳一次。</div>';
+  else if(u.stage==="done")h+='<div class="note" style="background:#eef8ee;margin-top:8px">✅ 已上傳 '+fmt(u.total)+' 筆（'+fmt(u.orders)+' 張訂單）'+(u.verified===true?'，已回讀確認':(u.verified===false?'，<span style="color:#B45309">回讀尚未看到，請 1 分鐘後重新整理確認</span>':''))+'。頁面資料已重新載入。</div>';
   return h+'</div>';}
 function shLoadXlsx(){
   if(window.XLSX)return Promise.resolve(window.XLSX);
@@ -7567,14 +7578,23 @@ function shUploadGo(){
   u.rows.forEach(function(r){if(cur.length>=SHUP_CHUNK&&r[2]!==curOrd){chunks.push(cur);cur=[];}cur.push(r);curOrd=r[2];});
   if(cur.length)chunks.push(cur);
   SHUP={stage:"uploading",done:0,total:u.rows.length,orders:u.orders,first:u.rows[0][2]};render();
+  if(staleBlock())return;
+  var cnt={};u.rows.forEach(function(r){cnt[r[2]]=(cnt[r[2]]||0)+1;});
+  SHUP.check=chunks.map(function(c){return {ord:c[0][2],n:cnt[c[0][2]]};}).slice(0,25);   /* 每一塊抽第一張訂單，回讀比筆數 */
+  function send(i,tries){   /* 2026-11-11：原本用 post()（失敗也當成功）；這裡自己送，連不上重試 2 次，還是不行就停下並講清楚 */
+    return fetch(GAS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify({type:"shopline",rows:chunks[i],token:API_TOKEN})})
+      .catch(function(e){if(tries<2)return new Promise(function(r){setTimeout(r,2500);}).then(function(){return send(i,tries+1);});throw e;});}
   (function next(i){if(i>=chunks.length){shUploadVerify();return;}
-    post({type:"shopline",rows:chunks[i]},true).then(function(){SHUP.done+=chunks[i].length;render();next(i+1);});})(0);}
+    send(i,0).then(function(){SHUP.done+=chunks[i].length;render();next(i+1);},function(){SHUP.stage="done";SHUP.verified=false;SHUP.failAt=SHUP.done;SHIST={};SHLOAD={};render();
+      alert("⚠️ 上傳到第 "+SHUP.done+"／"+SHUP.total+" 筆時連線失敗，後面的沒有送出。\n請確認網路後，同一個檔案再上傳一次（重複上傳不會重複計算）。");});})(0);}
 function shUploadVerify(){
   var first=SHUP.first;
   setTimeout(function(){
-    gvizQ("fact_shopline","select count(A) where C='"+String(first).replace(/'/g,"")+"'",MONTH_SHEET_ID).then(function(rs){
-      var n=rs&&rs[0]?num(rs[0][Object.keys(rs[0])[0]]):0;
-      SHUP.stage="done";SHUP.verified=n>0;
+    var ck=SHUP.check&&SHUP.check.length?SHUP.check:[{ord:first,n:1}];
+    gvizQ("fact_shopline","select C,count(A) where "+ck.map(function(x){return "C='"+String(x.ord).replace(/'/g,"")+"'";}).join(" or ")+" group by C",MONTH_SHEET_ID).then(function(rs){
+      var got={};(rs||[]).forEach(function(r){var k=Object.keys(r);got[String(r[k[0]])]=num(r[k[1]]);});
+      var miss=ck.filter(function(x){return got[String(x.ord)]!==x.n;}),n=ck.length-miss.length;
+      SHUP.stage="done";SHUP.verified=!miss.length;SHUP.miss=miss.length;
       SHIST={};SHLOAD={};SUPC={};   /* 清快取，重讀 */
       gvcDelMatch(/^gq:.*fact_shopline/);   /* 2026-09-26：暫存已搬到 IndexedDB */
       render();

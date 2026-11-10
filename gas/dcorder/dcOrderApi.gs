@@ -50,7 +50,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.8-shipbase';
+var DCO_VER = 'v1.8.1-hctbatch';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -963,14 +963,17 @@ function hctCreate_(b) {
   /* 送新竹：要標籤圖一批最多 5 筆 */
   var res = [];
   for (var s = 0; s < recs.length; s += 5) {
-    var part = recs.slice(s, s + 5), out = hctArr_(hctCall_('TransData_Json', part.map(function (x) { return x.rec; })));
+    var part = recs.slice(s, s + 5), out;
+    /* v1.8.1：後面一批沒回應（逾時／504）時，前面已經成功的照樣記進表（原本整個丟例外，新竹那邊留下沒人知道的貨號） */
+    try { out = hctArr_(hctCall_('TransData_Json', part.map(function (x) { return x.rec; }))); }
+    catch (e) { for (var q = s; q < recs.length; q++) res.push({ ErrMsg: '新竹沒有回應（' + String(e && e.message || e).slice(0, 80) + '），這箱請再按一次' }); break; }
     part.forEach(function (x, i) { res.push(out[i] || {}); });
   }
   /* 「訂單編號重複」（新竹那邊今天已有這個號碼，例：試算表被手動刪列）→ 換下一個序號單筆再送，最多 9 次 */
   recs.forEach(function (x, i) {
     for (var tries = 0; !x.old && tries < 9 && res[i].success !== 'Y' && /訂單編號重複/.test(String(res[i].ErrMsg || '')); tries++) {
       x.rec.epino = hctEpino_(id, ++seq);
-      res[i] = hctArr_(hctCall_('TransData_Json', [x.rec]))[0] || {};
+      try { res[i] = hctArr_(hctCall_('TransData_Json', [x.rec]))[0] || {}; } catch (e) { res[i] = { ErrMsg: '新竹沒有回應（' + String(e && e.message || e).slice(0, 80) + '），這箱請再按一次' }; break; }
     }
   });
   var labels = [], fails = [];
