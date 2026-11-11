@@ -403,16 +403,27 @@ def _cfg_path(store):
     return _dir() / f"store-{int(store)}.json"
 
 
+# 2026-11-11 經營者：「連續上班最多幾天」「晚班接隔天早班最多幾次」不再讓店長填，一律照勞基法：
+# 七休一＝連續上班最多 6 天；晚班接早班不限次數，只要下班到隔天上班有 11 小時（不到 11 小時照舊提醒）
+LAW_MAX_CONSEC = 6
+
+
+def _law(cfg):
+    cfg["max_consec"] = LAW_MAX_CONSEC
+    cfg["late_early_limit"] = None
+    return cfg
+
+
 def cfg_load(store):
     p = _cfg_path(store)
     if int(store) in TEST_COPY and not p.exists():
         p = _cfg_path(TEST_SRC)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            return _law(json.loads(p.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
             pass
-    return {"shifts": [], "max_consec": 5, "late_early_limit": 0, "support": "", "rules": "", "carry": [], "updated": ""}
+    return _law({"shifts": [], "support": "", "rules": "", "carry": [], "updated": ""})
 
 
 def _t(m):
@@ -518,8 +529,7 @@ def cfg_clean(body):
             raise ValueError(f"班別名稱「{name}」重複")
         names.add(name)
         out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數")})
-    out["max_consec"] = _num(body.get("max_consec"), 5, 1, 12, "連續上班上限")
-    out["late_early_limit"] = _num(body.get("late_early_limit"), 0, 0, 31, "晚接早上限")
+    _law(out)   # 連上天數、晚接早照勞基法（不收店長填的值）
     out["support"] = str(body.get("support") or "").strip()[:1000]
     out["rules"] = str(body.get("rules") or "").strip()[:4000]
     for r in (body.get("carry") or [])[:60]:
@@ -1149,8 +1159,8 @@ def form_text(st, cfg):
     for r in cfg.get("shifts") or []:
         segs = [f"{a}-{b}" for a, b in r["segs"]] + [""] * (3 - len(r["segs"]))
         L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
-    L.append(f"連續上班上限\t{cfg.get('max_consec', 5)} 天")
-    L.append(f"晚班接隔天早班\t{'不允許' if not cfg.get('late_early_limit') else '最多 ' + str(cfg['late_early_limit']) + ' 次'}")
+    L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（勞基法七休一）")
+    L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
     if cfg.get("support"):
         L.append("跨店支援夥伴\t" + cfg["support"].replace("\n", "；"))
     if cfg.get("rules"):
