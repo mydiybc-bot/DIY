@@ -1086,7 +1086,7 @@ function i18nSnapPost_(body) {
 function i18nSnapPush_(force, deadline) {
   var t0 = Date.now(); deadline = deadline || t0 + 270000;
   var L = i18nListData_().data, have = force ? {} : (i18nSnapPost_({ op: 'manifest' }).vers || {}), todo = [];
-  L.items.forEach(function (it) { I18N_LANGS.forEach(function (l) { if (it.langs[l] === 'live' && it.ver[l] && have[it.id + '|' + l] !== it.ver[l]) todo.push({ id: it.id, lang: l, ver: it.ver[l] }); }); });
+  L.items.forEach(function (it) { I18N_LANGS.concat(['en']).forEach(function (l) { if (it.langs[l] === 'live' && it.ver[l] && have[it.id + '|' + l] !== it.ver[l]) todo.push({ id: it.id, lang: l, ver: it.ver[l] }); }); });
   var ctx = todo.length ? i18nGetCtx_() : null, batch = [], size = 0, pushed = 0, failed = [], cut = false;
   var flush = function () { if (!batch.length) return; i18nSnapPost_({ op: 'put', items: batch }); pushed += batch.length; batch = []; size = 0; };
   for (var i = 0; i < todo.length; i++) {
@@ -1129,7 +1129,7 @@ function i18nSnapSet_(p) {
   var chk = null;
   if (p.check) {   /* 驗證：一次推（ctx）組出來的內容＝平板 i18nGet 單支組出來的，一字不差 */
     var ctx = i18nGetCtx_(), L = i18nListData_().data, n = 0, same = 0, diff = [];
-    L.items.forEach(function (it) { I18N_LANGS.forEach(function (l) { if (n >= Number(p.check) || it.langs[l] !== 'live') return; n++;
+    L.items.forEach(function (it) { I18N_LANGS.concat(['en']).forEach(function (l) { if (n >= Number(p.check) || it.langs[l] !== 'live') return; n++;
       var x = JSON.stringify(i18nGetData_(it.id, l, ctx)), y = JSON.stringify(i18nGetData_(it.id, l)); if (x === y) same++; else diff.push(it.id + '|' + l); }); });
     chk = { n: n, same: same, diff: diff };
   }
