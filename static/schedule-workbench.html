@@ -301,7 +301,7 @@ function curStore(){return auth&&auth.as==='hq'?$('storeSel').value:(auth&&auth.
   try{var ls=localStorage.getItem('sw_hq_store');if(ls&&$('storeSel').querySelector('option[value="'+ls+'"]'))$('storeSel').value=ls}catch(_){}   // 總部重新整理後記住上次選的店（2026-11-05 模擬）
   var d=new Date(),opts='';for(var i=-1;i<=2;i++){var x=new Date(d.getFullYear(),d.getMonth()+i,1);var v=x.getFullYear()+String(x.getMonth()+1).padStart(2,'0');opts+='<option value="'+v+'">'+x.getFullYear()+' 年 '+(x.getMonth()+1)+' 月</option>'}
   $('ymSel').innerHTML=opts;var nx=new Date(d.getFullYear(),d.getMonth()+1,1);$('ymSel').value=nx.getFullYear()+String(nx.getMonth()+1).padStart(2,'0');})();
-function showLogin(msg){$('login').classList.remove('hide');$('app').classList.add('hide');$('logoutBtn').classList.add('hide');$('storeSel').classList.add('hide');$('who').textContent='';$('lgErr').textContent=msg||''}
+function showLogin(msg){$('login').classList.remove('hide');$('app').classList.add('hide');$('logoutBtn').classList.add('hide');$('storeSel').classList.add('hide');$('rgLink').classList.add('hide');$('who').textContent='';$('lgErr').textContent=msg||''}
 $('lgBtn').onclick=function(){
   var a={as:$('lgAs').value,pwd:$('lgPwd').value};if(!a.pwd){$('lgErr').textContent='請輸入密碼';return}
   $('lgBtn').disabled=true;$('lgErr').textContent='驗證中…';
@@ -323,7 +323,8 @@ $('storeSel').onchange=$('ymSel').onchange=function(){try{localStorage.setItem('
   $('dsb').textContent='🕒 讀取中…';refresh(true)};
 
 /* ── 讀狀態、重畫結果區（不碰輸入框） ── */
-function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message})}
+var retryT=null;
+function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message+(S?'':'（10 秒後自動再試）');if(!S&&auth){clearTimeout(retryT);retryT=setTimeout(function(){refresh(first)},10000)}})}   /* 2026-11-11：換店／換月第一次讀失敗會一直停在「讀取中…」 */
 function apply(j,first){
   /* 2026-11-04 經營者：排 12 月卻看到 11 月的資料。切換店／月後，晚到的舊月份回應一律丟掉 */
   if(j.ym!==$('ymSel').value||String(j.store)!==String(curStore()))return false;
@@ -344,6 +345,8 @@ function apply(j,first){
 function renderFiles(){
   var t=S.template;$('tplUp').classList.toggle('hide',!!t);$('tplInfo').innerHTML=t?('📄 '+esc(t.info.title)+'｜'+t.info.emps.length+' 人｜'+(t.source==='104'?'104 '+fmtTs(t.fetched*1000):esc(t.name))):'⚠ 這個月還沒有 104 範本：店長在 104 建好當月班表後，隔天早上會自動取得';
 }
+var NOFLOOR_DAY=/特休|補休/,NOFLOOR_SEG=['事務班','交流會議','區會','台北內訓課','經管會','特休','補休'];   /* 同後端 NOFLOOR_DAY_TAGS／NOFLOOR_SEG_TAGS */
+function floorSegs(c){if(NOFLOOR_DAY.test(c.dtag||''))return [];return (c.segs||[]).filter(function(s){return inStore(s[3])&&!String(s[2]||'').split(/[、,，]/).some(function(t){return NOFLOOR_SEG.indexOf(t.trim())>=0})})}
 function inStore(pos){pos=(pos||'').trim();if(!pos)return true;return (S.template.info.title||'').indexOf(pos.replace(/店$/,''))>=0}
 
 /* ── 設定表單（2026-10-28）：只在第一次載入、換店月、存檔成功後重建；輪詢不碰（中文輸入規則） ── */
@@ -593,10 +596,10 @@ function renderTable(){
       var raw=((S.schedule[e.id]||{})[d.d])||'',c=((S.cells[e.id]||{})[d.d])||{segs:[]},sh=short(raw),cls='c';
       if(isWk(d.d))cls+=' wk';
       if(c.type==='例假日'||c.type==='休息日')cls+=' rest';
-      if(c.type==='國定假日'||c.type==='特休')cls+=' hol';
+      if(c.type==='國定假日'||c.type==='特休'||/特休|補休/.test(c.dtag||''))cls+=' hol';
       if(c.bad)cls+=' bad';
       if(chg[e.id+'|'+d.d])cls+=' chg';
-      var onsite=(c.segs||[]).filter(function(s){return inStore(s[3])});
+      var onsite=floorSegs(c);   /* 2026-11-11：跟後端檢查同一套（特休、補休、事務班、會議、別店的時段都不算現場） */
       if(onsite.length){dayN[d.d]=(dayN[d.d]||0)+1;dayHrs[d.d]=(dayHrs[d.d]||0)+onsite.reduce(function(a,s){return a+(mm(s[1])-mm(s[0]))/60},0)}
       var tags=(c.segs||[]).map(function(s){return s[2]}).filter(function(t,i,a){return t&&a.indexOf(t)===i});if(c.dtag)tags.unshift((c.dtag==='彈性挪假'&&!(c.segs||[]).length)?'可支援':c.dtag);   /* 沒排班的彈性挪假日＝本店排不滿，可支援其他店 */
       h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw)+'">'+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
@@ -604,7 +607,10 @@ function renderTable(){
     var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td>'+(B?'<td><b>'+money((B.month.by_emp||{})[e.id]||0)+'</b></td>':'')+'</tr>';
   });
   var tail=B?'<td></td><td></td>':'<td></td>';
-  h+='<tr class="sum"><td class="nm">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(dayN[d.d]||0)+'</td>'});h+=tail+'</tr>';
+  /* 在店人數優先用後端檢查算的（含外店調來的人）；現場工時加上外店來支援的時數（日獎金那份算好的） */
+  var cov={};((S.check&&S.check.cover)||[]).forEach(function(x){cov[x.d]=x.got});
+  if(B)info.days.forEach(function(d){var r=B.days[d.d];if(r)for(var k in r.staff){var x=r.staff[k];if(x.guest&&x.work){dayHrs[d.d]=(dayHrs[d.d]||0)+(+x.work);if(cov[d.d]==null)dayN[d.d]=(dayN[d.d]||0)+1}}});
+  h+='<tr class="sum"><td class="nm" title="在店現場的人數（含外店調來的；特休、補休、事務班、會議不算）">在店人數</td>';info.days.forEach(function(d){h+='<td>'+(cov[d.d]!=null?cov[d.d]:(dayN[d.d]||0))+'</td>'});h+=tail+'</tr>';
   loadResv();
   h+='<tr class="sum"><td class="nm" title="訂位系統目前已訂位的人數（含陪同、已取消不算）。只有今天起約 5 週內有資料；✕＝訂位資料讀不到（2 分鐘後自動再試）'+(RESV&&RESV.built?'；資料時間 '+esc(RESV.built):'')+'">已訂位人數</td>';
   info.days.forEach(function(d){var v=resvOf(d.d);h+='<td'+(v?' style="font-weight:600"':' class="mute"')+'>'+(resvState==='loading'?'…':resvState==='fail'?'✕':v===null?'—':v)+'</td>'});h+=tail+'</tr>';
