@@ -148,9 +148,9 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             tgt = v.get("target") or (v.get("target_hint") if typ == "正職" else None)
             tgt = float(tgt) if tgt not in (None, "") else (u["std_min"] / 60 if typ == "正職" and u["std_min"] else None)
             mn = v.get("min_hours")
-            mv = v.get("move")   # 2026-11-09 本月設定「調店」：沒填的正職可、兼職否
             emps.append({"k": (u["store"], e["id"]), "id": e["id"], "name": e["name"], "u": u, "ft": typ == "正職",
-                         "move": (mv == "可") if mv in ("可", "否") else typ == "正職", "dflt": bool(v.get("_default")),
+                         "move": True,   # 2026-11-11 經營者：全部夥伴都可調店（後台固定）
+                         "dflt": bool(v.get("_default")),
                          "target": int(round(tgt * 60)) if tgt else None,
                          "min": int(round(float(mn) * 60)) if mn not in (None, "") else None})
     E = {e["k"]: e for e in emps}
