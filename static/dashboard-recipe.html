@@ -1237,6 +1237,7 @@ function conv(item,unit){unit=String(unit||'').trim();
   for(var i=0;i<CONV.length;i++){if(CONV[i].item===item&&CONV[i].unit===unit)return num(CONV[i].amt)||1}
   for(var j=0;j<CONV.length;j++){var it=CONV[j].item;if((it==='（通用）'||it==='(通用)'||it==='通用')&&CONV[j].unit===unit)return num(CONV[j].amt)||1}
   return 1}
+function convHas(item,unit){unit=String(unit||'').trim();for(var i=0;i<CONV.length;i++){if(CONV[i].item===item&&CONV[i].unit===unit)return true}return false}   /* 2026-11-11：這個品名有沒有自己的單位換算（costLines 別名用） */
 function skuOf(name){return SKU[name]||SKUALIAS[name]||null}
 function isTool(name){var s=skuOf(name);
   if(s)return s.cat==='器具'||s.cat==='模具';
@@ -1293,7 +1294,8 @@ function costLines(lines){ // lines:[{m,q,u}]
     var loss=LOSS[cat];
     if(pe){var c;
       if(pe.u!=='g'&&pe.u!=='ml'){c=a.q*pe.p*loss}
-      else{var qu=a.u==='g'||a.u==='ml'?a.q:a.q*conv(a.m,a.u);c=qu*pe.p*loss}
+      else{var cf=conv(a.m,a.u);if(s&&s.name&&s.name!==a.m&&!convHas(a.m,a.u)&&convHas(s.name,a.u))cf=conv(s.name,a.u);   /* 2026-11-11：BOM 寫別名、單位換算登記在主檔品名底下時，改用主檔品名的換算（原本查不到當 1 算） */
+        var qu=a.u==='g'||a.u==='ml'?a.q:a.q*cf;c=qu*pe.p*loss}
       rows.push({m:a.m,q:a.q,u:a.u,cat:cat,cost:c,t:pe.t,s:pe.s,warn:pe.warn||''})}
     else rows.push({m:a.m,q:a.q,u:a.u,cat:cat,cost:null,t:'X',s:'缺價：到採購系統主檔填「單價＋內容量」，或回報體驗中心'})});
   rows.sort(function(x,y){var o={'食材':0,'耗材':1};if(o[x.cat]!==o[y.cat])return o[x.cat]-o[y.cat];return (y.cost||0)-(x.cost||0)});
@@ -2779,10 +2781,12 @@ function qtyInputOf(key){var m;
 
 /* ---- 成本卡：非 🆕 列走同一套 costLines 引擎；🆕 列由本表推算（原包裝成本 ÷ 規格數字 × 每份使用量）；半成品用料只在表一有一列對到它、且那列是主檔沒有又沒填原包裝成本時，才加總進那一列（semiCostRow） ---- */
 function validLines(){return AP.lines.filter(function(l){return String(l.m||'').trim()&&num(l.q)>0})}
+/* 2026-11-11：🆕 品項每份用量單位寫 kg／公斤／L／公升、原包裝規格是重量／容量（已換成 g／ml）→ 用量也要 ×1000，否則成本、每店幾包少算 1000 倍 */
+function kiloF(l){var sp;return (!(num(l.pkgN)>0)&&/^(kg|公斤|l|公升|升)$/i.test(ckTok(l.u))&&(sp=ckSpec(l.pkgSpec))&&ckWV(sp.f))?1000:1}
 function newCostOf(l){var pc=num(l.pkgCost),pn=packOf(l),q=num(l.q),cv=convOf(l);
   if(unitMis(l))return {cost:null,s:'估？（原包裝規格和每份用量的單位對不上，請看品項下方紅框）'};   /* 2026-10-28 單位防呆 */
   if(cv&&!cv.v)return {cost:null,s:'估？（單位「'+String(l.u||'').trim()+'」還沒有換成 '+cv.base+' 的換算，成本先不算）'};
-  var qe=cv?q*cv.v:q;
+  var qe=(cv?q*cv.v:q)*kiloF(l);   /* 2026-11-11：kg／L 換成 g／ml */
   if(pc>0&&pn&&q>0)return {cost:pc/pn*qe,s:'🆕 原包裝成本 '+pc+' ÷ 規格 '+pn+' × 每份 '+(cv?q+' '+String(l.u||'').trim()+'（≈'+r2(qe)+' '+cv.base+'）':q)};
   return {cost:null,s:'估？（🆕 需填原包裝成本與含數字的規格才能推算）'}}
 /* 2026-11-03 經營者：表一某列是本單的半成品（例：雪花肉桂捲每份配 1 份無酒精熱紅酒）、主檔沒有、也沒填原包裝成本
@@ -2818,15 +2822,18 @@ function computeCost(){
   L.forEach(function(l){if(isNewItem(l)||isToolLine(l))return;var mc=num(l.mc);if(!(mc>0))return;var nm=String(l.m).trim();
     rows.forEach(function(x){if(x.m===nm&&x.cost===null){x.cost=mc;x.t='M';x.s='主廚手填（採購主檔還算不出這項成本，請主檔負責人補正確單價或單位）';x.manual=true}})});
   /* 2026-10-17 客人選一：每組只算最貴的選項；同一品名只出現在「非最貴選項」的列＝不計入（optOut） */
-  var OM=optModel(),inBest={},inOther={};
+  var OM=optModel(),inBest={},inOther={},optCut={};
   OM.order.forEach(function(g){var gg=OM.G[g],best=null;
-    gg.order.forEach(function(n){var O=gg.opts[n],cst=0,unk=false;O.idx.forEach(function(i){var l=AP.lines[i];if(!(num(l.q)>0)||isToolLine(l))return;var x=rows.filter(function(y){return y.m===String(l.m).trim()})[0];if(!x||x.cost===null)unk=true;else cst+=x.cost});O.cost=cst;O.unk=unk;if(!best||cst>best.cost)best=O});
+    gg.order.forEach(function(n){var O=gg.opts[n],cst=0,unk=false;O.idx.forEach(function(i){var l=AP.lines[i];if(!(num(l.q)>0)||isToolLine(l))return;var x=rowOf({rows:rows},l);if(!x||x.cost===null)unk=true;else cst+=x.cost});O.cost=cst;O.unk=unk;if(!best||cst>best.cost)best=O});
     gg.best=best?best.name:'';
+    /* 2026-11-11：同一品項同時出現在別的選項／一般列（成本引擎會併成一筆）→ 每個選項只算自己那一列的份額（rowOf）；非最貴選項那幾列的份額記在 optCut，加總時扣掉 */
+    gg.order.forEach(function(n){if(n===gg.best)return;gg.opts[n].idx.forEach(function(i){var l=AP.lines[i];if(!(num(l.q)>0)||isToolLine(l))return;var x=rowOf({rows:rows},l);if(x&&x.part&&x.cost!==null){var ck=x.m+'|'+x.u;optCut[ck]=(optCut[ck]||0)+x.cost}})});
     gg.order.forEach(function(n){gg.opts[n].idx.forEach(function(i){var k=String(AP.lines[i].m).trim();if(n===gg.best)inBest[k]=1;else inOther[k]=1})})});
   var plain={};L.forEach(function(l){var k=String(l.m).trim();if(!String(l.og||'').trim())plain[k]=1});
   rows.forEach(function(x){x.optOut=!!(inOther[x.m]&&!inBest[x.m]&&!plain[x.m])});
   var t={A:0,B:0,C:0},gaps=0,fd=0,cs=0,nEst=0;
-  rows.forEach(function(x){if(x.optOut)return;if(x.cost===null){gaps++;return}t[x.t==='A'?'A':(x.t==='B'?'B':'C')]+=x.cost;if(x.t==='C'||x.t==='M')nEst++;if(x.cat==='食材')fd+=x.cost;else cs+=x.cost});
+  rows.forEach(function(x){if(x.optOut)return;if(x.cost===null){gaps++;return}var cc=x.cost,ct=x.li?0:(optCut[x.m+'|'+x.u]||0);if(ct>0)cc=Math.max(0,cc-ct);   /* 2026-11-11：扣掉非最貴選項的份額（沒有就是原數字） */
+    t[x.t==='A'?'A':(x.t==='B'?'B':'C')]+=cc;if(x.t==='C'||x.t==='M')nEst++;if(x.cat==='食材')fd+=cc;else cs+=cc});
   var total=t.A+t.B+t.C;
   return {rows:rows,opt:OM,tools:r.tools.concat(tools),total:total,tiers:t,gaps:gaps,fd:fd,cs:cs,nEst:nEst,nNew:Object.keys(newNames).length,
           ev:total?Math.round((t.A+t.B)/total*100):0}}
@@ -3158,9 +3165,10 @@ function campStores(){var h=AP.head,c=h.campaign_id?campOf(h.campaign_id):null;r
 function storeList(){var b=BRAND_STORE_LIST[String(AP.head.brand||'').trim()]||BRAND_STORE_LIST[BRAND_DEFAULT],cs=campStores();if(!cs.length)return b;var x=b.filter(function(n){return cs.indexOf(n)>=0});return x.length?x:cs}
 function storeN(){var cs=campStores();return cs.length?storeList().length:(BRAND_STORE_N[String(AP.head.brand||'').trim()]||12)}
 function qtyHint(){var n=num(AP.head.qty),k=storeN(),w=campStores().length?'參與的 '+k+' 家店合計':'全部門市合計';if(!(n>0))return '整個檔期、'+w+'幾份';return w+'；每店約 '+(Math.round(n/k*10)/10)+' 份'}
-function lossOf(l){if(!isNewItem(l)||isToolLine(l)||unitMis(l))return null;var bq=buyQty(l),pn=packOf(l),pc=num(l.pkgCost);if(!(bq>0)||!(pn>0))return null;
-  var k=storeN(),per=bq/k,packs=Math.ceil(per/pn-1e-9),left=packs*pn-per,pct=packs>0?left/(packs*pn):0;
-  return {k:k,per:per,packs:packs,left:left,pct:pct,servings:num(l.q)>0?pn/num(l.q):0,cost:pc>0?k*left/pn*pc:null,hot:pct>=0.5&&(pc<=0||k*left/pn*pc>=200)}}
+function lossOf(l){if(!isNewItem(l)||isToolLine(l)||unitMis(l)||convOf(l))return null;   /* 2026-11-11：匙／滴等待換算的單位不算每店幾包；kg／L 用量換成 g／ml（kf） */
+  var bq=buyQty(l),pn=packOf(l),pc=num(l.pkgCost);if(!(bq>0)||!(pn>0))return null;
+  var kf=kiloF(l),k=storeN(),per=bq*kf/k,packs=Math.ceil(per/pn-1e-9),left=packs*pn-per,pct=packs>0?left/(packs*pn):0;
+  return {k:k,per:per,packs:packs,left:left,pct:pct,servings:num(l.q)>0?pn/(num(l.q)*kf):0,cost:pc>0?k*left/pn*pc:null,hot:pct>=0.5&&(pc<=0||k*left/pn*pc>=200)}}
 function buyCellHTML(l){var bq=buyQty(l);if(!bq)return '—';var u=String(l.u||'').trim(),o=esc(String(bq)),gp=gPerOf(l);
   if(gp>0)o+='<div class="ap-hint" style="color:#2E6B8A" title="'+esc(bq+' '+(u||cntUnit(l))+' × 1 '+cntUnit(l)+'約 '+gp+' g')+'">≈ '+esc(gTxt(bq*gp))+'</div>';   /* 2026-11-03 秤重採購 */
   var L=lossOf(l);
@@ -3771,6 +3779,7 @@ function semiUseLoad(item){if(SEMIUSE_ING[item])return;SEMIUSE_ING[item]=1;
     function(){SEMIUSE[item]=[];semiUseRefresh(item)})}
 function semiUseRefresh(item){AP.semis.forEach(function(s,si){if(!s.shared||semiName(s)!==item)return;var el=document.querySelector('.ap-semi[data-semi="'+si+'"] [data-useline]');if(!el)return;
   var yq=num(s.yq),yu=String(s.yu||'').trim(),its=semiItemsOf(s).filter(function(it){return num(it.q)>0});
+  if(!(yq>0)){el.innerHTML='';return}   /* 2026-11-11：「一批做出」被清空時不畫換算表（原本會出現 Infinity／NaN） */
   el.innerHTML=semiUseShared(item,SEMIUSE[item]||[],yq,yu,function(q){return its.map(function(it){return esc(it.m)+' '+r3(num(it.q)*q/yq)+' '+esc(it.u||'')}).join('、')})})}
 function semiUseShared(item,list,yq,yu,per){
   var h='📐 <b>共用配方</b>：每支甜點用多少「'+esc(item)+'」各不相同，採購系統<b>照 BOM 表每支甜點自己的用量</b>換算，這張單只負責「一批的配方」。';
@@ -3954,7 +3963,8 @@ function askCred(role,msg,cb,verify,pass){   /* pass：verify 是「真正的動
   var rs=m.querySelector('#apCredRole'),pw=m.querySelector('#apCredPw'),ok=m.querySelector('#apCredOk'),box=m.querySelector('#apCredMsg');
   if(role)rs.disabled=true;
   setTimeout(function(){pw.focus()},30);
-  function go(){var r=rs.value,p=pw.value;if(!p){box.textContent='請輸入密碼';return}
+  function go(){if(ok.disabled)return;   /* 2026-11-11：確認中再按 Enter 不重複送出 */
+    var r=rs.value,p=pw.value;if(!p){box.textContent='請輸入密碼';return}
     ok.disabled=true;box.textContent='確認中…';var t0=Date.now(),note='',
       tick=setInterval(function(){box.textContent='確認中…已 '+Math.round((Date.now()-t0)/1000)+' 秒'+note},1000),   /* 10/06：Google 慢的時候要等，顯示秒數讓人知道還在跑 */
       onR=function(k){note='（連線不穩，自動重試第 '+k+' 次）'};
@@ -4521,7 +4531,7 @@ function campSumHTML(){if(!LM||!LM.data)return '';var rows=sumRows();if(!rows.le
 function sumRefreshLy(){var el=document.getElementById('apSumLy');if(el)el.innerHTML=sumLyHTML(sumRows());var p=document.getElementById('apSumPick');if(p)p.onchange=function(){SUM.pick=p.value;sumRefreshLy();if(SUM.pick)sumLoadLy(SUM.pick).then(sumRefreshLy,function(e){SUM.err=String(e&&e.message||e);sumRefreshLy()})}}
 function sumWire(){var d=document.getElementById('apSum');if(!d)return;
   d.ontoggle=function(){SUM.open=d.open;if(!d.open)return;sumRefreshLy();
-    sumLoadSubs().then(function(){if(!SUM.pick)SUM.pick=sumGuess((LM.data&&LM.data.campaign)||{});sumRefreshLy();if(SUM.pick)return sumLoadLy(SUM.pick).then(sumRefreshLy)},function(e){SUM.err=String(e&&e.message||e)+'（Google 慢的時候請重新整理再試）';sumRefreshLy()})};
+    sumLoadSubs().then(function(){if(!SUM.pick)SUM.pick=sumGuess((LM.data&&LM.data.campaign)||{});sumRefreshLy();if(SUM.pick)return sumLoadLy(SUM.pick).then(sumRefreshLy)}).catch(function(e){SUM.err=String(e&&e.message||e)+'（Google 慢的時候請重新整理再試）';sumRefreshLy()})};   /* 2026-11-11：改用 catch：去年銷售讀取失敗也要顯示錯誤（原本一直停在讀取中） */
   if(d.open)sumRefreshLy()}
 function lmCardHTML(){var lk=lockedReq();
   if(lk)return '<div class="ap-note">這支目前是「'+esc((AP.sub||{}).status)+'」，已經不能再修改。</div>';
@@ -4543,7 +4553,7 @@ function lmGo(rid){if(_busy||!LM||rid===LM.rid)return;
     LM.rid=rid;applyLoaded(r.data||{});LM.chef=true;SENDMSG='';render();lmHash()})}
 function lmChef(){if(_busy||!LM)return;var rid=LM.rid;
   if(lmDirty()&&!confirm('你改的還沒儲存，切換到主廚模式會重新讀取這支（沒存的會丟掉）。確定？'))return;
-  credRun('主廚','輸入主廚密碼，就可以修改整張申請表。',function(cr,onR){_busy=true;SENDMSG='<span class="ap-muted">讀取中…</span>';updSendUI();return fetchReq(cr,rid,onR)},
+  credRun('主廚','輸入主廚密碼，就可以修改整張申請表。',function(cr,onR){_busy=true;SENDMSG='<span class="ap-muted">讀取中…</span>';updSendUI();return fetchReq(cr,rid,onR).then(function(r){if(r&&!r.ok&&r.code==='auth'){_busy=false;SENDMSG='';updSendUI()}return r})},   /* 2026-11-11：密碼錯時先解除忙碌（原本取消密碼框後按鈕都沒反應） */
     function(cr,r){_busy=false;
       if(!r||!r.ok){if(r&&r.code==='auth')setCred(null,'主廚');SENDMSG='<span class="ap-bad">✕ '+esc((r&&r.msg)||'讀取失敗')+'</span>';updSendUI();return}
       if(!applyLoaded(r.data||{}))return;LM.chef=true;SENDMSG='<span class="ap-okline">🔓 主廚模式</span>';render()})}
@@ -4619,7 +4629,7 @@ function linkFlow(force){if(_busy)return;var h=AP.head,cid=h.campaign_id;
       var onR2=function(k){note='，連線不穩自動重試第 '+k+' 次';if(onR)onR(k)};
       return (save?saveReqP(cr,force,onR2):Promise.resolve({ok:true})).then(function(r){
         if(!r.ok)return r;
-        return apiPost({action:'getCampaign',role:cr.role,password:cr.pw,campaign_id:cid,lite:true},onR2).then(function(g){if(g.ok)g.saved=r;return g})})},
+        return apiPost({action:'getCampaign',role:cr.role,password:cr.pw,campaign_id:cid,lite:true},onR2).then(function(g){if(g.ok)g.saved=r;return g})}).then(function(r){if(r&&!r.ok&&r.code==='auth'){clearInterval(tk);_busy=false;SENDMSG='';updSendUI()}return r})},   /* 2026-11-11：密碼錯時先解除忙碌（原本在密碼框按取消後整頁卡住、秒數一直跳） */
     function(cr,r){clearInterval(tk);_busy=false;
       if(r&&r.ok){var k=(r.data||{}).camp_key||'',d=(r.saved&&r.saved.data)||{};
         if(!k){SENDMSG='<span class="ap-bad">✕ 系統沒有給連結（要用主廚或管理者身分）</span>';updSendUI();return}
@@ -4664,7 +4674,9 @@ function openFind(cr,pre){
   function norm(v){return String(v==null?'':v).toLowerCase().replace(/\s+/g,'')}
   function fill(r,quiet){
     if(!r.ok){if(r.code==='auth')setCred(null,cr.role);if(!FR.list||!quiet)info.innerHTML='<span class="ap-bad">讀不到清單：'+esc(r.msg||'')+'</span>';return}
-    FR.list=((r.data||{}).reqs)||[];FR.at=Date.now();
+    FR.list=((r.data||{}).reqs)||[];FR.at=Date.now();fillSel()}
+  /* 2026-11-11：檔期／狀態下拉抽成 fillSel：第二次打開先顯示舊清單時也要填選項（原本只剩「全部」、改不回來） */
+  function fillSel(){if(!FR.list)return;
     var G={},order=[],S={};FR.list.forEach(function(x){var k=x.campaign_id||'';if(!G[k]){G[k]={name:x.campaign||'（沒有檔期）',from:String(x.camp_from||'').slice(0,10),arch:x.camp_state==='封存',n:0};order.push(k)}G[k].n++;S[x.status||'草稿']=(S[x.status||'草稿']||0)+1});
     order.sort(function(a,b){return String(G[b].from).localeCompare(String(G[a].from))});FR.G=G;FR.order=order;
     if(FR.cid&&!G[FR.cid])FR.cid='';if(FR.st&&!S[FR.st])FR.st='';
@@ -4687,7 +4699,7 @@ function openFind(cr,pre){
             +'<td><span class="ap-badge'+(lk?' lk':'')+'">'+esc(x.status||'草稿')+'</span></td>'
             +'<td><button class="ap-btn2 ap-mini" type="button" data-fro="'+esc(x.req_id)+'" title="系統單號 '+esc(x.req_id)+'">'+(lk?'打開看':'打開')+'</button></td></tr>'}).join('')+'</tbody></table></div>'}).join('')}
   if(pre){fill(pre);return}
-  if(FR.list){draw();info.innerHTML+=' <span class="ap-muted">（更新清單中…）</span>'}   /* 上次讀過：先顯示，背景讀最新 */
+  if(FR.list){fillSel();info.innerHTML+=' <span class="ap-muted">（更新清單中…）</span>'}   /* 上次讀過：先顯示，背景讀最新 */
   apiPost({action:'listReqs',role:cr.role,password:cr.pw},function(k){if(!FR.list)info.textContent='連線不穩，自動重試中（第 '+k+' 次）…'}).then(function(r){
     if(!res.isConnected)return;   /* 視窗已關（或重開了另一個） */
     fill(r,!!FR.list)})}
@@ -5563,7 +5575,8 @@ function wire(){var root=document.getElementById('apRoot');
   root.querySelectorAll('[data-t1gh]').forEach(function(tr){tr.onclick=function(){var g=tr.dataset.t1gh;t1Fold(g,!T1FOLD[g])}});   /* 2026-11-03 用料表分類伸縮 */
   root.querySelectorAll('tr[data-ln]').forEach(function(tr){var i=+tr.dataset.ln;
     tr.querySelectorAll('[data-lf]').forEach(function(el){var f=el.dataset.lf;
-      if(f==='m'){wireSearch(el,'l'+i,function(){var l=AP.lines[i];var s=skuOf(l.m);_t1Last=i;
+      if(f==='m'){wireSearch(el,'l'+i,function(){var l=AP.lines[i];if(!l)return;   /* 2026-11-11：這一列剛被刪掉就不處理（原本會出錯） */
+          var s=skuOf(l.m);_t1Last=i;
           if(s){l.id=s.id;if(!l.u)l.u=s.useUnit||'g';if(!l.zone)l.zone=defaultZone(s.name,s.cat)}else if(l.m&&!l.zone)l.zone=defaultZone(l.m,l.cat||'');simAlert(i)})}
       else if(f==='u'){el.oninput=function(){AP.lines[i].u=el.value;OUT=null;saveDraft();refreshCost()};el.onchange=function(){renderSoon()}}
       else if(f==='mc'){el.oninput=function(){AP.lines[i].mc=el.value;OUT=null;saveDraft();refreshCost();var b=el.closest('.ap-conv');if(b)b.classList.toggle('ok',num(el.value)>0)}}   /* 2026-10-17 主廚手填成本 */
@@ -5924,11 +5937,15 @@ function apiNote(){if(S.err)return '<div class="ap-bad">⚠ '+esc(S.err)+'</div>
 /* 打簽核人時不重畫整頁（避免游標跳掉、按鈕被換掉），只更新按鈕狀態 */
 function refreshSaveBtn(){var el=root();if(!el)return;
   if(S.edit&&S.edit.qi<0){var b=el.querySelector('[data-smsave]'),miss=saveMissing(S.edit);if(b)b.disabled=miss.length>0;var m=el.querySelector('#smMiss');if(m)m.textContent=miss.length&&!S.busy?'還不能儲存，還差：'+miss.join('、'):''}
-  var qb=el.querySelector('[data-smqsave]');if(qb){var ok=S.queue.filter(function(q){var d=diffOf(q);return !problems(q).length&&!(d&&!d.length)}).length;qb.disabled=!(S.qSigned&&trim(S.qSigner)&&ok&&canWrite())}}
+  var qb=el.querySelector('[data-smqsave]');if(qb){var ok=S.queue.filter(function(q){var d=diffOf(q);return !problems(q).length&&!(d&&!d.length)}).length;qb.disabled=!(S.qSigned&&trim(S.qSigner)&&ok&&(canWrite()||verUnk()))}}
 /* 儲存按鈕還差什麼（資料、簽核勾選、簽核人、寫入端） */
 function saveMissing(ed,probs){var m=(probs||problems(ed)).slice();if(!ed.signed)m.push('勾選「主管簽核同意」');if(!trim(ed.signer))m.push('填簽核人');
   if(!S.api)m.push('儲存功能還沒設定（請通知體驗中心）');else if(S.apiVer>0&&S.apiVer<NEED_VER)m.push('儲存功能要更新到 v'+NEED_VER+'（請通知體驗中心）');if(S.busy)m.push('正在儲存');return m}
 function canWrite(){return !!S.api&&S.apiVer>=NEED_VER&&!S.busy}
+/* 2026-11-11：開頁時沒讀到儲存功能的版本（Google 慢／斷線）→ 按儲存時真的再查一次，查到再接著存（原本只會跳「還沒準備好」） */
+function verUnk(){return !!S.api&&S.apiVer<=0&&!S.busy}
+function verRetry(again){if(!verUnk())return false;if(S._verTry)return true;S._verTry=true;S.status='<span class="ap-muted">確認儲存功能版本中…</span>';render();
+  loadApiVer().then(function(){S._verTry=false;S.status='';render();if(S.apiVer>0)again();else alert('讀不到儲存功能的版本（Google 忙碌或連線不穩），請按「重新讀取」後再試')});return true}
 
 function listHTML(){var f=nz(S.fq),k=S.fkind;
   var ents=S.ents.filter(function(e){return (!k||e.kind===k)&&(!f||nz(e.item+e.desserts.join('')).indexOf(f)>=0)&&(!S.fchk||splitNote(e.info.note).flag)});
@@ -5967,14 +5984,14 @@ function queueHTML(){var ok=0;
       +'<td>'+(pr.length?'<span class="ap-bad">缺：'+pr.map(esc).join('、')+'</span>':'<span style="color:#2E7D32">✓ 可儲存</span>')+(newMatList(q).length?'<div class="ap-muted">自動建主檔：'+newMatList(q).map(esc).join('、')+'</div>':'')+(newToolsOf(q).length?'<div class="ap-muted">新器具（建主檔＋設標配）：'+newToolsOf(q).map(function(t){return esc(t.m)+'×'+t.par}).join('、')+'</div>':'')+'</td>'
       +'<td style="white-space:nowrap"><button class="ap-btn2" data-smqedit="'+i+'">核對／修改</button> <button class="ap-x" data-smqdel="'+i+'" title="移除">✕</button></td></tr>'});
   h+='</table></div><div style="margin:8px 0"><label style="font-weight:700"><input type="checkbox" data-smqsign="1"'+(S.qSigned?' checked':'')+'> 以上配方已經主管簽核同意</label> 　簽核人 <input type="text" data-smqsigner="1" value="'+esc(S.qSigner)+'" placeholder="必填，例：萱萱" style="width:160px"></div>'
-    +'<div class="ap-actions"><button class="ap-btn" data-smqsave="1"'+(S.qSigned&&trim(S.qSigner)&&ok&&canWrite()?'':' disabled')+'>💾 全部儲存（'+ok+' 項可存）</button><button class="ap-btn2" data-smqclear="1">清空待儲存</button>'
+    +'<div class="ap-actions"><button class="ap-btn" data-smqsave="1"'+(S.qSigned&&trim(S.qSigner)&&ok&&(canWrite()||verUnk())?'':' disabled')+'>💾 全部儲存（'+ok+' 項可存）</button><button class="ap-btn2" data-smqclear="1">清空待儲存</button>'
     +(ok<S.queue.length?'<span class="ap-muted">有缺漏或和採購系統相同的會略過</span>':'')+'</div></div>';
   return h}
 
 /* ---- 查詢詳情（製作或使用時看的頁面）---- */
 function detailHTML(e){var nb=Math.max(0.01,num(S.nb)||1),i=e.info||{},tools=textToTools(i.tools);
   var groups={'食材':[],'耗材':[],'未建主檔':[],'半成品':[]};
-  e.lines.forEach(function(l){var c=isSemiName(l.m,e.item)?'半成品':catOf(l.m);if(c==='器具'||c==='模具'){tools.push(l);return}(groups[c]=groups[c]||[]).push(l)});
+  e.lines.forEach(function(l){var c=isSemiName(l.m,e.item)?'半成品':catOf(l.m);if(/器具|模具/.test(c)){tools.push(l);return}(groups[c]||groups['食材']).push(l)});   /* 2026-11-11：主檔品類別不是這四種的（例：包材）歸到食材那一組，不再漏列 */
   function tbl(title,arr,scale){if(!arr.length)return '';return '<div class="ap-h" style="margin-top:10px">'+title+'</div><table style="font-size:14px"><tr><th style="text-align:left">品項</th><th style="text-align:right">'+(scale?'做 '+r3(nb)+' 批':'數量')+'</th><th></th></tr>'
     +arr.map(function(l){var q=num(l.q);return '<tr><td>'+esc(l.m)+'</td><td style="text-align:right;font-weight:700">'+(q?r3(scale?q*nb:q):'')+'</td><td>'+esc(l.u||'')+'</td></tr>'}).join('')+'</table>'}
   var st=entStatus(e),steps=String(i.steps||'').split(/\n+/).map(trim).filter(Boolean);
@@ -6168,7 +6185,8 @@ function setPars(tools){var want=tools.filter(function(t){return t.par>0});if(!w
       note('<div style="color:#2E6B8A;font-weight:700;margin-top:4px">🔧 新器具／模具已建主檔並設定標配：'+res.map(function(z){return esc(z.x.m)+'（'+esc(z.x.id)+'）每店 '+z.x.par+'，'+z.n+'／'+stores.length+' 店確認'}).join('；')+'。各店可在採購系統「店別參數」自己調整。</div>')},
       function(){if(att<3)verifyPars(items,stores,att+1);else note('<div class="ap-bad">標配已送出，但讀不到店別參數核對，請到採購系統店別參數確認。</div>')})},[4000,6000,10000,15000][att])}}
 function saveOne(){var ed=S.edit;if(!ed||S.busy)return;var pr=problems(ed);if(pr.length){alert('儲存前請先補：\n'+pr.join('\n'));return}
-  if(!ed.signed||!trim(ed.signer)){alert('請勾選「本配方已經主管簽核同意」並填寫簽核人');return}if(!canWrite()){alert('儲存功能還沒準備好（後台版本要 v'+NEED_VER+' 以上），請通知體驗中心');return}
+  if(!ed.signed||!trim(ed.signer)){alert('請勾選「本配方已經主管簽核同意」並填寫簽核人');return}if(verRetry(saveOne))return;   /* 2026-11-11：版本未知先重查 */
+  if(!canWrite()){alert('儲存功能還沒準備好（後台版本要 v'+NEED_VER+' 以上），請通知體驗中心');return}
   var pl=payloadOf(ed,ed.signer),nk={};keysOf(trim(ed.name),ed.shared,ed.desserts).forEach(function(k){nk[ikey(k[0],k[1])]=1});
   var hit=S.ents.filter(function(e){return e!==ed.orig&&keysOf(e.item,e.shared,e.desserts).some(function(k){return nk[ikey(k[0],k[1])]})});
   var bu=ed.lines.filter(function(l){return trim(l.m)&&num(l.q)>0&&badUnit(l)}).map(function(l){return l.m+' '+l.q+' '+l.u});
@@ -6181,7 +6199,8 @@ function saveOne(){var ed=S.edit;if(!ed||S.busy)return;var pr=problems(ed);if(pr
   sendAndVerify(pl,checkOf(ed,pl)).then(function(ok){
     if(ok){S.edit=null;S.view=null;afterWrite('<span style="color:#2E7D32;font-weight:700">✓ 已儲存「'+esc(trim(ed.name))+'」並讀回確認（'+new Date().toTimeString().slice(0,5)+'）。採購系統明天 07:05 重算後生效。</span>',pl.rows,newToolsOf(ed))}
     else{S.busy=false;S.status='<span class="ap-bad">✕ 讀回對不上，可能沒有寫進去。請稍後再按一次；兩次都失敗請通知體驗中心。</span>';render()}})}
-function saveQueue(){if(S.busy)return;if(!S.qSigned||!trim(S.qSigner)){alert('請勾選「以上配方已經主管簽核同意」並填寫簽核人');return}if(!canWrite()){alert('儲存功能還沒準備好（後台版本要 v'+NEED_VER+' 以上），請通知體驗中心');return}
+function saveQueue(){if(S.busy)return;if(!S.qSigned||!trim(S.qSigner)){alert('請勾選「以上配方已經主管簽核同意」並填寫簽核人');return}if(verRetry(saveQueue))return;   /* 2026-11-11：版本未知先重查 */
+  if(!canWrite()){alert('儲存功能還沒準備好（後台版本要 v'+NEED_VER+' 以上），請通知體驗中心');return}
   var all=S.queue.map(function(q){return attachOrig(q)}),same=all.filter(function(q){var d=diffOf(q);return d&&!d.length});
   var list=all.filter(function(q){var d=diffOf(q);return !problems(q).length&&!(d&&!d.length)});
   if(!list.length){alert(same.length?'待儲存的項目都和採購系統現有配方完全相同，不用儲存。':'沒有可以儲存的項目，請先核對補齊');return}
@@ -6296,7 +6315,8 @@ function queueFromApply(list,dessert){if(typeof window.activateTab==='function')
 
 function ensureInit(){if(S.inited){if(S.ready)render();return}S.inited=true;
   if(R&&R.ensureInit)R.ensureInit();
-  (function wait(n){if(R&&R.ready){loadAll();return}if(n>240){var ld=document.getElementById('smLoading');if(ld)ld.textContent='讀不到主檔，請重新整理';return}setTimeout(function(){wait(n+1)},250)})(0)}
+  (function wait(n){if(R&&R.ready){loadAll();return}if(n>240){var ld=document.getElementById('smLoading');if(ld)ld.textContent='讀不到主檔，請重新整理';if(S.pendingOpen){var po=S.pendingOpen;S.pendingOpen=null;po()}   /* 2026-11-11：申請表②在等的寫入要回報失敗，不要一直轉圈 */
+    return}setTimeout(function(){wait(n+1)},250)})(0)}
 
 /* 2026-10-08：新品申請表 ② 上傳採購時一起寫半成品配方（不切換分頁、不開確認框；簽核人＝signer）。回傳 {done,same,skip,fail}（品名清單） */
 function autoSave(list,dessert,signer){return new Promise(function(res){
@@ -6409,7 +6429,14 @@ function dupInfo(rows){var k={},d=0;rows.forEach(function(r){var key=String(r.m|
 
 /* ---- 畫面 ---- */
 function root(){return $('bmRoot')}
-function paint(){var el=root();if(!el)return;
+/* 2026-11-11：資料讀回來重畫時：選字中先等選完；重畫後把焦點放回搜尋框 */
+function paint(){
+  if(window.__ime&&__ime.on){clearTimeout(paint._t);paint._t=setTimeout(paint,300);return}
+  var ae=document.activeElement,fid=ae&&(ae.id==='bmQ'||ae.id==='bmMQ')?ae.id:'',pos=null;
+  if(fid){try{pos=ae.selectionStart}catch(e){}}
+  paint0();
+  if(fid){var n=$(fid);if(n&&document.activeElement!==n){try{n.focus();if(pos!=null)n.setSelectionRange(pos,pos)}catch(e){}}}}
+function paint0(){var el=root();if(!el)return;
   var c=getCred(),h='<div class="bm-top"><span class="bm-who">'+(c?'🔑 身分：<b>'+esc(c.role)+'</b> <a href="#" data-bm="logout">換身分</a>':'🔒 瀏覽不用密碼；要修改請按「✏️」時再輸入身分密碼')+'</span>'
     +'<span class="bm-sp"></span><button class="ap-btn2 ap-mini" data-bm="reload">🔄 重新讀取</button></div>'
     +'<div class="bm-note"><b>不要直接改 Google 試算表</b>。06:00–07:45 採購系統重算，不能存。'
@@ -6542,7 +6569,7 @@ var CONT_MAP={'container1':'彩色塑膠碗','container2':'白色瓷碗','':''};
 function parseDoc(html,file){var p=R().parseRecipeHTML(html,file.replace(/\.(doc|docx|html?)$/i,''))||{name:'',lines:[],warn:[],text:''};
   /* 容器：RecipeMod 解析器沒讀 data-container → 這裡照同一套規則再走一遍（同順序、同解析式），對不上的行不給容器 */
   var doc=new DOMParser().parseFromString(html,'text/html'),els=doc.querySelectorAll('.ingred'),conts=[];
-  var UNIT='(g|ml|cc|kg|支|個|包|片|張|顆|組|條|對|把|份|滴|杯|盒|罐|捲|卷|雙|朵|碗|台|匙|平匙|串|件|袋|瓶|台斤|斤)',re=new RegExp('^(.+?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*'+UNIT+'$');
+  var UNIT='(g|ml|cc|kg|支|個|包|片|張|顆|組|條|對|把|份|滴|杯|盒|罐|捲|卷|雙|朵|碗|台|匙|平匙|串|件|袋|瓶|台斤|斤)',re=new RegExp('^(.+?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*'+UNIT+'(?:\\s*[（(]\\s*([^（）()]*(?:平匙|約\\s*[0-9.]+\\s*g)[^（）()]*?)\\s*[）)])?$');   /* 2026-11-11：跟 RecipeMod 解析式一致（行尾可帶「(3.5平匙)／（約30g）」），否則行數對不上、容器全變空白 */
   Array.prototype.forEach.call(els,function(el){var c=el.cloneNode(true);Array.prototype.forEach.call(c.querySelectorAll('span'),function(x){x.parentNode.removeChild(x)});
     var s2=c.textContent.replace(/ /g,' ').replace(/\s+/g,' ').trim();if(!s2)return;if(s2.match(re))conts.push(CONT_MAP[String(el.getAttribute('data-container')||'').replace(/\|.*/,'')]||'')});
   var rows=p.lines.map(function(l,i){return {m:l.m,q:l.q,u:l.u,c:conts.length===p.lines.length?conts[i]:''}});
@@ -6660,9 +6687,10 @@ function delMap(){var F=S.mapEdit;if(!F||!F.orig){alert('請先在左邊選一�
   if(!confirm('再確認一次：真的刪除「'+F.orig+'」這一列？'))return;
   post({action:'mapDelete',a:F.orig,base:F.base,confirm_history:true,rq:rqToken()}).then(function(r){if(!r.ok){alert(r.msg);return}alert('✅ 已刪除');S.mapEdit=null;loadLists(true).then(paint,lerr)})}
 function loadLog(key){S.log=null;post({action:'bomLog',key:key||'',limit:150}).then(function(r){S.log=r.ok?r.data.rows:[];if(!r.ok)S.err=r.msg;paint()})}
-function undo(batch){if(!S.meta||!S.meta.perms.undo){alert('還原要管理者權限');return}
+function undo(batch){ensureMeta(function(){   /* 2026-11-11：先確認身分權限（在申請表登入過但沒進過 BOM 修改時 S.meta 是空的，管理者會被誤擋） */
+  if(!S.meta||!S.meta.perms||!S.meta.perms.undo){alert('還原要管理者權限');return}
   if(!confirm('要把批次 '+batch+' 改回改之前嗎？'))return;if(!confirm('再確認一次：還原會直接改回試算表裡的資料。'))return;
-  post({action:'bomUndo',batch:batch,rq:rqToken()}).then(function(r){if(!r.ok){alert(r.msg);return}alert('✅ '+(r.msg||'已還原'));loadLists(true).then(function(){loadLog();paint()},lerr)})}
+  post({action:'bomUndo',batch:batch,rq:rqToken()}).then(function(r){if(!r.ok){alert(r.msg);return}alert('✅ '+(r.msg||'已還原'));loadLists(true).then(function(){loadLog();paint()},lerr)})})}
 function startImport(html,file){var p=parseDoc(html,file);if(!p.rows.length){alert('這個檔案看不到食材清單（不是公司格式的食譜 .doc？）');return}
   var nm=guessName(p.name||file);S.imp={file:file,parsed:p.rows.length,warn:p.warn,miss:p.miss,guess:p.name,name:nm,rows:p.rows,cmp:null,exists:false};impCompare()}
 function impCompare(){var I=S.imp;I.exists=S.desserts.some(function(d){return d.name===I.name});I.cmp=null;
@@ -6716,7 +6744,7 @@ function onR(k){S.msg='連線不穩，自動重試中（第 '+k+' 次）…';pai
 function start(){var h=parseHash();if(S.started===location.hash)return;S.started=location.hash;
   /* 2026-10-08：整檔連結 &view=1＝打開申請表本身（ApplyMod 連結模式：同仁改表頭、主廚改全部），不再是唯讀簽核頁 */
   if(h.view&&/^C-/.test(h.rid)&&window.ApplyMod&&ApplyMod.linkStart){ApplyMod.linkStart({cid:h.rid,k:h.k,rid:h.r||''});return}
-  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.notify=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.chg=false;S.closeHint=false;S.open={};
+  S.rid=h.rid;S.k=h.k;S.who=h.who||'';S.view=null;S.step=null;S.msg='';S.last=null;S.notify=null;S.busy=false;S.info=null;S.me=null;S.cmt='';S.dcm=null;S.chg=false;S.closeHint=false;S.open={};
   S.camp=/^C-/.test(S.rid);S.cv=null;S.cdec={};S.ccm={};S.cmts={};S.pfx='';
   S.ro=!!(S.camp&&h.view);   /* 2026-10-08：&view=1＝唯讀申請表（主廚貼到 104 表單；簽核在 104 做，這頁不顯示你是誰／留言／同意退回） */
   document.body.classList.add('sign-mode');document.title=(S.ro?'新品申請表 ':(S.camp?'新品整檔簽核 ':'新品申請單 '))+(S.rid||'');
@@ -6792,13 +6820,13 @@ function decide(dec){if(S.busy||!S.me)return;var ta=document.getElementById('sgC
         (S.k?A().post({action:'signOpen',req_id:S.rid,k:S.k}):A().post({action:'signView',signer:me.name,pin:me.pin,req_id:S.rid})).then(function(v){S.busy=false;
           var mine=v.ok?((v.data.signoffs||[]).filter(function(o){return isLive(o.decision)&&o.signer===me.name})[0]):null;
           if(mine&&mine.decision===dec){var keepP=S.view&&S.view.people;S.view=v.data;if(!S.view.people&&keepP)S.view.people=keepP;var names=signers(),lv=live();
-            S.last={decision:dec,status:v.data.req.status,agreed:names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,total:names.length};S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}return}
+            S.last={decision:dec,status:v.data.req.status,agreed:names.filter(function(n){return lv.some(function(o){return o.signer===n&&o.decision==='同意'})}).length,total:names.length};S.dcm=null;S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}return}
           S.msg='✕ '+(r.msg||'送出失敗')+'（系統上還沒有你的決定，請再按一次）';paint()});return}
       if(r.code==='locked'&&r.data&&r.data.status&&S.view)S.view.req.status=r.data.status;authLost(r);S.msg='✕ '+(r.msg||'送出失敗');paint();return}
     var d=r.data||{};S.view.req.status=d.status;
     S.view.signoffs=((S.view.signoffs||[]).filter(function(o){return !isLive(o.decision)})).concat(d.signoffs||[]);
     S.last={decision:dec,status:d.status,agreed:(d.agreed||[]).length,total:(d.signers||[]).length,push:d.push||null};S.notify=d.notify||null;
-    S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}})}
+    S.dcm=null;S.chg=false;S.closeHint=false;S.msg='';paint();try{window.scrollTo(0,0)}catch(e){}})}
 /* 2026-10-07 經營者：「簽核同意後，不知道是否應該關閉這個網頁，或是有其他事項要處理」
    → 簽完（或之後再點連結、已經簽過）最上面一張完成卡：你的決定＋「你這邊已經完成，可以關閉這個網頁」＋接下來會怎樣；
      底下的同意／退回收進「要改變決定？」（送簽中還能改），畫面不再像還沒做完 */
@@ -6917,7 +6945,7 @@ function decHTML(){var v=S.view,q=v.req||{},st=q.status,lv=live(),names=signers(
   var isSigner=!!(S.me&&names.indexOf(S.me.name)>=0),wait=[];
   if(isSigner&&st==='送簽中'){var myB=cBatch(S.me.name);wait=names.filter(function(n){return n!==S.me.name&&cBatch(n)<myB&&!lv.some(function(o){return o.signer===n&&o.decision==='同意'})})}
   if(st==='送簽中'&&isSigner&&wait.length&&!mine)return '<div class="sg-card sg-hint">⏳ <b>還沒輪到你</b>：要等 <b>'+esc(wait.join('、'))+'</b> 先同意（前一批）才能簽。現在可以先看內容、在「💬 意見交流」留言；輪到你時主廚會再發 104 通知，可以先關閉這個網頁。</div>';
-  if(st==='送簽中'&&isSigner){var decBody='<textarea id="sgCm" placeholder="簽核意見（退回一定要寫原因；同意可以不寫）">'+esc((mine&&mine.comment)||'')+'</textarea>'
+  if(st==='送簽中'&&isSigner){var decBody='<textarea id="sgCm" placeholder="簽核意見（退回一定要寫原因；同意可以不寫）">'+esc(S.dcm!=null?S.dcm:((mine&&mine.comment)||''))+'</textarea>'   /* 2026-11-11：打到一半的簽核意見記在 S.dcm，重畫時放回去 */
       +'<div class="sg-row"><button type="button" class="sg-btn" id="sgYes"'+(S.busy?' disabled':'')+'>✓ 同意</button><button type="button" class="sg-btn no" id="sgNo"'+(S.busy?' disabled':'')+'>✕ 退回</button></div>';
     x+=mine?'<details class="sg-card sg-dec" id="sgChg"'+(S.chg?' open':'')+'><summary class="sg-h2" style="cursor:pointer;margin-bottom:0">要改變決定？ <span class="sg-muted" style="font-weight:400">（你已經「'+esc(mine.decision)+'」'+(mine.ts?'，'+esc(mine.ts):'')+'；還沒全部簽完前都可以改）</span></summary><div style="margin-top:10px">'+decBody+'</div></details>'
       :'<div class="sg-card sg-dec"><div class="sg-h2">你的決定</div>'+decBody+'</div>'}
@@ -7056,7 +7084,18 @@ function campPaint(){var R=cReqs(),c=cCamp();
   if(S.msg)h+='<div class="sg-card '+(/^✕/.test(S.msg)?'sg-badbox':(/^✓/.test(S.msg)?'sg-okbox':'sg-muted'))+'">'+esc(S.msg)+'</div>';
   if(S.cv)h+=cDoneHTML()+cInfoHTML()+(people()?meHTML():'')+cListHTML()+R.map(cDessHTML).join('')+cDecHTML();
   root().innerHTML=h;wire()}
-function paint(){if(S.camp){campPaint();return}var h='<div class="sg-card sg-top"><div class="sg-h">✍️ 新品申請單</div><div class="sg-muted">申請單 '+esc(S.rid||'（連結沒有單號）')
+/* 2026-11-11：資料讀回來整頁重畫時：選字中先等選完；重畫後把焦點與游標放回原本那個輸入框 */
+function paint(){
+  if(window.__ime&&__ime.on){clearTimeout(S._pt);S._pt=setTimeout(paint,250);return}
+  var rt=root(),ae=document.activeElement,fk='',p0=null,p1=null;
+  if(ae&&rt.contains(ae)&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')){
+    var a1=ae.getAttribute('data-ccmt'),a2=ae.getAttribute('data-ccm'),q=function(v){return String(v).replace(/["\\]/g,'\\$&')};
+    fk=ae.id?'#'+ae.id:(a1!=null?'[data-ccmt="'+q(a1)+'"]':(a2!=null?'[data-ccm="'+q(a2)+'"]':''));
+    try{p0=ae.selectionStart;p1=ae.selectionEnd}catch(e){}}
+  paint0();
+  if(fk){var ne=null;try{ne=root().querySelector(fk)}catch(e){}
+    if(ne&&document.activeElement!==ne){try{ne.focus();if(p0!=null)ne.setSelectionRange(p0,p1)}catch(e){}}}}
+function paint0(){if(S.camp){campPaint();return}var h='<div class="sg-card sg-top"><div class="sg-h">✍️ 新品申請單</div><div class="sg-muted">申請單 '+esc(S.rid||'（連結沒有單號）')
     +(S.view?'　<button type="button" class="sg-btn2" id="sgRefresh" style="min-height:30px;padding:0 10px;font-size:13px">🔄 看最新</button>':'')+'</div>'
     +(S.view?'<div class="sg-muted" style="margin-top:6px">'+(myDec()?'你已經簽完這張單了（看下面的結果）。':'點各段標題可以看細節；簽核在最下面。')+'</div>':'')+'</div>';
   if(S.msg)h+='<div class="sg-card '+(/^✕/.test(S.msg)?'sg-badbox':(/^✓/.test(S.msg)?'sg-okbox':'sg-muted'))+'">'+esc(S.msg)+'</div>';
@@ -7079,6 +7118,7 @@ function wire(){var r=root();
   var n=document.getElementById('sgNo');if(n)n.onclick=function(){decide('退回')};
   var cg=document.getElementById('sgCmtGo');if(cg)cg.onclick=sendCmt;
   var ct=document.getElementById('sgCmt');if(ct)ct.oninput=function(){S.cmt=ct.value};
+  var dc=document.getElementById('sgCm');if(dc)dc.oninput=function(){S.dcm=dc.value};   /* 2026-11-11：簽核意見／退回原因隨打隨記 */
   var rf=document.getElementById('sgRefresh');if(rf)rf.onclick=refresh;
   var cl=document.getElementById('sgClose');if(cl)cl.onclick=closePage;
   r.querySelectorAll('details[data-sec]').forEach(function(d){d.ontoggle=function(){var k=d.getAttribute('data-sec'),was=!!S.open[k];S.open[k]=d.open;
@@ -8105,10 +8145,13 @@ window.TrMod=(function(){
       return '<li>'+esc(x.name||x.zh.n)+' '+esc(x.zh.q)+' '+esc(x.unit||x.zh.u)+(x.cont?' <span class="c">'+esc(x.cont)+'</span>':'')
         +(x.conf?'<span class="tr-w ok">✅ 已確認（'+esc(x.conf.by||'')+'），後台對照表還沒補</span>':'')
         +(x.miss?'<span class="tr-w miss">⚠ 對照表沒有'+(x.ai?'，AI 暫譯':'，AI 也沒翻到')+'——到下方「要確認的」確認</span>':'')+(x.diff?'<span class="tr-w diff">ℹ 台灣叫「'+esc(x.zh.n)+'」</span>':'')+'</li>'}).join('')+'</ul>'}
-  var saveT=null;
-  function saveEdit(k,el){clearTimeout(saveT);saveT=setTimeout(function(){var key='tr:draft:'+S.src.id+':'+k,o=lsGet(key);if(!o)return;var kind=el.dataset.ed,kk=el.dataset.key;
+  /* 2026-11-11：改完一格馬上改另一格、或馬上按上傳／確認時，先把上一格還沒存的存起來（原本會被取消、修改不見） */
+  var saveT=null,saveFn=null;
+  function saveEdit(k,el){if(saveFn&&saveFn.el!==el)flushSave();clearTimeout(saveT);var sid=S.src.id;
+    saveFn=function(){var key='tr:draft:'+sid+':'+k,o=lsGet(key);if(!o)return;var kind=el.dataset.ed,kk=el.dataset.key;
     if(kind==='name')o.name=el.innerText.trim();else if(kind==='f')o.f[kk]=el.innerText.replace(/\n$/,'');else if(kind==='t'){o.s[kk]=o.s[kk]||{t:'',h:''};o.s[kk].t=el.innerText.trim()}else if(kind==='h'){o.s[kk]=o.s[kk]||{t:'',h:''};o.s[kk].h=safe(unimg(el))}
-    o.edited=new Date().toLocaleString('zh-TW',{hour12:false});lsSet(key,o)},500)}
+    o.edited=new Date().toLocaleString('zh-TW',{hour12:false});lsSet(key,o)};saveFn.el=el;
+    saveT=setTimeout(function(){saveT=null;var f=saveFn;saveFn=null;if(f)f()},500)}
   /* ---- 🔎 要確認的新品項與用語：確認 → 三地確認用語；匯出給代理商（Excel）／匯入代理商回填 ---- */
   var XLSX_URL='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',OKW=/^(ok|o\.k\.|✓|✔|v|對|正確|同意|yes|đúng|được)$/i;
   function pendOf(k,src,o){var out=[],seen={};
@@ -8145,7 +8188,7 @@ window.TrMod=(function(){
     $('trXOut').onclick=function(){exportX(k,src,o)};
     $('trXIn').onclick=function(){$('trXFile').value='';$('trXFile').click()};
     $('trXFile').onchange=function(){var f=this.files&&this.files[0];if(f)importX(f)}}
-  function flushSave(){if(saveT){clearTimeout(saveT);saveT=null}}
+  function flushSave(){if(saveT){clearTimeout(saveT);saveT=null}if(saveFn){var f=saveFn;saveFn=null;f()}}   /* 2026-11-11：真的先存，不是只取消 */
   function confirmItems(items,ask){
     if(ask&&!confirm(ask+'？\n\n確認後存進「各地確認用語」，之後翻譯都照這個用（不會改門市食譜後台）。'))return;
     var who='';try{who=localStorage.getItem('tr:who')||''}catch(e){}
