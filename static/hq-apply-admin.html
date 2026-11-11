@@ -349,7 +349,11 @@ var PC_API = 'https://script.google.com/macros/s/AKfycbwYrgdECSzqFNKp2gQvW9GPVaF
 var REVIEW_DASH = 'apply_review', AUTH_KEY = 'hqreview_auth';
 var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
   '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（2026-11-03），與 hq-apply.html、GAS 一致 */
-var TYPES = { petty: { label: '零用金', emoji: '🧾' }, advance: { label: '代墊款報銷', emoji: '💳' }, transfer: { label: '調撥申請', emoji: '🔄' }, vendor: { label: '廠商款報銷', emoji: '🏭' }, training: { label: '專業訓練費報銷', emoji: '🎓' } };
+var TYPES = { petty: { label: '零用金', emoji: '🧾' }, advance: { label: '代墊款', xl: '代墊款報銷', emoji: '💳' }, transfer: { label: '調撥', xl: '調撥申請', emoji: '🔄' }, vendor: { label: '廠商款', xl: '廠商款報銷', emoji: '🏭' }, training: { label: '專業訓練費', xl: '專業訓練費報銷', emoji: '🎓' } };
+/* 2026-11-11 經營者：項目名改短（代墊款／n月調撥／廠商款／專業訓練費），跟 hq-apply.html 一致；調撥帶期別月份。xl＝匯出 Excel 總表仍用的舊名（表頭還沒決定要不要改） */
+/* 2026-11-11 晚：每個項目名前面都加期別（11月上半零用金、11月代墊款、11月調撥、11月廠商款、2026第四季專業訓練費） */
+function periodShort(plabel) { var s = String(plabel || ''), q = s.match(/(\d{4})\s*年第\s*(\d)\s*季/); if (q) return q[1] + '第' + '一二三四'.charAt(q[2] - 1) + '季'; var m = s.match(/(\d+)\s*月(上半|下半)?/); return m ? Number(m[1]) + '月' + (m[2] || '') : ''; }
+function typeName(k, plabel) { var t = TYPES[k]; return t ? periodShort(plabel) + t.label : ''; }
 var ORDER = ['petty', 'advance', 'transfer', 'vendor', 'training'];
 var COLS = {
   petty: [['items', '品項／用途'], ['category', '會計科目'], ['amount', '金額'], ['invoice_no', '發票號碼'], ['note', '備註']],
@@ -430,7 +434,7 @@ function loadList() {
 function renderList() {
   var tb = $('list').querySelector('tbody');
   tb.innerHTML = S.rows.map(function (a) {
-    return '<tr class="row' + (a.id === S.sel ? ' sel' : '') + '" data-id="' + esc(a.id) + '"><td>' + esc(a.created) + '</td><td>' + esc(a.unit) + '</td><td>' + TYPES[a.type].emoji + ' ' + esc(a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '</td><td>' + esc(a.who) + '</td><td class="r">$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆' + (a.nPhotos ? '・📷' + a.nPhotos : '') + '</span></td><td><span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="muted">' + esc(a.reviewNote) + '</div>' : '') + '</td></tr>';
+    return '<tr class="row' + (a.id === S.sel ? ' sel' : '') + '" data-id="' + esc(a.id) + '"><td>' + esc(a.created) + '</td><td>' + esc(a.unit) + '</td><td>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '</td><td>' + esc(a.who) + '</td><td class="r">$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆' + (a.nPhotos ? '・📷' + a.nPhotos : '') + '</span></td><td><span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="muted">' + esc(a.reviewNote) + '</div>' : '') + '</td></tr>';
   }).join('');
   $('listEmpty').textContent = '沒有資料。'; $('listEmpty').style.display = S.rows.length ? 'none' : '';
 }
@@ -444,7 +448,7 @@ function renderDetail() {
   var trs = rows.map(function (r, k) { return '<tr><td>' + (k + 1) + '</td>' + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>'; }).join('');
   var photos = (a.photos || []).map(function (_, k) { return '<button type="button" data-photo="' + k + '">📷 照片 #' + (k + 1) + '</button>'; }).join('');
   var canReview = a.type !== 'petty' && a.status !== 'approved';   /* 2026-11-11 經營者：已完成的只留下載，通過後不再變更狀態 */
-  $('detail').innerHTML = '<div class="detail"><h3>' + TYPES[a.type].emoji + ' ' + esc(a.typeLabel) + (a.sub ? '（' + esc(a.sub) + '）' : '') + '｜' + esc(a.unit) + '｜' + esc(a.who) + '　<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span></h3>' +
+  $('detail').innerHTML = '<div class="detail"><h3>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + (a.sub ? '（' + esc(a.sub) + '）' : '') + '｜' + esc(a.unit) + '｜' + esc(a.who) + '　<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span></h3>' +
     '<div class="meta"><span>編號 ' + esc(a.id) + '</span><span>送出 ' + esc(a.created) + '</span><span>算 <b>' + esc(a.periodLabel) + '</b>（截止 ' + esc(a.deadline) + '）</span><span>合計 <b>$' + money(a.amount) + '</b>・' + a.n + ' 筆</span>' + (a.reviewer ? '<span>審核 ' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</div>' +
     (pl.note ? '<div style="margin-bottom:8px">💬 申請人：' + esc(pl.note) + '</div>' : '') + (pl.subReason ? '<div style="margin-bottom:8px">非常態原因：' + esc(pl.subReason) + '</div>' : '') +
     (a.reviewNote ? '<div style="margin-bottom:8px;color:#A3321F">審核意見：' + esc(a.reviewNote) + '</div>' : '') +
@@ -456,7 +460,7 @@ function renderDetail() {
 function setStatus(st, btn) {
   var a = S.app, note = '';
   if (st === 'rejected') { note = prompt('退回原因（會寫給店長看，並交辦到門市今日）：'); if (note == null) return; note = note.trim(); if (!note) { toast('退回一定要寫原因'); return; } }
-  else if (st === 'approved') { if (!confirm('通過這筆「' + a.typeLabel + '｜' + a.unit + '｜$' + money(a.amount) + '」？通過後店長就不能刪除。')) return; note = prompt('給店長的話（可空白）：') || ''; }
+  else if (st === 'approved') { if (!confirm('通過這筆「' + (typeName(a.type, a.periodLabel) || a.typeLabel) + '｜' + a.unit + '｜$' + money(a.amount) + '」？通過後店長就不能刪除。')) return; note = prompt('給店長的話（可空白）：') || ''; }
   else { note = prompt('改回審核中的原因（可空白）：') || ''; }
   btn.disabled = true; $('detMsg').textContent = '儲存中…';
   api({ action: 'rv_set', id: a.id, status: st, note: note }).then(function (r) {
@@ -490,7 +494,7 @@ $('exportBtn').addEventListener('click', function () {
   var btn = this; btn.disabled = true;
   api({ action: 'rv_export', type: type, period: pe }).then(function (r) {
     if (!r.apps.length) { toast('這一期沒有已完成的' + TYPES[type].label); return; }
-    return buildSummary(type, r).then(function (blob) { saveBlob(blob, TYPES[type].label + '總表_' + r.label.replace(/\s/g, '') + '.xlsx'); toast('已匯出 ' + r.apps.length + ' 筆申請'); });
+    return buildSummary(type, r).then(function (blob) { saveBlob(blob, (TYPES[type].xl || TYPES[type].label) + '總表_' + r.label.replace(/\s/g, '') + '.xlsx'); toast('已匯出 ' + r.apps.length + ' 筆申請'); });
   }).catch(function (e) { toast('匯出失敗：' + (e.message || e)); }).finally(function () { btn.disabled = false; });
 });
 /* 名單 */
@@ -638,7 +642,7 @@ function buildSummary(type, r) {
   return loadScript(XLSX_URL).then(function () {
     var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('清單'), FN = '新細明體', h = xlHelpers(ws, FN), cell = h.cell, F = h.F, B = h.B;
     ws.columns = [{ width: 18 }, { width: 12 }, { width: 12 }, { width: 8 }, { width: 12 }, { width: 12 }, { width: 16 }, { width: 40 }];
-    ws.mergeCells('A1:H1'); cell(1, 1, TYPES[type].label + '總表｜' + r.label, { name: FN, size: 16, bold: true }, { horizontal: 'center' }, false);
+    ws.mergeCells('A1:H1'); cell(1, 1, (TYPES[type].xl || TYPES[type].label) + '總表｜' + r.label, { name: FN, size: 16, bold: true }, { horizontal: 'center' }, false);
     ['送出', '單位', '申請人', '筆數', '金額', '狀態', '編號', '摘要'].forEach(function (x, i) { cell(3, i + 1, x, B, { horizontal: 'center' }); });
     var total = 0;
     r.apps.forEach(function (a, k) {
