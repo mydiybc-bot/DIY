@@ -203,6 +203,9 @@ th.week-empty, td.week-empty { background: rgba(0,0,0,0.02); }
 .cal-cell .day-num { font-weight: 800; color: var(--text); font-size: 13px; line-height: 1; }
 .cal-cell .cell-hrs { font-size: 12px; color: var(--text); line-height: 1.1; opacity: 0.85; }
 .cal-cell .cell-rev { font-size: 12px; color: var(--text); line-height: 1.1; opacity: 0.85; }
+.cal-cell .cell-resv { font-size: 12px; color: var(--text); line-height: 1.1; opacity: 0.85; }
+.cal-cell .cell-resv.mute { opacity: 0.5; }
+.cal-cell .cell-grp { align-self: flex-start; font-size: 12px; font-weight: 700; line-height: 1.25; padding: 1px 5px; border-radius: 4px; background: #E3ECFA; color: #2A4370; box-shadow: inset 0 0 0 1px #9DB4DA; }
 /* 2026-10-01 日獎金（待處理事項 #3） */
 .cal-cell .cell-bonus { font-size: 12px; line-height: 1.15; font-weight: 800; color: #7A4A00; }
 .cal-cell .cell-bonus.miss { font-weight: 600; color: var(--muted); }
@@ -1620,7 +1623,7 @@ function _csvDownload(headers, rows, baseName){
 }
 function exportHeatCSV(){ _csvDownload(['門市','週','rev/h','工時','旗標'], _csvHeat, '排班熱力矩陣'); }
 function exportDailyCSV(){
-  _csvDownload(['日期','週','工時（扣會議請假）','排班總工時','營收','rev/h','等級','客單','vs 月均工時','vs 月均營收','異常','甜點券$100','獎金營收','日獎金'], _csvDaily, '排班月份明細');
+  _csvDownload(['日期','週','工時（扣會議請假）','排班總工時','營收','rev/h','預約人數','團體','等級','客單','vs 月均工時','vs 月均營收','異常','甜點券$100','獎金營收','日獎金'], _csvDaily, '排班月份明細');
 }
 function exportEmpCSV(){
   if(!_csvEmp) return;
@@ -1917,6 +1920,90 @@ function loadDailyData() {
     document.getElementById('dailyTabCalendar').innerHTML = '<div class="empty-state"><div class="icon">⚠️</div>連不上資料服務（已自動重試 2 次）</div>';
   });
   document.head.appendChild(scriptEl);
+  loadResvFor(ym);
+}
+
+/* ===== 2026-11-11 每日預約人數＋團體標示（經營者交辦）=====
+   來源＝訂位分析儀表板同一支 GAS（fn=month：昨天以前；fn=future：今天起約 5 週）。
+   人數＝有效訂位的 party_size 合計（已取消不算）；團體＝類別含「大組／包館／包場」（照經營者指定，一般訂位 8 人以上不算）。
+   訂位資料晚到也不擋班表：另外抓，抓回來只重畫日曆／明細表。 */
+const RESV_API = 'https://script.google.com/macros/s/AKfycbzjvgoj6MQoDizE-322wOLyOvq4P3HVbOlvyHBszdyfuOrYPaSnDa48vQb_34LLgEJh/exec';
+const RESV_STORE_NAME = {1:'台中精明店',2:'台中草悟道店',3:'台北南京店',4:'台北士林店',5:'台南Focus店',6:'新竹文化店',7:'新北板橋店',8:'新北新店店',9:'桃園中壢店',10:'桃園藝文店',11:'台北遠百信義A13店',12:'高雄SKM Park店'};
+const RESV_GROUP_RE = /大組|包館|包場/;
+const _resvSrc = {};     /* 'month:YYYY-MM' / 'future' → {state:'loading'|'ok'|'fail', data, at} */
+let _resvYm = '';
+function _resvJsonp(url, done){
+  let tries = 0, finished = false;
+  const go = () => {
+    tries++;
+    const cb = '__sch_resv' + Date.now() + '_' + Math.floor(Math.random() * 1e6), sc = document.createElement('script');
+    let over = false;
+    const end = () => { over = true; try { delete window[cb]; } catch(_) { window[cb] = undefined; } if (sc.parentNode) sc.parentNode.removeChild(sc); };
+    const fail = () => { if (over || finished) return; end(); if (tries < 2) setTimeout(go, 3000); else { finished = true; done(null); } };
+    window[cb] = j => { if (over || finished) return; end(); finished = true; done(j && j.cols ? j : null); };
+    sc.onerror = fail;
+    setTimeout(fail, 60000);
+    sc.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
+    document.head.appendChild(sc);
+  };
+  go();
+}
+function _resvGet(key, url){
+  const s = _resvSrc[key], age = s ? Date.now() - s.at : 1e12;
+  if (s && (s.state === 'loading' || (s.state === 'ok' && age < 30 * 60000) || (s.state === 'fail' && age < 2 * 60000))) return;
+  _resvSrc[key] = { state: 'loading', data: s && s.data, at: Date.now() };
+  _resvJsonp(url, j => {
+    _resvSrc[key] = j ? { state: 'ok', data: j, at: Date.now() } : { state: (s && s.data) ? 'ok' : 'fail', data: s && s.data, at: Date.now() };
+    if (dailyData && dailyData.month === _resvYm) renderDailyTab();
+  });
+}
+function _resvKeys(ym){
+  const nowYm = _dateStr(new Date()).substring(0, 7), k = [];
+  if (ym <= nowYm) k.push('month:' + ym);
+  if (ym >= nowYm) k.push('future');
+  return k;
+}
+function loadResvFor(ym){
+  _resvYm = ym;
+  _resvKeys(ym).forEach(k => _resvGet(k, RESV_API + (k === 'future' ? '?fn=future' : '?fn=month&ym=' + encodeURIComponent(ym))));
+}
+/* 回傳 {state, byDate:{日期:{n 組, size 人, groups:[…]}}}；state：loading／ok／fail */
+function resvForStore(sid, ym){
+  const keys = _resvKeys(ym), srcs = keys.map(k => _resvSrc[k] || { state: 'loading' });
+  if (srcs.some(s => !s.data)) return { state: srcs.some(s => s.state === 'loading') ? 'loading' : 'fail', byDate: {} };
+  const name = RESV_STORE_NAME[sid], byDate = {};
+  const fut = keys.indexOf('future') >= 0 ? _resvSrc.future.data : null;
+  let futLo = '9999';
+  if (fut) { const fi = fut.cols.indexOf('date'); fut.rows.forEach(r => { const d = String(r[fi] || '').slice(0, 10); if (d && d < futLo) futLo = d; }); }
+  keys.forEach(k => {
+    const j = _resvSrc[k].data, ix = {}; j.cols.forEach((c, i) => ix[c] = i);
+    j.rows.forEach(r => {
+      const d = String(r[ix.date] || '').slice(0, 10);
+      if (d.slice(0, 7) !== ym || r[ix.store] !== name || r[ix.status] === '已取消') return;
+      if (k === 'future' ? d < futLo : (fut && d >= futLo)) return;   /* 今天起以未來訂位為準，避免重複 */
+      const o = byDate[d] || (byDate[d] = { n: 0, size: 0, groups: [] }), sz = Number(r[ix.party_size]) || 0;
+      o.n++; o.size += sz;
+      const cat = String(r[ix.category] || '');
+      if (RESV_GROUP_RE.test(cat)) o.groups.push({ slot: String(r[ix.slot] || ''), cat: cat.replace(/訂位$/, ''), size: sz, status: String(r[ix.status] || '') });
+    });
+  });
+  Object.keys(byDate).forEach(d => byDate[d].groups.sort((a, b) => a.slot < b.slot ? -1 : 1));
+  return { state: 'ok', byDate };
+}
+function resvCellHtml(rv, d){
+  if (rv.state === 'loading') return '<div class="cell-resv mute">📅 …</div>';
+  if (rv.state === 'fail') return '<div class="cell-resv mute" title="訂位資料讀不到，2 分鐘後切換月份會再試">📅 ✕</div>';
+  const o = rv.byDate[d];
+  let h = '<div class="cell-resv' + (o ? '' : ' mute') + '">📅 訂 ' + (o ? o.size + '人' : '0') + '</div>';
+  if (o && o.groups.length) {
+    const g = o.groups;
+    h += '<div class="cell-grp">' + (g.length === 1 ? '🏢 ' + _escNote(g[0].slot) + ' ' + _escNote(g[0].cat) + ' ' + g[0].size + '人'
+                                                   : '🏢 團體 ' + g.length + ' 組・' + g.reduce((s, x) => s + x.size, 0) + '人') + '</div>';
+  }
+  return h;
+}
+function resvGroupTxt(o){
+  return (o && o.groups.length) ? o.groups.map(x => x.slot + ' ' + x.cat + ' ' + x.size + '人').join('；') : '';
 }
 
 function updateBaselineLabel() {
@@ -2153,6 +2240,7 @@ function _renderDailyCalendarImpl() {
   // 索引
   const byDate = {};
   rows.forEach(r => { byDate[r.date] = r; });
+  const rv = resvForStore(Number(dailyData.store_id || document.getElementById('dailyStore').value), dailyData.month);   /* 2026-11-11 每日預約人數 */
 
   // 該月第一天 / 最後一天
   const ym = dailyData.month;
@@ -2184,7 +2272,7 @@ function _renderDailyCalendarImpl() {
         const dStr = ym + '-' + String(dayIdx).padStart(2,'0');
         const r = byDate[dStr];
         if (!r) {
-          cells += '<div class="cal-cell" style="background:#F5F5F5;" data-empty="1"><div class="day-num">' + dayIdx + '</div></div>';
+          cells += '<div class="cal-cell" style="background:#F5F5F5;" data-empty="1"><div class="day-num">' + dayIdx + '</div>' + resvCellHtml(rv, dStr) + '</div>';
         } else {
           const flags = dailyFlags(r, dailyData.baseline);
           const tier = dailyPerfTier(r);
@@ -2206,12 +2294,14 @@ function _renderDailyCalendarImpl() {
             bonus: calcDayBonus(r),
             date_note: r.date_note || '',
             off_notes: Array.isArray(r.off_notes) ? r.off_notes : [],
-            flags: flags.map(f => ({label: f.label, reason: f.reason}))
+            flags: flags.map(f => ({label: f.label, reason: f.reason})),
+            resv: rv.state === 'ok' ? (rv.byDate[dStr] || { n: 0, size: 0, groups: [] }) : null
           };
           cells += '<div class="cal-cell' + (flagged ? ' flagged' : '') + '" style="background:' + color + ';" data-tip-key="' + dStr + '">'
             + '<div class="day-num">' + dayIdx + (flagged ? ' <span style="color:var(--flag-red);font-size:12px;">🚩</span>' : '') + '</div>'
             + '<div class="cell-hrs">⏱ ' + (r.hours_all > 0 ? fmtDayHours(r) : '—') + '</div>'
             + '<div class="cell-rev">💰 ' + revShort + '</div>'
+            + resvCellHtml(rv, dStr)
             + '<div class="cell-rph ' + rphCls + '">' + rphTxt + '/h</div>'
             + bonusCellHtml(calcDayBonus(r))
             + '</div>';
@@ -2224,7 +2314,7 @@ function _renderDailyCalendarImpl() {
 
   document.getElementById('dailyTabCalendar').innerHTML =
     bonusMonthSummary(rows)
-    + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;" title="格子看 rev/h：🟢 優秀（平日 >$750、假日 >$1500）・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2＝跨級加倍）・ ⏱ 工時只算真正在店工作的時數（扣會議、內訓、請假），括號「全」是排班總工時，rev/h 用前面的數字算。把滑鼠移到日期格上，可以看當天班表和每人獎金。">🟢 優秀 ・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2）・ ⏱ 工時（全＝排班總工時）</div>'
+    + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px;" title="格子看 rev/h：🟢 優秀（平日 >$750、假日 >$1500）・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2＝跨級加倍）・ ⏱ 工時只算真正在店工作的時數（扣會議、內訓、請假），括號「全」是排班總工時，rev/h 用前面的數字算。把滑鼠移到日期格上，可以看當天班表和每人獎金。">🟢 優秀 ・ 🟡 正常 ・ 🚩 偏低（平日 <$' + thresholds.dayWd + '、假日 <$' + thresholds.dayWe + '）・ 🎁 日獎金（紅字 ×2）・ ⏱ 工時（全＝排班總工時）・ 📅 預約人數（已取消不算）・ <span style="background:#E3ECFA;color:#2A4370;padding:0 4px;border-radius:3px;font-weight:700">🏢 團體</span>（大組／包館／包場）</div>'
     + '<div class="cal-grid">' + cells + '</div>'
     + '<div id="calTooltip" class="cal-tooltip"></div>';
 
@@ -2260,6 +2350,10 @@ function buildTooltipHtml(d) {
 
   if (d.date_note) {
     html += '<div class="tt-date-note">📋 ' + _escNote(d.date_note) + '</div>';
+  }
+  if (d.resv) {   /* 2026-11-11 每日預約人數＋團體 */
+    html += '<div style="font-size:12px;margin-top:4px;">📅 預約 <b>' + d.resv.size + ' 人</b>（' + d.resv.n + ' 組，已取消不算）</div>';
+    d.resv.groups.forEach(g => { html += '<div style="font-size:12px;margin-top:2px;padding:1px 6px;border-radius:4px;background:#E3ECFA;color:#2A4370;font-weight:700;">🏢 ' + _escNote(g.slot) + ' ' + _escNote(g.cat) + ' ' + g.size + '人' + (g.status === '已付訂金' ? '（已付訂金）' : '') + '</div>'; });
   }
 
   if (d.bonus && d.bonus.hours > 0 && d.bonus.rev > 0) {
@@ -2332,10 +2426,11 @@ function renderDailyTable() {
   }
   const baseline = dailyData.baseline;
   const dayChar = ['日','一','二','三','四','五','六'];
+  const rv = resvForStore(Number(dailyData.store_id || document.getElementById('dailyStore').value), dailyData.month);   /* 2026-11-11 每日預約人數 */
 
   let html = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportDailyCSV()">⬇ 匯出 CSV</button></div>'
     + '<table class="daily-table"><thead><tr>'
-    + '<th>日期</th><th>週</th><th class="num" title="扣掉會議、內訓、請假後真正在店工作的時數；括號「全」是排班總工時">工時</th><th class="num">營收</th><th class="num">rev/h</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
+    + '<th>日期</th><th>週</th><th class="num" title="扣掉會議、內訓、請假後真正在店工作的時數；括號「全」是排班總工時">工時</th><th class="num">營收</th><th class="num">rev/h</th><th class="num" title="訂位系統的預約人數（已取消不算）">預約人數</th><th title="大組／包館／包場">團體</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
     + '</tr></thead><tbody>';
 
   rows.forEach(r => {
@@ -2358,10 +2453,12 @@ function renderDailyTable() {
     const hCls = Math.abs(hDelta) < 5 ? '' : (hDelta > 0 ? 'delta-pos' : 'delta-neg');
     const rCls = Math.abs(rDelta) < 5 ? '' : (rDelta > 0 ? 'delta-pos' : 'delta-neg');
     const bn = calcDayBonus(r);   // 2026-10-01 日獎金
+    const ro = rv.byDate[r.date];
+    const resvTd = rv.state === 'ok' ? (ro ? String(ro.size) : '0') : (rv.state === 'loading' ? '…' : '✕');
 
     _csvDaily.push([
       r.date, wkday, (r.hours_all > 0 ? r.hours : ''), (r.hours_all > 0 ? r.hours_all : ''), (r.revenue > 0 ? Math.round(r.revenue) : ''),
-      (r.rev_per_hour > 0 ? r.rev_per_hour : ''), tierLabel.replace(/^[^ ]+ /,''),
+      (r.rev_per_hour > 0 ? r.rev_per_hour : ''), (rv.state === 'ok' ? (ro ? ro.size : 0) : ''), resvGroupTxt(ro), tierLabel.replace(/^[^ ]+ /,''),
       (r.rev_per_head > 0 ? Math.round(r.rev_per_head) : ''),
       (r.hours > 0 ? hDelta.toFixed(0) : ''), (r.revenue > 0 ? rDelta.toFixed(0) : ''),
       flags.map(f => f.label).join('；'),
@@ -2373,6 +2470,8 @@ function renderDailyTable() {
       + '<td class="num">' + (r.hours_all > 0 ? fmtDayHours(r, '') : '—') + '</td>'
       + '<td class="num">' + (r.revenue > 0 ? '$' + Math.round(r.revenue).toLocaleString() : '—') + '</td>'
       + '<td class="num" style="' + rphBg + '">' + (r.rev_per_hour > 0 ? '$' + r.rev_per_hour : '—') + '</td>'
+      + '<td class="num">' + resvTd + '</td>'
+      + '<td>' + (ro && ro.groups.length ? '<span style="background:#E3ECFA;color:#2A4370;padding:1px 5px;border-radius:4px;font-weight:700;white-space:nowrap">🏢 ' + _escNote(resvGroupTxt(ro)) + '</span>' : '') + '</td>'
       + '<td>' + tierLabel + '</td>'
       + '<td class="num">' + (r.rev_per_head > 0 ? '$' + Math.round(r.rev_per_head) : '—') + '</td>'
       + '<td class="num ' + hCls + '">' + (r.hours > 0 ? (hDelta >= 0 ? '+' : '') + hDelta.toFixed(0) + '%' : '—') + '</td>'
