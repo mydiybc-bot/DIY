@@ -1161,6 +1161,7 @@ def form_text(st, cfg):
         L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
     L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（勞基法七休一）")
     L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
+    L.append("指休原則\t正職每月可自訂 4 天：平日 3 天、假日（週末、國定假日）1 天；超過的照店長填的排，但要在報告提醒店長")
     if cfg.get("support"):
         L.append("跨店支援夥伴\t" + cfg["support"].replace("\n", "；"))
     if cfg.get("rules"):
@@ -1245,6 +1246,34 @@ def _ext_from_form(st, cfg):
             "early_shift_starts": sorted({r["segs"][0][0] for r in cfg["shifts"] if "早" in r["name"]}),
             "revenue": {"weekday": ms["revenue"].get("weekday"), "weekend": ms["revenue"].get("weekend"), "special": special},
             "hol_days": sorted(holi), "notes": [], "from_form": True}
+
+
+# 2026-11-11 經營者：員工排休其中 4 天可自訂（平日 3 天、假日 1 天）；假日（週末、國定假日、當假日）以 1 天為原則，
+# 實際仍看各店營業狀況與店長安排 → 超過只提醒、不擋
+PICK_OFF = {"total": 4, "weekday": 3, "holiday": 1}
+
+
+def _gov_hol(st):
+    """這個月落在平日的政府放假日（國定假日）"""
+    y, m = int(st["ym"][:4]), int(st["ym"][4:])
+    return sorted(d["d"] for d in st["template"]["info"]["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, m, d["d"])))
+
+
+def _pick_off_warns(st, names, etype):
+    """正職指休超過「平日 3、假日 1、共 4 天」→ 提醒文字"""
+    ms = st.get("mset") or {}
+    info = st["template"]["info"]
+    wk = {d["d"] for d in info["days"] if d["wd"] in ("六", "日")} | set(_gov_hol(st)) | _hol_days(ms)
+    out = []
+    for eid, mk in (ms.get("marks") or {}).items():
+        if eid not in names or etype.get(eid) == "兼職":
+            continue
+        ds = [int(d) for d, v in mk.items() if v == "指休"]
+        h = sum(1 for d in ds if d in wk)
+        w = len(ds) - h
+        if len(ds) > PICK_OFF["total"] or h > PICK_OFF["holiday"] or w > PICK_OFF["weekday"]:
+            out.append(f"{names[eid]}：指休 {len(ds)} 天（平日 {w}、假日 {h}），原則上每月可自訂 4 天：平日 3 天、假日 1 天；超過的要店長視營業狀況決定")
+    return out
 
 
 def _hol_days(ms):
@@ -1566,6 +1595,10 @@ def run_check(st, schedule=None, guests=None, sibs=None):
     marks = ((st.get("mset") or {}).get("marks") or {})
     avail = ((st.get("mset") or {}).get("avail_shift") or {})
     etype = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
+    try:
+        warns += _pick_off_warns(st, {k: names[k] for k in parsed if k in names}, etype)
+    except Exception:   # noqa: BLE001 — 提醒算不出來不影響其他檢查
+        pass
     for eid, mk in marks.items():
         if eid not in parsed:
             continue
@@ -3831,7 +3864,7 @@ def _public(st):
         "plans": {}, "plan": st.get("plan"),   # 2026-11-10：只排兼職優先，不再回兩個方案
         "job": job, "cost": month_cost, "updated": st.get("updated", ""),
         "cfg": cfg, "mset": mset_view(st) if tpl else None, "formReady": form_ready(st, cfg),
-        "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES}, "nuo": nuo_ledger(st, cfg) if tpl else [],
+        "bonus": bonus_calc(st, ext), "stores": {**STORES, **TEST_STORES}, "nuo": nuo_ledger(st, cfg) if tpl else [], "gov_hol": _gov_hol(st) if tpl else [],
     }
 
 
