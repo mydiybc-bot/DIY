@@ -16,6 +16,11 @@
   var AREA_ORDER = ['5e1bd8a2-04b1-457a-8638-fef023c223f3', 'c1b9eaae-f1f0-4152-8392-d45507cbafa1', '5c1f4ecf-2b35-45aa-bc7d-a2cd7710b405',
     'e796c6da-1b35-4a0a-8f9d-78e7619ad5ed', 'f7b9b79a-448f-44d1-8154-979dcaf68fed', '971ea9b5-095b-4fe8-a29e-fce186544e21', '796e6d72-bf7d-40eb-bbaf-fd678b64b871'];   /* 跟後台平板頁同順序 */
   var T = {
+    en: { intro: '[Must-read for first-time visitors]', introBody: 'This tablet is your instructor today.\nFollow the on-screen instructions one step at a time.\nIf you have any questions, feel free to ask our staff anytime.', ready: 'Ready?\nSwipe left to get started ►►►',
+      noticeTitle: 'Please note', notice: ['This recipe is carefully designed; any changes will affect the result.', 'If you would like to use ingredients not in the recipe, please ask our staff (extra ingredients must be purchased).', 'Please wash the tools and containers you used.', 'This recipe is protected by copyright. Please do not take photos or videos, write it down, or copy it in any other way.'],
+      agree: 'I have read the above.', agreeFirst: 'Please tick "I have read the above" first', tray: 'Take a tray, then start from the next page.',
+      bowlP: 'Plastic bowl', bowlC: 'Ceramic bowl', oneBowl: 'One container per ingredient', where: 'See location', menu: 'Menu', next: 'Next', prev: 'Back', steps: 'Steps',
+      done: 'All done! Great job.', doneSub: 'If you have any questions, please ask our staff.', backMenu: 'Back to menu', reload: 'Reload video', pres: 'How to store', close: 'Close' },
     ja: { intro: '【はじめての方へ】', introBody: 'このタブレットが今日の先生です。\n画面の説明に沿って、1ステップずつ進めてください。\nわからないことがあれば、いつでもスタッフにお声がけください。', ready: '準備はいいですか？\n画面を左にスワイプして始めましょう ►►►',
       noticeTitle: 'ご注意ください', notice: ['このレシピは細かく設計されています。手順を変えると仕上がりに影響します。', 'レシピにない材料を使いたい場合は、スタッフにお声がけください（追加の材料はご購入となります）。', '使った道具や容器は洗ってください。', 'このレシピは著作権で保護されています。写真・動画の撮影、メモ、その他の方法での複製はご遠慮ください。'],
       agree: '上記の内容を確認しました。', agreeFirst: '先に「確認しました」にチェックしてください', tray: 'トレーを1枚取って、次のページから始めましょう。',
@@ -42,7 +47,7 @@
       bowlP: 'ชามพลาสติก', bowlC: 'ชามเซรามิก', oneBowl: 'วัตถุดิบหนึ่งอย่างต่อหนึ่งภาชนะ', where: 'ดูตำแหน่ง', menu: 'เมนู', next: 'ถัดไป', prev: 'ก่อนหน้า', steps: 'รายการขั้นตอน',
       done: 'เสร็จแล้ว! ขอบคุณ', doneSub: 'หากมีข้อสงสัย สอบถามพนักงานได้เลย', backMenu: 'กลับไปที่เมนู', reload: 'โหลดวิดีโออีกครั้ง', pres: 'วิธีเก็บรักษา', close: 'ปิด' }
   };
-  var HTML_LANG = { ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th' };
+  var HTML_LANG = { en: 'en', ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th' };
 
   var CSS = '.trv{position:fixed;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;overflow:clip;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
     + '.trv *{box-sizing:border-box}'
@@ -115,7 +120,7 @@
      ①先開後載：mount 時 data.slides 還沒有（null）→ 先畫開場說明、封面、注意事項、拿托盤（這幾頁不用後端資料），
        步驟頁位置先放「讀取中」；資料到了呼叫 fill(data) 補上步驟頁，客人停在哪頁就留在哪頁。讀不到 → fail(訊息) 顯示「再讀一次」（opt.onRetry）。
      ②圖片只載「目前頁＋前一頁＋後兩頁」：步驟大圖與內文圖片先放 data-lz，翻到附近才給 src（影片本來就只載目前頁）。 */
-  var T_LOAD = { ja: ['読み込み中…', 'レシピを読み込めませんでした', 'もう一度読み込む'], ko: ['불러오는 중…', '레시피를 불러오지 못했습니다', '다시 불러오기'],
+  var T_LOAD = { en: ['Loading…', 'Could not load the recipe', 'Reload'], ja: ['読み込み中…', 'レシピを読み込めませんでした', 'もう一度読み込む'], ko: ['불러오는 중…', '레시피를 불러오지 못했습니다', '다시 불러오기'],
     vi: ['Đang tải…', 'Không tải được công thức', 'Tải lại'], id: ['Memuat…', 'Resep gagal dimuat', 'Muat ulang'], th: ['กำลังโหลด…', 'โหลดสูตรไม่สำเร็จ', 'โหลดอีกครั้ง'] };
   Object.keys(T_LOAD).forEach(function (k) { if (T[k]) { T[k].loading = T_LOAD[k][0]; T[k].loadErr = T_LOAD[k][1]; T[k].retry = T_LOAD[k][2]; } });
   CSS += '.trv-wait{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*4);font-size:calc(var(--u)*4.5);font-weight:800;text-align:center;padding:10%}'
@@ -159,8 +164,8 @@
           order.sort(function (a, b) { var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
           order.forEach(function (a) {
             var ar = (data.areas || {})[a] || {}, list = groups[a].slice().sort(function (x, y) { var r = function (c) { return c === 'container1' ? 1 : c === 'container2' ? 2 : 0; }; return r(x.c) - r(y.c); });
-            var ao = AREA_ORIG[a] || ['', ar.en || '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
-              + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, g.en) ? '<span class="o">' + esc(origTxt(g.zh, g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
+            var ao = AREA_ORIG[a] || ['', ar.en || '']; if (lang === 'en') ao = [ao[0], '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
+              + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, lang === 'en' ? '' : g.en) ? '<span class="o">' + esc(origTxt(g.zh, lang === 'en' ? '' : g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
           });
           h += '<div style="height:calc(var(--u)*14)"></div>';
         } else {

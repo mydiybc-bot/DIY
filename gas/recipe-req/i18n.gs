@@ -892,6 +892,8 @@ function i18nListData_() {
       if (g[l]) loc[l] = g[l];
       else if (o.langs[l] === 'live') { var t = i18nTrName_(rm.sh, r, o.ver[l]); if (t) loc[l] = t; }   /* 到店須知頁沒有這支（例：鳳梨酥）→ 用譯文自己的品名，卡片才不會只剩英文（2026-10-29） */
     });
+    /* 英文（2026-11-11 經營者：「外語食譜，我要加英文食譜，放在第一個語言的位置」）：直接用後台台灣區英文版原文、不翻譯，所以收入就算放行 */
+    o.langs.en = 'live'; o.ver.en = i18nHash_([s.fp, s.upd, 'en'].join('|')).slice(0, 12);
     return o;
   });
   return { data: { at: now_(), items: out } };
@@ -905,7 +907,7 @@ function i18nTrName_(sh, r, ver) {
   c.put(k, nm, 21600);
   return nm;
 }
-function i18nGet_(p) { i18nTabletAuth_(p.tpw); return { data: i18nGetData_(p.id, p.lang) }; }
+function i18nGet_(p) { if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) i18nTabletAuth_(p.tpw); return { data: i18nGetData_(p.id, p.lang) }; }
 /* 一支×語言組好的平板內容（不驗密碼）：i18nGet 與快照共用。ctx（i18nGetCtx_）＝一次推很多支時先讀好的表，不重複讀 */
 function i18nGetCtx_() {
   var NM = {}; try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文（同 i18nBuild_） */ }
@@ -913,7 +915,7 @@ function i18nGetCtx_() {
 }
 function i18nGetData_(id, lang, ctx) {
   id = String(id || '').trim().toLowerCase(); lang = String(lang || '').trim();
-  if (I18N_LANGS.indexOf(lang) < 0) throw fail_('語言不對', 'bad');
+  if (I18N_LANGS.indexOf(lang) < 0 && lang !== 'en') throw fail_('語言不對', 'bad');
   var src;
   if (ctx) {
     if (!(id in ctx.src)) {
@@ -925,6 +927,7 @@ function i18nGetData_(id, lang, ctx) {
   } else src = i18nSrc_(id);
   if (!src) throw fail_('找不到這支食譜', 'nosrc');
   if (!i18nOn_(ctx ? ctx.pm : i18nPickMap_(), id)) throw fail_('這支食譜目前沒有開放給外國客人', 'notyet');
+  if (lang === 'en') return i18nBuild_(src, { name: src.name, pres: src.pres, slides: src.slides.map(function (s) { return { t: s.t, h: s.h }; }) }, ctx ? ctx.D : i18nDictRows_(), 'en', { status: 'ok', check: '', at: '', model: '原文' }, ctx ? ctx.NM : null);   /* 英文＝後台原文（2026-11-11） */
   var m = ctx ? ctx.rm : i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
   var c = i18nLiveContent_(m.sh, r);   /* 放行過的那份（原文改版、新譯文還沒好 → 上一版） */
   if (!c) throw fail_('這支食譜這個語言還沒翻好', 'notyet');
