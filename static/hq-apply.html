@@ -464,11 +464,14 @@ function unitShort(u) { var m = String(u).match(/^(\d+)店/); return m ? m[1] + 
 var ACCTS = ['5201 進貨食材', '6240 雜費', '6217 清潔費', '6205 運費', '6206 郵電費', '6207 修繕費', '6209 水電費',
   '6219 職工福利', '6204 差旅交通費', '6201-003 薪資-實作費用', '2825 暫收款'];
 function acctName(c) { return String(c || '').replace(/^[\d-]+\s+/, ''); }
+/* 2026-11-11 經營者：零用金的科目下拉改顯示店內常用說法；存檔的值仍是會計科目代碼（如 5201 進貨食材），Excel、審核後台、匯出鼎新都照舊 */
+var ACCT_SHOP = { '5201 進貨食材': '食材', '6206 郵電費': '郵資', '6209 水電費': '瓦斯費', '2825 暫收款': '訂金' };
+function acctShop(c) { return ACCT_SHOP[c] || acctName(c); }
 var ITEM_MAX = 60;
 /* 五個項目：cols＝明細欄位（k 欄位、l 標題、w 寬、num 數字、sel 下拉、date 日期、calc 自動算、bytes 位元組上限、def 預設：who／unit／today）；photos＝要不要拍單據；kind＝給 AI 的提示；grp＝零用金同單據拆科目 */
 var TYPES = {
   petty: { label: '零用金', emoji: '🧾', photos: true, kind: '', grp: true, hint: '一列一張單據（不同科目拆多列）。黃底＝AI 沒把握。品項／用途最多 60 位元組（中文 30 字）。',
-    cols: [{ k: 'items', l: '品項／用途', w: 260, ph: '例：水果-繁昌青果', bytes: 60 }, { k: 'category', l: '會計科目', w: 136, sel: ACCTS, selName: acctName }, { k: 'amount', l: '金額', w: 100, num: 1 }, { k: 'invoice_no', l: '發票號碼', w: 140, ph: '收據可空白' }, { k: 'note', l: '備註', ph: '店內寫給會計（可空白）' }] },
+    cols: [{ k: 'items', l: '品項／用途', w: 260, ph: '例：水果-繁昌青果', bytes: 60 }, { k: 'category', l: '會計科目', w: 136, sel: ACCTS, selName: acctShop }, { k: 'amount', l: '金額', w: 100, num: 1 }, { k: 'note', l: '備註', ph: '店內寫給會計（可空白）' }] },   /* 2026-11-11 經營者：零用金表單不顯示發票號碼欄；AI 讀到的號碼仍暗中留著（防重複請款、Excel 用） */
   advance: { label: '代墊款', emoji: '💳', photos: true, kind: 'advance', hint: '一列一張單據；付款對象＝先墊錢的人。黃底＝AI 沒把握。',
     cols: [{ k: 'items', l: '付款內容摘要', w: 260, ph: '例：停車費-嘟嘟房', bytes: 60 }, { k: 'invoice_no', l: '發票號碼', w: 140, ph: '收據可空白' }, { k: 'amount', l: '金額', w: 100, num: 1 }, { k: 'payee', l: '付款對象', w: 110, def: 'who' }, { k: 'note', l: '備註', ph: '可空白' }] },
   transfer: { label: '調撥', emoji: '🔄', photos: false, kind: '', hint: '一列一個品項；小計＝數量×單價。',
@@ -606,7 +609,7 @@ function previewApp(id, btn) {
     .catch(function (e) { toast('讀不到這筆申請：' + (e.message || e)); }).finally(function () { busyBtn(btn, false, '👁 預覽'); });
 }
 function pvCell(c, v) {
-  if (c.k === 'category') v = acctName(v);
+  if (c.k === 'category') v = acctShop(v);
   if (c.k === 'from' || c.k === 'to') v = unitShort(v);
   if (c.num || c.calc) return '<td class="r">' + money(v) + '</td>';
   return '<td>' + esc(v == null ? '' : v) + '</td>';
@@ -920,6 +923,7 @@ function addRow(o) {
     r[c.k] = c.num ? (Number(v) || 0) : String(v);
   });
   if (t.cols.every(function (c) { return c.k !== 'category'; })) r.category = o.category || '';   /* 代墊款等：科目留著給會計參考，不顯示 */
+  if (t.cols.every(function (c) { return c.k !== 'invoice_no'; })) r.invoice_no = o.invoice_no || '';   /* 零用金：發票號碼不顯示但留著 */
   r.grp = o.grp || 'm' + r.id;
   S.rows.push(r);
   var tr = document.createElement('tr'); tr.id = 'r' + r.id; if (r.confidence === '低') tr.className = 'low';
@@ -1026,7 +1030,7 @@ function checkReady(rows) {
   return true;
 }
 function meta() {
-  var t = TYPES[S.type], rows = orderedRows().map(function (r) { var o = { grp: r.grp, photo: r.photo, category: r.category || '' }; t.cols.forEach(function (c) { o[c.k] = r[c.k]; }); o.amount = rowAmount(r); return o; }), sum = 0;
+  var t = TYPES[S.type], rows = orderedRows().map(function (r) { var o = { grp: r.grp, photo: r.photo, category: r.category || '', invoice_no: r.invoice_no || '' }; t.cols.forEach(function (c) { o[c.k] = r[c.k]; }); o.amount = rowAmount(r); return o; }), sum = 0;
   rows.forEach(function (r) { sum += r.amount; });
   sum = Math.round(sum * 10) / 10;
   var summary = rows.length + ' 筆 $' + money(sum) + '：' + rows.slice(0, 3).map(function (r) { return r.items; }).join('、') + (rows.length > 3 ? '…' : '');
