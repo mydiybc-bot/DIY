@@ -33,7 +33,7 @@ from storage_paths import atomic_write_json, data_dir
 SNAP_KEY_SHA256 = "9b2d3b3fd95098c58c7799708862708a30937325f34b9cb3140435ffaab4827b"
 AUTH_API = "https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec"
 AUTH_DASH = "tablet_i18n"
-LANGS = ("ja", "ko", "vi", "id", "th")
+LANGS = ("en", "ja", "ko", "vi", "id", "th")   # en＝後台英文原文（2026-11-11）
 _ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _FINAL_RE = re.compile(r"密碼錯誤|已停用|查無|嘗試次數過多")   # 權限中心的明確答案（不是連線問題）
 
