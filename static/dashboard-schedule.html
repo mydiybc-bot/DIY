@@ -2206,11 +2206,16 @@ function calcDayBonus(r){
   staff.forEach(st => { st.bonus = (res.mult && st.work > 0 && !st.trainee) ? Math.round(BONUS_BASE * st.work / BONUS_STD_H * res.mult) : 0; res.total += st.bonus; });
   return res;
 }
+/* 2026-11-11 經營者：跨級加倍改寫成「$500 ×2＝$1,000」（原本「$1,000 ×2」會被看成再乘 2） */
+function bonusAmtTxt(b){
+  const f = v => '$' + v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  return b.cross ? f(b.total / 2) + ' ×2＝' + f(b.total) : f(b.total);
+}
 function bonusCellHtml(b){
   if (!b || b.hours <= 0 || b.rev <= 0) return '';
   if (b.noTier) return '<div class="cell-bonus miss">🎁 超過100h</div>';
   if (!b.hit) return '<div class="cell-bonus miss">🎁 未達標</div>';
-  return '<div class="cell-bonus' + (b.cross ? ' x2' : '') + '">🎁 $' + b.total.toLocaleString() + (b.cross ? ' ×2' : '') + '</div>';
+  return '<div class="cell-bonus' + (b.cross ? ' x2' : '') + '">🎁 ' + bonusAmtTxt(b) + '</div>';
 }
 function bonusMonthSummary(rows){
   let tot = 0, hit = 0, cross = 0, days = 0, voucher = 0, has = false;
@@ -2360,7 +2365,7 @@ function buildTooltipHtml(d) {
     const b = d.bonus;
     html += '<div class="tt-bonus">🎁 <b>日獎金</b>：POS 淨營收 $' + Math.round(b.net).toLocaleString() + ' ＋ 甜點券$100 $' + Math.round(b.voucher).toLocaleString() + (b.voucherQty ? '（' + b.voucherQty + ' 張）' : '') + ' ＝ <b>$' + Math.round(b.rev).toLocaleString() + '</b>'
       + '<br>店日工時 ' + b.hours + 'h' + (b.noTier ? '（超過 100h，公告沒有級距，不計）' : '（≤' + b.cap + 'h 級，門檻 $' + b.threshold.toLocaleString() + (b.next ? '；跨級門檻 $' + b.next.toLocaleString() : '') + '）')
-      + '<br>' + (b.noTier ? '' : (b.cross ? '✅ <b style="color:#B3261E">跨級達成，獎金 ×2</b>' : (b.hit ? '✅ 達標' : '— 未達標（還差 $' + Math.round(b.threshold - b.rev).toLocaleString() + '）')) + '　合計 <b>$' + b.total.toLocaleString() + '</b>') + '</div>';
+      + '<br>' + (b.noTier ? '' : (b.cross ? '✅ <b style="color:#B3261E">跨級達成，獎金 ×2</b>' : (b.hit ? '✅ 達標' : '— 未達標（還差 $' + Math.round(b.threshold - b.rev).toLocaleString() + '）')) + '　合計 <b>' + bonusAmtTxt(b) + '</b>') + '</div>';
   }
   html += '<div class="tt-sect-title">當日班表 (' + d.employees.length + ' 人)</div>';
   if (d.employees.length === 0) {
@@ -2430,7 +2435,7 @@ function renderDailyTable() {
 
   let html = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;"><button class="csv-btn" onclick="exportDailyCSV()">⬇ 匯出 CSV</button></div>'
     + '<table class="daily-table"><thead><tr>'
-    + '<th>日期</th><th>週</th><th class="num" title="扣掉會議、內訓、請假後真正在店工作的時數；括號「全」是排班總工時">工時</th><th class="num">營收</th><th class="num">rev/h</th><th class="num" title="訂位系統的預約人數（已取消不算）">預約人數</th><th title="大組／包館／包場">團體</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；×2＝跨級加倍">日獎金</th>'
+    + '<th>日期</th><th>週</th><th class="num" title="扣掉會議、內訓、請假後真正在店工作的時數；括號「全」是排班總工時">工時</th><th class="num">營收</th><th class="num">rev/h</th><th class="num" title="訂位系統的預約人數（已取消不算）">預約人數</th><th title="大組／包館／包場">團體</th><th>等級</th><th class="num">客單</th><th class="num">vs 月均工時</th><th class="num">vs 月均營收</th><th>異常</th><th class="num" title="甜點券$100 折抵額（日獎金營收要加回）">甜點券$100</th><th class="num" title="POS 淨營收＋甜點券$100">獎金營收</th><th class="num" title="依排班工時估算；跨級加倍寫成「$500 ×2＝$1,000」">日獎金</th>'
     + '</tr></thead><tbody>';
 
   rows.forEach(r => {
@@ -2462,7 +2467,7 @@ function renderDailyTable() {
       (r.rev_per_head > 0 ? Math.round(r.rev_per_head) : ''),
       (r.hours > 0 ? hDelta.toFixed(0) : ''), (r.revenue > 0 ? rDelta.toFixed(0) : ''),
       flags.map(f => f.label).join('；'),
-      (bn ? Math.round(bn.voucher) : ''), (bn && bn.rev > 0 ? Math.round(bn.rev) : ''), (bn && bn.hours > 0 && bn.rev > 0 ? bn.total + (bn.cross ? '（×2）' : '') : '')
+      (bn ? Math.round(bn.voucher) : ''), (bn && bn.rev > 0 ? Math.round(bn.rev) : ''), (bn && bn.hours > 0 && bn.rev > 0 ? (bn.cross ? (bn.total / 2) + '×2＝' + bn.total : bn.total) : '')
     ]);
     html += '<tr' + (flagged ? ' class="flagged-row"' : '') + '>'
       + '<td>' + r.date.substring(5) + (r.is_holiday ? ' 🎉' : '') + '</td>'
@@ -2479,7 +2484,7 @@ function renderDailyTable() {
       + '<td>' + flags.map(f => '<span class="flag-pill ' + f.sev + '" title="' + f.reason.replace(/"/g,'&quot;') + '">' + f.label + '</span>').join('') + '</td>'
       + '<td class="num">' + (bn && bn.voucher > 0 ? '$' + Math.round(bn.voucher).toLocaleString() : '—') + '</td>'
       + '<td class="num">' + (bn && bn.rev > 0 ? '$' + Math.round(bn.rev).toLocaleString() : '—') + '</td>'
-      + '<td class="num">' + (!bn || !(bn.hours > 0 && bn.rev > 0) ? '—' : (bn.noTier ? '超過100h' : (bn.hit ? '<b style="color:' + (bn.cross ? '#B3261E' : '#7A4A00') + '">$' + bn.total.toLocaleString() + (bn.cross ? ' ×2' : '') + '</b>' : '未達標'))) + '</td>'
+      + '<td class="num">' + (!bn || !(bn.hours > 0 && bn.rev > 0) ? '—' : (bn.noTier ? '超過100h' : (bn.hit ? '<b style="color:' + (bn.cross ? '#B3261E' : '#7A4A00') + '">' + bonusAmtTxt(bn) + '</b>' : '未達標'))) + '</td>'
       + '</tr>';
   });
 
