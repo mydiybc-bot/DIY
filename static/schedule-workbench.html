@@ -135,6 +135,7 @@ table.mk td.m{min-width:34px;height:28px;font-size:12px}
 td.m.k1{background:#e3eef9;color:#1b4d8a;font-weight:600}
 td.m.k2{background:#fde8e8;color:#9b2c2c;font-weight:600}
 td.m.k3{background:#e6f3e7;color:var(--ok);font-weight:600}
+td.m.rs{background:var(--rest);color:#56606b}td.m .rs2{display:block;font-size:11px;font-weight:400;color:#56606b}
 tr.sum td.rv{font-weight:600}tr.sum td.rv.est{font-weight:400;color:var(--mute)}
 tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr.sum td.bn.miss{color:var(--mute);font-weight:400}
 .bsum{font-size:13px;margin:4px 0}
@@ -172,7 +173,7 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
     </details>
     <details class="sec" id="msetBox" open><summary><b>📅 本月設定</b> <span id="msetSum" class="mute"></span></summary>
       <div id="msetForm"></div>
-      <div class="sub">指休／特休／可上日 <span class="mute" style="font-weight:normal">照上面填的自動畫出，對照用（要改請改上面的字再存檔）</span></div>
+      <div class="sub">指休／特休／可上日／例休 <span class="mute" style="font-weight:normal">指休、特休、可上照上面填的自動畫出（要改請改上面的字再存檔）；例、休、國定照目前班表</span></div>
       <div class="tblwrap" id="markWrap"></div>
     </details>
     <!-- 2026-11-05 經營者：「備用」用不到 → 拿掉排班設定表（Excel）與補充說明（設定都在上面填、臨時要求用對話框講）；
@@ -330,7 +331,7 @@ function apply(j,first){
   prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
   S=j;
   $('dsb').textContent='🕒 最後更新 '+(j.updated?j.updated.replace('T',' '):'（還沒有資料）')+'　·　'+j.store+' 號店 '+j.storeName+' '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月　·　本月 AI 費用約 NT$'+(j.cost||0);
-  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();renderForms(first);renderBonus();renderPlans();
+  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();renderForms(first);renderBonus();renderMarks();renderPlans();
   var running=j.job&&j.job.status==='running';
   $('draftBtn').disabled=running;$('chatBtn').disabled=running;$('undoBtn').disabled=running||!j.canUndo;$('expBtn').disabled=!j.schedule;
   $('bonusBtn').disabled=!j.bonus;$('revBtn').disabled=!j.schedule;$('bonusAllBtn').classList.toggle('hide',!(auth&&auth.as==='hq'));
@@ -497,13 +498,16 @@ function collectMset(){
 function saveMset(){$('msetSave').disabled=true;$('msetMsg').textContent='存檔中…';
   post('mset_save',{mset:collectMset()}).then(function(j){$('msetMsg').textContent='✅ 已存';formKey='keep';saveOnly='mset';apply(j);saveOnly='';setTimeout(function(){var m=$('msetMsg');if(m)m.textContent=''},2500)})
    .catch(function(e){$('msetSave').disabled=false;$('msetMsg').textContent='⚠ '+e.message})}
-var MK={'指休':'k1','特休':'k2','可上':'k3'};
+var MK={'指休':'k1','特休':'k2','可上':'k3'},RST={'例假日':'例','休息日':'休','國定假日':'國定'};
 function renderMarks(){
   if(!S.template||!S.mset){$('markWrap').innerHTML='';return}
   var info=S.template.info,marks=S.mset.marks||{},emps=S.mset.emps||{},av=S.mset.avail_shift||{};
   var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){h+='<th class="'+(isWk(d.d)?'wk':'')+'">'+d.d+'<br>'+d.wd+'</th>'});h+='</tr></thead><tbody>';
   info.emps.forEach(function(e){var t=(emps[e.id]||{}).type||'正職';h+='<tr><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
-    info.days.forEach(function(d){var v=(marks[e.id]||{})[d.d]||'',sh=v==='可上'?(av[e.id]||{})[d.d]:'';h+='<td class="m '+(MK[v]||'')+(isWk(d.d)?' wk':'')+'"'+(sh?' title="'+esc(sh)+'"':'')+'>'+esc(sh?sh.replace(/班$/,''):v)+'</td>'});h+='</tr>'});
+    info.days.forEach(function(d){var v=(marks[e.id]||{})[d.d]||'',sh=v==='可上'?(av[e.id]||{})[d.d]:'';
+      /* 2026-11-11 經營者：班表上的例假／休息／國定也同步顯示（照目前班表，改班後跟著變） */
+      var c=((S.cells||{})[e.id]||{})[d.d]||{},r=RST[c.type]||'';
+      h+='<td class="m '+(MK[v]||(r?'rs':''))+(isWk(d.d)?' wk':'')+'"'+(sh||r?' title="'+esc([sh,r?'班表：'+c.type:''].filter(Boolean).join('；'))+'"':'')+'>'+esc(sh?sh.replace(/班$/,''):v)+(r?(v?'<span class="rs2">'+r+'</span>':r):'')+'</td>'});h+='</tr>'});
   $('markWrap').innerHTML=h+'</tbody></table>';
 }
 /* 2026-11-05：日曆改唯讀（經營者：一格一格點太慢，改在夥伴表打字） */
