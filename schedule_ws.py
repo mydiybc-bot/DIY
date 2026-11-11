@@ -2734,6 +2734,7 @@ CHAT_RULES = """
  6. 檢查結果有新的 ❌ 一定要再改到沒有才回覆；⚠ 要告訴店長。
  7. 回覆用繁體中文，不要夾雜英文字。
 - 「本月設定」是店長填的設定表；格子開頭的 [指休]、[包館] 等是 104 班表上的標籤。說「設定表上是指休」只能根據本月設定的【指休】日期，不可以用格子標籤推論。
+- 店長問「別家店能不能派人來補班」「缺的人能不能請 X 號店支援」：一定先用 support_eval 評估（約 1～3 分鐘）。它會把本店和那幾家店的人放在一起重新排一次，看本店補不補得滿、來支援的店會不會反而缺人——**只是評估，不會改任何一家店的班表**。你也**絕對不可以**改別家店的班表（apply_changes 只能改本店的人；別家店的人不在本店名單上，也寫不進本店班表）。回覆時用白話說：本店缺的日子能不能補滿、建議誰哪天來支援、對方店會不會因此缺人、他們的工時會不會超過或不足、有沒有 104 崗位要先加；最後提醒「真的要調，請魔導師在『區域排班』採用，或請兩家店長自己協調後各改各的班表」。店長沒說哪家店：先評估同區的店；本店不在任何一區（或同區沒有別家店），就問店長想找哪幾家店。
 - 店長說某個平日「視為假日／當假日／照假日排」（或反過來改回平日）：先用 set_day_type 改那天的需求（檢查會改照假日班），再用 apply_changes 排人。不要叫店長去改設定表。
 """
 
@@ -2753,6 +2754,10 @@ TOOLS = [
      "strict": True},
     {"name": "undo", "description": "復原上一次改動（不論是你改的還是店長在日曆上改的）。",
      "input_schema": {"type": "object", "additionalProperties": False, "properties": {}}, "strict": True},
+    {"name": "support_eval", "description": "【只評估、不改任何班表】把本店和別家店的人放在一起重新排一次，看別家店能不能派人來補本店缺的班、對方店會不會因此缺人。約 1～3 分鐘。回傳評估結果（不會存檔）。",
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["stores"], "properties": {
+         "stores": {"type": "array", "items": {"type": "integer"}, "description": "要評估的支援店店號（1～14）；空陣列＝本店同區的其他店"}}},
+     "strict": True},
 ]
 
 
@@ -2803,6 +2808,92 @@ def _undo(st):
     return st["check"]
 
 
+def _support_eval(store, ym, helpers, jk):
+    """2026-11-11 經營者：店長想知道別家店能不能來補班 → 把本店＋支援店的人放一起重排一次，只評估、不存檔、不改任何店。
+    回傳給 AI 看的文字（現在各店缺幾人、重排後缺幾人、誰哪天去哪家店、工時、104 崗位缺口）"""
+    store = int(store)
+    helpers = [int(x) for x in helpers or [] if int(x) != store]
+    if not helpers:
+        rg = _region_of(store)
+        helpers = [x for x in REGIONS.get(rg, []) if x != store] if rg else []
+        if not helpers:
+            return "本店不在任何一區，或同區沒有別家店。請問店長想找哪幾家店來支援（給店號）？"
+    bad = [x for x in helpers if x not in STORES and x not in TEST_STORES]
+    if bad:
+        return f"沒有這些店號：{'、'.join(map(str, bad))}"
+    stores = [store] + helpers
+    sts, cfgs, not_ready = {}, {}, []
+    for x in stores:
+        st_ = _load(x, ym)
+        cf = cfg_load(x)
+        why = "" if st_.get("template") else "還沒有這個月的 104 範本"
+        if not why and not form_ready(st_, cf):
+            why = "店別基本設定（班別、每天幾人）或本月設定還沒填好"
+        if why:
+            not_ready.append(f"{_sname(x)}（{x} 號）：{why}")
+        else:
+            sts[x], cfgs[x] = st_, cf
+    if store not in sts:
+        return "本店自己的設定還沒填好，沒辦法評估：" + next(x for x in not_ready if x.startswith(f"{_sname(store)}（"))
+    stores = [x for x in stores if x in sts]
+    if len(stores) < 2:
+        return "要評估的店都還沒準備好，沒辦法評估：" + "；".join(not_ready)
+    mss = {x: mset_view(sts[x]) for x in stores}
+    ctx = (stores, sts, cfgs, mss)
+    rg_name = "測試" if all(x in TEST_STORES for x in stores) else ""
+    rules, badn, _ = _region_rules(rg_name, ym, ctx, jk)
+    y, mth = int(ym[:4]), int(ym[4:])
+    pos = {x: (TEST_POS.get(x, "") if x in TEST_STORES else STORE_POS.get(x, "")) for x in stores}
+    units, block = [], []
+    for x in stores:
+        info = sts[x]["template"]["info"]
+        for o in stores:   # 104 崗位缺口：評估時先當作可以調，另外列出要先在 104 加崗位
+            if o != x and pos[o] and info.get("positions") and pos[o] not in info["positions"]:
+                block.append(f"{_sname(x)}的 104 範本沒有「{pos[o]}」崗位（{_sname(x)}的人要去{_sname(o)}支援，104 要先加這個崗位）")
+        units.append({"store": x, "pos": pos[x], "info": dict(info, positions=[]), "cfg": cfgs[x], "ms": mss[x], "rules": rules.get(x, []),
+                      "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
+                      "prev_tail": _tail_merged(x, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {}})
+    _job(jk, status="running", step=f"正在評估 {len(stores)} 家店一起排（只評估、不改班表，約 1～3 分鐘）")
+    r = schedule_solver.solve_multi(units, mode="pt", lend=True, time_limit=90)
+
+    def cur_gap(x):
+        chk = sts[x].get("check") or {}
+        if not sts[x].get("schedule"):
+            return "還沒排班"
+        g = [c for c in chk.get("cover") or [] if c["got"] < c["need"]]
+        return f"缺 {sum(c['need'] - c['got'] for c in g)} 人次" + (f"（{'、'.join(str(c.get('label') or c.get('day')) for c in g)}）" if g else "")
+    L = ["【只評估，沒有改任何一家店的班表】", "評估的店：" + "、".join(f"{_sname(x)}（{x} 號）" for x in stores)]
+    if not_ready:
+        L.append("沒辦法一起評估（設定沒填好）：" + "；".join(not_ready))
+    L.append("\n## 現在各店（照目前存的班表）")
+    for x in stores:
+        L.append(f"- {_sname(x)}：{cur_gap(x)}")
+    L.append("\n## 把這幾家店的人一起重排後（別店人力可互相支援）")
+    for u in r["stores"]:
+        x = u["store"]
+        g = {}
+        for c in u["gaps"]:
+            g.setdefault(c["day"], []).append(f"{c['shift']} 缺 {c['need'] - c['got']}")
+        L.append(f"- {_sname(x)}：" + ("不缺人" if not g else "還缺 " + str(sum(c["need"] - c["got"] for c in u["gaps"])) + " 人次（" + "；".join(f"{d} 號 {'、'.join(v)}" for d, v in sorted(g.items())) + "）"))
+        hrs = [f"{h['name']} {h['hours']:g}h" + (f"／目標 {h['target']:g}h" if h.get("target") else (f"／最低 {h['min']:g}h" if h.get("min") else ""))
+               for h in u["hours"].values()]
+        L.append("  每人工時：" + "、".join(hrs))
+        if u.get("unmet"):
+            nm = {e["id"]: e["name"] for e in sts[x]["template"]["info"]["emps"]}
+            L.append("  備註規則沒做到：" + "；".join(f"{_rule_text(q['rule'], nm)}（{'、'.join(map(str, q['days']))} 號）" for q in u["unmet"]))
+    mv = r["moves"]
+    L.append(f"\n## 建議的支援（{len(mv)} 人次）")
+    L += [f"- {m['day']} 號 {_sname(m['store'])}的 {m['name']} 去{_sname(m['to'])}上{m['shift']}" for m in sorted(mv, key=lambda m: (m["day"], m["store"]))] or ["- 不用調人"]
+    if block:
+        L.append("\n## 104 要先處理")
+        L += [f"- {b}" for b in dict.fromkeys(block)]
+    for x, v in badn.items():
+        if v:
+            L.append(f"（{_sname(x)}有備註 AI 讀不懂，這次沒套：{'；'.join(v)}）")
+    L.append(f"\n（程式排了 {r['stats']['seconds']} 秒，結果：{r['stats']['status']}。這是重排的建議，跟各店現在的班表可能不一樣；真的要調，請魔導師在「區域排班」採用，或兩家店長協調後各改各的班表。）")
+    return "\n".join(L)
+
+
 def _chat_system(st):
     cfg = cfg_load(st["store"])
     return (RULES + CHAT_RULES + "\n## 本店這個月的設定（AI 從設定表讀到的）\n" +
@@ -2851,6 +2942,8 @@ def _chat_turn(st, text, model, k, tag=" "):
                 if b.name == "undo":
                     chk = _undo(st)
                     out = "沒有可以復原的改動" if chk is None else "已復原。\n" + check_text(chk)
+                elif b.name == "support_eval":   # 只評估、不改班表、不存檔
+                    out = _support_eval(st["store"], st["ym"], b.input.get("stores") or [], k)
                 elif b.name == "set_day_type":
                     chk = _set_day_type(st, b.input.get("days") or [], b.input.get("holiday"))
                     out = "已改日子類型。\n" + check_text(chk)
