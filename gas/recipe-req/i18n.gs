@@ -780,7 +780,7 @@ function i18nKick_(p) {
 }
 function i18nDaily() {
   var t0 = Date.now(), ref = null;
-  try { ref = i18nRefresh_(false, t0 + 180000); } catch (e) { i18nLog_('排程', 'refresh', '', '', 'error', errMsg_(e)); return; }
+  try { ref = i18nRefresh_(true, t0 + 180000); }   /* 2026-11-11 改全部重抓：後台「新增步驟」不會改食譜更新日（11/10 一平匙說明漏了 22 支）；只抓 38 頁約 16 秒，內容沒變指紋不變、不會重翻 */ catch (e) { i18nLog_('排程', 'refresh', '', '', 'error', errMsg_(e)); return; }
   i18nLog_('排程', 'refresh', '', '', 'ok', '檢查 ' + ref.checked + '、重抓 ' + ref.fetched + '、內容有變 ' + ref.changed + '、下架 ' + ref.gone + (ref.errors.length ? '；' + ref.errors.join('；') : ''));
   if (i18nProp_('I18N_AUTO') !== '1') return;
   i18nAutoStart_();
@@ -826,6 +826,8 @@ function i18nAutoSet_(p) {
   i18nWriteKey_(p);
   if (p.on != null) i18nProp_('I18N_AUTO', Number(p.on) ? '1' : '0');
   i18nEnsureTrigger_();
+  var ref = p.refresh ? i18nRefresh_(true, Date.now() + 180000) : null;   /* 立刻全部重抓原文（同每天 06:30） */
+  if (ref) i18nLog_('Claude Code', 'refresh', '', '', 'ok', '檢查 ' + ref.checked + '、重抓 ' + ref.fetched + '、內容有變 ' + ref.changed + '、下架 ' + ref.gone + (ref.errors.length ? '；' + ref.errors.join('；') : ''));
   var st = Number(p.on) && p.start ? i18nAutoStart_() : null;
   if (p.test && p.test.id && p.test.lang) {   /* 實測一組：指定的頁強制重翻＋回讀（花一點 API）；同自動排程的流程與放行規則 */
     var tid = String(p.test.id).toLowerCase(), tl = String(p.test.lang), tk = tid + '|' + tl;
@@ -833,7 +835,7 @@ function i18nAutoSet_(p) {
     try { st = i18nWork_(tid, tl, 'Claude Code 實測', false, { auto: true, deadline: Date.now() + 300000, redo: (p.test.pages || []).map(Number) }); } finally { i18nRelease_(tk); }
   }
   var trig = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); }).filter(function (f) { return /^i18n/.test(f); });
-  return { data: { auto: i18nProp_('I18N_AUTO') === '1', start: st, triggers: trig, pending: i18nPending_().length } };
+  return { data: { auto: i18nProp_('I18N_AUTO') === '1', refresh: ref, start: st, triggers: trig, pending: i18nPending_().length } };
 }
 ACTIONS.i18nAutoSet = function (p, a) { return i18nAutoSet_(p, a); };
 NOAUTH.i18nAutoSet = 1; SELFLOCK.i18nAutoSet = 1;
@@ -1299,3 +1301,45 @@ function i18nTestNow() {
   var s = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.filter(function (x) { return x.state === 'ok'; })[0];
   if (s) Logger.log(JSON.stringify(i18nWork_(s.id, 'ja', '編輯器')));
 }
+
+/* 同步檢查（2026-11-11 經營者：「檢查外語食譜是不是和自己做食譜實體保持同步更新到今天」）：只讀、不寫任何表。
+   當場讀後台 /Recipes 清單＋每支台灣區英文啟用中食譜的內容，跟 i18n_src（平板用的原文）比：清單有沒有多／少、更新日、內容指紋。
+   另列中文版（同名、台灣、繁中、啟用）更新日比英文版晚的（英文版可能還沒跟著改）。要唯讀預覽通行碼。 */
+function i18nSyncCheck_(p) {
+  if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) { Utilities.sleep(1000); throw fail_('要通行碼', 'auth'); }
+  var t0 = Date.now(), sess = rbSession_(), html = rbAuthedGet_(sess, '/Recipes').text; rbSaveSession_(sess);
+  var rows = nmListRows_(html), meta = lgListMeta_(html);
+  if (rows.length < 100) throw fail_('後台食譜清單只讀到 ' + rows.length + ' 支', 'rbpage');
+  rows.forEach(function (r) { var m = meta[String(r.id).toLowerCase()] || {}; r.id = String(r.id).toLowerCase(); r.region = m.region || ''; });
+  var live = rows.filter(function (r) { return r.region === '台灣' && r.lang === '英文' && r.status === 'Active'; });
+  var sm = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows, src = {}; sm.forEach(function (s) { src[s.id] = s; });
+  var pm = i18nPickMap_(), onLive = {}, out = [];
+  var ids = live.map(function (r) { return r.id; }), pages = [];
+  for (var i = 0; i < ids.length; i += 5) pages = pages.concat(i18nFetchPages_(ids.slice(i, i + 5)));
+  live.forEach(function (r, i) {
+    onLive[r.id] = 1;
+    var s = src[r.id], o = { id: r.id, name: r.name, upd_now: r.upd, upd_tab: s ? s.upd : '', state: s ? s.state : '（平板沒有）', on: i18nOn_(pm, r.id) };
+    try {
+      var pg = pages[i]; if (pg.code !== 200) throw new Error('HTTP ' + pg.code);
+      var nw = i18nParse_(pg.text, r.id); o.same = !!s && i18nFp_(nw) === s.fp;
+      if (s && !o.same) {   /* 差在哪：頁數、哪幾頁標題／內文不同（列前 6 處） */
+        var old = i18nReadJ_(sm[0] ? i18nMeta_('i18n_src', I18N_SRC_HEAD).sh : null, s._r, I18N_SRC_HEAD) || { slides: [] };
+        o.pages_now = nw.slides.length; o.pages_tab = old.slides.length; o.diff = [];
+        if (nw.name !== old.name) o.diff.push('名稱'); if (nw.pres !== old.pres) o.diff.push('保存方式');
+        var ok = {}; old.slides.forEach(function (x) { ok[i18nSlideKey_(x)] = 1; });
+        nw.slides.forEach(function (x, j) { if (!ok[i18nSlideKey_(x)] && o.diff.length < 8) o.diff.push('第' + (j + 1) + '頁「' + x.t + '」：' + i18nPlain_(x.h).replace(/\s+/g, ' ').slice(0, 60)); });
+      }
+    } catch (e) { o.same = null; o.err = errMsg_(e); }
+    out.push(o);
+  });
+  var extra = sm.filter(function (s) { return s.state === 'ok' && !onLive[s.id]; }).map(function (s) { return { id: s.id, name: s.name }; });
+  var zh = {}; rows.forEach(function (r) { if (r.region === '台灣' && r.lang === '繁體中文' && r.status === 'Active') zh[i18nNameKey_(r.name)] = r; });
+  var zhNewer = [];
+  live.forEach(function (r) {
+    var k = i18nNameKey_(String(r.name).split('｜').slice(1).join('｜')), z = k && zh[k];
+    if (z && z.upd > r.upd) zhNewer.push({ en: r.name, en_upd: r.upd, zh: z.name, zh_upd: z.upd });
+  });
+  return { data: { at: now_(), backend_total: rows.length, live: live.length, src_ok: sm.filter(function (s) { return s.state === 'ok'; }).length, refresh_at: i18nProp_('I18N_REFRESH_AT'), items: out, extra: extra, zh_newer: zhNewer, sec: Math.round((Date.now() - t0) / 1000) } };
+}
+ACTIONS.i18nSyncCheck = function (p, a) { return i18nSyncCheck_(p, a); };
+NOAUTH.i18nSyncCheck = 1; READS.i18nSyncCheck = 1;
