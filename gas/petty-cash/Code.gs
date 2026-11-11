@@ -19,7 +19,7 @@
      每期每單位（或每人）限次、過截止日自動算下一期、截止前可刪可重送、專人審核（通過／退回）、退回時交辦到該店「門市今日」。
      動作與規則見檔尾「總部申請作業」那一段。read 多收 kind（advance／vendor／training）調整 AI 提示。
    ===================================================================== */
-var VER = 'pc-2026-11-03.1';
+var VER = 'pc-2026-11-11.1';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -428,7 +428,7 @@ function authSetup_() {
      調撥 m25：每月 25 → 26 日起算下個月
      訓練費 q15：1/15、4/15、7/15、10/15 → 1/16～4/15＝第一季（1～3 月）…
    額度（dim_limit 分頁，專人可改）：每期每「單位」1 次；代墊款在體驗中心算「人」；訓練費算人；廠商款分常態（1 次）／非常態（不限）。
-     退回的、刪除的不佔額度。
+     退回的、刪除的不佔額度；測試資料（編號 DEMO 開頭、申請人姓名含「測試」）也不佔（2026-11-11，isTest_）。
    刪除：該期截止日（含當天）前、而且還沒審核通過 → 可刪；刪除＝標記，資料留著。
    通知：退回時用體驗中心身分（task_hq，密碼由本程式從 dim_auth 讀、不經人手）向公告 API 交辦一件「指定日期＝今天」給那家店（門市今日「今天要做」）；
      出貨中心、體驗中心沒有門市今日，只在 hub 卡與申請頁看得到。
@@ -612,8 +612,11 @@ function apView_(r, full) {
 function photoIds_(r) { try { var a = JSON.parse(r.photos || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
 function canDel_(r) { return r.deleted !== 'Y' && r.status !== 'approved' && apToday_() <= r.deadline; }
 function apFind_(tb, id) { return tb.rows.filter(function (x) { return x.id === String(id) && x.deleted !== 'Y'; })[0]; }
+/* 測試資料不佔額度（2026-11-11 經營者）：編號 DEMO 開頭（示範假申請）或申請人姓名含「測試」 */
+function isTest_(r) { return /^DEMO/i.test(String(r.id || '')) || /測試/.test(String(r.who || '')); }
 function countUsed_(rows, type, sub, unit, who, periodKey, lim) {
   return rows.filter(function (r) {
+    if (isTest_(r)) return false;
     if (r.deleted === 'Y' || r.type !== type || r.unit !== unit || r.period !== periodKey) return false;
     if (r.status === 'rejected') return false;
     if (type === 'vendor' && r.sub !== sub) return false;
@@ -639,7 +642,7 @@ function apMe_(b) {
     subs.forEach(function (sub) {
       var lim = limitOf_(k, sub, unit), used = countUsed_(mine, k, sub, unit, who, pr.key, lim);
       var usedBy = {};
-      if (lim.scope === 'person') mine.forEach(function (r) { if (r.type === k && r.period === pr.key && r.status !== 'rejected' && (k !== 'vendor' || r.sub === sub)) usedBy[r.who] = (usedBy[r.who] || 0) + 1; });
+      if (lim.scope === 'person') mine.forEach(function (r) { if (!isTest_(r) && r.type === k && r.period === pr.key && r.status !== 'rejected' && (k !== 'vendor' || r.sub === sub)) usedBy[r.who] = (usedBy[r.who] || 0) + 1; });
       info.quota[sub || '_'] = { scope: lim.scope, max: lim.max, used: used, usedBy: usedBy, ok: lim.max === 0 || used < lim.max };
     });
     periods[k] = info;
