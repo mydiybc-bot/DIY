@@ -1162,6 +1162,7 @@ def form_text(st, cfg):
     L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（勞基法七休一）")
     L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
     L.append("指休原則\t正職每月可自訂 4 天：平日 3 天、假日（週末、國定假日）1 天；超過的照店長填的排，但要在報告提醒店長")
+    L.append("同一天指休\t同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開休假日")
     if cfg.get("support"):
         L.append("跨店支援夥伴\t" + cfg["support"].replace("\n", "；"))
     if cfg.get("rules"):
@@ -1273,6 +1274,17 @@ def _pick_off_warns(st, names, etype):
         w = len(ds) - h
         if len(ds) > PICK_OFF["total"] or h > PICK_OFF["holiday"] or w > PICK_OFF["weekday"]:
             out.append(f"{names[eid]}：指休 {len(ds)} 天（平日 {w}、假日 {h}），原則上每月可自訂 4 天：平日 3 天、假日 1 天；超過的要店長視營業狀況決定")
+    # 2026-11-11 經營者：同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開
+    by = {}
+    for eid, mk in (ms.get("marks") or {}).items():
+        if eid in names and etype.get(eid) != "兼職":
+            for d, v in mk.items():
+                if v == "指休":
+                    by.setdefault(int(d), []).append(names[eid])
+    lab = {d["d"]: d["label"] for d in info["days"]}
+    for d in sorted(by):
+        if len(by[d]) > 1:
+            out.append(f"{lab.get(d, d)}：{'、'.join(by[d])} 同一天指休，請店長協調夥伴錯開休假日")
     return out
 
 
