@@ -3473,6 +3473,163 @@ def _ssl_ctx():
         return ssl.create_default_context()
 
 
+# ── 每人每月早班／晚班次數（2026-11-13 經營者：排班不考慮早晚班公平，但班表要列出每人每月早、晚班次數，一年份）──
+# 早班＝開店那一批、晚班＝做到打烊那一批；中班、全天班、特休／補休不算。
+# 開店／打烊時間＝那個月「平日」「假日」各自最常見的當天最早上班、最晚下班時間（單看當天會被偶爾的事務班、開會拉歪）。
+# 資料：這個月用工作台目前的班表；其他月份先看工作台存檔（104 每天同步），沒有再讀排班分析資料倉（fact_schedule，2026-03 起才有）。
+_EL_OFF_RE = re.compile(r"特休|補休")
+_el_lock = threading.Lock()
+
+
+def _el_classify(days):
+    """days＝[{"wk": 假日?, "cells": [(誰, 上班分鐘, 下班分鐘)]}] → {誰: [早, 晚]}"""
+    import collections
+    op, cl = {}, {}
+    for wk in (False, True):
+        a = collections.Counter(min(c[1] for c in d["cells"]) for d in days if d["wk"] == wk and d["cells"])
+        b = collections.Counter(max(c[2] for c in d["cells"]) for d in days if d["wk"] == wk and d["cells"])
+        if a:
+            top = max(a.values())
+            op[wk] = min(t for t, n in a.items() if n == top)
+            top = max(b.values())
+            cl[wk] = max(t for t, n in b.items() if n == top)
+    out = {}
+    for d in days:
+        if d["wk"] not in op:
+            continue
+        o, c = op[d["wk"]], cl[d["wk"]]
+        for who, a, b in d["cells"]:
+            n = out.setdefault(who, [0, 0])
+            if a <= o + 45 and b <= c - 60:
+                n[0] += 1
+            elif b >= c - 45 and a >= o + 60:
+                n[1] += 1
+    return out
+
+
+def _el_from_state(st):
+    """工作台的一份班表 → {姓名: [早, 晚]}；沒有班表回 None"""
+    tpl, sch = st.get("template"), st.get("schedule") or {}
+    if not tpl or not sch:
+        return None
+    info = tpl["info"]
+    shifts, dtypes = (_ext(st) or {}).get("shifts") or {}, set(info["dayTypes"])
+    y, mo = int(st["ym"][:4]), int(st["ym"][4:])
+    days = []
+    for d in info["days"]:
+        cells = []
+        for e in info["emps"]:
+            try:
+                c = parse_cell((sch.get(e["id"]) or {}).get(str(d["d"]), ""), shifts, dtypes)
+            except (ValueError, TypeError):
+                continue
+            segs = [x for x in c["segs"] if x and x[0] and x[1] and not _EL_OFF_RE.search((x[2] if len(x) > 2 else "") or "")]
+            if not segs or _EL_OFF_RE.search(c.get("dtag") or ""):
+                continue
+            try:
+                a, b = schedule_solver._mins(segs[0][0]), schedule_solver._mins(segs[-1][1])
+            except (ValueError, TypeError):
+                continue
+            cells.append((e["name"].strip(), a, b + (1440 if b < a else 0)))
+        days.append({"wk": d["wd"] in ("六", "日") or _tw_off(dt.date(y, mo, d["d"])), "cells": cells})
+    return _el_classify(days) if any(d["cells"] for d in days) else None
+
+
+def _el_from_gas(store, ym):
+    """排班分析資料倉那個月的班表 → {姓名: [早, 晚]}；那個月沒資料回 {}；讀不到丟 Exception"""
+    src = TEST_SRC if int(store) in TEST_STORES else store
+    url = REV_API + "?" + urllib.parse.urlencode({"action": "getStoreDailyData", "store_id": int(src), "month": f"{ym[:4]}-{ym[4:]}", "callback": "cb"})
+    with urllib.request.urlopen(url, timeout=90, context=_ssl_ctx()) as r:
+        t = r.read().decode("utf-8")
+    m = re.search(r"^\s*cb\((.*)\)\s*;?\s*$", t, re.S)
+    d = json.loads(m.group(1) if m else t)
+    if not d.get("ok"):
+        raise ValueError(str(d.get("error") or "班表資料讀不到"))
+    days = []
+    for row in d.get("daily") or []:
+        cells = []
+        for e in row.get("employees") or []:
+            if _EL_OFF_RE.search(str(e.get("cell") or "") + str(e.get("note") or "")):
+                continue
+            segs = re.findall(r"(\d{2})(\d{2})-(\d{2})(\d{2})", str(e.get("shift") or ""))
+            if not segs or not str(e.get("name") or "").strip():
+                continue
+            a, b = int(segs[0][0]) * 60 + int(segs[0][1]), int(segs[-1][2]) * 60 + int(segs[-1][3])
+            cells.append((str(e["name"]).strip(), a, b + (1440 if b < a else 0)))
+        days.append({"wk": bool(row.get("is_weekend") or row.get("is_holiday")), "cells": cells})
+    return _el_classify(days)
+
+
+def el_year(st):
+    """班表下方「每人每月早班／晚班次數」：這份班表所在那一年 1～12 月 → {year, months, rows, note}"""
+    import concurrent.futures
+    store, ym = st["store"], st["ym"]
+    year = ym[:4]
+    cp = _dir() / "el_cache.json"
+    with _el_lock:
+        try:
+            cache = json.loads(cp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cache = {}
+    now = time.time()
+    today = dt.date.today()
+    recent = {f"{today.year}{today.month:02d}", _prev_ym(f"{today.year}{today.month:02d}")}
+    data, need, failed = {}, [], []
+    for mo in range(1, 13):
+        mm = f"{year}{mo:02d}"
+        if mm == ym:
+            data[mm] = _el_from_state(st)
+            continue
+        p = _dir() / f"{_key(store, mm)}.json"
+        got = None
+        if p.exists():
+            try:
+                got = _el_from_state(json.loads(p.read_text(encoding="utf-8")))
+            except Exception:   # noqa: BLE001
+                got = None
+        if got is not None:
+            data[mm] = got
+            continue
+        if mm < "202603":            # 排班分析資料倉 2026-03 才開始有班表
+            data[mm] = None
+            continue
+        c = cache.get(f"{int(store)}-{mm}")
+        ttl = 6 * 3600 if (mm in recent or mm > max(recent)) else 30 * 86400
+        if c and now - c.get("t", 0) < ttl:
+            data[mm] = c["cnt"] or None
+        else:
+            need.append(mm)
+    if need:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {mm: ex.submit(_el_from_gas, store, mm) for mm in need}
+        for mm, f in futs.items():
+            try:
+                cnt = f.result()
+                cache[f"{int(store)}-{mm}"] = {"t": now, "cnt": cnt}
+                data[mm] = cnt or None
+            except Exception:   # noqa: BLE001
+                old = cache.get(f"{int(store)}-{mm}")
+                data[mm] = (old or {}).get("cnt") or None
+                failed.append(int(mm[4:]))
+        with _el_lock:
+            try:
+                cur = json.loads(cp.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                cur = {}
+            cur.update({k: v for k, v in cache.items() if k.split("-")[1] in need and k.startswith(f"{int(store)}-")})
+            atomic_write_json(cp, cur)
+    ext = _ext(st) if st.get("template") else {}
+    typ = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
+    rows = []
+    for e in (st.get("template") or {}).get("info", {}).get("emps") or []:
+        nm = e["name"].strip()
+        ms = {str(mo): ((data[f"{year}{mo:02d}"] or {}).get(nm) if data[f"{year}{mo:02d}"] is not None else None) for mo in range(1, 13)}
+        rows.append({"id": e["id"], "name": e["name"], "type": typ.get(e["id"], ""), "m": ms,
+                     "total": [sum((v or [0, 0])[i] for v in ms.values()) for i in (0, 1)]})
+    return {"ok": True, "year": int(year), "cur": int(ym[4:]), "has": [mo for mo in range(1, 13) if data[f"{year}{mo:02d}"] is not None],
+            "rows": rows, "failed": failed}
+
+
 def fetch_rev(store, ym):
     """排班分析 GAS getStoreDailyData（bonus=1）→ {日: {net, voucher, qty, rev}}；失敗丟 Exception"""
     store = TEST_SRC if int(store) in TEST_STORES else store
@@ -3997,6 +4154,10 @@ def handle(path, body):
     with _glock:
         running = (_jobs.get(k) or {}).get("status") == "running"
 
+    if act == "el_year":   # 2026-11-13：班表下方每人每月早／晚班次數（畫面載入後另外讀，不拖慢主畫面）
+        with lk:
+            st = _load(store, ym)
+        return 200, el_year(st)
     if act == "state":
         rev_est_ensure(store, ym)
         with lk:

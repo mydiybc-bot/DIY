@@ -207,6 +207,7 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
       <span class="lt-g">🟢 人效高</span><span class="lt-y">🟡 正常</span><span class="lt-r">🔴 偏低</span><span>營業額粗體＝實際、「預」＝預估</span></div>
     <div id="s104" class="job hide" style="background:#eef5ff;border-color:#c9dcf5"></div>
     <div class="tblwrap" id="tblWrap"><div class="mute" style="padding:12px">還沒有班表</div></div>
+    <div id="elBox" style="margin-top:12px"></div>
   </div>
 
   <div class="card" id="bonusCard">
@@ -323,6 +324,33 @@ $('storeSel').onchange=$('ymSel').onchange=function(){try{localStorage.setItem('
   $('dsb').textContent='🕒 讀取中…';refresh(true)};
 
 /* ── 讀狀態、重畫結果區（不碰輸入框） ── */
+/* 2026-11-13 經營者：班表下方列出每人每月早班、晚班次數（一年份；只顯示、排班不考慮） */
+var elKey='',elData=null;
+function loadEL(){
+  if(!S||!S.template){elKey='';elData=null;$('elBox').innerHTML='';return}
+  var k=S.store+'|'+S.ym+'|'+(S.updated||'');
+  if(k===elKey)return;
+  var st=S.store,ym=S.ym;elKey=k;
+  if(!elData||elData._k!==st+'|'+ym)$('elBox').innerHTML='<div class="mute">📊 每人每月早／晚班次數：讀取中…（第一次約 10～30 秒）</div>';
+  post('el_year').then(function(j){if(!S||S.store!==st||S.ym!==ym)return;j._k=st+'|'+ym;elData=j;renderEL()})
+    .catch(function(e){if(!S||S.store!==st||S.ym!==ym)return;elKey='';$('elBox').innerHTML='<div class="mute">📊 每人每月早／晚班次數讀不到（'+esc(e.message)+'）　<a href="#" onclick="loadEL();return false">再試一次</a></div>'});
+}
+function renderEL(){
+  var j=elData;if(!j||!j.rows||!j.rows.length){$('elBox').innerHTML='';return}
+  var td='padding:4px 6px;border:1px solid var(--line);text-align:center;white-space:nowrap';
+  var h='<div style="font-weight:700;margin-bottom:4px">📊 '+j.year+' 年每人每月早班／晚班次數</div>'
+    +'<div class="tblwrap"><table style="border-collapse:collapse;font-size:13px;width:100%"><tr style="background:#f6f1ea"><th style="'+td+';text-align:left">夥伴</th>';
+  for(var m=1;m<=12;m++)h+='<th style="'+td+(m===j.cur?';background:var(--chg)':'')+'">'+m+' 月</th>';
+  h+='<th style="'+td+'">全年合計</th></tr>';
+  j.rows.forEach(function(r){
+    h+='<tr><td style="'+td+';text-align:left">'+esc(r.name)+(r.type==='兼職'?' <span class="mute">兼</span>':'')+'</td>';
+    for(var m=1;m<=12;m++){var v=r.m[m];h+='<td style="'+td+(m===j.cur?';background:var(--chg)':'')+'">'+(v&&(v[0]||v[1])?v[0]+'／'+v[1]:'<span class="mute">—</span>')+'</td>'}
+    h+='<td style="'+td+';font-weight:700">'+r.total[0]+'／'+r.total[1]+'</td></tr>'});
+  h+='</table></div><div class="mute" style="margin-top:4px">格子＝早班次數／晚班次數。早班＝開店那一批、晚班＝做到打烊那一批；中班、全天班、特休不算。'
+    +j.cur+' 月照上面目前的班表算，改班後會跟著變；其他月份是當時的班表'+(j.year===2026?'（2026 年 3 月以前沒有班表資料）':'')+'。只供參考，排班不會自動調整早晚班。'
+    +(j.failed&&j.failed.length?'<br>⚠ '+j.failed.join('、')+' 月這次沒讀到，稍後重新整理再試。':'')+'</div>';
+  $('elBox').innerHTML=h;
+}
 var retryT=null;
 function refresh(first){return post('state').then(function(j){apply(j,first)}).catch(function(e){$('dsb').textContent='⚠ '+e.message+(S?'':'（10 秒後自動再試）');if(!S&&auth){clearTimeout(retryT);retryT=setTimeout(function(){refresh(first)},10000)}})}   /* 2026-11-11：換店／換月第一次讀失敗會一直停在「讀取中…」 */
 function apply(j,first){
@@ -332,7 +360,7 @@ function apply(j,first){
   prevRaw={};for(var e2 in j.schedule||{}){var r2=j.schedule[e2]||{};for(var d2 in r2)prevRaw[e2+'|'+d2]=r2[d2]}
   S=j;
   $('dsb').textContent='🕒 最後更新 '+(j.updated?j.updated.replace('T',' '):'（還沒有資料）')+'　·　'+j.store+' 號店 '+j.storeName+' '+j.ym.slice(0,4)+' 年 '+(+j.ym.slice(4))+' 月　·　本月 AI 費用約 NT$'+(j.cost||0);
-  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();renderForms(first);renderBonus();renderMarks();renderPlans();
+  renderFiles();renderJob();render104();renderTable();renderCheck();renderReport();renderChat();renderForms(first);renderBonus();renderMarks();renderPlans();loadEL();
   var running=j.job&&j.job.status==='running';
   $('draftBtn').disabled=running;$('chatBtn').disabled=running;$('undoBtn').disabled=running||!j.canUndo;$('expBtn').disabled=!j.schedule;
   $('bonusBtn').disabled=!j.bonus;$('revBtn').disabled=!j.schedule;$('bonusAllBtn').classList.toggle('hide',!(auth&&auth.as==='hq'));
