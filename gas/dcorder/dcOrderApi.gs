@@ -1,5 +1,7 @@
 /**
- * diybc-dcorder-api  v1.9（2026-11-12 盤點輪次存雲端）
+ * diybc-dcorder-api  v1.9.1（2026-11-12 新竹按重量也一箱一張托運單）
+ *
+ * v1.9.1：新竹司機反映多件合成一個貨號、掃描機只跳 1 件 → hctCreate 按重量也改一箱一張（件數 1、總重量平均分），上限 20 箱。
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
  *
  * v1.9：新分頁 dc_invsess（一店一列）：盤點頁「延續／新的一週（重新盤點）」原本只存在裝置本機，
@@ -55,7 +57,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.9-invsess';
+var DCO_VER = 'v1.9.1-hct1box';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -949,7 +951,7 @@ function hctPad2_(n) { n = String(n); return n.length < 2 ? '0' + n : n; }
 function hctEpino_(id, seq) { return String(id).replace(/[^A-Za-z0-9]/g, '') + hctPad2_(seq); }   /* 只能英文和數字 */
 
 /* 產生（或同日更正）托運單：{id, cs, boxes, weight, sizes:[60,90…], rcv:{name, tel, addr}}
-   W（重量）：一筆＝boxes 箱＋總重量；S（總長）：一箱一筆，sizes 每箱尺寸。
+   W（重量）：v1.9 起也一箱一筆（總重量平均分）；S（總長）：一箱一筆，sizes 每箱尺寸。
    同一天、同客代、還沒交寄 → 第 i 箱沿用原託運單號＋貨號（新竹當更正）；多的新開、少的作廢。換客代或隔天 → 舊的全部作廢重開。 */
 function hctCreate_(b) {
   var id = dcoStr_(b.id), cfg = hctCfg_(), cs = hctCsOf_(cfg, b.cs) || cfg.cs[0];
@@ -963,9 +965,10 @@ function hctCreate_(b) {
     items = sizes.map(function (s) { return { ejamt: 1, eqamt: s }; });
   } else {
     var boxes = Math.floor(dcoNum_(b.boxes)), weight = Math.ceil(dcoNum_(b.weight));
-    if (!(boxes >= 1 && boxes <= 999)) return { ok: false, error: '件數要填 1～999' };
+    if (!(boxes >= 1 && boxes <= 20)) return { ok: false, error: '件數要填 1～20 箱' };
     if (!(weight >= 1 && weight <= 99999)) return { ok: false, error: '重量要填 1 公斤以上（小數會進位）' };
-    items = [{ ejamt: boxes, eqamt: weight }];
+    /* v1.9（2026-11-12）：新竹司機掃描機不會跳多件 → 改一箱一張托運單（件數 1），總重量平均分到每箱（整數、每箱至少 1 公斤） */
+    for (var bi = 0; bi < boxes; bi++) items.push({ ejamt: 1, eqamt: Math.max(1, Math.floor(weight / boxes) + (bi < weight % boxes ? 1 : 0)) });
   }
   var tl = dcoRead_(SH_LINE), rs = dcoRowsOf_(tl, id);
   if (!rs.length) return { ok: false, error: '找不到訂單' };
