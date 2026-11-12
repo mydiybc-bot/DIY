@@ -1162,7 +1162,6 @@ def form_text(st, cfg):
         segs = [f"{a}-{b}" for a, b in r["segs"]] + [""] * (3 - len(r["segs"]))
         L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
     L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（公司規定；勞基法七休一是 6 天）")
-    L.append("早晚班公平\t正職的早班、晚班次數要公平，兩個月一期（11～12 月、1～2 月…）：每期第二個月把第一個月多排的早班／晚班補回來（備註指定只能上某班的人除外）")
     L.append("休假分散\t正職休假要平均散開：連休最多 2 天（店長指休、特休自己連成的不算），避免「休、上 1 天、又休」")
     L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
     L.append("指休原則\t正職每月可自訂 4 天：平日 3 天、假日（週末、國定假日）1 天；超過的照店長填的排，但要在報告提醒店長")
@@ -1467,90 +1466,6 @@ def _tail_merged(store, ym, ids):
     except Exception:   # noqa: BLE001
         pass
     return out
-
-
-# ── 早晚班公平（2026-11-12 經營者：每個人的早班、晚班要公平，用兩個月看；上個月早 5 晚 10，這個月就早 10 晚 5）──
-# 兩個月一期（經營者 2026-11-12 追加）：11～12 月一期、1～2 月下一期…（單數月＝一期的第一個月）。
-# 第一個月照本店早晚比例平均排；第二個月把第一個月多排的早班／晚班補回來；每期各自結算、不帶到下一期。
-
-
-def _el_period(ym):
-    """這個月所在的那一期 → (第一個月, 第二個月)"""
-    y, mo = int(ym[:4]), int(ym[4:])
-    if mo % 2:
-        return ym, (f"{y + 1}01" if mo == 12 else f"{y}{mo + 1:02d}")
-    return f"{y}{mo - 1:02d}", ym
-
-
-_EL_SKIP_RE = re.compile(r"特休|補休")
-
-
-def _el_kind(c, sh):
-    """這格算早班還是晚班：用上班、下班時間找本店最接近的班別（104 同步來的格子只有時間、沒有班別名）；中班、看不出來的回 ''"""
-    segs = [x for x in c.get("segs") or [] if x and x[0] and x[1] and not _EL_SKIP_RE.search((x[2] if len(x) > 2 else "") or "")]
-    if not segs or not sh or _EL_SKIP_RE.search(c.get("dtag") or ""):
-        return ""
-    try:
-        a, b = schedule_solver._mins(segs[0][0]), schedule_solver._mins(segs[-1][1])
-    except (ValueError, TypeError):
-        return ""
-    if b < a:
-        b += 1440
-    best = min(sh.values(), key=lambda s: abs(s["start"] - a) + abs(s["end"] - b))
-    return best["kind"] if best["kind"] in ("早", "晚") else ""
-
-
-def _el_count(st, sh):
-    """一份班表每人早班、晚班各幾次 → {工號: [早, 晚]}"""
-    out = {}
-    tpl, sch = st.get("template"), st.get("schedule") or {}
-    if not tpl or not sch or not sh:
-        return out
-    shifts, dtypes = (_ext(st) or {}).get("shifts") or {}, set(tpl["info"]["dayTypes"])
-    for eid, row in sch.items():
-        n = [0, 0]
-        for v in (row or {}).values():
-            try:
-                kd = _el_kind(parse_cell(v, shifts, dtypes), sh) if v else ""
-            except (ValueError, TypeError):
-                continue
-            if kd:
-                n[0 if kd == "早" else 1] += 1
-        out[eid] = n
-    return out
-
-
-def _el_month(store, ym, sh):
-    p = _dir() / f"{_key(store, ym)}.json"
-    if not p.exists():
-        return {}
-    try:
-        return _el_count(json.loads(p.read_text(encoding="utf-8")), sh)
-    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return {}
-
-
-def _el_debt(store, ym, ft_ids):
-    """排初稿用：一期的第二個月才有——這些正職在第一個月「早班排多了幾個」（×100；負的＝晚班排多了）。
-    標準＝第一個月這群正職合計的早晚比例，所以大家加起來是 0，只看誰比同事多。"""
-    try:
-        m1, m2 = _el_period(ym)
-        if ym != m2:
-            return {}
-        cnt = _el_month(store, m1, schedule_solver.shift_info(cfg_load(store)))
-        rows = {e: cnt[e] for e in ft_ids if sum(cnt.get(e) or [0])}
-        tot = sum(a + b for a, b in rows.values())
-        if not tot or len(rows) < 2:
-            return {}
-        r = sum(a for a, _ in rows.values()) / tot
-        out = {e: int(round(100 * (a - (a + b) * r))) for e, (a, b) in rows.items()}
-        return {e: max(-1200, min(1200, v)) for e, v in out.items() if v}
-    except Exception:   # noqa: BLE001 — 讀不到就不帶，照樣排
-        return {}
-
-
-def _ft_ids(info, ms):
-    return {e["id"] for e in info["emps"] if (((ms.get("emps") or {}).get(e["id"]) or {}).get("type") or "正職") == "正職"}
 
 
 def _prev_tail_all(ym, ids):
@@ -2200,24 +2115,6 @@ def live_report(st):
         for r in sup:
             tg = f"／目標 {float(r['target']):g}h" if r["target"] else ""
             L.append(f"- {r['name']}：{'、'.join(str(d) for d in r['support'])} 號（共 {len(r['support'])} 天；本月 {r['hours']:g}h{tg}）")
-    try:   # 2026-11-12 經營者：正職早晚班要公平，兩個月一期 → 列出本期兩個月每人早／晚班次數與合計，店長判斷合不合理
-        sh = schedule_solver.shift_info(cfg_load(st["store"]))
-        m1, m2 = _el_period(st["ym"])
-        cnt = {mm: (_el_count(st, sh) if mm == st["ym"] else _el_month(st["store"], mm, sh)) for mm in (m1, m2)}
-        ft = [r for r in sm["rows"] if r["type"] != "兼職" and any(sum(cnt[mm].get(r["id"]) or [0]) for mm in (m1, m2))]
-        if ft:
-            f2 = lambda v: f"{v[0]}／{v[1]}" if v and sum(v) else "—"
-            other = m2 if st["ym"] == m1 else m1
-            tip = "下個月排初稿時會把這個月多排的早班／晚班補回來" if st["ym"] == m1 else "排初稿時已盡量把上個月多排的早班／晚班補回來"
-            if not any(sum(v) for v in cnt[other].values()):
-                tip += f"；{int(other[4:])} 月" + ("還沒排" if st["ym"] == m1 else "沒有班表，只看本月")
-            L += ["", f"**正職早晚班次數（{int(m1[4:])}～{int(m2[4:])} 月一期，兩個月合計要公平；{tip}）**",
-                  f"| 夥伴 | {int(m1[4:])} 月 早／晚 | {int(m2[4:])} 月 早／晚 | 本期合計 早／晚 |", "|---|---|---|---|"]
-            for r in ft:
-                a, b = cnt[m1].get(r["id"]) or [0, 0], cnt[m2].get(r["id"]) or [0, 0]
-                L.append(f"| {r['name']} | {f2(a)} | {f2(b)} | {a[0] + b[0]}／{a[1] + b[1]} |")
-    except Exception:   # noqa: BLE001
-        pass
     try:   # 調店：去別店的看本店班表（崗位填別店的格子），來本店的看同區各店班表
         info = st["template"]["info"]
         names = {e["id"]: e["name"] for e in info["emps"]}
@@ -2302,8 +2199,7 @@ def _draft_worker(store, ym):
         plans = {}
         for mode in ("pt",):
             r_ = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=tail,
-                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode,
-                                       el_debt=_el_debt(store, ym, _ft_ids(info, ms)))
+                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode)
             for (eid, d), (cell, _) in fixed.items():
                 r_["schedule"][eid][str(d)] = cell
             plans[mode] = r_
@@ -2504,8 +2400,7 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
         fixed[s] = fx
         units.append({"store": s, "pos": _region_pos(rg, s), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules.get(s, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()},
-                      "el_debt": _el_debt(s, ym, _ft_ids(info, mss[s]))})
+                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
     out = {}
     for i, mode in enumerate(modes):
         _job(jk, status="running", step=f"程式正在排整區（{PLAN_NAME[mode]}，{i + 1}／{len(modes)}，約 1～3 分鐘）")
@@ -3015,8 +2910,7 @@ def _support_eval(store, ym, helpers, jk):
                 block.append(f"{_sname(x)}的 104 範本沒有「{pos[o]}」崗位（{_sname(x)}的人要去{_sname(o)}支援，104 要先加這個崗位）")
         units.append({"store": x, "pos": pos[x], "info": dict(info, positions=[]), "cfg": cfgs[x], "ms": mss[x], "rules": rules.get(x, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _tail_merged(x, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {},
-                      "el_debt": _el_debt(x, ym, _ft_ids(info, mss[x]))})
+                      "prev_tail": _tail_merged(x, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {}})
     _job(jk, status="running", step=f"正在評估 {len(stores)} 家店一起排（只評估、不改班表，約 1～3 分鐘）")
     r = schedule_solver.solve_multi(units, mode="pt", lend=True, time_limit=90)
 

@@ -36,9 +36,6 @@ W_SWITCH = 30        # 前後兩天早晚班交換（讓班表穩定一點）
 W_OFFRUN = 1200      # 正職連休 3 天以上（每多 1 天；店長指休／特休自己連成的不算）。2026-11-12 經營者：休假太集中要改善。
                      # 低於國定假日放在公告當天（1500）、多排人（3400 起），不會為了散開休假而多排人或挪國定假日
 W_LONE = 400         # 正職休假中間只夾 1 天班（休・上・休）：讓休假平均散開，不要碎成一天一天
-W_EL = 3             # 正職早晚班公平（第二段）：每人「早班偏多／偏少」的程度，1 個班＝100 點 → 300。2026-11-12 經營者：
-                     # 早晚班要公平、用兩個月看（上個月早 5 晚 10 → 這個月早 10 晚 5）；兩個月一期，第二個月才有 el_debt（第一個月多排的）
-W_EL_GAP = 3         # 同店正職裡偏最多和偏最少的差距（每點）
 W_LEND = 1500        # 區域一起排：調去同城別家店（每人每天；比多排、缺人便宜，比沒事調店貴）
 
 # 2026-11-10 經營者：人力先滿足 週六 ＞ 國定假日 ＞ 週日 ＞ 週五 ＞ 四 ＞ 三 ＞ 二 ＞ 一
@@ -91,7 +88,7 @@ def demand_of(info, shifts, rules, hol=()):
     return need
 
 
-def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std", el_debt=None):
+def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std"):
     """
     單店排班（工作台「排初稿」用）。參數意義見 solve_multi 的 unit；回傳那一家店的結果。
     mode（2026-11-06 經營者：排兩種給店長比較）：
@@ -101,7 +98,7 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
     回傳 {"schedule": {工號: {日: 格子}}, "gaps": [...], "nuo": {工號: [日]}, "stats": {...}}
     """
     unit = {"store": 0, "info": info, "cfg": cfg, "ms": ms, "rules": rules, "hol_days": hol_days,
-            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes, "el_debt": el_debt}
+            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes}
     r = solve_multi([unit], mode=mode, lend=False, time_limit=time_limit)
     out = r["stores"][0]
     out["stats"] = r["stats"]
@@ -135,7 +132,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         late_limit = cfg.get("late_early_limit")
         U.append({"store": u["store"], "pos": u.get("pos") or "", "info": info, "ms": ms, "rules": rules, "shifts": shifts,
                   "need": need, "caps": caps, "positions": set(info.get("positions") or ()), "hol_days": set(u.get("hol_days") or ()), "prev_tail": u.get("prev_tail") or {},
-                  "fixed_minutes": u.get("fixed_minutes") or {}, "el_debt": u.get("el_debt") or {},
+                  "fixed_minutes": u.get("fixed_minutes") or {},
                   "std_min": int(round(float(base.get("std_hours") or 0) * 60)), "off_days": base.get("off_days"),
                   "holidays": int(base.get("holidays") or 0), "max_consec": int(cfg.get("max_consec") or 5),
                   "late_limit": int(late_limit) if late_limit not in (None, "") else None})
@@ -469,7 +466,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 if a and b:
                     sw = m.NewBoolVar("")
                     m.Add(sum(a) + sum(b) - 1 <= sw)
-                    pen_sp.append((sw, W_SWITCH))   # 2026-11-12 移到第二段：留在第一段會擋住早晚班公平的調整
+                    pen.append((sw, W_SWITCH))
 
     # 備註規則（工號都是同一家店的人）
     for u in U:
@@ -504,39 +501,6 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                         both = m.NewBoolVar("")
                         m.Add(sum(va) + ca + sum(vb) + cb - 1 <= both)
                         pen.append((both, W_APART))
-
-    # 2026-11-12 經營者：正職早晚班要公平（第二段，盡量）。標準＝每個人的早晚比例跟本店這個月「早班：晚班」需求一樣；
-    # dev＝早班×(100−R)−晚班×R＋上個月以前累計欠的（el_debt，正＝早班排多了）；越接近 0 越公平，同店正職之間也拉近。
-    # 兼職、備註指定只能上某些班的人、同一人掛別店的那一份不算。
-    el_by_store = {}
-    for e in emps:
-        u, k = e["u"], e["k"]
-        if not e["ft"] or e.get("alias") or any(kk[0] == e["id"] for kk in u["only"]):
-            continue
-        ne = sum(c for d in days for n, c in u["need"][d].items() if u["shifts"][n]["kind"] == "早")
-        nl = sum(c for d in days for n, c in u["need"][d].items() if u["shifts"][n]["kind"] == "晚")
-        if not ne or not nl:
-            continue
-        R = int(round(100 * ne / (ne + nl)))
-        ev = [v for d in days for v in opts_where(k, d, lambda s, n: SH[(s, n)]["kind"] == "早")]
-        lv = [v for d in days for v in opts_where(k, d, lambda s, n: SH[(s, n)]["kind"] == "晚")]
-        if not ev and not lv:
-            continue
-        debt = max(-1200, min(1200, int(u["el_debt"].get(e["id"]) or 0)))
-        dev = m.NewIntVar(-5000, 5000, "")
-        m.Add(dev == (100 - R) * sum(ev) - R * sum(lv) + debt)
-        ab = m.NewIntVar(0, 5000, "")
-        m.AddAbsEquality(ab, dev)
-        pen_sp.append((ab, W_EL))
-        el_by_store.setdefault(u["store"], []).append(dev)
-    for vs in el_by_store.values():
-        if len(vs) > 1:
-            mx, mn = m.NewIntVar(-5000, 5000, ""), m.NewIntVar(-5000, 5000, "")
-            m.AddMaxEquality(mx, vs)
-            m.AddMinEquality(mn, vs)
-            gap = m.NewIntVar(0, 10000, "")
-            m.Add(gap == mx - mn)
-            pen_sp.append((gap, W_EL_GAP))
 
     for e, w_under, w_over, goal in deferred:
         if not goal:
