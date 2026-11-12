@@ -174,7 +174,7 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
     </details>
     <details class="sec" id="msetBox" open><summary><b>📅 本月設定</b> <span id="msetSum" class="mute"></span></summary>
       <div id="msetForm"></div>
-      <div class="sub">指休／特休／可上日／例休 <span class="mute" style="font-weight:normal">指休、特休、可上照上面填的自動畫出（要改請改上面的字再存檔）；例、休、國定照目前班表</span></div>
+      <div class="sub">指休／特休／可上日／例休 <span class="mute" style="font-weight:normal">指休、特休、可上照上面填的自動畫出（要改請改上面的字再存檔）；例、休、國定照目前班表；<b style="color:#b26a00">可支援</b>＝本店這天不缺人、多出來的假（可去別店上班補時數），不算在例假／休息天數裡；最右邊是每人天數小計</span></div>
       <div class="tblwrap" id="markWrap"></div>
     </details>
     <!-- 2026-11-05 經營者：「備用」用不到 → 拿掉排班設定表（Excel）與補充說明（設定都在上面填、臨時要求用對話框講）；
@@ -539,12 +539,17 @@ function renderMarks(){
   var info=S.template.info,marks=S.mset.marks||{},emps=S.mset.emps||{},av=S.mset.avail_shift||{};
   /* 2026-11-11 經營者：同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開（兼職不算） */
   var dup={};info.emps.forEach(function(e){if(((emps[e.id]||{}).type||'正職')==='兼職')return;var mk=marks[e.id]||{};for(var d in mk)if(mk[d]==='指休')(dup[d]=dup[d]||[]).push(e.name)});
-  var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){var two=(dup[d.d]||[]).length>1;h+='<th class="'+(isWk(d.d)?'wk':'')+(two?' dup':'')+'"'+(two?' title="'+esc(dup[d.d].join('、'))+' 同一天指休"':'')+'>'+d.d+'<br>'+d.wd+'</th>'});h+='</tr></thead><tbody>';
+  var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){var two=(dup[d.d]||[]).length>1;h+='<th class="'+(isWk(d.d)?'wk':'')+(two?' dup':'')+'"'+(two?' title="'+esc(dup[d.d].join('、'))+' 同一天指休"':'')+'>'+d.d+'<br>'+d.wd+'</th>'});h+=(S.schedule?'<th style="white-space:nowrap">休假小計</th>':'')+'</tr></thead><tbody>';
   info.emps.forEach(function(e){var t=(emps[e.id]||{}).type||'正職';h+='<tr><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
+    var cn={li:0,xi:0,gd:0,sp:0,tx:0};   /* 2026-11-13 經營者：例休 8＋國定 1 卻看起來休 12 天 → 「可支援」（多出來的假）、特休分開標，右邊加小計 */
     info.days.forEach(function(d){var v=(marks[e.id]||{})[d.d]||'',sh=v==='可上'?(av[e.id]||{})[d.d]:'';
       /* 2026-11-11 經營者：班表上的例假／休息／國定也同步顯示（照目前班表，改班後跟著變） */
       var c=((S.cells||{})[e.id]||{})[d.d]||{},r=RST[c.type]||'';
-      h+='<td class="m '+(MK[v]||(r?'rs':''))+(isWk(d.d)?' wk':'')+'"'+(sh||r?' title="'+esc([sh,r?'班表：'+c.type:''].filter(Boolean).join('；'))+'"':'')+'>'+esc(sh?sh.replace(/班$/,''):v)+(r?(v?'<span class="rs2">'+r+'</span>':r):'')+'</td>'});h+='</tr>'});
+      var off=!(c.segs||[]).length,tx=/特休|補休/.test(c.dtag||'')||v==='特休',sp=off&&c.dtag==='彈性挪假';
+      if(tx)cn.tx++;else if(sp){cn.sp++;r='<span style="color:#b26a00;font-weight:700">可支援</span>'}else if(off&&c.type==='例假日')cn.li++;else if(off&&c.type==='休息日')cn.xi++;else if(off&&c.type==='國定假日')cn.gd++;
+      h+='<td class="m '+(MK[v]||(r?'rs':''))+(isWk(d.d)?' wk':'')+'"'+(sh||r?' title="'+esc([sh,r?'班表：'+(sp?'可支援其他店（本店這天不缺人，多出來的假，不算例假／休息天數）':c.type):''].filter(Boolean).join('；'))+'"':'')+'>'+esc(sh?sh.replace(/班$/,''):v)+(r?(v?'<span class="rs2">'+r+'</span>':r):'')+'</td>'});
+    if(S.schedule)h+='<td style="white-space:nowrap;font-size:12px;text-align:left;padding:2px 6px">'+(t==='兼職'?'<span class="mute">—</span>':'例休 <b>'+(cn.li+cn.xi)+'</b>・國定 <b>'+cn.gd+'</b>'+(cn.sp?'<br><span style="color:#b26a00">可支援 <b>'+cn.sp+'</b></span>':'')+(cn.tx?(cn.sp?'・':'<br>')+'特休 <b>'+cn.tx+'</b>':''))+'</td>';
+    h+='</tr>'});
   var dl=info.days.filter(function(d){return (dup[d.d]||[]).length>1}).map(function(d){return d.d+' 號（'+d.wd+'）'+dup[d.d].join('、')});
   $('markWrap').innerHTML=h+'</tbody></table>'+(dl.length?'<div class="dupnote">⚠ 同一天有兩人以上指休，請店長協調夥伴錯開休假日：'+esc(dl.join('；'))+'</div>':'');
 }
