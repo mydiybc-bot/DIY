@@ -408,7 +408,13 @@ function renderCfgForm(cfg){
   var h=(cfg.shifts||[]).length?'':'<div class="warn" style="font-size:13px">⚠ 下面是預設範例，請改成本店實際的班別</div>';
   h+='<div class="sub">班別與每天需要的人數</div><div class="tblwrap"><table class="frm" id="shiftTbl"><thead><tr><th>班別名稱</th><th>上班</th><th>下班</th><th>休息<br>幾分鐘</th><th>休息<br>從幾點</th><th>平日每天<br>幾人</th><th>假日每天<br>幾人</th><th></th></tr></thead><tbody>'+sh.map(shiftRow).join('')+'</tbody></table></div>';
   h+='<button class="btn ghost sm" id="shiftAdd" type="button">＋ 加一個班別</button><span class="mute">　名稱要含早／中／晚、分平日／假日</span>'+
-     '<div class="mute" style="font-size:12px;margin-top:4px">只要填上班、下班和休息幾分鐘（不休息填 0）。休息時間不算工時；匯入 104 時系統會自動拆成兩段。「休息從幾點」不填＝上班滿 4 小時後開始休。</div>';
+     '<div class="mute" style="font-size:12px;margin-top:4px">只要填上班、下班和休息幾分鐘（不休息填 0）。休息時間不算工時；匯入 104 時系統會自動拆成兩段。「休息從幾點」不填＝上班滿 4 小時後開始休。</div>'+
+     '<details class="xhelp" style="margin-top:6px"><summary class="mute">ⓘ 想加 4、6、10 小時這種偶爾才用的班別</summary><ol class="mute" style="margin:4px 0;font-size:13px">'+
+     '<li>按「＋ 加一個班別」，名稱例：<b>平日早班4h</b>（一樣要含早／中／晚、平日／假日），填上班、下班、休息。</li>'+
+     '<li><b>平日、假日人數都填 0</b> → 排初稿不會自動排這個班，只有你指定才會用。（填 1 以上＝每天都要有人上這個班）</li>'+
+     '<li>要排給誰：在「本月設定」那位夥伴的「個人特殊班別／備註」寫，例：<b>9 號排平日早班4h</b>、<b>每週三排平日晚班6h</b>，再按「排初稿」。</li>'+
+     '<li>已經排好初稿才想加：在班表點那一格改，或在下面跟 AI 說「9 號葉思柔改上平日早班4h」。</li>'+
+     '<li>長的班（例 10 小時）如果時間蓋住原本的早班或晚班，那個班當天會自動少排 1 人，不會多排。4 小時這種短班算額外人力。</li></ol></details>';
   /* 2026-11-11 經營者：連上天數、晚接早不再讓店長填，照勞基法 */
   h+='<div class="sub">規則</div><div class="mute" style="font-size:13px">連續上班最多 5 天（公司規定，超過會提醒；勞基法七休一是 6 天，超過 6 天算錯誤）；排初稿時休假會盡量平均散開、連休最多 2 天（指休、特休不算）；晚班接隔天早班可以，下班到隔天上班要隔 11 小時以上。</div>';
   /* 2026-11-13 經營者：「跨店支援夥伴」「店規」兩欄刪掉（後端也不再收、不再給 AI 讀） */
@@ -747,7 +753,11 @@ twoStep($('draftBtn'),'再按一次確認（會重排整個月）',function(){
   if(!S)return;
   if(!S.template){alert('這個月還沒有 104 範本：店長在 104 建好當月班表後，隔天早上會自動取得（急的話可在上方手動上傳）');return}
   if(!S.formReady&&!(S.settingsFiles||[]).length){alert('請先填好「店別基本設定」的班別、「本月設定」的平日／假日營收預估，按存檔（或上傳 Excel 設定表）');return}
-  post('draft').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
+  /* 2026-11-13 經營者：「備註填了，排班卻沒考慮」→ 原因是打完字沒按存檔。排初稿前先自動把畫面上的店別基本設定、本月設定存起來 */
+  var p=Promise.resolve();
+  if($('shiftTbl')&&$('cfgSave'))p=p.then(function(){return post('cfg_save',{cfg:collectCfg()})});
+  if($('empTbl')&&$('msetSave'))p=p.then(function(){return post('mset_save',{mset:collectMset()})});
+  p.then(function(){return post('draft')}).then(function(j){formKey='keep';apply(j)}).catch(function(e){alert('還沒開始排：'+e.message+'\n（排初稿前會先自動存「店別基本設定」和「本月設定」，請先把這個問題改好）')})});
 twoStep($('undoBtn'),'再按一次確認復原',function(){post('undo').then(function(j){apply(j)}).catch(function(e){alert(e.message)})});
 $('expBtn').onclick=function(){
   post('export').then(function(j){

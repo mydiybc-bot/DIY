@@ -837,7 +837,8 @@ def _shift_of(seg, names):
         def pick(d, w, cand=cand, key=key):
             # 2026-11-05 模擬：「每週一三五 下午」平日沒有中班，原本拿了假日中班塞到平日
             want, other = ("假日", "平日") if w in ("六", "日") else ("平日", "假日")
-            hit = next((n for n in cand if want in n or other not in n), "")
+            # 2026-11-13：店長另外加了「平日晚班6h」這種特殊班別後，「晚班」被配到名字最長的那個（人數 0）→ 取名字最短的（一般的班）
+            hit = next((n for n in sorted(cand, key=len) if want in n or other not in n), "")
             if not hit and key in ("中", "下午"):   # 這天類型沒有中班 → 下午／中班算晚班
                 hit = next((n for n in names if "晚" in n and (want in n or other not in n)), "")
             return hit   # 都沒有＝這天不限班別
@@ -883,6 +884,9 @@ def _parse_seg(seg, wd_of, names, shift_mode, label, month=None):
     return out
 
 
+_EXCEPT_ONLY = re.compile(r"^\s*(除了|除去|扣掉|不含|不包含)")   # 2026-11-13：整段只講「除了哪幾天」
+
+
 def parse_days_text(txt, info_days, shift_names=None, label=""):
     """「4、9、17」「10-12」「每週一三五 晚班；20、21 早班」「平日」→ [(日, 班別或空字串)]；看不懂丟 ValueError"""
     out = {}
@@ -891,7 +895,12 @@ def parse_days_text(txt, info_days, shift_names=None, label=""):
     for seg in re.split(r"[；;\n]+", str(txt or "")):
         seg = seg.strip()
         if seg:
-            out.update(_parse_seg(seg, wd_of, names, shift_names is not None, label, (info_days[0].get("m") if info_days else None)))
+            r = _parse_seg(seg, wd_of, names, shift_names is not None, label, (info_days[0].get("m") if info_days else None))
+            if out and _EXCEPT_ONLY.match(seg):   # 「平日 晚班；除了 14、15」：後面那段只是排除 → 從前面的結果拿掉，不是「整個月除了這兩天都可以」
+                for d in set(wd_of) - set(r):
+                    out.pop(d, None)
+            else:
+                out.update(r)
     return sorted(out.items())
 
 
@@ -974,7 +983,11 @@ def parse_days_smart(st, txt, info_days, shift_names, label, kind, ai=True):
                 _parse_log(st, kind, seg, std, True)
             used = True
             std_parts.append(std)
-        out.update(r)
+        if out and _EXCEPT_ONLY.match(seg):   # 後面那段只是「除了哪幾天」→ 從前面的結果拿掉
+            for d in set(wd_of) - set(r):
+                out.pop(d, None)
+        else:
+            out.update(r)
     return sorted(out.items()), used, "；".join(std_parts)
 
 
@@ -1632,7 +1645,9 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                 warns.append(f"{names[eid]} {d['label']}：兼職只有填「可上」的日子能排，這天沒填")
             elif v == "可上" and c["segs"] and avail.get(eid, {}).get(str(d["d"])) in shifts:
                 want = avail[eid][str(d["d"])]
-                if [[x[0], x[1]] for x in c["segs"]] != [list(x) for x in shifts[want]]:
+                ws_, we_ = _hm2m(shifts[want][0][0]), _hm2m(shifts[want][-1][1])
+                inside = _hm2m(c["segs"][0][0]) >= ws_ and _hm2m(c["segs"][-1][1]) <= we_   # 2026-11-13：在那個班的時間範圍內（例：晚班裡的 6 小時班）不算排錯
+                if [[x[0], x[1]] for x in c["segs"]] != [list(x) for x in shifts[want]] and not inside:
                     warns.append(f"{names[eid]} {d['label']}：兼職這天只能上{want}，班表排的不一樣")
     limit = ext.get("late_early_limit")
     if late_starts and early_starts and limit is not None:
@@ -1855,8 +1870,8 @@ def _draft_worker_ai(store, ym):
 RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班程式看得懂的規則。只回 JSON：{"rules":[…],"unapplied":["原文：為什麼沒辦法翻"]}
 規則種類（days 一律是這個月的日期數字陣列；emp 是工號；shift 只能用給你的班別名稱）：
 - {"type":"off","emp":"工號","days":[…]}：那幾天不能上班
-- {"type":"work","emp":"工號","days":[…],"shift":"班別或null"}：那幾天一定要上班
-- {"type":"only_shift","emp":"工號","shifts":[…],"days":[…]或null}：只能上這些班（null＝整個月）
+- {"type":"work","emp":"工號","days":[…],"shift":"班別或null"}：那幾天一定要上班（店長指定班別就填 shift，包含標「人數 0」的特殊班別，例：「9 號排平日早班10h」）
+- {"type":"only_shift","emp":"工號","shifts":[…],"days":[…]或null}：只能上這些班（null＝整個月）。「不排某個班」（例：週五不排晚班、不上假日中班）也用這個：shifts 列出那幾天「其餘有要人的班」（平日列平日的班、假日列假日的班；標「人數 0」的特殊班別不要列）
 - {"type":"prefer_shift","emp":"工號","shifts":[…],"days":[…]或null}：最好上這些班（「白天班最好」「盡量排早班」）
 - {"type":"apart","emps":["工號","工號"],"days":[…]或null}：兩人不要同一天上班
 - {"type":"demand","shift":"班別","days":[…],"count":人數}：這幾天這班要幾人（取代原本人數，例：週三晚班只排 1 人）
@@ -1864,6 +1879,7 @@ RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班�
 - {"type":"fixed_cell","emp":"工號","day":日期,"cell":"格子"}：那天固定用這個格子（上課、會議、跨店支援、包館等自訂時段）
 格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@交流會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@交流會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。自訂上班時間超過 4 小時的，中間要留 30 分鐘休息、拆成兩段（上班滿 4 小時後開始休，例：店長說「10:30 到 19:00」→「10:30-14:30,15:00-19:00」；104 不會自動扣休息，寫成一段會把休息也算進工時）；店長明講不休息或指定休息時間才照他說的。
 店長用語對照：上課／南京上課／內訓→時段標籤「@台北內訓課」＋那段的崗位（例 10:20-12:00,12:30-15:00@台北內訓課#南京店）；店長會議／區會→@區會；交流會→@交流會議；事務→@事務班；經管會→@經管會；包館→@包館；到別家店支援→那幾段 #那家店＋@支援。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、彈性挪假、挪假補班、整天支援）。
+店長只說某天幾點到幾點開會／上課、其他時間照常上班（沒講班別）：用 fixed_cell，拿那天類型的早班時段當底（平日用平日早班、假日或當假日用假日早班），把會議那段切出來標上標籤，其餘照原時段，例：平日早班 10:30-14:30,15:00-19:00、13:00-15:00 開區會 →「10:30-13:00,13:00-15:00@區會,15:00-19:00」。
 朝會、巡店、消毒這類日常筆記不用翻，也不用列進 unapplied。看不懂或沒辦法用上面規則表達的，原文放進 unapplied 並說明原因。不要自己發明規則。"""
 
 
@@ -1892,6 +1908,33 @@ def _daytype_shift(name, holiday_type, shifts):
     return alt if a in name and alt in shifts else name
 
 
+def _fixed_cover(cell, cfg, title):
+    """固定格子（自訂時段）人在本店現場的時間，蓋住哪些班 60% 以上、而且早班有接到開店／晚班有接到打烊 → [班別名]（蓋最多的排前面）。
+    開會／上課／事務／特休的時段、崗位在別店的時段不算在店"""
+    mins = set()
+    for sg in cell.get("segs") or []:
+        tag, pos = (sg[2] if len(sg) > 2 else "") or "", (sg[3] if len(sg) > 3 else "") or ""
+        if tag in NOFLOOR_SEG_TAGS or BONUS_MEET_RE.search(tag) or _elsewhere(pos, title) or (cell.get("dtag") or "") in NOFLOOR_DAY_TAGS:
+            continue
+        mins.update(range(_hm2m(sg[0]), _hm2m(sg[1])))
+    out = []
+    if not mins:
+        return out
+    for r in cfg.get("shifts") or []:
+        sm = set()
+        for a, b in r.get("segs") or []:
+            sm.update(range(_hm2m(a), _hm2m(b)))
+        if not sm or len(sm & mins) / len(sm) < 0.6:
+            continue
+        # 早班要有人開店、晚班要有人做到打烊：自訂班沒接到那一頭（例：上午去上課、下午才進店）就不算頂掉這個班
+        if "早" in r["name"] and min(mins) > min(sm) + 30:
+            continue
+        if "晚" in r["name"] and max(mins) < max(sm) - 30:
+            continue
+        out.append((len(sm & mins) / len(sm), r["name"]))
+    return [n for _, n in sorted(out, reverse=True)]
+
+
 def _note_rules(st, cfg, ms):
     """備註／店規 → (rules, 沒套用的說明)；沒有備註就不叫 AI"""
     texts = _note_texts(st, cfg, ms)
@@ -1904,7 +1947,7 @@ def _note_rules(st, cfg, ms):
         f"月份：{st['ym'][:4]} 年 {int(st['ym'][4:])} 月；日期（星期）：" + "、".join(f"{d['d']}({d['wd']}{'・當假日' if d['d'] in holi else ''})" for d in info["days"]),
         "（標「當假日」的平日，人力照假日班排，要加人就加假日的班）" if holi else "",
         "員工：" + "；".join(f"{e['id']} {e['name']}" for e in info["emps"]),
-        "班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + "）" for r in cfg.get("shifts") or []),
+        "班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + ("；人數 0＝特殊班別，只有店長指定才排" if not (r.get("wd") or r.get("we")) else "") + "）" for r in cfg.get("shifts") or []),
         "可用標籤：" + "、".join(info["tags"]), "可用崗位：" + "、".join(info["positions"]),
         "本店是：" + info["title"], "", "店長寫的："] + texts)
     msg = _client_().messages.create(model=MODEL, max_tokens=6000, system=RULES_SYS,
@@ -1957,6 +2000,17 @@ def _note_rules(st, cfg, ms):
                     raise ValueError("班別不對")
             if t == "work" and r.get("shift") not in shifts:
                 r["shift"] = None
+            if t == "work" and r.get("shift"):
+                # 2026-11-13：指定的班別那天「要 0 人」（店長另外加的 4／6／10 小時班，人數填 0）→ 排班程式不會自己用到它，
+                # 改成那天固定用這個班別的格子
+                wkd0 = {x["d"] for x in info["days"] if x["wd"] in ("六", "日")} | holi
+                row = next(x for x in cfg["shifts"] if x["name"] == r["shift"])
+                zero = [dd for dd in r["days"] if not int(row.get("we" if dd in wkd0 else "wd") or 0)]
+                for dd in zero:
+                    rules.append({"type": "fixed_cell", "emp": r["emp"], "day": dd, "cell": r["shift"]})
+                r["days"] = [dd for dd in r["days"] if dd not in zero]
+                if not r["days"]:
+                    continue
             if t in ("demand", "extra"):   # 平日班套到假日型的日子（或反過來）→ 換成同名另一種（2026-11-05 模擬：當假日的 31 號被加「平日晚班」）
                 wkd = {x["d"] for x in info["days"] if x["wd"] in ("六", "日")} | holi
                 groups = {}
@@ -2190,11 +2244,12 @@ def _draft_worker(store, ym):
         _job(k, status="running", step="程式正在排班（約 10 秒）")
         shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfg["shifts"]}
         dtypes = set(info["dayTypes"])
-        fixed = {}
+        fixed, fcover = {}, {}
         for r in rules:
             if r["type"] == "fixed_cell":
                 c = parse_cell(r["cell"], shmap, dtypes)
                 fixed[(r["emp"], r["day"])] = (r["cell"], int(round(cell_hours(c) * 60)))
+                fcover[(r["emp"], r["day"])] = _fixed_cover(c, cfg, info["title"])
         y, mth = int(ym[:4]), int(ym[4:])
         hol = [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))]
         # 2026-11-06 經營者：同一份規則排兩種（A 正職優先、B 兼職優先），同時給店長看、選一個採用
@@ -2202,7 +2257,7 @@ def _draft_worker(store, ym):
         plans = {}
         for mode in ("pt",):
             r_ = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=tail,
-                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode)
+                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode, fixed_cover=fcover)
             for (eid, d), (cell, _) in fixed.items():
                 r_["schedule"][eid][str(d)] = cell
             plans[mode] = r_
@@ -2395,15 +2450,16 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
         info = sts[s]["template"]["info"]
         shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfgs[s]["shifts"]}
         dtypes = set(info["dayTypes"])
-        fx = {}
+        fx, fcv = {}, {}
         for r in rules.get(s, []):
             if r["type"] == "fixed_cell":
                 c = parse_cell(r["cell"], shmap, dtypes)
                 fx[(r["emp"], r["day"])] = (r["cell"], int(round(cell_hours(c) * 60)))
+                fcv[(r["emp"], r["day"])] = _fixed_cover(c, cfgs[s], info["title"])
         fixed[s] = fx
         units.append({"store": s, "pos": _region_pos(rg, s), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules.get(s, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}})
+                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}, "fixed_cover": fcv})
     out = {}
     for i, mode in enumerate(modes):
         _job(jk, status="running", step=f"程式正在排整區（{PLAN_NAME[mode]}，{i + 1}／{len(modes)}，約 1～3 分鐘）")

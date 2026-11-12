@@ -88,7 +88,7 @@ def demand_of(info, shifts, rules, hol=()):
     return need
 
 
-def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std"):
+def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std", fixed_cover=None):
     """
     單店排班（工作台「排初稿」用）。參數意義見 solve_multi 的 unit；回傳那一家店的結果。
     mode（2026-11-06 經營者：排兩種給店長比較）：
@@ -98,7 +98,7 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
     回傳 {"schedule": {工號: {日: 格子}}, "gaps": [...], "nuo": {工號: [日]}, "stats": {...}}
     """
     unit = {"store": 0, "info": info, "cfg": cfg, "ms": ms, "rules": rules, "hol_days": hol_days,
-            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes}
+            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes, "fixed_cover": fixed_cover}
     r = solve_multi([unit], mode=mode, lend=False, time_limit=time_limit)
     out = r["stores"][0]
     out["stats"] = r["stats"]
@@ -123,6 +123,15 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         rules = u.get("rules") or []
         shifts = shift_info(cfg)
         need = demand_of(info, shifts, rules, {int(x["day"]) for x in ms.get("special") or [] if x.get("as_holiday")})
+        # 2026-11-13：備註指定的自訂班（固定格子）如果時間蓋住某個班大部分（例：10 小時班蓋住早班）→ 那個班這天少排 1 人，
+        # 不然會多排一個人。回報用的 need_orig 不變（檢查是算人頭，固定格子的人本來就算在店）。
+        need_orig = {d: dict(v) for d, v in need.items()}
+        for (_, dd), cand in (u.get("fixed_cover") or {}).items():
+            hit = next((n for n in cand if need.get(dd, {}).get(n)), None)
+            if hit:
+                need[dd][hit] -= 1
+                if not need[dd][hit]:
+                    del need[dd][hit]
         caps = {}
         for r in rules:
             if r["type"] == "demand" and r.get("shift") in shifts:
@@ -131,7 +140,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         base = ms.get("base") or {}
         late_limit = cfg.get("late_early_limit")
         U.append({"store": u["store"], "pos": u.get("pos") or "", "info": info, "ms": ms, "rules": rules, "shifts": shifts,
-                  "need": need, "caps": caps, "positions": set(info.get("positions") or ()), "hol_days": set(u.get("hol_days") or ()), "prev_tail": u.get("prev_tail") or {},
+                  "need": need, "need_orig": need_orig, "caps": caps, "positions": set(info.get("positions") or ()), "hol_days": set(u.get("hol_days") or ()), "prev_tail": u.get("prev_tail") or {},
                   "fixed_minutes": u.get("fixed_minutes") or {},
                   "std_min": int(round(float(base.get("std_hours") or 0) * 60)), "off_days": base.get("off_days"),
                   "holidays": int(base.get("holidays") or 0), "max_consec": int(cfg.get("max_consec") or 5),
@@ -194,7 +203,9 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 continue
             ok = [n for n in u["shifts"] if u["need"][d].get(n)]
             if not e["ft"] and can and avail.get(str(d)) in u["shifts"]:
-                ok = [n for n in ok if n == avail[str(d)]]
+                # 2026-11-13：可上的班這天不用人（例：人數填 0 的「平日晚班6h」）→ 改看同一種（早／中／晚）有要人的班，不然這天整個排不進去
+                kd = u["shifts"][avail[str(d)]]["kind"]
+                ok = [n for n in ok if n == avail[str(d)]] or ([n for n in ok if u["shifts"][n]["kind"] == kd] if kd else [])
             lim = u["only"].get((eid, d))
             if lim and [n for n in ok if n in lim]:
                 ok = [n for n in ok if n in lim]
@@ -650,7 +661,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 if miss:
                     unmet.append({"rule": r, "days": miss})
         out.append({"store": st_, "schedule": sched, "gaps": gaps, "extras": extras, "nuo": nuo, "mode": mode,
-                    "hours": hours, "need": u["need"], "unmet": unmet, "guests": guests})
+                    "hours": hours, "need": u["need_orig"], "unmet": unmet, "guests": guests})
     return {"pos_block": sorted(pos_block), "stores": out, "moves": moves,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(status), "objective": sv.ObjectiveValue()}}
 
