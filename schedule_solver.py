@@ -33,6 +33,9 @@ W_PT_TGT = 4         # 兼職跟目標時數差（每分鐘）
 W_PREFER = 300       # 備註偏好的班別沒排到（每次）
 W_HOL_DATE = 1500    # 國定假日沒放在政府公告的那天（每天）
 W_SWITCH = 30        # 前後兩天早晚班交換（讓班表穩定一點）
+W_OFFRUN = 1200      # 正職連休 3 天以上（每多 1 天；店長指休／特休自己連成的不算）。2026-11-12 經營者：休假太集中要改善。
+                     # 低於國定假日放在公告當天（1500）、多排人（3400 起），不會為了散開休假而多排人或挪國定假日
+W_LONE = 400         # 正職休假中間只夾 1 天班（休・上・休）：讓休假平均散開，不要碎成一天一天
 W_LEND = 1500        # 區域一起排：調去同城別家店（每人每天；比多排、缺人便宜，比沒事調店貴）
 
 # 2026-11-10 經營者：人力先滿足 週六 ＞ 國定假日 ＞ 週日 ＞ 週五 ＞ 四 ＞ 三 ＞ 二 ＞ 一
@@ -220,7 +223,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         for d in days:
             for (s, n) in allowed[e["k"] + (d,)]:
                 x[e["k"] + (d, s, n)] = m.NewBoolVar("")
-    pen = []
+    pen, pen_sp = [], []    # pen＝原本的規則；pen_sp＝休假散開（第二段才算）
     ft_under = {}
     # 2026-11-10：同一個工號掛在同區兩家店的名單（跨店支援的夥伴）＝同一個人，同一天只能在一家店上班
     same = {}
@@ -434,6 +437,25 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     m.Add(sum(vs) - sum(hv) + lack >= 2)
                     pen.append((lack, W_WEEK))
                     week = []
+            # 2026-11-12 經營者：休假不要集中 → 連休最多 2 天（第 3 天起每天扣分）、不要「休・上・休」
+            # 整段都是店長指休／備註不能上的不扣（那是店長排的）；特休、固定格子當作有上班
+            forced = {d for d in days if not isinstance(offv[d], int) and not work(k, d)[0]}
+            for i in range(nd - 2):
+                w3 = days[i:i + 3]
+                if any(isinstance(offv[d], int) for d in w3) or all(d in forced for d in w3):
+                    continue
+                b3 = m.NewBoolVar("")
+                m.Add(sum(offv[d] for d in w3) - 2 <= b3)
+                pen_sp.append((b3, W_OFFRUN))
+            for i in range(1, nd - 1):
+                p_, d_, n_ = days[i - 1], days[i], days[i + 1]
+                if isinstance(offv[d_], int) or d_ in forced or isinstance(offv[p_], int) or isinstance(offv[n_], int):
+                    continue
+                if p_ in forced and n_ in forced:
+                    continue
+                b1 = m.NewBoolVar("")
+                m.Add(offv[p_] + offv[n_] - offv[d_] - 1 <= b1)
+                pen_sp.append((b1, W_LONE))
             e["_hol"] = hl
 
         # 班別穩定：前後兩天早／晚交換小扣分
@@ -499,13 +521,27 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 m.Add(mx >= v)
             pen.append((mx, W_FT_FAIR))
 
-    m.Minimize(sum(v * w for v, w in pen))
+    # 2026-11-12：分兩段排。第一段照原本的規則排（人數、時數、休假天數…）；第二段在「原本的分數不可變差」下把休假散開。
+    # 一次排的話線上機器（半顆 CPU）會在時限內顧此失彼：實測休假散開了，但時數等原本目標變差。
+    main = sum(v * w for v, w in pen)
+    m.Minimize(main)
     sv = cp_model.CpSolver()
-    sv.parameters.max_time_in_seconds = time_limit
+    sv.parameters.max_time_in_seconds = time_limit * 0.6 if pen_sp else time_limit
     sv.parameters.num_search_workers = workers   # 線上機器只有半顆 CPU、512MB，開多也沒用
     status = sv.Solve(m)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError("程式排不出班表（請檢查班別與人數設定）")
+    if pen_sp:
+        m.Add(main <= int(round(sv.ObjectiveValue())))
+        for v in x.values():
+            m.AddHint(v, sv.Value(v))
+        m.Minimize(main + sum(v * w for v, w in pen_sp))
+        sv2 = cp_model.CpSolver()
+        sv2.parameters.max_time_in_seconds = max(5.0, time_limit - (time.time() - t0))
+        sv2.parameters.num_search_workers = workers
+        st2 = sv2.Solve(m)
+        if st2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):   # 第二段沒排出來就用第一段的結果
+            sv, status = sv2, st2
 
     POS = {u["store"]: u["pos"] for u in U}
     pick = {}

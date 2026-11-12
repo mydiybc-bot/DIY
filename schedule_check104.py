@@ -254,7 +254,7 @@ def rule_checks(rep, days, rows, max_consec, expect):
                 if run == 7:
                     rep.e(f"{who}：{run_start} 起連續上班超過 6 天（違反七休一）")
                 elif run == max_consec + 1:
-                    rep.w(f"{who}：{run_start} 起連上 {run} 天，超過本店上限 {max_consec} 天")
+                    rep.w(f"{who}：{run_start} 起連上 {run} 天，超過公司上限 {max_consec} 天")
             else:
                 run = 0
                 if fulltime and not t:

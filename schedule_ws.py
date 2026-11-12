@@ -405,7 +405,9 @@ def _cfg_path(store):
 
 # 2026-11-11 經營者：「連續上班最多幾天」「晚班接隔天早班最多幾次」不再讓店長填，一律照勞基法：
 # 七休一＝連續上班最多 6 天；晚班接早班不限次數，只要下班到隔天上班有 11 小時（不到 11 小時照舊提醒）
-LAW_MAX_CONSEC = 6
+# 2026-11-12 經營者：公司規定連續上班最多 5 天（正職、兼職都適用；跨店合併算）。排初稿照 5 天排；
+# 店長手動改成連上 6 天只提醒不擋（6 天仍合法），7 天以上照舊算錯誤（七休一）
+LAW_MAX_CONSEC = 5
 
 
 def _law(cfg):
@@ -1159,7 +1161,8 @@ def form_text(st, cfg):
     for r in cfg.get("shifts") or []:
         segs = [f"{a}-{b}" for a, b in r["segs"]] + [""] * (3 - len(r["segs"]))
         L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
-    L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（勞基法七休一）")
+    L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（公司規定；勞基法七休一是 6 天）")
+    L.append("休假分散\t正職休假要平均散開：連休最多 2 天（店長指休、特休自己連成的不算），避免「休、上 1 天、又休」")
     L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
     L.append("指休原則\t正職每月可自訂 4 天：平日 3 天、假日（週末、國定假日）1 天；超過的照店長填的排，但要在報告提醒店長")
     L.append("同一天指休\t同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開休假日")
@@ -1671,7 +1674,7 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                 used_other = any(a <= x <= b for x in od)
                 why = "、".join(([f"上個月底已連上 {tail} 天"] if used_tail else []) + ([f"在{'、'.join(sorted({od[x] for x in od if a <= x <= b}))}的班"] if used_other else []))
                 msg = f"{names[eid]}：加上{why}，到 {b} 號連續上班 {n} 天" if used_tail else f"{names[eid]}：加上{why}，{a}～{b} 號連續上班 {n} 天"
-                (errors if n > 6 else warns).append(msg + ("，超過 6 天（七休一）" if n > 6 else f"，超過本店上限 {mc} 天"))
+                (errors if n > 6 else warns).append(msg + ("，超過 6 天（七休一）" if n > 6 else f"，超過公司上限 {mc} 天"))
     except Exception:   # noqa: BLE001 — 讀別店存檔失敗不影響本店檢查
         pass
     # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
