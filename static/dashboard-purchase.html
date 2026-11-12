@@ -1191,7 +1191,42 @@ function lsFree(){ /* 2026-09-26：本機空間滿時，只清各儀表板的暫
 function lsDel(k){try{localStorage.removeItem(k);}catch(e){}}
 function escA(v){return String(v==null?"":v).replace(/"/g,'&quot;');}
 function sessStart(st){var v=lsGet("invSession_"+st);if(v==null||v==="")return null;var n=+v;return isNaN(n)?null:n;}
-function setSess(st,t){lsSet("invSession_"+st,String(t>0?t-2000:t));}   /* 2026-09-08 bb 批：回退 2 秒。fact_inventory 時間戳經 gviz 回來只到「秒」（Date(y,m,d,h,mi,s) 無毫秒），
+function setSess(st,t){lsSet("invSession_"+st,String(t>0?t-2000:t));lsSet("invSessAt_"+st,String(Date.now()));isPush(st);}   /* 2026-11-12：同時送雲端（見 IS） */
+/* ===== 2026-11-12 盤點輪次存雲端（diybc-dcorder-api v1.9 的 dc_invsess）=====
+   事故：7 號店手機按「🔄 重新盤點」→ 手機 0/206；電腦還是「延續歷史盤點中 196/206」。輪次起點原本只存本機 localStorage。
+   規則：雲端一店一列 {start, setAt}；各裝置以「最後一次設定」為準（setAt 大的贏）。
+   本機舊資料沒有設定時間：新的一週＝用開始時間當設定時間，延續＝1（任何新設定都蓋過它）。
+   別台開了新的一週 → 本機改用新起點；本機在新起點之前填、還沒送出的數字一併捨棄（跟按重新盤點的那台一樣）。
+   讀取每家店最多每 60 秒一次（盤點頁、訂貨單頁畫面時觸發）；連不上雲端就照舊用本機。 */
+var IS={ld:{},at:{},done:{}};
+function isLocalAt(st){var v=+lsGet("invSessAt_"+st);if(v>0)return v;var ss=sessStart(st);return ss==null?0:(ss>0?ss:1);}
+function isWaiting(st){return dcoOn()&&!IS.done[st];}
+function isEnsure(st){if(!st||!dcoOn()||IS.ld[st])return;if(IS.at[st]&&Date.now()-IS.at[st]<60000)return;isLoad(st);}
+function isLoad(st){IS.ld[st]=true;IS.at[st]=Date.now();
+  return dcoJsonp({action:"invsess",store:st}).then(function(d){if(!(d&&d.ok))throw new Error((d&&d.error)||"後端沒有回應");
+      var c=d.sess,ss=sessStart(st),la=isLocalAt(st);
+      if(c&&(ss==null||c.setAt>la))return isAdopt(st,c);
+      if(ss!=null&&(!c||la>c.setAt))isPush(st);})
+    .catch(function(e){console.warn("讀不到雲端盤點輪次，先用本機：",e&&e.message);})
+    .then(function(){var first=!IS.done[st];IS.ld[st]=false;IS.done[st]=true;if(first&&ST.storeId===st&&(ST.tab==="盤點"||ST.tab==="訂貨單"))render();});}
+function isPush(st){if(!dcoOn())return;var ss=sessStart(st);if(ss==null)return;
+  dcoPostRaw({action:"invsessSet",store:st,start:ss,setAt:isLocalAt(st)}).then(function(r){
+    if(r&&r.ok&&r.stale&&r.sess&&r.sess.setAt>isLocalAt(st))isAdopt(st,r.sess);
+    else if(!(r&&r.ok))IS.at[st]=0;})   /* 沒寫進去：下次畫面時重讀、再比一次 */
+    .catch(function(){IS.at[st]=0;});}
+function isAdopt(st,c){var prev=sessStart(st),start=+c.start||0;
+  lsSet("invSession_"+st,String(start));lsSet("invSessAt_"+st,String(c.setAt));
+  if(start>0&&(prev==null||start>prev)){   /* 別台開了新的一週：比新起點舊的本機草稿、未送出數字、足夠勾一起作廢 */
+    var raw=lsGet("invDraft_"+st),d={};try{d=raw?(JSON.parse(raw)||{}):{};}catch(e){d={};}
+    Object.keys(d).forEach(function(id){if(!(d[id]&&d[id].t>=start))delete d[id];});
+    if(Object.keys(d).length)lsSet("invDraft_"+st,JSON.stringify(d));else clearDraft(st);
+    var D=DIRTY[st]||{},drop=0;Object.keys(D).forEach(function(id){var iv=(INV[st]||{})[id];if(!(iv&&iv.t>=start)){delete D[id];drop++;}});
+    lsDel("invOK_"+st);INVOK[st]={};
+    if(ST.storeId===st){ST.orderEdit={};ST.orderOff={};ST.orderPack={};ST.orderPackQty={};}
+    if(drop&&typeof location!=="undefined"&&!(typeof window!=="undefined"&&window.__TEST__)){location.reload();return;}   /* 輸入框裡還留著舊數字：跟「重新盤點」一樣重新載入 */
+    if(typeof toast==="function"&&ST.storeId===st)toast("🔄 另一台裝置已開始新一輪盤點，這台已同步");}
+  if(ST.storeId===st&&(ST.tab==="盤點"||ST.tab==="訂貨單"))render();}
+/* setSess 回退 2 秒說明（2026-09-08 bb 批）：回退 2 秒。fact_inventory 時間戳經 gviz 回來只到「秒」（Date(y,m,d,h,mi,s) 無毫秒），
    若店長按下「新的一週」與存檔落在同一秒，iv.t 被截到 .000 會小於 ss ⇒ 剛存的盤點被判成「不是本輪」。延續模式 t=0 不動。 */
 /* 2026-09-02 x 批：「✓ 足夠」＝店長目視庫存明顯高於訂貨點、不數也不訂。session 級旗標存本機 localStorage（invOK_店號），
    與盤點輪次同壽命；填入數字即自動取消；重新盤點時清空。不寫 Sheet（fact_inventory 只放真數字）。 */
@@ -2323,7 +2358,7 @@ function invSets(store){var liveAll=liveItems(store);
     nDC:all.filter(function(s){return isDC(store,s);}).length};}
 function invfChipsHtml(S){return [["全部","全部("+S.all.length+")"],["本次未盤","📝 本次未盤("+S.nUn+")"]].concat(S.nEv?[["檔期","🎉 檔期("+S.nEv+")"]]:[]).concat(S.nDC?[["出貨中心","🏬 出貨中心("+S.nDC+")"]]:[]).concat(S.allZ.length?[["零需求","💤 零需求("+S.allZ.length+")"]]:[]).concat(S.allT.length?[["清貨尾","🧹 清貨尾("+S.allT.length+")"]]:[]).concat(S.allX.length?[["過季","🗓 過季("+S.allX.length+")"]]:[]).map(function(c){return '<div class="chip '+(ST.invFilter===c[0]?"on":"")+'" data-invf="'+c[0]+'">'+c[1]+'</div>';}).join("");}
 function invfWire(root){Array.prototype.forEach.call((root||document).querySelectorAll("[data-invf]"),function(el){el.onclick=function(){ST.invFilter=el.dataset.invf;render();};});}
-function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcLoad(store);ZCST=store;}supplyEnsure(store);   /* 2026-09-04 ak 批：載入本店下單紀錄供 📦 供給倍數徽章 */
+function viewCount(){var store=ST.storeId;mergeDraft(store);isEnsure(store);if(ZCST!==store){zcLoad(store);ZCST=store;}supplyEnsure(store);   /* 2026-09-04 ak 批：載入本店下單紀錄供 📦 供給倍數徽章 */
   var ss=sessStart(store),S=invSets(store);   /* cv 批：清單與計數見 invSets */
   var live=S.live,nUn=S.nUn,items=S.items,hit=S.hit;
   var groups=zonesOrderedZ(store,S.itemsAll);   /* cv 批：全部列都畫，沒命中搜尋的加 .qh（打字只切換顯示，見 invQApply） */
@@ -2356,7 +2391,7 @@ function viewCount(){var store=ST.storeId;mergeDraft(store);if(ZCST!==store){zcL
   if(ss!=null)html+='<div class="fabtn" id="nextUn"'+(nUn>0?'':' style="display:none"')+'>⬇ 下一個未盤</div>';   /* cv 批：一律畫、沒有未盤時藏起來（搜尋就地篩選與 invPatch 會切換） */
   html+='<div class="savebar"><div class="prog">'+storeChip(store)+' '+(dn?('<b style="color:#C0392B">'+dn+' 筆</b>已填未送出'):'<span>目前沒有待送出的變更</span>')+(ss!=null?('<br>本次已盤 '+done+' / '+tot+' 項'):'')+'</div>'
     +'<button class="btn" id="saveCount"'+(dn?'':' disabled')+'>💾 儲存盤點'+(dn?('（'+dn+'）'):'')+'</button></div>';
-  if(ss==null)html+=sessModal();
+  if(ss==null)html+=(isWaiting(store)?'<div class="note">⏳ 讀取這家店目前的盤點輪次（手機、平板、電腦共用）…</div>':sessModal());
   if(ST.adjSku)html+=adjModal(store);
   return html;}
 /* 2026-10-02 cv 批：分區標頭的「已盤／項數」與一張分區卡片（從 viewCount 原樣抽出；viewCount、搜尋就地篩選、分區就地收合展開共用） */
@@ -3143,7 +3178,7 @@ function campBanner(st){
     h+='</div>';});
   h+='</div>';
   return h;}
-function viewOrder(){var store=ST.storeId,live=liveItems(store);
+function viewOrder(){var store=ST.storeId,live=liveItems(store);isEnsure(store);
   mergeDraft(store);
   var skipped=live.filter(function(s){return !countedForOrder(store,s)&&!zeroDemand(store,s)&&!okOf(store,s);}).length;   /* 2026-09-01 v 批：零需求不算「未盤」；x 批：✓ 足夠不算 */
   var nOk=live.filter(function(s){return okOf(store,s);}).length;

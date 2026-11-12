@@ -1,7 +1,12 @@
 /**
- * diybc-dcorder-api  v1.7.1（2026-11-09 取消合併；已寄出的單不能合併）
+ * diybc-dcorder-api  v1.9（2026-11-12 盤點輪次存雲端）
  * 門市 → 出貨中心 訂單 API（取代 Shopline 門市叫貨）
  *
+ * v1.9：新分頁 dc_invsess（一店一列）：盤點頁「延續／新的一週（重新盤點）」原本只存在裝置本機，
+ *       手機按了重新盤點、電腦還停在舊輪次（11/12 7 號店：手機 0/206、電腦 196/206）。改存雲端，各裝置以最後一次設定為準。
+ *       GET  invsess &store=店號 → {sess:{store,start,setAt}|null}（start：0＝延續歷史；>0＝本輪開始毫秒）
+ *       POST invsessSet {store,start,setAt}：setAt 比雲端舊就不蓋（回傳雲端現值，stale:true）
+*
  * v1.7.1：merge 擋下「新竹托運單已交寄」的訂單（貨已寄出，只是沒按出貨完成；11/09 9 家店誤合併的原因）。
  *
  * v1.7：POST unmerge {id:<併入的那張>, base?}：把合併拆回原本的幾張（被併入的那幾張回到合併前的狀態與備註；
@@ -50,7 +55,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.8.1-hctbatch';
+var DCO_VER = 'v1.9-invsess';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -63,6 +68,8 @@ var SH_HCTIMG = 'dc_hct_img';   /* v1.3：標籤圖另放一頁（一張約 15,0
 var H_HCTIMG = ['託運單號', '新竹貨號', '標籤', '建立時間'];
 var SH_VMARK = 'dc_vmark';   /* v1.6：門市「本輪已叫貨／不叫」標記 */
 var H_VMARK = ['標記號', '店號', '廠商', '類型', '標記時間', 'sku_id', '品名', '數量', '單位', '狀態', '復原時間'];
+var SH_INVSESS = 'dc_invsess';   /* v1.9：各店盤點輪次（一店一列） */
+var H_INVSESS = ['店號', '盤點開始', '設定時間', '設定時間（看）', '狀態'];
 var HCT_IMG_DAYS = 60;
 var DCO_MERGED_PREFIX = '已併入 ';                    /* v1.2：被合併的訂單備註開頭（前端靠它顯示「已併入」） */
 var OPEN_ST = { '待處理': 1, '備貨中': 1 };
@@ -231,6 +238,7 @@ function doGet(e) {
     if (p.action === 'stock') return dcoOut_({ ok: true, stock: dcoStock_(), locs: dcoLocs_() }, cb);   /* v1.2：多回 locs，舊前端不讀這欄 */
     if (p.action === 'locs') return dcoOut_({ ok: true, locs: dcoLocs_() }, cb);
     if (p.action === 'vmarks') return dcoOut_({ ok: true, marks: vmList_(p) }, cb);   /* v1.6 */
+    if (p.action === 'invsess') return dcoOut_({ ok: true, sess: isGet_(p.store) }, cb);   /* v1.9 */
     if (p.action === 'hct') { var hp = hctPub_(); return dcoOut_({ ok: true, env: hp.env, cfg: hp, labels: hctList_(p) }, cb); }   /* v1.3；v1.5 多回 cfg（客代清單、派遣，不含帳密） */
     return dcoOut_({ ok: false, error: '未知的 action' }, cb);
   } catch (err) {
@@ -321,6 +329,28 @@ function vmUnmark_(b) {
   return { ok: true, mid: mid, n: rs.length };
 }
 
+/* ── v1.9：盤點輪次（一店一列；數字存文字免得被轉成科學記號或日期） ── */
+function isTable_() {
+  var ss = dcoSS_();
+  if (!ss.getSheetByName(SH_INVSESS)) dcoEnsure_(ss, SH_INVSESS, H_INVSESS, ['A', 'B', 'C']);
+  return dcoRead_(SH_INVSESS);
+}
+function isRow_(t, store) { for (var i = 0; i < t.rows.length; i++) if (dcoStr_(t.rows[i]['店號']) === store) return t.rows[i]; return null; }
+function isOut_(r) { return r ? { store: dcoStr_(r['店號']), start: Number(dcoStr_(r['盤點開始'])) || 0, setAt: Number(dcoStr_(r['設定時間'])) || 0 } : null; }
+function isGet_(store) { store = dcoStr_(store); if (!store) return null; return isOut_(isRow_(isTable_(), store)); }
+function isSet_(b) {
+  var store = dcoStr_(b.store), start = Math.max(0, Math.floor(Number(b.start) || 0)), setAt = Math.floor(Number(b.setAt) || 0);
+  if (!store) return { ok: false, error: '缺少店號' };
+  if (!(setAt > 0)) return { ok: false, error: '缺少設定時間' };
+  var t = isTable_(), r = isRow_(t, store), cur = isOut_(r);
+  if (cur && cur.setAt >= setAt) return { ok: true, stale: true, sess: cur };   /* 別台裝置後來又設過：不蓋 */
+  var row = [store, String(start), String(setAt), Utilities.formatDate(new Date(setAt), DCO_TZ, 'yyyy-MM-dd HH:mm:ss'), start > 0 ? '新的一週' : '延續歷史'];
+  if (r) t.sh.getRange(r._row, 1, 1, row.length).setValues([row]);
+  else t.sh.getRange(t.sh.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+  dcoLog_('invsessSet', '', store, { start: start, setAt: setAt });
+  return { ok: true, sess: { store: store, start: start, setAt: setAt } };
+}
+
 /* ── POST ───────────────────────────────────────────────────── */
 function doPost(e) {
   var body = {};
@@ -348,6 +378,7 @@ function doPost(e) {
     else if (a === 'hctQuery') r = hctQuery_(body);                   /* v1.5 */
     else if (a === 'vmark') r = vmMark_(body);                        /* v1.6 */
     else if (a === 'vunmark') r = vmUnmark_(body);                    /* v1.6 */
+    else if (a === 'invsessSet') r = isSet_(body);                    /* v1.9 */
     else r = { ok: false, error: '未知的 action' };
     return dcoOut_(r);
   } catch (err) {
