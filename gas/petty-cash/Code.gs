@@ -19,7 +19,7 @@
      每期每單位（或每人）限次、過截止日自動算下一期、截止前可刪可重送、專人審核（通過／退回）、退回時交辦到該店「門市今日」。
      動作與規則見檔尾「總部申請作業」那一段。read 多收 kind（advance／vendor／training）調整 AI 提示。
    ===================================================================== */
-var VER = 'pc-2026-11-11.1';
+var VER = 'pc-2026-11-12.1';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -430,6 +430,7 @@ function authSetup_() {
    額度（dim_limit 分頁，專人可改）：每期每「單位」1 次；代墊款在體驗中心算「人」；訓練費算人；廠商款分常態（1 次）／非常態（不限）。
      退回的、刪除的不佔額度；測試資料（編號 DEMO 開頭、申請人姓名含「測試」）也不佔（2026-11-11，isTest_）。
    刪除：該期截止日（含當天）前、而且還沒審核通過 → 可刪；刪除＝標記，資料留著。
+   修改（canEdit_）：要審核的項目＝審核中／已退回可改（改完回審核中）；不用審核的零用金（done）＝該期截止日（含當天）前可改，改完仍是已完成（2026-11-12 經營者）。同一筆編號、同一期、不佔額度。
    通知：退回時用體驗中心身分（task_hq，密碼由本程式從 dim_auth 讀、不經人手）向公告 API 交辦一件「指定日期＝今天」給那家店（門市今日「今天要做」）；
      出貨中心、體驗中心沒有門市今日，只在 hub 卡與申請頁看得到。
    資料：零用金報銷_紀錄 試算表加 apply／dim_limit／dim_staff／apply_log 四個分頁；單據照片存 Drive「總部申請作業_附件／期別」（零用金不存）。
@@ -454,9 +455,11 @@ var LIMIT_HEAD = ['type', 'sub', 'unit', 'scope', 'max', 'note'];
 var STAFF_HEAD = ['unit', 'name', 'active', 'added_at', 'added_by'];
 var APLOG_HEAD = ['time', 'action', 'id', 'type', 'unit', 'who', 'msg'];
 var AP_STATUS = { pending: '審核中', approved: '已完成', rejected: '已退回', done: '已完成' };   /* 2026-11-03 經營者：零用金「已送出」與審核「已通過」統一顯示「已完成」（代碼不變） */
-var PAYLOAD_MAX = 45000, PHOTO_MAX = 12, ROWS_MAX = 80, NOTE_MAX = 300, WHO_MAX = 20;
+/* 2026-11-12 經營者：五個項目的照片都開放超過 12 張。PHOTO_MAX＝一筆申請最多存幾張（網址公開、防濫用）；PHOTO_REQ＝一次請求最多收幾張（太多會逾時、佔住排隊鎖）。
+   前端 submit／update 先帶第一批，其餘每批用 photo_add 補上（apPhotoAdd_） */
+var PAYLOAD_MAX = 45000, PHOTO_MAX = 100, PHOTO_REQ = 12, ROWS_MAX = 80, NOTE_MAX = 300, WHO_MAX = 20;
 var AP_ACTIONS = {
-  login: apLogin_, me: apMe_, submit: apSubmit_, update: apUpdate_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
+  login: apLogin_, me: apMe_, submit: apSubmit_, update: apUpdate_, photo_add: apPhotoAdd_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
   rv_login: rvLogin_, rv_list: rvList_, rv_get: rvGet_, rv_photo: rvPhoto_, rv_set: rvSet_, rv_staff: rvStaff_, rv_staff_set: rvStaffSet_, rv_export: rvExport_, rv_limits: rvLimits_
 };
 
@@ -605,12 +608,18 @@ function apView_(r, full) {
   var o = { id: r.id, created: r.created.slice(0, 16), type: r.type, typeLabel: (AP_TYPES[r.type] || {}).label || r.type, sub: r.sub, unit: r.unit, who: r.who,
     period: r.period, periodLabel: r.period_label, deadline: r.deadline, status: r.status, statusLabel: AP_STATUS[r.status] || r.status,
     amount: Number(r.amount) || 0, n: Number(r.n) || 0, summary: r.summary, reviewer: r.reviewer, reviewNote: r.review_note, reviewedAt: r.reviewed_at.slice(0, 16),
-    nPhotos: photoIds_(r).length, canDel: canDel_(r), canEdit: r.deleted !== 'Y' && (r.status === 'pending' || r.status === 'rejected') };
+    nPhotos: photoIds_(r).length, canDel: canDel_(r), canEdit: canEdit_(r) };
   if (full) { try { o.payload = JSON.parse(r.payload || '{}'); } catch (e) { o.payload = {}; } }
   return o;
 }
 function photoIds_(r) { try { var a = JSON.parse(r.photos || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
 function canDel_(r) { return r.deleted !== 'Y' && r.status !== 'approved' && apToday_() <= r.deadline; }
+/* 2026-11-12 經營者：零用金（不用審核、狀態 done）送出後也要能修改，但只到該期截止日（含當天）；要審核的項目照舊＝審核中／已退回可改 */
+function canEdit_(r) {
+  if (r.deleted === 'Y') return false;
+  if (r.status === 'pending' || r.status === 'rejected') return true;
+  return r.status === 'done' && apToday_() <= r.deadline;
+}
 function apFind_(tb, id) { return tb.rows.filter(function (x) { return x.id === String(id) && x.deleted !== 'Y'; })[0]; }
 /* 測試資料不佔額度（2026-11-11 經營者）：編號 DEMO 開頭（示範假申請）或申請人姓名含「測試」 */
 function isTest_(r) { return /^DEMO/i.test(String(r.id || '')) || /測試/.test(String(r.who || '')); }
@@ -677,7 +686,7 @@ function apSubmit_(b) {
   var payloadStr = JSON.stringify(pl);
   if (payloadStr.length > PAYLOAD_MAX) throw fail_('明細太長，請分兩次申請', 'input');
   var amount = Math.round(Number(pl.sum) || 0), n = pl.rows.length, summary = apClean_(pl.summary, 120).trim();
-  var photos = Array.isArray(b.photos) ? b.photos.slice(0, PHOTO_MAX) : [];
+  var photos = Array.isArray(b.photos) ? b.photos.slice(0, PHOTO_REQ) : [];
   if (type === 'petty') photos = [];   /* 零用金不存照片（原本的做法） */
   apRate_('submit:' + unit, 20, 600, '送出太多次了，請 10 分鐘後再試');
   var today = apToday_(), pr = period_(type, today), lim = limitOf_(type, sub, unit);
@@ -686,7 +695,7 @@ function apSubmit_(b) {
     var tb = apLoad_('apply', AP_HEAD, 6000);
     var used = countUsed_(tb.rows, type, sub, unit, who, pr.key, lim);
     if (lim.max > 0 && used >= lim.max) {
-      throw fail_(pr.label + '的' + t.label + (sub ? '（' + sub + '）' : '') + (lim.scope === 'person' ? '，' + who + ' 已經申請過了' : '，本單位已經申請過了') + '（每期 ' + lim.max + ' 次）。要改內容請先刪掉原本那一筆再重送。', 'quota');
+      throw fail_(pr.label + '的' + t.label + (sub ? '（' + sub + '）' : '') + (lim.scope === 'person' ? '，' + who + ' 已經申請過了' : '，本單位已經申請過了') + '（每期 ' + lim.max + ' 次）。要改內容請到「我的申請」按「修改」。', 'quota');
     }
     var id = 'A' + Utilities.formatDate(new Date(), TZ, 'yyMMddHHmmss') + Math.floor(Math.random() * 90 + 10);
     var fids = [];
@@ -702,7 +711,8 @@ function apSubmit_(b) {
 function apUpdate_(b) {
   var unit = unitAuth_(b), tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
   if (!r || r.unit !== unit) throw fail_('找不到這筆申請', 'gone');
-  if (r.status !== 'pending' && r.status !== 'rejected') throw fail_(r.status === 'approved' ? '這筆已經審核通過，不能修改' : '這筆不能修改', 'deny');
+  if (!canEdit_(r)) throw fail_(r.status === 'approved' ? '這筆已經審核通過，不能修改' : r.status === 'done' ? '這一期（' + r.period_label + '）已經在 ' + r.deadline + ' 截止，不能修改' : '這筆不能修改', 'deny');
+  var keep = r.status === 'done';   /* 不用審核的（零用金）：改完仍是已完成 */
   var t = AP_TYPES[r.type], who = apClean_(b.who, WHO_MAX).replace(/\s+/g, '').trim() || r.who;
   var sub = t.subs ? String(b.sub || r.sub) : '';
   if (t.subs && t.subs.indexOf(sub) < 0) throw fail_('請選常態或非常態', 'input');
@@ -712,14 +722,37 @@ function apUpdate_(b) {
   if (sub === '非常態' && !apClean_(pl.subReason, NOTE_MAX).trim()) throw fail_('非常態請款請填原因', 'input');
   var payloadStr = JSON.stringify(pl);
   if (payloadStr.length > PAYLOAD_MAX) throw fail_('明細太長，請分兩次申請', 'input');
-  var photos = Array.isArray(b.photos) ? b.photos.slice(0, PHOTO_MAX) : [], fids = photoIds_(r);
-  if (photos.length) { try { fids = fids.concat(savePhotos_(r.id, r.period, photos)).slice(0, PHOTO_MAX); } catch (e) { apLog_('photo_fail', r.id, r.type, unit, who, errMsg_(e)); } }
+  var fids = photoIds_(r), photos = Array.isArray(b.photos) ? b.photos.slice(0, Math.min(PHOTO_REQ, Math.max(0, PHOTO_MAX - fids.length))) : [];
+  if (r.type === 'petty') photos = [];   /* 零用金不存照片（同 apSubmit_） */
+  if (photos.length) { try { fids = fids.concat(savePhotos_(r.id, r.period, photos, fids.length)).slice(0, PHOTO_MAX); } catch (e) { apLog_('photo_fail', r.id, r.type, unit, who, errMsg_(e)); } }
   var amount = Math.round(Number(pl.sum) || 0), summary = apClean_(pl.summary, 120).trim();
   apPutCols_(tb.sh, AP_HEAD, r._row, { sub: sub, who: who, amount: amount, n: pl.rows.length, summary: summary, payload: payloadStr, photos: JSON.stringify(fids),
-    status: 'pending', reviewer: '', review_note: '', reviewed_at: '', updated: new Date(), notice: '' });
+    status: keep ? 'done' : 'pending', reviewer: '', review_note: '', reviewed_at: '', updated: new Date(), notice: '' });
   SpreadsheetApp.flush();
   apLog_('update', r.id, r.type, unit, who, r.period_label + ' $' + amount + ' ' + pl.rows.length + ' 筆（原狀態 ' + r.status + '）');
-  return { id: r.id, period: { key: r.period, label: r.period_label, deadline: r.deadline }, status: 'pending', statusLabel: AP_STATUS.pending, photosSaved: fids.length };
+  return { id: r.id, period: { key: r.period, label: r.period_label, deadline: r.deadline }, status: keep ? 'done' : 'pending', statusLabel: AP_STATUS[keep ? 'done' : 'pending'], photosSaved: fids.length };
+}
+/* 2026-11-12：照片分批補上。送出／修改之後，前端把第一批以外的照片每批呼叫一次；加在原有照片後面，一筆最多 PHOTO_MAX 張。
+   存 Drive 不佔排隊鎖（慢），只有把檔案編號寫回 apply 那一下才鎖 */
+function apPhotoAdd_(b) {
+  var unit = unitAuth_(b), tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
+  if (!r || r.unit !== unit) throw fail_('找不到這筆申請', 'gone');
+  if (r.type === 'petty') throw fail_('零用金不存照片', 'deny');
+  if (!canEdit_(r)) throw fail_('這筆申請已經不能再加照片', 'deny');
+  var have = photoIds_(r).length, photos = Array.isArray(b.photos) ? b.photos.slice(0, Math.min(PHOTO_REQ, Math.max(0, PHOTO_MAX - have))) : [];
+  if (!photos.length) return { id: r.id, added: 0, photosSaved: have };
+  apRate_('photo:' + unit, 150, 600, '照片上傳太多次了，請 10 分鐘後再試');
+  var ids = savePhotos_(r.id, r.period, photos, have);
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var tb2 = apLoad_('apply', AP_HEAD, 6000), r2 = apFind_(tb2, b.id);
+    if (!r2) throw fail_('找不到這筆申請', 'gone');
+    var all = photoIds_(r2).concat(ids).slice(0, PHOTO_MAX);
+    apPutCols_(tb2.sh, AP_HEAD, r2._row, { photos: JSON.stringify(all), updated: new Date() });
+    SpreadsheetApp.flush();
+    apLog_('photo_add', r.id, r.type, unit, r.who, '照片 +' + ids.length + '，共 ' + all.length);
+    return { id: r.id, added: ids.length, photosSaved: all.length };
+  } finally { lock.releaseLock(); }
 }
 function apDel_(b) {
   var unit = unitAuth_(b), tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
@@ -743,12 +776,12 @@ function apDir_(periodKey) {
   var it = root.getFoldersByName(periodKey);
   return it.hasNext() ? it.next() : root.createFolder(periodKey);
 }
-function savePhotos_(id, periodKey, photos) {
-  var dir = apDir_(periodKey), out = [];
+function savePhotos_(id, periodKey, photos, start) {   /* start＝這筆申請已經有幾張，檔名接著編（2026-11-12 分批上傳） */
+  var dir = apDir_(periodKey), out = [], n0 = Number(start) || 0;
   photos.forEach(function (p, k) {
     var img = String((p && p.img) || ''), mt = String((p && p.mt) || 'image/jpeg');
     if (!img || img.length > IMG_MAX) return;
-    var f = dir.createFile(Utilities.newBlob(Utilities.base64Decode(img), mt, id + '_' + (k + 1) + (mt === 'image/png' ? '.png' : '.jpg')));
+    var f = dir.createFile(Utilities.newBlob(Utilities.base64Decode(img), mt, id + '_' + (n0 + k + 1) + (mt === 'image/png' ? '.png' : '.jpg')));
     out.push(f.getId());
   });
   return out;
