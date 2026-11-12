@@ -413,6 +413,9 @@ LAW_MAX_CONSEC = 5
 def _law(cfg):
     cfg["max_consec"] = LAW_MAX_CONSEC
     cfg["late_early_limit"] = None
+    # 2026-11-13 經營者：店別基本設定的「跨店支援夥伴」「店規」兩欄刪掉 → 一律當空白（舊存檔有填也不再套用；當時 12 店都沒填）
+    cfg["support"] = ""
+    cfg["rules"] = ""
     return cfg
 
 
@@ -532,8 +535,8 @@ def cfg_clean(body):
         names.add(name)
         out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數")})
     _law(out)   # 連上天數、晚接早照勞基法（不收店長填的值）
-    out["support"] = str(body.get("support") or "").strip()[:1000]
-    out["rules"] = str(body.get("rules") or "").strip()[:4000]
+    out["support"] = ""   # 2026-11-13：兩欄已刪，不再收
+    out["rules"] = ""
     for r in (body.get("carry") or [])[:60]:
         name = str(r.get("name") or "").strip()[:20]
         if not name:
