@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- 2026-11-03 新建「🗂 申請審核」（總部申請作業的審核後台；經營者交辦）：審核專人用權限中心 apply_review 密碼登入
-     → 待審核／已通過／已退回／全部 分頁，依項目、單位、期別篩選 → 展開看明細與單據照片 → ✅ 通過／↩ 退回（必填原因；退回會交辦到該店「門市今日」）
+     → 待審核／已通過／已退回／零用金 分頁（2026-11-13 「全部」改「零用金」），依項目、單位、期別篩選 → 展開看明細與單據照片 → ✅ 通過／↩ 退回（必填原因；退回會交辦到該店「門市今日」）
      → ⬇ 下載該筆 Excel、📊 匯出某項目某一期所有通過的申請（給會計）；👥 名單：各單位申請人姓名（合併打錯的、停用離職的）；⚙️ 額度：dim_limit 內容與試算表連結。
      後端＝GAS「零用金報銷_資料庫」rv_* 動作（密碼在後端驗，快取 10 分鐘）。本頁只放 hub 體驗中心區。 -->
 <html lang="zh-Hant">
@@ -322,7 +322,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <button type="button" data-tab="pending" class="on">⏳ 待審核<span class="n" id="nPending">–</span></button>
       <button type="button" data-tab="approved">✅ 已完成<span class="n" id="nApproved">–</span></button>
       <button type="button" data-tab="rejected">↩ 已退回<span class="n" id="nRejected">–</span></button>
-      <button type="button" data-tab="all">全部（含零用金）</button>
+      <button type="button" data-tab="done">🧾 零用金<span class="n" id="nPetty">–</span></button>
       <button type="button" data-tab="staff">👥 名單</button>
       <button type="button" data-tab="limits">⚙️ 額度</button>
     </div>
@@ -348,7 +348,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 var PC_API = 'https://script.google.com/macros/s/AKfycbwYrgdECSzqFNKp2gQvW9GPVaFcHcU6eFB2cQ6jxZE6gKfqtmtmnMwdLEA6JeSAvcTR/exec';
 var REVIEW_DASH = 'apply_review', AUTH_KEY = 'hqreview_auth';
 var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
-  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（2026-11-03），與 hq-apply.html、GAS 一致 */
+  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心', '測試用'];   /* 正式店名（2026-11-03），與 hq-apply.html、GAS 一致；測試用（2026-11-13）的申請只在單位篩選選「測試用」時列出 */
 var TYPES = { petty: { label: '零用金', emoji: '🧾' }, advance: { label: '代墊款', xl: '代墊款報銷', emoji: '💳' }, transfer: { label: '調撥', xl: '調撥申請', emoji: '🔄' }, vendor: { label: '廠商款', xl: '廠商款報銷', emoji: '🏭' }, training: { label: '專業訓練費', xl: '專業訓練費報銷', emoji: '🎓' } };
 /* 2026-11-11 經營者：項目名改短（代墊款／n月調撥／廠商款／專業訓練費），跟 hq-apply.html 一致；調撥帶期別月份。xl＝匯出 Excel 總表仍用的舊名（表頭還沒決定要不要改） */
 /* 2026-11-11 晚：每個項目名前面都加期別（11月上半零用金、11月代墊款、11月調撥、11月廠商款、2026第四季專業訓練費） */
@@ -411,7 +411,7 @@ function initLogin() {
 function logout(msg) { A = { pw: '', name: '', exp: 0 }; lsDel(AUTH_KEY); $('unitBadge').hidden = true; show('vLogin'); if (msg) $('lgErr').textContent = msg; }
 function enter() {
   $('rvName').textContent = A.name; $('unitBadge').hidden = false; show('vMain');
-  $('fType').innerHTML = '<option value="">全部項目</option>' + ORDER.map(function (k) { return '<option value="' + k + '">' + TYPES[k].emoji + ' ' + TYPES[k].label + '</option>'; }).join('');
+  $('fType').innerHTML = '<option value="">全部項目</option>' + ORDER.filter(function (k) { return k !== 'petty'; }).map(function (k) { return '<option value="' + k + '">' + TYPES[k].emoji + ' ' + TYPES[k].label + '</option>'; }).join('');
   $('fUnit').innerHTML = '<option value="">全部單位</option>' + UNITS.map(function (u) { return '<option>' + esc(u) + '</option>'; }).join('');
   setTab('pending');
 }
@@ -419,13 +419,16 @@ function setTab(tab) {
   S.tab = tab; S.sel = ''; $('detail').innerHTML = '';
   $('tabs').querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === tab); });
   $('listCard').hidden = tab === 'staff' || tab === 'limits'; $('staffCard').hidden = tab !== 'staff'; $('limitsCard').hidden = tab !== 'limits';
+  $('fType').hidden = tab === 'done';   /* 零用金分頁只有零用金，項目篩選用不到 */
   if (tab === 'staff') loadStaff(); else if (tab === 'limits') loadLimits(); else loadList();
 }
+/* 2026-11-13 經營者：拿掉「全部（含零用金）」，改「🧾 零用金」只列零用金（狀態 done＝零用金，不用審核）；其他三個分頁本來就沒有零用金 */
+function curType() { return S.tab === 'done' ? 'petty' : $('fType').value; }
 function loadList() {
   var tb = $('list').querySelector('tbody'); tb.innerHTML = '<tr><td colspan="7" class="muted">讀取中…</td></tr>'; $('listEmpty').style.display = 'none';
-  return api({ action: 'rv_list', status: S.tab === 'all' ? 'all' : S.tab, type: $('fType').value, unit: $('fUnit').value, period: $('fPeriod').value }).then(function (r) {
+  return api({ action: 'rv_list', status: S.tab, type: curType(), unit: $('fUnit').value, period: $('fPeriod').value }).then(function (r) {
     S.rows = r.rows; S.counts = r.counts; S.periods = r.periods;
-    $('nPending').textContent = r.counts.pending; $('nApproved').textContent = r.counts.approved; $('nRejected').textContent = r.counts.rejected;
+    $('nPending').textContent = r.counts.pending; $('nApproved').textContent = r.counts.approved; $('nRejected').textContent = r.counts.rejected; $('nPetty').textContent = r.counts.done;
     var cur = $('fPeriod').value, keys = Object.keys(r.periods).sort().reverse();
     $('fPeriod').innerHTML = '<option value="">全部期別</option>' + keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(r.periods[k]) + '</option>'; }).join('');
     renderList();
@@ -489,10 +492,10 @@ function dlOne(btn) {
 $('reloadBtn').addEventListener('click', loadList);
 ['fType', 'fUnit', 'fPeriod'].forEach(function (id) { $(id).addEventListener('change', loadList); });
 $('exportBtn').addEventListener('click', function () {
-  var type = $('fType').value, pe = $('fPeriod').value;
-  if (!type || !pe) { toast('請先在上面選「項目」和「期別」再匯出'); return; }
+  var type = curType(), pe = $('fPeriod').value;
+  if (!type || !pe) { toast(S.tab === 'done' ? '請先在上面選「期別」再匯出' : '請先在上面選「項目」和「期別」再匯出'); return; }
   var btn = this; btn.disabled = true;
-  api({ action: 'rv_export', type: type, period: pe }).then(function (r) {
+  api({ action: 'rv_export', type: type, period: pe, unit: $('fUnit').value }).then(function (r) {
     if (!r.apps.length) { toast('這一期沒有已完成的' + TYPES[type].label); return; }
     return buildSummary(type, r).then(function (blob) { saveBlob(blob, (TYPES[type].xl || TYPES[type].label) + '總表_' + r.label.replace(/\s/g, '') + '.xlsx'); toast('已匯出 ' + r.apps.length + ' 筆申請'); });
   }).catch(function (e) { toast('匯出失敗：' + (e.message || e)); }).finally(function () { btn.disabled = false; });
