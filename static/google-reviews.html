@@ -603,7 +603,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 <div class="ai-chips" id="aiNegChips"></div>
 <div class="table-wrap">
 <table>
-<thead><tr><th>年月</th><th>門市</th><th>星等</th><th>評論內容</th><th title="每則負評附 AI 寫的公開回覆草稿，看過、改好再自己貼到 Google（系統不會自動回覆）">🤖 AI 分類與回覆草稿</th></tr></thead>
+<thead><tr><th>評論日期</th><th>門市</th><th>星等</th><th>評論內容</th><th title="每則負評附 AI 寫的公開回覆草稿，看過、改好再自己貼到 Google（系統不會自動回覆）">🤖 AI 分類與回覆草稿</th></tr></thead>
 <tbody id="negTbody"></tbody>
 </table>
 </div>
@@ -613,7 +613,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 <div class="section-title" style="display:flex;align-items:center;gap:8px;">📄 評論明細 <span id="detailCount" style="font-weight:400;font-size: 14px;color:var(--muted);"></span><button class="csv-btn" style="margin-left:auto;" onclick="exportReviewsCSV()" title="匯出目前篩選條件下的全部評論（非畫面前 200 筆）">⬇ 匯出 CSV</button></div>
 <div class="table-wrap">
 <table>
-<thead><tr><th>年月</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>評論性質</th><th>評論者</th><th>評論內容</th></tr></thead>
+<thead><tr><th>評論日期</th><th>門市</th><th>品牌</th><th>區域</th><th>星等</th><th>評論性質</th><th>評論者</th><th>評論內容</th></tr></thead>
 <tbody id="detailTbody"></tbody>
 </table>
 </div>
@@ -675,7 +675,7 @@ async function initLoad() {
 showLoading(true);
 try {
 // 改由 GAS 後端讀 Sheet（伺服器端 getValues，完整不截斷），一次取回全部列。
-// GAS rows 欄位順序：0 門市 1 評論者 2 年月 3 星等 4 品牌 5 區域 6 標記 7 內容
+// GAS rows 欄位順序：0 門市 1 評論者 2 年月 3 星等 4 品牌 5 區域 6 標記 7 內容（8–12 AI 判讀、13 評論日期 yyyy-MM-dd）
 /* 2026-10-04 效能第 1 批（1-3）冷啟動重試（比照 POS 地雷 18）：GAS 冷啟動常回 5xx（script onerror）或 ok:false，
    先別報錯，畫面維持轉圈，3 秒後自動再抓，最多重試 2 次；逾時（30 秒沒回）不重試，直接顯示錯誤，避免轉圈太久。 */
 let data = null;
@@ -693,6 +693,7 @@ _allRows = (data.rows || []).map(c => ({
 store:  c[0] || '',
 author: c[1] || '',
 ym:     c[2] || '',
+date:   c[13] || '',   /* 2026-11-13 評論日期 yyyy-MM-dd（評論表 C 欄）；期間篩選與達標仍照 ym（歸屬月份） */
 stars:  (c[3] === '' || c[3] === null || c[3] === undefined) ? null : Number(c[3]),
 brand:  c[4] || '',
 region: c[5] || '',
@@ -1087,7 +1088,7 @@ const negs = rows.filter(r => r.stars !== null && r.stars <= 4).sort((a,b) => (b
 const tb = document.getElementById('negTbody');
 if (!negs.length) { tb.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--muted)">篩選範圍內沒有負評</td></tr>'; return; }
 _aiReplies = negs.map(r => (r.ai && r.ai.reply) || '');
-tb.innerHTML = negs.map((r, i) => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td><span class="neg-badge">${r.stars} ★</span></td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}</td><td style="min-width:260px;max-width:420px;">${aiNegCell(r, i)}</td></tr>`).join('');
+tb.innerHTML = negs.map((r, i) => `<tr>${dateCell(r)}<td>${esc(r.store)}</td><td><span class="neg-badge">${r.stars} ★</span></td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}</td><td style="min-width:260px;max-width:420px;">${aiNegCell(r, i)}</td></tr>`).join('');
 }
 /* 2026-10-24 AI 回覆草稿：負評分類＋可展開的草稿＋複製鈕（_aiReplies 依畫面順序存全文，複製不經 HTML） */
 let _aiReplies = [];
@@ -1117,12 +1118,21 @@ function renderAiNegChips(rows) {
     (pending ? `<span style="color:var(--muted);font-size:14px;align-self:center;">（${pending} 則還沒判讀）</span>` : '');
 }
 
+/* 2026-11-13 評論日期格（近期負評、評論明細共用）：顯示年月日；
+   晚抓到的舊評論日期月份會跟歸屬月份（ym，期間篩選與達標用）不同，下面加一行小字註明計入哪個月。沒有日期的退回顯示年月。 */
+function dateCell(r) {
+  const d = r.date || '';
+  if (!d) return `<td style="white-space:nowrap;">${esc(r.ym||'—')}</td>`;
+  const note = (r.ym && d.slice(0,7) !== r.ym) ? `<div style="font-size:12px;color:var(--muted);" title="這則是舊評論，系統較晚才抓到，數量算在抓到的那個月">計入 ${esc(r.ym)}</div>` : '';
+  return `<td style="white-space:nowrap;">${esc(d)}${note}</td>`;
+}
+
 function renderDetailTable(rows) {
 const show = rows.slice(0,200);
 document.getElementById('detailCount').textContent = `共 ${rows.length} 筆${rows.length>200?' （顯示前 200）':''}`;
 const tb = document.getElementById('detailTbody');
 if (!show.length) { tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--muted)">無符合條件的資料</td></tr>'; return; }
-tb.innerHTML = show.map(r => `<tr><td>${esc(r.ym||'—')}</td><td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=4?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td>${ isValidReview(r) ? '<span class="valid-badge">✓ 真實評論</span>' : (r.stars!==null&&r.stars<=4) ? '<span class="neg-badge">負評</span>' : (r.stars===5 && !validContent(r)) ? '<span class="empty-badge">5★ 空白</span>' : (r.stars===5) ? '<span class="plain-badge">5★ 一般</span>' : '<span class="empty-badge">—</span>' }</td><td>${esc(r.author||'—')}</td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}${aiDetailLine(r)}</td></tr>`).join('');
+tb.innerHTML = show.map(r => `<tr>${dateCell(r)}<td>${esc(r.store)}</td><td>${esc(r.brand||'—')}</td><td>${esc(r.region||'—')}</td><td><span class="${r.stars&&r.stars<=4?'neg-badge':'star-badge'}">${r.stars!==null?r.stars+' ★':'—'}</span></td><td>${ isValidReview(r) ? '<span class="valid-badge">✓ 真實評論</span>' : (r.stars!==null&&r.stars<=4) ? '<span class="neg-badge">負評</span>' : (r.stars===5 && !validContent(r)) ? '<span class="empty-badge">5★ 空白</span>' : (r.stars===5) ? '<span class="plain-badge">5★ 一般</span>' : '<span class="empty-badge">—</span>' }</td><td>${esc(r.author||'—')}</td><td style="max-width:600px;word-break:break-word;white-space:pre-wrap;line-height:1.55;">${esc(cleanGoogleTranslation(r.text||''))}${aiDetailLine(r)}</td></tr>`).join('');
 }
 /* 2026-10-24 明細表 AI 判讀一行（夥伴／稱讚重點／負評分類；沒判讀過不顯示） */
 function aiDetailLine(r) {
@@ -1148,11 +1158,11 @@ function _reviewNature(r){
   return '—';
 }
 function exportReviewsCSV(){
-  const headers = ['年月','門市','品牌','區域','星等','評論性質','評論者','評論內容','AI夥伴','AI稱讚重點','AI負評分類','AI回覆草稿'];   /* 後 4 欄 2026-10-24 AI 判讀 */
+  const headers = ['評論日期','年月','門市','品牌','區域','星等','評論性質','評論者','評論內容','AI夥伴','AI稱讚重點','AI負評分類','AI回覆草稿'];   /* 後 4 欄 2026-10-24 AI 判讀 */
   const lines = [headers.map(_csvCell).join(',')];
   _csvRows.forEach(r=>{
     lines.push([
-      r.ym||'', r.store||'', r.brand||'', r.region||'',
+      r.date||'', r.ym||'', r.store||'', r.brand||'', r.region||'',
       (r.stars!==null && r.stars!==undefined ? r.stars : ''),
       _reviewNature(r), r.author||'', cleanGoogleTranslation(r.text||''),
       (r.ai&&r.ai.partners)||'', (r.ai&&r.ai.praise)||'', (r.ai&&r.ai.neg)||'', (r.ai&&r.ai.reply)||''

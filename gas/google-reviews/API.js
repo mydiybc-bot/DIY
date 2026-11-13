@@ -33,8 +33,8 @@ function doGet(e) {
         var r = vals[i];
         if (r[0] === '' || r[0] === null) continue;
         var a = ai[String(r[5] || '')] || ['', '', '', '', ''];
-        /* 0–7 原欄位不變；8 起為 AI 判讀：people(Y/N)、夥伴、稱讚重點、負評類型、回覆草稿 */
-        rows.push([r[0], r[1], fmtYM_(r[6]), r[7], r[8], r[9], r[10], r[4], a[0], a[1], a[2], a[3], a[4]]);
+        /* 0–7 原欄位不變；8 起為 AI 判讀：people(Y/N)、夥伴、稱讚重點、負評類型、回覆草稿；13 評論日期 yyyy-MM-dd（C 欄評論時間，2026-11-13 加） */
+        rows.push([r[0], r[1], fmtYM_(r[6]), r[7], r[8], r[9], r[10], r[4], a[0], a[1], a[2], a[3], a[4], fmtDay_(r[2])]);
       }
     }
     payload = JSON.stringify({ ok: true, count: rows.length, rows: rows });
@@ -55,6 +55,16 @@ function fmtYM_(val) {
   }
   var mt = String(val).trim().match(/^(\d{4})[-\/](\d{1,2})/);
   return mt ? mt[1] + '-' + ('0' + mt[2]).slice(-2) : String(val).trim();
+}
+/* 2026-11-13：評論時間（C 欄）→ yyyy-MM-dd；日期物件照指令碼時區（台灣），文字取開頭的年月日 */
+function fmtDay_(val) {
+  if (val === null || val === '') return '';
+  if (Object.prototype.toString.call(val) === '[object Date]') {
+    if (isNaN(val.getTime())) return '';
+    return val.getFullYear() + '-' + ('0' + (val.getMonth() + 1)).slice(-2) + '-' + ('0' + val.getDate()).slice(-2);
+  }
+  var mt = String(val).trim().match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  return mt ? mt[1] + '-' + ('0' + mt[2]).slice(-2) + '-' + ('0' + mt[3]).slice(-2) : '';
 }
 /* 2026-10-30：近期評論（給決策中心 GAS action=reviews 用）。每列 [0門市,1評論者,2評論時間 yyyy-MM-dd HH:mm,3年月,4星等數字,5內容,6 AI people,7 AI夥伴,8 AI負評分類]
    範圍：年月＝本月或上月，或評論時間在 40 天內。結果暫存 10 分鐘。 */
