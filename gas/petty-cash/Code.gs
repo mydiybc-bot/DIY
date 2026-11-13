@@ -19,7 +19,7 @@
      每期每單位（或每人）限次、過截止日自動算下一期、截止前可刪可重送、專人審核（通過／退回）、退回時交辦到該店「門市今日」。
      動作與規則見檔尾「總部申請作業」那一段。read 多收 kind（advance／vendor／training）調整 AI 提示。
    ===================================================================== */
-var VER = 'pc-2026-11-13.1';
+var VER = 'pc-2026-11-13.2';   /* 11-13.2：審核後台可直接修改申請明細（rv_edit） */
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -463,7 +463,7 @@ var AP_STATUS = { pending: '審核中', approved: '已完成', rejected: '已退
 var PAYLOAD_MAX = 45000, PHOTO_MAX = 100, PHOTO_REQ = 12, ROWS_MAX = 80, NOTE_MAX = 300, WHO_MAX = 20;
 var AP_ACTIONS = {
   login: apLogin_, me: apMe_, submit: apSubmit_, update: apUpdate_, photo_add: apPhotoAdd_, del: apDel_, get: apGet_, staff_add: apStaffAdd_, period: apPeriod_,
-  rv_login: rvLogin_, rv_list: rvList_, rv_get: rvGet_, rv_photo: rvPhoto_, rv_set: rvSet_, rv_staff: rvStaff_, rv_staff_set: rvStaffSet_, rv_export: rvExport_, rv_limits: rvLimits_
+  rv_login: rvLogin_, rv_list: rvList_, rv_get: rvGet_, rv_photo: rvPhoto_, rv_set: rvSet_, rv_edit: rvEdit_, rv_staff: rvStaff_, rv_staff_set: rvStaffSet_, rv_export: rvExport_, rv_limits: rvLimits_
 };
 
 function apNow_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
@@ -612,7 +612,7 @@ function apView_(r, full) {
     period: r.period, periodLabel: r.period_label, deadline: r.deadline, status: r.status, statusLabel: AP_STATUS[r.status] || r.status,
     amount: Number(r.amount) || 0, n: Number(r.n) || 0, summary: r.summary, reviewer: r.reviewer, reviewNote: r.review_note, reviewedAt: r.reviewed_at.slice(0, 16),
     nPhotos: photoIds_(r).length, canDel: canDel_(r), canEdit: canEdit_(r) };
-  if (full) { try { o.payload = JSON.parse(r.payload || '{}'); } catch (e) { o.payload = {}; } }
+  if (full) { try { o.payload = JSON.parse(r.payload || '{}'); } catch (e) { o.payload = {}; } o.updated = r.updated; }   /* updated：審核後台修改時用來確認沒有人同時改過（rv_edit） */
   return o;
 }
 function photoIds_(r) { try { var a = JSON.parse(r.photos || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
@@ -723,6 +723,7 @@ function apUpdate_(b) {
   if (!pl || !Array.isArray(pl.rows) || !pl.rows.length) throw fail_('還沒有明細', 'input');
   if (pl.rows.length > ROWS_MAX) throw fail_('明細最多 ' + ROWS_MAX + ' 列', 'input');
   if (sub === '非常態' && !apClean_(pl.subReason, NOTE_MAX).trim()) throw fail_('非常態請款請填原因', 'input');
+  try { var plOld = JSON.parse(r.payload || '{}'); if (Array.isArray(plOld.rvEdits)) pl.rvEdits = plOld.rvEdits; } catch (e) { }   /* 2026-11-13：審核修改紀錄（rv_edit）不因店家修改而消失 */
   var payloadStr = JSON.stringify(pl);
   if (payloadStr.length > PAYLOAD_MAX) throw fail_('明細太長，請分兩次申請', 'input');
   var fids = photoIds_(r), photos = Array.isArray(b.photos) ? b.photos.slice(0, Math.min(PHOTO_REQ, Math.max(0, PHOTO_MAX - fids.length))) : [];
@@ -838,6 +839,80 @@ function rvSet_(b) {
   if (notice) apPutCols_(tb.sh, AP_HEAD, r._row, { notice: notice });
   apLog_('review', r.id, r.type, r.unit, who, status + (note ? '：' + note : '') + (notice ? '｜' + notice : ''));
   return { id: r.id, status: status, statusLabel: AP_STATUS[status], notice: notice };
+}
+/* 2026-11-13 經營者：審核後台可以直接修改申請內容（例：零用金某一列會計科目選錯，改成雜費）。
+   - 任何狀態都能改（審核中／已完成／已退回、零用金也可以，不看截止日）；狀態不變、不通知店家。
+   - 前端只送每一列「改後的可編輯欄位＋原本第幾列 i」，沒送到的列＝刪掉；暗存欄位（grp、photo、AI 備註…）沿用原列；不能新增列。
+   - 後端重算合計、筆數、摘要；調撥小計＝數量×單價。
+   - 改了什麼寫進 apply_log（rv_edit），並在 payload.rvEdits 留最近 10 次（誰、何時、改了什麼），審核後台明細下面看得到。
+   - base＝打開這筆時看到的 updated；跟現在不同（店家或別的審核人員剛好也改了）就擋下，請重開再改。 */
+var RV_EDIT = {
+  petty: ['items', 'category', 'amount', 'invoice_no', 'note'],
+  advance: ['items', 'invoice_no', 'amount', 'payee', 'note'],
+  transfer: ['date', 'from', 'to', 'items', 'qty', 'price'],
+  vendor: ['vendor', 'items', 'invoice_no', 'amount', 'note'],
+  training: ['items', 'vendor', 'date', 'payee', 'amount', 'invoice_no', 'note']
+};
+var RV_LABEL = { items: '品項', category: '會計科目', amount: '金額', invoice_no: '發票號碼', note: '備註', payee: '付款對象', vendor: '廠商', date: '日期', from: '轉出', to: '轉入', qty: '數量', price: '單價' };
+function rvShow_(key, v) { v = v == null ? '' : String(v); if (key === 'category') v = v.replace(/^[\d-]+\s+/, ''); return v === '' ? '（空白）' : apClean_(v, 30); }
+/* 純計算（不碰試算表，可單獨拿來測）：old＝原本的明細列、edits＝前端送來的列 → {rows, sum, log[]} */
+function rvEditRows_(type, old, edits) {
+  var keys = RV_EDIT[type];
+  if (!keys) throw fail_('不認得的申請項目', 'input');
+  if (!Array.isArray(edits) || !edits.length) throw fail_('至少要留一列明細（整筆不要的話請店家刪除，或退回）', 'input');
+  if (edits.length > ROWS_MAX) throw fail_('明細最多 ' + ROWS_MAX + ' 列', 'input');
+  var used = {}, rows = [], log = [], sum = 0, order = [];
+  edits.forEach(function (e, k) {
+    var i = Number(e && e.i);
+    if (!(i >= 0 && i < old.length) || Math.floor(i) !== i || used[i]) throw fail_('明細對不上，請重新打開這筆再改', 'input');
+    used[i] = 1; order.push(i);
+    var o = JSON.parse(JSON.stringify(old[i] || {})), ch = [];
+    keys.forEach(function (key) {
+      if (!e.hasOwnProperty(key)) return;
+      var v = e[key];
+      if (key === 'amount' || key === 'qty' || key === 'price') {
+        v = Number(String(v == null ? '' : v).replace(/[,\s]/g, '') || 0);
+        if (!isFinite(v) || v < 0) throw fail_('第 ' + (i + 1) + ' 列' + RV_LABEL[key] + '要填 0 以上的數字', 'input');
+        v = Math.round(v * 10) / 10;
+      } else v = apClean_(v, key === 'note' ? NOTE_MAX : 120).trim();
+      var was = o[key];
+      if (String(was == null ? '' : was) !== String(v)) {   /* 只檢查有改的欄位（原本就不在清單裡的舊值不擋） */
+        if (key === 'category' && ACCTS.indexOf(v) < 0) throw fail_('第 ' + (i + 1) + ' 列會計科目不在清單裡', 'input');
+        if ((key === 'from' || key === 'to') && UNITS.indexOf(v) < 0) throw fail_('第 ' + (i + 1) + ' 列' + RV_LABEL[key] + '單位不對', 'input');
+        if (key === 'date' && v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw fail_('第 ' + (i + 1) + ' 列日期格式不對', 'input');
+        ch.push(RV_LABEL[key] + ' ' + rvShow_(key, was) + '→' + rvShow_(key, v)); o[key] = v; }
+    });
+    if (type === 'transfer') o.amount = Math.round((Number(o.qty) || 0) * (Number(o.price) || 0) * 10) / 10;
+    if (ch.length) log.push('第' + (i + 1) + '列 ' + ch.join('、'));
+    sum += Number(o.amount) || 0;
+    rows.push(o);
+  });
+  old.forEach(function (r, i) { if (!used[i]) log.push('刪掉第' + (i + 1) + '列（' + rvShow_('items', r.items) + ' $' + (Number(r.amount) || 0).toLocaleString('en-US') + '）'); });
+  if (order.some(function (x, k) { return k && x < order[k - 1]; })) log.push('調整順序');
+  return { rows: rows, sum: Math.round(sum * 10) / 10, log: log };
+}
+function rvEdit_(b) {
+  rvAuth_(b);
+  var who = apClean_(b.who, WHO_MAX).trim() || '審核';
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var tb = apLoad_('apply', AP_HEAD, 6000), r = apFind_(tb, b.id);
+    if (!r) throw fail_('找不到這筆申請', 'gone');
+    if (String(b.base == null ? '' : b.base) !== r.updated) throw fail_('這筆剛剛被改過（店家或其他審核人員），請重新打開這筆再改', 'stale');
+    var pl = {}; try { pl = JSON.parse(r.payload || '{}'); } catch (e) { pl = {}; }
+    var res = rvEditRows_(r.type, Array.isArray(pl.rows) ? pl.rows : [], b.rows);
+    if (!res.log.length) return { id: r.id, changed: 0, log: '' };
+    var msg = res.log.join('；');
+    pl.rows = res.rows; pl.sum = res.sum;
+    pl.summary = (res.rows.length + ' 筆 $' + res.sum.toLocaleString('en-US') + '：' + res.rows.slice(0, 3).map(function (x) { return x.items; }).join('、') + (res.rows.length > 3 ? '…' : '')).slice(0, 120);
+    pl.rvEdits = (Array.isArray(pl.rvEdits) ? pl.rvEdits : []).concat([{ who: who, at: apNow_(), log: apClean_(msg, 500) }]).slice(-10);
+    var payloadStr = JSON.stringify(pl);
+    if (payloadStr.length > PAYLOAD_MAX) throw fail_('明細太長，存不下', 'input');
+    apPutCols_(tb.sh, AP_HEAD, r._row, { amount: Math.round(res.sum), n: res.rows.length, summary: pl.summary, payload: payloadStr, updated: new Date() });
+    SpreadsheetApp.flush();
+    apLog_('rv_edit', r.id, r.type, r.unit, who, msg);
+    return { id: r.id, changed: res.log.length, log: msg };
+  } finally { lock.releaseLock(); }
 }
 /* 退回 → 交辦到那家店的「門市今日」（指定日期＝今天，沒做會一直掛著）。出貨中心、體驗中心沒有門市今日 → 不交辦 */
 function rejectNotice_(r, note, who) {
