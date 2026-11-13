@@ -88,7 +88,8 @@ def demand_of(info, shifts, rules, hol=()):
     return need
 
 
-def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std", fixed_cover=None):
+def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std", fixed_cover=None,
+          prev_week=None):
     """
     單店排班（工作台「排初稿」用）。參數意義見 solve_multi 的 unit；回傳那一家店的結果。
     mode（2026-11-06 經營者：排兩種給店長比較）：
@@ -98,7 +99,7 @@ def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=
     回傳 {"schedule": {工號: {日: 格子}}, "gaps": [...], "nuo": {工號: [日]}, "stats": {...}}
     """
     unit = {"store": 0, "info": info, "cfg": cfg, "ms": ms, "rules": rules, "hol_days": hol_days,
-            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes, "fixed_cover": fixed_cover}
+            "prev_tail": prev_tail, "fixed_minutes": fixed_minutes, "fixed_cover": fixed_cover, "prev_week": prev_week}
     r = solve_multi([unit], mode=mode, lend=False, time_limit=time_limit)
     out = r["stores"][0]
     out["stats"] = r["stats"]
@@ -110,7 +111,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
     多家店一起排（2026-11-06 經營者「整區一起排」：同城的店一起排，自己店優先，缺人／多人才調店）。
     units：每家店一個 dict：store（店號）、pos（104 崗位名，例「南京店」；調店時寫進格子）、info（104 範本資訊）、
            cfg（店別基本設定）、ms（本月設定 mset_view）、rules（AI 從備註翻的規則）、hol_days（政府公告放假的平日）、
-           prev_tail（{工號: 上個月最後連續上班幾天}）、fixed_minutes（{(工號, 日): 固定格子分鐘數}）
+           prev_tail（{工號: 上個月最後連續上班幾天}）、fixed_minutes（{(工號, 日): 固定格子分鐘數}）、
+           prev_week（{工號: {"off": 上個月落在本月第一週的休假天數, "li": 那幾天有沒有例假日}}；2026-11-13 跨月那週要接起來算 1 例 1 休）
     lend：True＝夥伴可以調去同一批的其他店（每調一次扣 W_LEND，所以只在能減少缺人／多排時才調）
     回傳 {"stores": [每家店的結果，順序同 units], "moves": [{store, emp, name, day, to, shift}], "stats": {...}}
     """
@@ -144,6 +146,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                   "fixed_minutes": u.get("fixed_minutes") or {},
                   "std_min": int(round(float(base.get("std_hours") or 0) * 60)), "off_days": base.get("off_days"),
                   "holidays": int(base.get("holidays") or 0), "max_consec": int(cfg.get("max_consec") or 5),
+                  "prev_week": u.get("prev_week") or {}, "tags": set(info.get("tags") or ()),
                   "late_limit": int(late_limit) if late_limit not in (None, "") else None})
     days = [d["d"] for d in U[0]["info"]["days"]]
     wd_of = {d["d"]: d["wd"] for d in U[0]["info"]["days"]}
@@ -435,6 +438,20 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 dv = m.NewIntVar(0, nd, "")
                 m.Add(int(u["off_days"]) - tot <= dv)
                 pen.append((dv, W_OFF))
+            # 2026-11-13 經營者「跨月份要修」：月初不是週日時，第一週（104 以週日為一週第一天）前幾天在上個月，
+            # 要接上個月那幾天的休假一起算 1 例 1 休（12 月模擬：11/29～12/5 有 7 人一週上 6 天、48 小時）
+            pw = u["prev_week"].get(e["id"])
+            first = []
+            for d in days:
+                if wd_of[d] == "日":
+                    break
+                first.append(d)
+            if first and pw is not None:
+                vs = [offv[w] for w in first if not isinstance(offv[w], int)]
+                hv = [hl[w] for w in first if w in hl]
+                lack = m.NewIntVar(0, 2, "")
+                m.Add(sum(vs) - sum(hv) + int(pw.get("off") or 0) + lack >= 2)
+                pen.append((lack, W_WEEK))
             week = []
             for d in days:
                 if wd_of[d] == "日":
@@ -574,7 +591,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             k, row = e["k"], {}
             mk = marks.get(e["id"]) or {}
             hol = e.get("_hol") or {}
-            week_has_rest = set()
+            week_has_rest = {"例"} if (u["prev_week"].get(e["id"]) or {}).get("li") else set()   # 跨月那週上個月已有例假 → 本月這週的休假標休息日
             mins_ = 0
             for d in days:
                 if wd_of[d] == "日":
@@ -633,7 +650,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     if cnt <= 0:
                         break
                     if sched[e["id"]].get(str(d)) == "休息日":
-                        sched[e["id"]][str(d)] = "[彈性挪假]休息日"
+                        # 2026-11-13：這家店的 104 班表沒啟用「彈性挪假」標籤時不貼（貼了匯入會失敗），只記在 nuo、報告提醒
+                        sched[e["id"]][str(d)] = "[彈性挪假]休息日" if (not u["tags"] or "彈性挪假" in u["tags"]) else "休息日"
                         nuo.setdefault(e["id"], []).append(d)
                         cnt -= 1
         extras = []

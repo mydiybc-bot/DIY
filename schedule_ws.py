@@ -1597,6 +1597,58 @@ def _tail_merged(store, ym, ids):
     return out
 
 
+def _prev_week_all(ym, ids):
+    """2026-11-13 經營者「跨月份要修」：本月第一週（104 以週日為一週第一天）落在上個月的那幾天，每人（各店名單合起來）
+    → {工號: {"n": 幾天, "off": 沒上班的天數（國定假日不算，跟 1 例 1 休同口徑）, "li": 有沒有例假日, "min": 上班分鐘數}}；
+    本月 1 號是週日、或上個月沒班表 → {}"""
+    y, mth = int(ym[:4]), int(ym[4:])
+    k = (dt.date(y, mth, 1).weekday() + 1) % 7      # 週日 0、週一 1 …：上個月有幾天落在本月第一週
+    if not k:
+        return {}
+    pym = _prev_ym(ym)
+    pl = (dt.date(y, mth, 1) - dt.timedelta(days=1)).day
+    want = set(range(pl - k + 1, pl + 1))
+    seen, mins, li, have = {}, {}, set(), set()
+    for s in STORES:
+        p = _dir() / f"{_key(s, pym)}.json"
+        if not p.exists():
+            continue
+        try:
+            st2 = json.loads(p.read_text(encoding="utf-8"))
+            tpl, sch = st2.get("template"), st2.get("schedule") or {}
+            if not tpl or not sch:
+                continue
+            shifts, dtypes = (_ext(st2) or {}).get("shifts") or {}, set(tpl["info"]["dayTypes"])
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            continue
+        for eid in ids:
+            row = sch.get(eid)
+            if row is None:
+                continue
+            have.add(eid)
+            for dd in want:
+                try:
+                    c = parse_cell(row.get(str(dd), "") or "", shifts, dtypes)
+                except (ValueError, TypeError):
+                    continue
+                if c["segs"]:
+                    seen.setdefault(eid, set()).add(dd)
+                    mins[eid] = mins.get(eid, 0) + int(round(cell_hours(c) * 60))
+                elif c["type"] == "例假日":
+                    li.add(eid)
+                elif c["type"] == "國定假日":
+                    seen.setdefault(eid, set())
+                    mins.setdefault(eid, 0)
+                    seen[eid].add(-dd)      # 國定假日：不算 1 例 1 休的休假
+    out = {}
+    for eid in have:
+        ds = seen.get(eid, set())
+        work = {d for d in ds if d > 0}
+        hol = {-d for d in ds if d < 0}
+        out[eid] = {"n": k, "off": k - len(work) - len(hol - work), "li": eid in li, "min": mins.get(eid, 0)}
+    return out
+
+
 def _prev_tail_all(ym, ids):
     """這些工號上個月底「連續上班到月底」幾天（各店名單合起來算）→ {工號: 天數}；上個月沒班表就沒有"""
     pym = _prev_ym(ym)
@@ -1808,6 +1860,52 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                 (errors if n > 6 else warns).append(msg + ("，超過 6 天（七休一）" if n > 6 else f"，超過公司上限 {mc} 天"))
     except Exception:   # noqa: BLE001 — 讀別店存檔失敗不影響本店檢查
         pass
+    # 2026-11-13 經營者「跨月份要修」：①正職跨月那週（上個月最後幾天＋本月第一週）要有 1 例 1 休；
+    # ②每週（週日起算，含跨月那週）上班超過 40 小時要提醒（104 目前是一般工時，超過要付加班費）。別店名單的班也合起來算。
+    try:
+        pw = _prev_week_all(st["ym"], set(parsed))
+        try:
+            others2 = _other_store_days(st["store"], st["ym"], set(parsed), sibs)
+        except Exception:   # noqa: BLE001
+            others2 = {}
+        dl = info["days"]
+        weeks, cur = [], []
+        for d in dl:
+            if d["wd"] == "日" and cur:
+                weeks.append(cur)
+                cur = []
+            cur.append(d)
+        if cur:
+            weeks.append(cur)
+        for eid in parsed:
+            p0 = pw.get(eid) or {}
+            od = set((others2.get(eid) or {}).keys())
+            for i, wk in enumerate(weeks):
+                head = i == 0 and wk[0]["wd"] != "日"
+                if not head and len(wk) < 7:
+                    continue        # 月底不滿一週的，排下個月時再接起來算
+                mins = sum(int(round(cell_hours(parsed[eid][d["d"]]) * 60)) for d in wk) + (int(p0.get("min") or 0) if head else 0)
+                mins += 480 * sum(1 for d in wk if d["d"] in od and not parsed[eid][d["d"]]["segs"])   # 別店名單那天的班（約 8h）
+                span = (f"上個月最後 {p0.get('n')} 天～" if head and p0 else "") + f"{wk[0]['label']}–{wk[-1]['label']}"
+                if mins > 40 * 60 and (not head or p0):
+                    warns.append(f"{names[eid]} {span}：這週上班 {mins / 60:g} 小時，超過 40 小時（104 一般工時，超過的部分要付加班費）")
+                if head and p0 and etype.get(eid) != "兼職":
+                    off = int(p0.get("off") or 0) + sum(1 for d in wk if not parsed[eid][d["d"]]["segs"] and d["d"] not in od
+                                                        and parsed[eid][d["d"]]["type"] != "國定假日")
+                    lis = int(bool(p0.get("li"))) + sum(1 for d in wk if parsed[eid][d["d"]]["type"] == "例假日")
+                    if off < 2:
+                        errors.append(f"{names[eid]} {span}：跨月這週只休 {off} 天（每 7 天要 1 例假＋1 休息日，接上個月的班算）")
+                    elif lis == 0:
+                        warns.append(f"{names[eid]} {span}：跨月這週沒有例假日（上個月那幾天也沒有），請把其中一天休假改成例假日")
+                    elif lis > 1:
+                        warns.append(f"{names[eid]} {span}：跨月這週例假日 {lis} 天（上個月那幾天已有例假，本月這週的休假應標休息日）")
+    except Exception:   # noqa: BLE001 — 讀上個月存檔失敗不影響其他檢查
+        pass
+    # 2026-11-13：這家店 104 班表沒啟用「彈性挪假」標籤 → 正職少排的天數沒辦法貼標籤，提醒到 104 啟用
+    if "彈性挪假" not in set(info.get("tags") or ()) and any(
+            h.get("target") and h["regular"] < float(h["target"]) - 0.01 for h in hours if etype.get(h["id"]) != "兼職"):
+        warns.append("這家店的 104 班表沒啟用「彈性挪假」標籤：正職少排的天數先只標休息日、沒貼標籤（貼了會匯入失敗）。"
+                     "請到 104 班別管理把「彈性挪假」「挪假補班」加進這家店的班表，再重新取得範本、排一次")
     # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
     # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
     support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]]
@@ -2370,7 +2468,8 @@ def _draft_worker(store, ym):
         plans = {}
         for mode in ("pt",):
             r_ = schedule_solver.solve(info, cfg, ms, rules=rules, hol_days=hol, prev_tail=tail,
-                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode, fixed_cover=fcover)
+                                       fixed_minutes={kk: v[1] for kk, v in fixed.items()}, mode=mode, fixed_cover=fcover,
+                                       prev_week=_prev_week_all(ym, {e["id"] for e in info["emps"]}))
             for (eid, d), (cell, _) in fixed.items():
                 r_["schedule"][eid][str(d)] = cell
             plans[mode] = r_
@@ -2572,7 +2671,8 @@ def _region_solve(rg, ym, ctx, rules, bad, secs_ai, modes, jk):
         fixed[s] = fx
         units.append({"store": s, "pos": _region_pos(rg, s), "info": info, "cfg": cfgs[s], "ms": mss[s], "rules": rules.get(s, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}, "fixed_cover": fcv})
+                      "prev_tail": _tail_merged(s, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {kk: v[1] for kk, v in fx.items()}, "fixed_cover": fcv,
+                      "prev_week": _prev_week_all(ym, {e["id"] for e in info["emps"]})})
     out = {}
     for i, mode in enumerate(modes):
         _job(jk, status="running", step=f"程式正在排整區（{PLAN_NAME[mode]}，{i + 1}／{len(modes)}，約 1～3 分鐘）")
@@ -3082,7 +3182,8 @@ def _support_eval(store, ym, helpers, jk):
                 block.append(f"{_sname(x)}的 104 範本沒有「{pos[o]}」崗位（{_sname(x)}的人要去{_sname(o)}支援，104 要先加這個崗位）")
         units.append({"store": x, "pos": pos[x], "info": dict(info, positions=[]), "cfg": cfgs[x], "ms": mss[x], "rules": rules.get(x, []),
                       "hol_days": [d["d"] for d in info["days"] if d["wd"] not in ("六", "日") and _tw_off(dt.date(y, mth, d["d"]))],
-                      "prev_tail": _tail_merged(x, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {}})
+                      "prev_tail": _tail_merged(x, ym, {e["id"] for e in info["emps"]}), "fixed_minutes": {},
+                      "prev_week": _prev_week_all(ym, {e["id"] for e in info["emps"]})})
     _job(jk, status="running", step=f"正在評估 {len(stores)} 家店一起排（只評估、不改班表，約 1～3 分鐘）")
     r = schedule_solver.solve_multi(units, mode="pt", lend=True, time_limit=90)
 
