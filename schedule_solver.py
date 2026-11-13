@@ -183,6 +183,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             if r["type"] == "only_shift":
                 for dd in (r.get("days") or days):
                     u["only"][(r["emp"], dd)] = set(r["shifts"]) & set(u["shifts"])
+    roster = {e["k"] for e in emps}   # (店, 工號)：這人在哪幾家店的 104 名單上
     for e in emps:
         u, eid, k = e["u"], e["id"], e["k"]
         mk = (u["ms"].get("marks") or {}).get(eid) or {}
@@ -221,7 +222,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     if o["store"] != u["store"] and o["pos"] and u["positions"] and o["pos"] not in u["positions"]:
                         pos_block.add((u["store"], o["store"]))
                         continue
-                    if o["store"] != u["store"]:
+                    # 2026-11-13 經營者「混合做法」：人已在那家店的 104 名單上 → 班寫在那家店（那家店 104 看得到），不在自己店寫支援
+                    if o["store"] != u["store"] and (o["store"], eid) not in roster:
                         opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n) and (
                             not want or (o["shifts"][n]["kind"] == want["kind"] if want["kind"] else n == avail.get(str(d))))]
             allowed[k + (d,)] = opts
@@ -267,6 +269,13 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 g["alias"] = (g["dflt"] if setd else g is not grp[0])
             if not setd:
                 home[eid_] = grp[0]
+    # 2026-11-13 經營者「混合做法」：同一人掛好幾家店名單時，例假／休息日／國定假日只標在「自己店」那一筆（店長存過、設正職的那筆；
+    # 都沒存過就第一筆），而且要看他整天在各店有沒有上班——原本每筆各算各的，別店名單那筆排了班、自己店照樣標休息日，104 匯入會擋
+    rest_owner = {}
+    for eid_, grp in same.items():
+        fts = [g for g in grp if g["ft"]]
+        if fts:
+            rest_owner[eid_] = next((g for g in fts if not g.get("alias")), fts[0])
     Hk, deferred = {}, []
 
     def work(k, d):
@@ -408,10 +417,15 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             pen.append((short_min, W_PT_MIN))
 
         # 正職休假：國定假日標記、例假＋休息天數、完整一週至少 1 例 1 休
-        if e["ft"]:
+        if e["ft"] and rest_owner.get(e["id"], e) is e:
             offv, hl = {}, {}
             for d in days:
-                v, c = work(k, d)
+                v, c = [], 0
+                for g in same.get(e["id"]) or [e]:     # 各店名單合起來：任何一家店有班就不是休假
+                    a_, b_ = work(g["k"], d)
+                    v += a_
+                    c += b_
+                c = min(c, 1)
                 if c:
                     offv[d] = 0
                     continue
@@ -467,7 +481,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     week = []
             # 2026-11-12 經營者：休假不要集中 → 連休最多 2 天（第 3 天起每天扣分）、不要「休・上・休」
             # 整段都是店長指休／備註不能上的不扣（那是店長排的）；特休、固定格子當作有上班
-            forced = {d for d in days if not isinstance(offv[d], int) and not work(k, d)[0]}
+            forced = {d for d in days if not isinstance(offv[d], int) and not any(work(g["k"], d)[0] for g in same.get(e["id"]) or [e])}
             for i in range(nd - 2):
                 w3 = days[i:i + 3]
                 if any(isinstance(offv[d], int) for d in w3) or all(d in forced for d in w3):
@@ -615,6 +629,10 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     else:
                         row[str(d)] = away_cell(s, n)
                         moves.append({"store": st_, "emp": e["id"], "name": e["name"], "day": d, "to": s, "shift": n})
+                elif e["ft"] and (rest_owner.get(e["id"], e) is not e or any(
+                        pick.get(g["k"] + (d,)) or g["k"] + (d,) in pto or g["k"] + (d,) in fixed
+                        for g in same.get(e["id"]) or [] if g is not e)):
+                    row[str(d)] = ""        # 休假只標在自己店那筆；那天在別店名單上班 → 自己店留空白（104 一人一天一份班表）
                 elif e["ft"]:
                     if d in hol and sv.Value(hol[d]):
                         row[str(d)] = tag + "國定假日"

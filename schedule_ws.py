@@ -1683,8 +1683,9 @@ def _prev_tail_all(ym, ids):
     return out
 
 
-def _other_store_days(store, ym, ids, override=None):
-    """這些工號在「別家店的名單」上有排班的日子 → {工號: {日: 店名}}（不含 @支援 調店：那是寫在自己店的班表上）"""
+def _other_store_days(store, ym, ids, override=None, any_content=False):
+    """這些工號在「別家店的名單」上有排班的日子 → {工號: {日: 店名}}（不含 @支援 調店：那是寫在自己店的班表上）
+    any_content=True（2026-11-13）：格子有任何內容都算（例假日、休息日、國定假日、標籤）——104 一人一天只能在一份班表"""
     out = {}
     for s in STORES:
         if int(s) == int(store):
@@ -1706,7 +1707,7 @@ def _other_store_days(store, ym, ids, override=None):
         for eid in hit:
             for dd, v in (sch.get(eid) or {}).items():
                 try:
-                    if v and parse_cell(v, shifts, dtypes)["segs"]:
+                    if v and (any_content or parse_cell(v, shifts, dtypes)["segs"]):
                         out.setdefault(eid, {})[int(dd)] = _sname(s) + "店"
                 except (ValueError, TypeError):
                     continue
@@ -1830,7 +1831,17 @@ def run_check(st, schedule=None, guests=None, sibs=None):
     try:
         mc = int(ext.get("max_consec") or 5)
         others = _other_store_days(st["store"], st["ym"], set(parsed), sibs)
+        anyc = _other_store_days(st["store"], st["ym"], set(parsed), sibs, any_content=True)
         tails = _prev_tail_all(st["ym"], set(parsed))
+        # 2026-11-13 經營者「混合做法」：同一天本店格子有內容（上班、例假、休息日、國定假日都算）、別店名單那天也有內容 → 104 會擋
+        for eid in parsed:
+            oc = anyc.get(eid) or {}
+            clash = sorted(d["d"] for d in info["days"] if d["d"] in oc and not (d["d"] in (others.get(eid) or {}) and parsed[eid][d["d"]]["segs"])
+                           and (parsed[eid][d["d"]]["segs"] or parsed[eid][d["d"]]["type"] or parsed[eid][d["d"]]["dtag"]))
+            if clash:
+                errors.append(f"{names[eid]}：{'、'.join(str(x) for x in clash)} 號本店班表有內容（上班或休假），"
+                              f"{'、'.join(sorted({oc[x] for x in clash}))}的班表同一天也有內容——104 一人一天只能在一家店的班表。"
+                              "去有名單的店支援時，班寫在那家店、自己店那天留空白（不要標休假）")
         dlist = [x["d"] for x in info["days"]]
 
         def _run(ds, tail=0):
