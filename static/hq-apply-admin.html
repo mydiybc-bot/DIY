@@ -97,6 +97,8 @@ window.__ime=(function(){
   table.det tr.rm td{opacity:.45;text-decoration:line-through}
   table.det tr.rm td:last-child{opacity:1;text-decoration:none}
   table.det td.x button{font-family:inherit;font-size:12px;border:1px solid #E3B3A8;background:#fff;color:#A3321F;border-radius:6px;padding:2px 7px;cursor:pointer;white-space:nowrap}
+  table.det td.no{text-align:center;font-weight:700;vertical-align:middle}
+  table.det tr.gin td.no{border-bottom-color:transparent}
   .edhint{font-size:13px;color:#8A5A00;background:#FFF4D6;border-radius:8px;padding:6px 10px;margin-bottom:8px}
   .edlog{font-size:12px;color:#6F4E45;background:#F6EFEA;border-radius:8px;padding:6px 10px;margin-bottom:8px}
   .edlog div+div{margin-top:3px}
@@ -377,7 +379,15 @@ var COLS = {
   vendor: [['vendor', '廠商'], ['items', '單據種類／單號'], ['invoice_no', '發票號碼'], ['amount', '金額'], ['note', '備註']],
   training: [['items', '課程／活動'], ['vendor', '主辦單位'], ['date', '上課日期'], ['payee', '參加人'], ['amount', '金額'], ['invoice_no', '發票號碼'], ['note', '備註']]
 };
-var A = { pw: '', name: '', exp: 0 }, S = { tab: 'pending', rows: [], counts: {}, periods: {}, sel: '', app: null };
+/* 2026-11-13 經營者：修改頁要跟申請表一樣 → 零用金修改時不列發票號碼（號碼照樣暗存、不會被清掉）；編碼照申請表算（同一張單據＝同 grp 的連續幾列＝一個編碼） */
+var EDCOLS = { petty: [['items', '品項／用途'], ['category', '會計科目'], ['amount', '金額'], ['note', '備註']] };
+function grpNo(rows) {   /* 跟 buildPetty 同一套算法：回傳每列 {no 編碼, first 是不是這組第一列, n 這組幾列, last} */
+  var out = [], no = 0;
+  rows.forEach(function (r, k) { var first = !k || rows[k - 1].grp !== r.grp; if (first) no++; out.push({ no: no, first: first, n: 0, last: k === rows.length - 1 || rows[k + 1].grp !== r.grp }); });
+  for (var k = 0; k < out.length; k++) if (out[k].first) { var n = 1; while (k + n < out.length && !out[k + n].first) n++; out[k].n = n; }
+  return out;
+}
+var A = { pw: '', name: '', exp: 0 }, S ={ tab: 'pending', rows: [], counts: {}, periods: {}, sel: '', app: null };
 function $(id) { return document.getElementById(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
@@ -491,6 +501,12 @@ function edSum() {
   });
   var el = $('edSum'); if (el) el.innerHTML = '改後合計 <b>$' + money(Math.round(sum * 10) / 10) + '</b>・' + n + ' 筆（原本 $' + money(a.amount) + '・' + a.n + ' 筆）';
 }
+function edNo() {   /* 修改中刪掉／復原列 → 編碼照存檔後的樣子重排（刪掉的列不編號） */
+  if (S.app.type !== 'petty') return;
+  var trs = [].slice.call($('detail').querySelectorAll('table.det tbody tr[data-i]')), live = trs.filter(function (tr) { return !tr.classList.contains('rm'); });
+  var g = grpNo(live.map(function (tr) { return { grp: tr.dataset.g }; }));
+  trs.forEach(function (tr) { var k = live.indexOf(tr), td = tr.querySelector('td.no'); td.textContent = k >= 0 && g[k].first ? g[k].no : ''; tr.classList.toggle('gin', k >= 0 && !g[k].last); });
+}
 function edDirty() { return !!$('detail').querySelector('table.det tr.chg, table.det tr.rm'); }
 function startEdit() { S.edit = true; renderDetail(); edSum(); }
 function cancelEdit() { if (edDirty() && !confirm('改的內容還沒儲存，確定放棄？')) return; S.edit = false; renderDetail(); }
@@ -509,11 +525,12 @@ function saveEdit(btn) {
   }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
 }
 function renderDetail() {
-  var a = S.app, pl = a.payload || {}, cols = COLS[a.type] || [], rows = pl.rows || [], ed = !!S.edit;
-  var th = '<tr><th>#</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + (ed ? '<th></th>' : '') + '</tr>';
+  var a = S.app, pl = a.payload || {}, rows = pl.rows || [], ed = !!S.edit, pet = a.type === 'petty', cols = (ed && EDCOLS[a.type]) || COLS[a.type] || [];
+  var gn = pet ? grpNo(rows) : null;   /* 零用金：編碼＝申請表的編碼（同一張單據幾列共用一個） */
+  var th = '<tr><th>' + (pet ? '編碼' : '#') + '</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + (ed ? '<th></th>' : '') + '</tr>';
   var trs = rows.map(function (r, k) {
-    if (ed) return '<tr data-i="' + k + '"><td>' + (k + 1) + '</td>' + cols.map(function (c) { return edCell(c, r, k, a.type); }).join('') + '<td class="x"><button type="button" data-rm="' + k + '">🗑 刪除</button></td></tr>';
-    return '<tr><td>' + (k + 1) + '</td>' + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>';
+    if (ed) return '<tr data-i="' + k + '"' + (pet ? ' data-g="' + esc(r.grp == null ? '' : r.grp) + '"' + (gn[k].last ? '' : ' class="gin"') : '') + '><td class="no">' + (pet ? (gn[k].first ? gn[k].no : '') : k + 1) + '</td>' + cols.map(function (c) { return edCell(c, r, k, a.type); }).join('') + '<td class="x"><button type="button" data-rm="' + k + '">🗑 刪除</button></td></tr>';
+    return '<tr>' + (pet ? (gn[k].first ? '<td class="no"' + (gn[k].n > 1 ? ' rowspan="' + gn[k].n + '"' : '') + '>' + gn[k].no + '</td>' : '') : '<td>' + (k + 1) + '</td>') + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>';
   }).join('');
   var edLog = (pl.rvEdits || []).slice().reverse().map(function (x) { return '<div>✏️ ' + esc(x.who) + ' ' + esc(String(x.at || '').slice(0, 16)) + '：' + esc(x.log) + '</div>'; }).join('');
   var photos = (a.photos || []).map(function (_, k) { return '<button type="button" data-photo="' + k + '">📷 照片 #' + (k + 1) + '</button>'; }).join('');
@@ -522,7 +539,7 @@ function renderDetail() {
     '<div class="meta"><span>編號 ' + esc(a.id) + '</span><span>送出 ' + esc(a.created) + '</span><span>算 <b>' + esc(a.periodLabel) + '</b>（截止 ' + esc(a.deadline) + '）</span><span>合計 <b>$' + money(a.amount) + '</b>・' + a.n + ' 筆</span>' + (a.reviewer ? '<span>審核 ' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</div>' +
     (pl.note ? '<div style="margin-bottom:8px">💬 申請人：' + esc(pl.note) + '</div>' : '') + (pl.subReason ? '<div style="margin-bottom:8px">非常態原因：' + esc(pl.subReason) + '</div>' : '') +
     (a.reviewNote ? '<div style="margin-bottom:8px;color:#A3321F">審核意見：' + esc(a.reviewNote) + '</div>' : '') +
-    (ed ? '<div class="edhint">✏️ 修改中：直接改下面的格子，改過的列會變黃底；不要的列按「🗑 刪除」（可復原）。存好後狀態不變、不會通知店家。</div>' : '') +
+    (ed ? '<div class="edhint">✏️ 修改中：直接改下面的格子，改過的列會變黃底；不要的列按「🗑 刪除」（可復原）。' + (pet ? '編碼跟申請表一樣，同一張單據的幾列共用一個編碼。' : '') + '存好後狀態不變、不會通知店家。</div>' : '') +
     '<div class="tbl-wrap"><table class="det"><thead>' + th + '</thead><tbody>' + trs + '</tbody></table></div>' +
     (edLog ? '<div class="edlog">' + edLog + '</div>' : '') +
     (photos ? '<div class="thumbs" id="thumbs">' + photos + '</div><div id="photoBox"></div>' : '<div class="muted" style="margin-bottom:8px">（沒有照片）</div>') +
@@ -547,7 +564,7 @@ document.addEventListener('click', function (e) {
   if ((t.dataset.tab || t.dataset.id) && S.edit && edDirty() && !confirm('改的內容還沒儲存，確定離開？')) return;
   if (t.dataset.tab) setTab(t.dataset.tab);
   else if (t.dataset.id) openDetail(t.dataset.id);
-  else if (t.dataset.rm != null) { var tr = t.closest('tr'), rm = !tr.classList.contains('rm'); tr.classList.toggle('rm', rm); t.textContent = rm ? '↺ 復原' : '🗑 刪除'; tr.querySelectorAll('[data-k]').forEach(function (el) { el.disabled = rm; }); edSum(); }
+  else if (t.dataset.rm != null) { var tr = t.closest('tr'), rm = !tr.classList.contains('rm'); tr.classList.toggle('rm', rm); t.textContent = rm ? '↺ 復原' : '🗑 刪除'; tr.querySelectorAll('[data-k]').forEach(function (el) { el.disabled = rm; }); edNo(); edSum(); }
   else if (t.id === 'edBtn') startEdit();
   else if (t.id === 'edSave') saveEdit(t);
   else if (t.id === 'edCancel') cancelEdit();
