@@ -2,7 +2,9 @@
 <!-- 2026-11-03 新建「🗂 申請審核」（總部申請作業的審核後台；經營者交辦）：審核專人用權限中心 apply_review 密碼登入
      → 待審核／已通過／已退回／零用金 分頁（2026-11-13 「全部」改「零用金」），依項目、單位、期別篩選 → 展開看明細與單據照片 → ✅ 通過／↩ 退回（必填原因；退回會交辦到該店「門市今日」）
      → ⬇ 下載該筆 Excel、📊 匯出某項目某一期所有通過的申請（給會計）；👥 名單：各單位申請人姓名（合併打錯的、停用離職的）；⚙️ 額度：dim_limit 內容與試算表連結。
-     後端＝GAS「零用金報銷_資料庫」rv_* 動作（密碼在後端驗，快取 10 分鐘）。本頁只放 hub 體驗中心區。 -->
+     後端＝GAS「零用金報銷_資料庫」rv_* 動作（密碼在後端驗，快取 10 分鐘）。本頁只放 hub 體驗中心區。
+     2026-11-13 經營者：明細下面多「✏️ 修改內容」＝審核人員直接改明細（會計科目、金額、品項…，或刪掉一列），任何狀態都能改、狀態不變、不通知店家；
+     後端 rv_edit（GAS pc-2026-11-13.2）重算合計，改了什麼記在 apply_log 與這筆的「審核修改」紀錄。 -->
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
@@ -89,6 +91,15 @@ window.__ime=(function(){
   table.det th{background:#F6EFEA;text-align:left;padding:5px 6px;border-bottom:1px solid #E0CCBF;white-space:nowrap}
   table.det td{padding:5px 6px;border-bottom:1px solid #F0ECE8}
   table.det td.r{text-align:right;white-space:nowrap}
+  table.det input,table.det select{width:100%;min-width:72px;font-family:inherit;font-size:13px;padding:4px 6px;border:1px solid #CFC6BF;border-radius:6px;background:#fff}
+  table.det input.wide{min-width:180px}
+  table.det tr.chg td{background:#FFF8E6}
+  table.det tr.rm td{opacity:.45;text-decoration:line-through}
+  table.det tr.rm td:last-child{opacity:1;text-decoration:none}
+  table.det td.x button{font-family:inherit;font-size:12px;border:1px solid #E3B3A8;background:#fff;color:#A3321F;border-radius:6px;padding:2px 7px;cursor:pointer;white-space:nowrap}
+  .edhint{font-size:13px;color:#8A5A00;background:#FFF4D6;border-radius:8px;padding:6px 10px;margin-bottom:8px}
+  .edlog{font-size:12px;color:#6F4E45;background:#F6EFEA;border-radius:8px;padding:6px 10px;margin-bottom:8px}
+  .edlog div+div{margin-top:3px}
   .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
   .thumbs button{border:1px solid #DDD;background:#fff;border-radius:8px;padding:6px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .thumbs img{max-width:100%;max-height:70vh;border:1px solid #DDD;border-radius:8px;display:block;margin-top:6px}
@@ -299,6 +310,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <ol>
         <li>點一筆展開：看明細、單據照片（點「照片 #1」才載入）、申請人的話。</li>
         <li>按「✅ 通過」或「↩ 退回」。退回一定要寫原因；1～12 店的退回會自動交辦到那家店的「門市今日・今天要做」，店長修正後可以在截止前重送（退回的不佔額度）。</li>
+        <li>「✏️ 修改內容」：直接改明細（會計科目、金額、品項…，或刪掉一列），按「💾 儲存修改」。任何狀態都能改，狀態不變、不會通知店家；改了什麼會記在這筆下面。</li>
         <li>「⬇ Excel」下載這一筆的申請表；「📊 匯出一期總表」把某項目某一期所有通過的申請合成一份給會計。</li>
         <li>「👥 名單」：各單位申請人姓名（店長在表單上自己加的）。打錯名字用「改名」（申請紀錄會一起改，額度才算得準），離職用「停用」。</li>
         <li>「⚙️ 額度」：每期次數規則在試算表 dim_limit 分頁，改了 2 分鐘內生效。零用金不用審核，只看得到紀錄。</li>
@@ -355,6 +367,9 @@ var TYPES = { petty: { label: '零用金', emoji: '🧾' }, advance: { label: '�
 function periodShort(plabel) { var s = String(plabel || ''), q = s.match(/(\d{4})\s*年第\s*(\d)\s*季/); if (q) return q[1] + '第' + '一二三四'.charAt(q[2] - 1) + '季'; var m = s.match(/(\d+)\s*月(上半|下半)?/); return m ? Number(m[1]) + '月' + (m[2] || '') : ''; }
 function typeName(k, plabel) { var t = TYPES[k]; return t ? periodShort(plabel) + t.label : ''; }
 var ORDER = ['petty', 'advance', 'transfer', 'vendor', 'training'];
+/* 2026-11-13：「✏️ 修改內容」的會計科目下拉，與 GAS ACCTS、hq-apply.html ACCTS 一致 */
+var ACCTS = ['5201 進貨食材', '6240 雜費', '6217 清潔費', '6205 運費', '6206 郵電費', '6207 修繕費', '6209 水電費',
+  '6219 職工福利', '6204 差旅交通費', '6201-003 薪資-實作費用', '2825 暫收款'];
 var COLS = {
   petty: [['items', '品項／用途'], ['category', '會計科目'], ['amount', '金額'], ['invoice_no', '發票號碼'], ['note', '備註']],
   advance: [['items', '付款內容摘要'], ['invoice_no', '發票號碼'], ['amount', '金額'], ['payee', '付款對象'], ['note', '備註']],
@@ -416,7 +431,7 @@ function enter() {
   setTab('pending');
 }
 function setTab(tab) {
-  S.tab = tab; S.sel = ''; $('detail').innerHTML = '';
+  S.tab = tab; S.sel = ''; S.edit = false; $('detail').innerHTML = '';
   $('tabs').querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === tab); });
   $('listCard').hidden = tab === 'staff' || tab === 'limits'; $('staffCard').hidden = tab !== 'staff'; $('limitsCard').hidden = tab !== 'limits';
   $('fType').hidden = tab === 'done';   /* 零用金分頁只有零用金，項目篩選用不到 */
@@ -442,23 +457,78 @@ function renderList() {
   $('listEmpty').textContent = '沒有資料。'; $('listEmpty').style.display = S.rows.length ? 'none' : '';
 }
 function openDetail(id) {
-  S.sel = id; renderList(); var box = $('detail'); box.innerHTML = '<div class="detail muted">讀取中…</div>';
+  S.sel = id; S.edit = false; renderList(); var box = $('detail'); box.innerHTML = '<div class="detail muted">讀取中…</div>';
   api({ action: 'rv_get', id: id }).then(function (r) { S.app = r.app; renderDetail(); box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }).catch(function (e) { box.innerHTML = '<div class="detail">讀不到：' + esc(e.message || e) + '</div>'; });
 }
+/* 2026-11-13 經營者：「✏️ 修改內容」＝審核人員直接改明細（S.edit＝修改中）。每一列帶原本第幾列（data-i），刪掉的列只標記、可復原；
+   打字時只改這一列的底色與合計，不重畫輸入框（中文輸入規則）。儲存走 GAS rv_edit，後端重算合計並留修改紀錄 */
+var NUMK = { amount: 1, qty: 1, price: 1 };
+function edCell(c, r, i, type) {
+  var k = c[0], v = r[k] == null ? '' : String(r[k]), at = ' data-i="' + i + '" data-k="' + k + '"';
+  if (type === 'transfer' && k === 'amount') return '<td class="r" data-calc="' + i + '">' + money(r.amount) + '</td>';
+  if (k === 'category') return '<td><select' + at + '>' + (ACCTS.indexOf(v) < 0 ? ['' + v].concat(ACCTS) : ACCTS).map(function (x) { return '<option value="' + esc(x) + '"' + (x === v ? ' selected' : '') + '>' + esc(x ? acctName(x) : '（空白）') + '</option>'; }).join('') + '</select></td>';
+  if (k === 'from' || k === 'to') return '<td><select' + at + '>' + (UNITS.indexOf(v) < 0 ? ['' + v].concat(UNITS) : UNITS).map(function (x) { return '<option value="' + esc(x) + '"' + (x === v ? ' selected' : '') + '>' + esc(x ? unitShort(x) : '（空白）') + '</option>'; }).join('') + '</select></td>';
+  if (NUMK[k]) return '<td class="r"><input type="text" inputmode="decimal"' + at + ' value="' + esc(v) + '" style="text-align:right;max-width:110px"></td>';
+  if (k === 'date') return '<td><input type="date"' + at + ' value="' + esc(v) + '"></td>';
+  return '<td><input type="text"' + at + ' value="' + esc(v) + '"' + (k === 'items' ? ' class="wide"' : '') + ' maxlength="' + (k === 'note' ? 300 : 120) + '"></td>';
+}
+function edNum(s) { return Number(String(s == null ? '' : s).replace(/[,\s]/g, '')) || 0; }
+function edMark(tr) {   /* 這一列跟原本不一樣 → 黃底；調撥小計跟著算 */
+  var a = S.app, rows = (a.payload || {}).rows || [], o = rows[+tr.dataset.i] || {}, chg = false, q = {};
+  tr.querySelectorAll('[data-k]').forEach(function (el) {
+    var k = el.dataset.k, was = o[k] == null ? '' : String(o[k]); q[k] = el.value;
+    if (NUMK[k] ? edNum(el.value) !== edNum(was) || (el.value.trim() === '') !== (was === '') : el.value.trim() !== was) chg = true;
+  });
+  tr.classList.toggle('chg', chg);
+  var cc = tr.querySelector('[data-calc]'); if (cc) cc.textContent = money(Math.round(edNum(q.qty) * edNum(q.price) * 10) / 10);
+}
+function edSum() {
+  var sum = 0, n = 0, a = S.app;
+  $('detail').querySelectorAll('table.det tbody tr[data-i]').forEach(function (tr) {
+    if (tr.classList.contains('rm')) return; n++;
+    var g = function (k) { var el = tr.querySelector('[data-k="' + k + '"]'); return el ? edNum(el.value) : 0; };
+    sum += a.type === 'transfer' ? Math.round(g('qty') * g('price') * 10) / 10 : g('amount');
+  });
+  var el = $('edSum'); if (el) el.innerHTML = '改後合計 <b>$' + money(Math.round(sum * 10) / 10) + '</b>・' + n + ' 筆（原本 $' + money(a.amount) + '・' + a.n + ' 筆）';
+}
+function edDirty() { return !!$('detail').querySelector('table.det tr.chg, table.det tr.rm'); }
+function startEdit() { S.edit = true; renderDetail(); edSum(); }
+function cancelEdit() { if (edDirty() && !confirm('改的內容還沒儲存，確定放棄？')) return; S.edit = false; renderDetail(); }
+function saveEdit(btn) {
+  var a = S.app, rows = [];
+  $('detail').querySelectorAll('table.det tbody tr[data-i]').forEach(function (tr) {
+    if (tr.classList.contains('rm')) return;
+    var o = { i: +tr.dataset.i }; tr.querySelectorAll('[data-k]').forEach(function (el) { o[el.dataset.k] = el.value; }); rows.push(o);
+  });
+  if (!rows.length) { toast('至少要留一列；整筆不要的話請退回或請店家刪除'); return; }
+  if (!edDirty()) { toast('沒有改動'); return; }
+  btn.disabled = true; $('detMsg').textContent = '儲存中…';
+  api({ action: 'rv_edit', id: a.id, base: a.updated || '', rows: rows }).then(function (r) {
+    S.edit = false; toast(r.changed ? '已儲存修改' : '沒有改動');
+    return loadList();
+  }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
+}
 function renderDetail() {
-  var a = S.app, pl = a.payload || {}, cols = COLS[a.type] || [], rows = pl.rows || [];
-  var th = '<tr><th>#</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
-  var trs = rows.map(function (r, k) { return '<tr><td>' + (k + 1) + '</td>' + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>'; }).join('');
+  var a = S.app, pl = a.payload || {}, cols = COLS[a.type] || [], rows = pl.rows || [], ed = !!S.edit;
+  var th = '<tr><th>#</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + (ed ? '<th></th>' : '') + '</tr>';
+  var trs = rows.map(function (r, k) {
+    if (ed) return '<tr data-i="' + k + '"><td>' + (k + 1) + '</td>' + cols.map(function (c) { return edCell(c, r, k, a.type); }).join('') + '<td class="x"><button type="button" data-rm="' + k + '">🗑 刪除</button></td></tr>';
+    return '<tr><td>' + (k + 1) + '</td>' + cols.map(function (c) { var v = r[c[0]]; if (c[0] === 'category') v = acctName(v); if (c[0] === 'from' || c[0] === 'to') v = unitShort(v); var num = c[0] === 'amount' || c[0] === 'qty' || c[0] === 'price'; return '<td' + (num ? ' class="r"' : '') + '>' + (num ? money(v) : esc(v)) + '</td>'; }).join('') + '</tr>';
+  }).join('');
+  var edLog = (pl.rvEdits || []).slice().reverse().map(function (x) { return '<div>✏️ ' + esc(x.who) + ' ' + esc(String(x.at || '').slice(0, 16)) + '：' + esc(x.log) + '</div>'; }).join('');
   var photos = (a.photos || []).map(function (_, k) { return '<button type="button" data-photo="' + k + '">📷 照片 #' + (k + 1) + '</button>'; }).join('');
   var canReview = a.type !== 'petty' && a.status !== 'approved';   /* 2026-11-11 經營者：已完成的只留下載，通過後不再變更狀態 */
   $('detail').innerHTML = '<div class="detail"><h3>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + (a.sub ? '（' + esc(a.sub) + '）' : '') + '｜' + esc(a.unit) + '｜' + esc(a.who) + '　<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span></h3>' +
     '<div class="meta"><span>編號 ' + esc(a.id) + '</span><span>送出 ' + esc(a.created) + '</span><span>算 <b>' + esc(a.periodLabel) + '</b>（截止 ' + esc(a.deadline) + '）</span><span>合計 <b>$' + money(a.amount) + '</b>・' + a.n + ' 筆</span>' + (a.reviewer ? '<span>審核 ' + esc(a.reviewer) + ' ' + esc(a.reviewedAt) + '</span>' : '') + '</div>' +
     (pl.note ? '<div style="margin-bottom:8px">💬 申請人：' + esc(pl.note) + '</div>' : '') + (pl.subReason ? '<div style="margin-bottom:8px">非常態原因：' + esc(pl.subReason) + '</div>' : '') +
     (a.reviewNote ? '<div style="margin-bottom:8px;color:#A3321F">審核意見：' + esc(a.reviewNote) + '</div>' : '') +
+    (ed ? '<div class="edhint">✏️ 修改中：直接改下面的格子，改過的列會變黃底；不要的列按「🗑 刪除」（可復原）。存好後狀態不變、不會通知店家。</div>' : '') +
     '<div class="tbl-wrap"><table class="det"><thead>' + th + '</thead><tbody>' + trs + '</tbody></table></div>' +
+    (edLog ? '<div class="edlog">' + edLog + '</div>' : '') +
     (photos ? '<div class="thumbs" id="thumbs">' + photos + '</div><div id="photoBox"></div>' : '<div class="muted" style="margin-bottom:8px">（沒有照片）</div>') +
+    (ed ? '<div class="actions"><button class="btn ok" type="button" id="edSave">💾 儲存修改</button><button class="btn ghost" type="button" id="edCancel">取消</button><span class="muted" id="edSum"></span><span class="muted" id="detMsg"></span></div></div>' :
     '<div class="actions">' + (canReview ? '<button class="btn ok" type="button" data-set="approved"' + (a.status === 'approved' ? ' disabled' : '') + '>✅ 通過</button><button class="btn warn" type="button" data-set="rejected"' + (a.status === 'rejected' ? ' disabled' : '') + '>↩ 退回</button>' + (a.status !== 'pending' ? '<button class="btn ghost" type="button" data-set="pending">改回審核中</button>' : '') : a.type === 'petty' ? '<span class="muted">零用金不審核</span>' : '<span class="muted">已完成，不再變更狀態</span>') +
-    '<button class="btn ghost" type="button" id="dlBtn">⬇ Excel</button><span class="muted" id="detMsg"></span></div></div>';
+    '<button class="btn ghost" type="button" id="edBtn">✏️ 修改內容</button><button class="btn ghost" type="button" id="dlBtn">⬇ Excel</button><span class="muted" id="detMsg"></span></div></div>');
 }
 function setStatus(st, btn) {
   var a = S.app, note = '';
@@ -473,13 +543,20 @@ function setStatus(st, btn) {
   }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
 }
 document.addEventListener('click', function (e) {
-  var t = e.target.closest ? e.target.closest('[data-tab],[data-id],[data-photo],[data-set],#dlBtn') : null; if (!t) return;
+  var t = e.target.closest ? e.target.closest('[data-tab],[data-id],[data-photo],[data-set],[data-rm],#dlBtn,#edBtn,#edSave,#edCancel') : null; if (!t) return;
+  if ((t.dataset.tab || t.dataset.id) && S.edit && edDirty() && !confirm('改的內容還沒儲存，確定離開？')) return;
   if (t.dataset.tab) setTab(t.dataset.tab);
   else if (t.dataset.id) openDetail(t.dataset.id);
+  else if (t.dataset.rm != null) { var tr = t.closest('tr'), rm = !tr.classList.contains('rm'); tr.classList.toggle('rm', rm); t.textContent = rm ? '↺ 復原' : '🗑 刪除'; tr.querySelectorAll('[data-k]').forEach(function (el) { el.disabled = rm; }); edSum(); }
+  else if (t.id === 'edBtn') startEdit();
+  else if (t.id === 'edSave') saveEdit(t);
+  else if (t.id === 'edCancel') cancelEdit();
   else if (t.dataset.photo != null) showPhoto(+t.dataset.photo, t);
   else if (t.dataset.set) setStatus(t.dataset.set, t);
   else if (t.id === 'dlBtn') dlOne(t);
 });
+['input', 'change'].forEach(function (ev) { $('detail').addEventListener(ev, function (e) { var tr = e.target.closest && e.target.closest('tr[data-i]'); if (!tr || !S.edit) return; edMark(tr); edSum(); }); });
+window.addEventListener('beforeunload', function (e) { if (S.edit && edDirty()) { e.preventDefault(); e.returnValue = ''; } });
 function showPhoto(k, btn) {
   var box = $('photoBox'); box.innerHTML = '<div class="muted">載入照片…</div>'; btn.disabled = true;
   api({ action: 'rv_photo', id: S.app.id, k: k }).then(function (r) { box.innerHTML = '<img src="data:' + r.mt + ';base64,' + r.img + '" alt="照片 ' + (k + 1) + '">'; }).catch(function (e) { box.innerHTML = '<div class="muted">載入失敗：' + esc(e.message || e) + '</div>'; }).finally(function () { btn.disabled = false; });
