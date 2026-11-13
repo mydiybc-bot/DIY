@@ -2112,7 +2112,7 @@ function renderDailyCalendar() {
    ・這裡依「排班工時」估算，實際發放以人資核算為準 */
 const BONUS_TIERS = [[10,10000],[20,14000],[30,29000],[40,42000],[50,53000],[60,65000],[70,77000],[80,88000],[90,100000],[100,110000]];
 const BONUS_BASE = 200, BONUS_STD_H = 8;
-const BONUS_LEAVE_RE = /特休|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災/;
+const BONUS_LEAVE_RE = /特休(?!取消)|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災/;
 const BONUS_MEET_RE = /會議|區會|上課|內訓|培訓|教育訓練|研習|經管會/;   /* 2026-11-09：104 標籤「經管會」也算會議（與工作台 schedule_ws 一致） */
 const BONUS_NOFLOOR_RE = /不計現場人力|不算現場人力/;
 const BONUS_MEET_DEFAULT_H = 2;   /* 交流會議沒寫時數時，依公司慣例扣 2 小時 */
@@ -2124,15 +2124,17 @@ function bonusOverlapH(A, B){ let t = 0; A.forEach(a => B.forEach(b => { const s
 function bonusDayMeetSegs(r){
   const segs = [];
   const add = t => String(t || '').split(/[；;\n／\/、，,＋+]/).forEach(p => { if (BONUS_MEET_RE.test(p)) bonusSegs(p).forEach(x => segs.push(x)); });
-  add(r && r.date_note); ((r && r.employees) || []).forEach(e => add(e.note));
+  add(r && r.date_note); ((r && r.employees) || []).forEach(e => add(bonusPlainNote(e.note)));
   return segs;
 }
+/* 2026-11-13：門市排班工作台的格子備註以「📝」開頭併進個人備註，只給人看；算日獎金、工時時跳過（例：「📝原排特休取消」不能當成請特休） */
+function bonusPlainNote(n){ return String(n || '').split('；').filter(x => x.trim().indexOf('📝') !== 0).join('；'); }
 function bonusNonWork(e, dateNote, daySegs){
   const h = Number(e.hours) || 0; if (h <= 0) return { off: 0, why: '' };
   const cell = String(e.cell || ''), lv = cell.match(BONUS_LEAVE_RE);
   if (lv) return { off: h, why: '班表寫「' + lv[0] + '」' };
   const shiftSegs = bonusSegs(e.shift || cell), texts = [];
-  if (e.note) String(e.note).split(/[；;\n／\/、，,＋+]/).forEach(t => texts.push(t));   /* 一則備註寫好幾件事時逐段判斷（例：指休／交流會議 2000-2200） */
+  if (e.note) bonusPlainNote(e.note).split(/[；;\n／\/、，,＋+]/).forEach(t => texts.push(t));   /* 一則備註寫好幾件事時逐段判斷（例：指休／交流會議 2000-2200） */
   if (dateNote && e.name) String(dateNote).split(/[；;\n／\/]/).forEach(t => { if (t.indexOf(e.name) >= 0) texts.push(t); });
   let off = 0; const why = [];
   texts.forEach(t => {

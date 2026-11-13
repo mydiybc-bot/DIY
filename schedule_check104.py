@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 FIELDS = ["出勤類型", "起", "迄", "崗位", "標籤", "當日標籤"]
 REST_TYPES = {"例假日", "休息日", "國定假日"}
 OK_TYPES = REST_TYPES | {"特休"}
-OTHER_STORE_TAGS = {"支援", "台北內訓課", "區會", "經管會", "交流會議"}
+OTHER_STORE_TAGS = {"支援", "會議", "上課", "台北內訓課", "區會", "經管會", "交流會議"}   # 2026-11-13 加 104 新標籤「會議」「上課」
 # 104 班表名稱關鍵字 → 崗位簡稱（判斷「崗位填成本店」用）
 STORE_POS = [("高雄", "高雄店"), ("精明", "精明店"), ("草悟道", "草悟道店"), ("台南", "台南店"),
              ("新竹", "新竹店"), ("南京", "南京店"), ("士林", "士林店"), ("新店", "新店店"),
@@ -216,7 +216,7 @@ def check(path, template, max_consec, expect):
                 if pos and pos == own_pos:
                     rep.w(f"{seg}：崗位填了本店「{pos}」，在本店上班的時段崗位要留空")
                 elif pos and not (set(tags) & OTHER_STORE_TAGS):
-                    rep.w(f"{seg}：崗位填了「{pos}」但沒打支援／台北內訓課／區會等標籤，請確認")
+                    rep.w(f"{seg}：崗位填了「{pos}」但沒打支援／上課／會議等標籤，請確認")
                 if bad:
                     continue
                 a, b = mins(st), mins(en)

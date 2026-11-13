@@ -31,7 +31,7 @@ await (async () => {
     const s = pick[key];
     try {
       const d = (await (await fetch('/hrm2/api/shift/getStep2Schedule/multi/' + s.id, { credentials: 'include' })).json()).data;
-      const emps = d.scheduledEmps.map(e => ({ empId: e.empId, name: e.name, mustHour: e.mustHour, annualHour: e.annualHour, compHour: e.compHour }));
+      const emps = d.scheduledEmps.map(e => ({ empId: e.empId, name: e.name, mustHour: e.mustHour, annualHour: e.annualHour, compHour: e.compHour, memo: e.memo || '' }));   // memo＝104 員工備註（2026-11-13 工作台核對有沒有貼上）
       const tags = {}; d.tagList.forEach(t => { tags[t.id] = t.name; });
       const pos = {}; d.positionList.forEach(p => { pos[p.id] = p.name; });
       const cls = {}; d.allClassList.forEach(c => { cls[c.id] = c.name; });

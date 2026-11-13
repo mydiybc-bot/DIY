@@ -87,8 +87,33 @@ TW_WORK = {
 REV_EST_RETRY = 3600
 BONUS_TIERS = [(10, 10000), (20, 14000), (30, 29000), (40, 42000), (50, 53000), (60, 65000), (70, 77000), (80, 88000), (90, 100000), (100, 110000)]
 BONUS_BASE, BONUS_STD_H = 200, 8
-BONUS_LEAVE_RE = re.compile(r"特休|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災")
+BONUS_LEAVE_RE = re.compile(r"特休(?!取消)|病假|事假|喪假|婚假|產假|陪產|公假|補休|休假|月休|例假|休息日|指休|生理假|家庭照顧假|請假|天災")
 BONUS_MEET_RE = re.compile(r"會議|區會|上課|內訓|培訓|教育訓練|研習|經管會")
+
+# ── 2026-11-13 經營者裁定 104 標籤整合：20 個 → 13 個（12 月起的班表只用這 13 個）──
+# 104 用過的舊標籤刪不掉也不能停用，舊月份（11 月以前）的班表照樣讀得懂；新班表的範本只有新標籤。
+TAGS_2026_12 = ("指休", "特休", "補休", "特休取消", "彈性挪假", "挪假補班", "會議", "上課", "事務班", "包館", "支援", "帶新人", "誤餐費*1")
+TAG_MERGE = {"經管會": "會議", "區會": "會議", "交流會議": "會議", "店務會議": "會議",
+             "台北內訓課": "上課", "新人課": "上課", "備品班": "事務班", "消毒作業": "事務班"}
+TAG_OLD = {"會議": "交流會議", "上課": "台北內訓課"}   # 範本還是舊清單（11 月以前）時退回舊名
+DAY_TAGS = ("指休", "特休", "補休", "特休取消", "彈性挪假", "挪假補班")   # 整天性質 → 當日標籤 [ ]
+
+
+def _tag104(tag, allowed):
+    """格子上的標籤 → 這份範本認得的名稱（舊標籤換新、新標籤遇到舊範本退回舊名）；一段可能有「、」分開的多個"""
+    out = []
+    for t in re.split(r"[、,，]", tag or ""):
+        t = t.strip()
+        if not t:
+            continue
+        if allowed and t not in allowed:
+            for cand in (TAG_MERGE.get(t), TAG_OLD.get(t), TAG_OLD.get(TAG_MERGE.get(t) or "")):
+                if cand and cand in allowed:
+                    t = cand
+                    break
+        if t not in out:
+            out.append(t)
+    return "、".join(out)
 BONUS_NOFLOOR_RE = re.compile(r"不計現場人力|不算現場人力")
 DEFAULT_SHIFTS = [  # 新店第一次打開表單的預設列（店長自己改）
     {"name": "平日早班", "segs": [["10:20", "12:00"], ["12:30", "18:50"]], "wd": 1, "we": 0},
@@ -486,6 +511,92 @@ def cell_from_span(sp):
     """改班視窗填的「上班／下班／休息」→ 格子文字（10:30-14:30,15:00-19:00）"""
     segs = split_span(sp.get("start"), sp.get("end"), sp.get("rest"), sp.get("rest_at") or "", "自訂時段")
     return ",".join(f"{a}-{b}" for a, b in segs)
+
+
+def cell_str(c):
+    """parse_cell 的結果 → 格子文字（反過來）"""
+    head = f"[{c['dtag']}]" if c.get("dtag") else ""
+    segs = ",".join(f"{a}-{b}" + (f"@{t}" if t else "") + (f"#{p}" if p else "") for a, b, t, p in c.get("segs") or [])
+    if c.get("type") and segs:
+        return f"{head}{c['type']}:{segs}"
+    return head + (c.get("type") or segs)
+
+
+def cell_with_tag(value, tag, win, shifts, dtypes):
+    """2026-11-13 經營者「備註要能匯入 104」：改班視窗選的標籤套進格子。
+    整天性質（指休、特休、特休取消…）→ 當日標籤；其他 → 時段標籤，win＝{start,end} 只標那段（班切開，例：14:00-16:00 開會），空白＝整天每段都標。
+    tag＝"__none" 清掉這格所有標籤（崗位留著）"""
+    c = parse_cell(value, shifts, dtypes)
+    if tag == "__none":
+        c["dtag"] = ""
+        c["segs"] = [[a, b, "", p] for a, b, _, p in c["segs"]]
+        return cell_str(c)
+    tag = unicodedata.normalize("NFKC", str(tag or "")).strip()
+    if not tag:
+        return value
+    if tag in DAY_TAGS:
+        c["dtag"] = tag
+        return cell_str(c)
+    if not c["segs"]:
+        raise ValueError(f"「{tag}」要標在上班時間上：先選班別或填上下班時間")
+    a = _hhmm((win or {}).get("start")) if (win or {}).get("start") else ""
+    b = _hhmm((win or {}).get("end")) if (win or {}).get("end") else ""
+    if bool(a) != bool(b):
+        raise ValueError("只標一段時間的話，開始、結束都要填（例：14:00、16:00）")
+    if not a:
+        c["segs"] = [[s0, e0, tag, p] for s0, e0, _, p in c["segs"]]
+        return cell_str(c)
+    wa, wb = _mins(a), _mins(b)
+    if wb <= wa:
+        raise ValueError("結束時間要晚於開始時間")
+    out, hit = [], False
+    for s0, e0, t0, p in c["segs"]:
+        if str(e0).startswith("次日"):
+            out.append([s0, e0, t0, p])
+            continue
+        sa, sb = _mins(s0), _mins(e0)
+        lo, hi = max(sa, wa), min(sb, wb)
+        if lo >= hi:
+            out.append([s0, e0, t0, p])
+            continue
+        hit = True
+        if sa < lo:
+            out.append([s0, _t(lo), t0, p])
+        out.append([_t(lo), _t(hi), tag, p])
+        if hi < sb:
+            out.append([_t(hi), e0, t0, p])
+    if not hit:
+        raise ValueError(f"{a}–{b} 不在這天的上班時間裡")
+    if len(out) > 4:
+        raise ValueError("切開後超過 4 段（104 一天最多 4 段），請改用「自訂」直接寫時段")
+    c["segs"] = out
+    return cell_str(c)
+
+
+NOTE_MAX = 40
+
+
+def note_clean(text):
+    """格子備註：一行、最多 40 字；分號、換行換成逗號（排班分析儀表板用「；」分段，不能被拆開）"""
+    t = str(text or "").replace("\u3000", " ")   # 不做全形轉半形：店長打的「，」要照原樣
+    t = re.sub(r"[；;\r\n\t]+", "，", t).strip(" ，")
+    if len(t) > NOTE_MAX:
+        raise ValueError(f"備註最多 {NOTE_MAX} 個字（現在 {len(t)} 字）")
+    return t
+
+
+def memo104(st):
+    """每人當月備註 → 104「員工備註」要貼的文字（104 上限 50 字；超過就截斷並標「…」）"""
+    names = {e["id"]: e["name"] for e in ((st.get("template") or {}).get("info") or {}).get("emps") or []}
+    mon = int(str(st["ym"])[4:])
+    out = {}
+    for eid, row in (st.get("notes") or {}).items():
+        parts = [f"{mon}/{int(d)}" + (" " if t[:1].isdigit() else "") + t for d, t in sorted(row.items(), key=lambda x: int(x[0])) if t]   # 文字開頭是數字（14:00…）加空格，免得黏成「11/414:00」
+        if not parts or eid not in names:
+            continue
+        txt = "；".join(parts)
+        out[eid] = {"name": names[eid], "text": txt if len(txt) <= 50 else txt[:49] + "…", "full": txt, "cut": len(txt) > 50}
+    return out
 
 
 def _carry_date(v, name=""):
@@ -1351,6 +1462,7 @@ def fill(st, schedule=None):
     hdr, days, emps = c104.layout(ws)
     shifts = _ext(st).get("shifts") or {}
     dtypes = set(st["template"]["info"]["dayTypes"])
+    allowed = set(st["template"]["info"].get("tags") or [])   # 2026-11-13：舊標籤自動換成範本認得的新名稱
     for e in emps:
         row = (schedule or {}).get(e["id"]) or {}
         for d in days:
@@ -1365,14 +1477,14 @@ def fill(st, schedule=None):
             if c["type"]:
                 ws.cell(e["row"], col).value = c["type"]
             if c["dtag"]:
-                ws.cell(e["row"], col + 5).value = c["dtag"]
+                ws.cell(e["row"], col + 5).value = _tag104(c["dtag"], allowed)
             for k, (s, en, tag, pos) in enumerate(c["segs"][:4]):
                 ws.cell(e["row"] + k, col + 1).value = s
                 ws.cell(e["row"] + k, col + 2).value = en
                 if pos:
                     ws.cell(e["row"] + k, col + 3).value = pos
                 if tag:
-                    ws.cell(e["row"] + k, col + 4).value = tag
+                    ws.cell(e["row"] + k, col + 4).value = _tag104(tag, allowed)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1382,7 +1494,8 @@ def fill(st, schedule=None):
 
 # 不算現場人力的時段標籤／整天標籤（schedule_rules.md：開會、內訓、事務不佔現場班；特休、補休照常排班但人不在）
 # 2026-11-05 經營者：謝雨庭 12/4、12/11 排事務班，早班沒人，檢查卻沒列出缺口
-NOFLOOR_SEG_TAGS = {"事務班", "交流會議", "區會", "台北內訓課", "經管會", "特休", "補休"}   # 特休／補休標在時段上（104 吳予茜 11/24）也不在店
+NOFLOOR_SEG_TAGS = {"事務班", "會議", "上課", "交流會議", "區會", "台北內訓課", "經管會", "特休", "補休"}   # 2026-11-13 加 104 新標籤「會議」「上課」（備品班舊資料照舊算在店）
+# 特休／補休標在時段上（104 吳予茜 11/24）也不在店
 NOFLOOR_DAY_TAGS = {"特休", "補休"}
 
 
@@ -1601,7 +1714,7 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                           "hours": round(tot, 2), "regular": round(tot - ot, 2), "ot": round(ot, 2),
                           "例假": cnt("例假日"), "休息": cnt("休息日"), "國定": cnt("國定假日"),
                           # 特休照排班＋當日標籤「特休」（104 寫法），類型欄是空的 → 也要算（2026-11-05 模擬：特休欄一直是 0）
-                          "特休": sum(1 for t, _, tg in inf if t == "特休" or "特休" in str(tg or ""))})
+                          "特休": sum(1 for t, _, tg in inf if t == "特休" or "特休" in str(tg or "").replace("特休取消", ""))})
     # 本店規則（現場人力含同區外店調來支援的人）
     if guests is None:
         guests = _guest_cells(st["store"], st["ym"])
@@ -1877,9 +1990,9 @@ RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班�
 - {"type":"demand","shift":"班別","days":[…],"count":人數}：這幾天這班要幾人（取代原本人數，例：週三晚班只排 1 人）
 - {"type":"extra","shift":"班別","days":[…],"count":人數}：這幾天這班多加幾人（特殊日加人）
 - {"type":"fixed_cell","emp":"工號","day":日期,"cell":"格子"}：那天固定用這個格子（上課、會議、跨店支援、包館等自訂時段）
-格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@交流會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@交流會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。自訂上班時間超過 4 小時的，中間要留 30 分鐘休息、拆成兩段（上班滿 4 小時後開始休，例：店長說「10:30 到 19:00」→「10:30-14:30,15:00-19:00」；104 不會自動扣休息，寫成一段會把休息也算進工時）；店長明講不休息或指定休息時間才照他說的。
-店長用語對照：上課／南京上課／內訓→時段標籤「@台北內訓課」＋那段的崗位（例 10:20-12:00,12:30-15:00@台北內訓課#南京店）；店長會議／區會→@區會；交流會→@交流會議；事務→@事務班；經管會→@經管會；包館→@包館；到別家店支援→那幾段 #那家店＋@支援。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、彈性挪假、挪假補班、整天支援）。
-店長只說某天幾點到幾點開會／上課、其他時間照常上班（沒講班別）：用 fixed_cell，拿那天類型的早班時段當底（平日用平日早班、假日或當假日用假日早班），把會議那段切出來標上標籤，其餘照原時段，例：平日早班 10:30-14:30,15:00-19:00、13:00-15:00 開區會 →「10:30-13:00,13:00-15:00@區會,15:00-19:00」。
+格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。自訂上班時間超過 4 小時的，中間要留 30 分鐘休息、拆成兩段（上班滿 4 小時後開始休，例：店長說「10:30 到 19:00」→「10:30-14:30,15:00-19:00」；104 不會自動扣休息，寫成一段會把休息也算進工時）；店長明講不休息或指定休息時間才照他說的。
+店長用語對照（2026-12 起的 104 標籤；給你的標籤清單裡沒有新名稱時，程式匯出會自動換成舊名）：上課／南京上課／內訓／新人課→時段標籤「@上課」＋那段的崗位（例 10:20-12:00,12:30-15:00@上課#南京店）；店長會議／區會／交流會／經管會／店務會議／晨會／朝會→@會議；事務／備品／消毒／SGS→@事務班；帶新人→@帶新人；包館→@包館；到別家店支援→那幾段 #那家店＋@支援；原本排特休後來取消→當日標籤 [特休取消]（照常上班）。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、特休取消、彈性挪假、挪假補班、整天支援）。
+店長只說某天幾點到幾點開會／上課、其他時間照常上班（沒講班別）：用 fixed_cell，拿那天類型的早班時段當底（平日用平日早班、假日或當假日用假日早班），把會議那段切出來標上標籤，其餘照原時段，例：平日早班 10:30-14:30,15:00-19:00、13:00-15:00 開區會 →「10:30-13:00,13:00-15:00@會議,15:00-19:00」。
 朝會、巡店、消毒這類日常筆記不用翻，也不用列進 unapplied。看不懂或沒辦法用上面規則表達的，原文放進 unapplied 並說明原因。不要自己發明規則。"""
 
 
@@ -3241,7 +3354,7 @@ def sync104(payload, force_dash=False):
             st["s104"] = {"id": item.get("id"), "name": item.get("name"), "status": res["status"], "modify": item.get("modify"),
                           "fetched": time.time(), "cells": cells, "missing": missing, "unknown": unknown,
                           "emps": [{"name": e["name"], "mustHour": e.get("mustHour"), "annualHour": e.get("annualHour"),
-                                    "compHour": e.get("compHour")} for e in emps.values()]}
+                                    "compHour": e.get("compHour"), "memo": e.get("memo") or ""} for e in emps.values()]}
             adopted = False
             if has_content and (not st.get("schedule") or (item.get("modify") or 0) > (st.get("s104_adopted") or 0)):
                 d = _diff(st, st.get("schedule"), cells) if st.get("schedule") else [1]
@@ -3261,7 +3374,7 @@ def sync104(payload, force_dash=False):
                        diff=st["s104"].get("diff"))
             # 2026-11-09 第一段：104 有內容 → 整月轉成排班分析儀表板的列，內容沒變就不重送
             if has_content:
-                pk, ph = _dash104_item(item)
+                pk, ph = _dash104_item(item, st)
                 if force_dash or ph != (st.get("dash104") or {}).get("hash"):
                     dash_items.append((k, pk, ph))
                 else:
@@ -3328,11 +3441,23 @@ def _hhmm4(ms, base_day):
     return t.strftime("%H%M")
 
 
-def _dash104_item(item):
-    """一份 104 班表 → upsert104 的 item（rows／notes）與內容雜湊"""
+def _dash104_item(item, st=None):
+    """一份 104 班表 → upsert104 的 item（rows／notes）與內容雜湊
+    st：工作台這個月的存檔；2026-11-13 起格子備註（st["notes"]）以「📝文字」併進那天的個人備註（儀表板算日獎金時跳過 📝 段）"""
     tags, pos = item.get("tags") or {}, item.get("pos") or {}
     emps = {str(e["empId"]): e for e in item.get("emps") or []}
     home, ym = int(item["store"]), str(item["ym"])
+    wnote = {}
+    if st and st.get("notes"):
+        tnames = {e["id"]: e["name"] for e in ((st.get("template") or {}).get("info") or {}).get("emps") or []}
+        y, m = int(ym[:4]), int(ym[4:])
+        for eid, row in st["notes"].items():
+            for d, t in (row or {}).items():
+                if t and tnames.get(eid):
+                    try:
+                        wnote[(dt.date(y, m, int(d)).isoformat(), tnames[eid])] = "📝" + t
+                    except ValueError:
+                        pass
     days = {}
     for empId, base, typ, frm, to, tag_ids, pos_id, _cls in item.get("shifts") or []:
         if str(empId) not in emps:
@@ -3373,11 +3498,22 @@ def _dash104_item(item):
                 t["note"].append(f"{pname} {label} 不計現場人力")
             if target != home and f"跨店支援（自{STORES.get(home, home)}店）" not in t["note"]:
                 t["note"].append(f"跨店支援（自{STORES.get(home, home)}店）")
+        wn = wnote.pop((date, name), "")
         for target, t in sorted(by_store.items()):
-            note = "；".join(dict.fromkeys(other_dtag + t["note"] + leave_notes))
+            extra = [wn] if wn and target == home else []
+            note = "；".join(dict.fromkeys(other_dtag + t["note"] + leave_notes + extra))
             rows.append([date, target, empId, name, "", "|".join(t["segs"]), "\n".join(t["cell"]), note])
-        if leave_notes and not by_store:
-            notes.append([date, home, empId, name, "；".join(leave_notes), 0])
+        if wn and home not in by_store and by_store:   # 整天去別店支援：備註跟著那一列
+            r0 = rows[-1]
+            r0[7] = "；".join([x for x in (r0[7], wn) if x])
+            wn = ""
+        if (leave_notes or wn) and not by_store:
+            notes.append([date, home, empId, name, "；".join(leave_notes + ([wn] if wn else [])), 0])
+    # 工作台有備註、104 那天完全沒有這個人的格子（例：休假日）→ 也送
+    by_name = {e["name"]: k for k, e in emps.items()}
+    for (date, name), wn in sorted(wnote.items()):
+        if name in by_name and date[:7].replace("-", "") == ym:
+            notes.append([date, home, by_name[name], name, wn, 0])
     payload = {"store": home, "ym": ym, "source": f"104:{home}-{ym}:{item.get('id')}@{item.get('modify') or 0}",
                "rows": rows, "notes": notes}
     h = hashlib.sha1(json.dumps({"rows": rows, "notes": notes}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -3536,7 +3672,7 @@ def _ssl_ctx():
 # 早班＝開店那一批、晚班＝做到打烊那一批；中班、全天班、特休／補休不算。
 # 開店／打烊時間＝那個月「平日」「假日」各自最常見的當天最早上班、最晚下班時間（單看當天會被偶爾的事務班、開會拉歪）。
 # 資料：這個月用工作台目前的班表；其他月份先看工作台存檔（104 每天同步），沒有再讀排班分析資料倉（fact_schedule，2026-03 起才有）。
-_EL_OFF_RE = re.compile(r"特休|補休")
+_EL_OFF_RE = re.compile(r"特休(?!取消)|補休")   # 「特休取消」＝照常上班
 _el_lock = threading.Lock()
 
 
@@ -4010,7 +4146,7 @@ def bonus_xlsx(stores, ym):
         f"月份：{ym[:4]}-{ym[4:]}；產出時間：{dt.datetime.now():%Y-%m-%d %H:%M}",
         "班表來源：門市排班工作台（每天早上自動跟 104 同步；店長在 104 改班，隔天會跟上）。實際發放請以出勤紀錄核對。",
         "營收來源：排班分析資料倉（POS 淨營收，已扣全部折扣）＋「甜點券$100」折抵額加回（「自己人$100甜點券」不算）。",
-        "店日工時＝當天在本店真正工作的時數合計：假別（特休、病假…）、交流會議／區會／內訓／經管會的時段不算；事務班、備品班、包館照算。",
+        "店日工時＝當天在本店真正工作的時數合計：假別（特休、病假…）、會議／上課（舊標籤：交流會議、區會、內訓、經管會）的時段不算；事務班、包館、帶新人照算；特休取消照常上班。",
         "跨店支援（崗位填別家店的時段）：那幾個小時算在「被支援的店」，用被支援店的營收與級距算獎金，列在被支援店底下（正職/兼職欄寫「外店支援」）；原店那幾個小時不算、備註欄會註明。被支援店的班表若本來就排了這位夥伴，以被支援店的班表為準，不重複算。",
         "級距（店日工時→營收門檻）：≤10h 10,000／≤20h 14,000／≤30h 29,000／≤40h 42,000／≤50h 53,000／≤60h 65,000／≤70h 77,000／≤80h 88,000／≤90h 100,000／≤100h 110,000；超過 100h 不發。",
         "達標＝獎金營收 ≥ 門檻（剛好等於也算）；營收 ≥ 下一級門檻＝跨級，獎金 ×2。",
@@ -4088,6 +4224,7 @@ def _public(st):
         "ok": True, "store": st["store"], "storeName": _sname(st["store"]), "ym": st["ym"],
         "settingsFiles": [{"name": f["name"], "chars": len(f["text"])} for f in st.get("settings_files") or []],
         "note": st.get("note", ""), "s104": s104,
+        "notes": st.get("notes") or {}, "memo104": memo104(st) if tpl else {},
         "template": ({"name": tpl["name"], "info": tpl["info"], "source": tpl.get("source", "upload"),
                       "fetched": tpl.get("fetched")} if tpl else None),
         "ext": ext or None, "schedule": st.get("schedule"), "cells": cells, "report": report,
@@ -4229,7 +4366,7 @@ def handle(path, body):
             return 200, _public(_load(store, ym))
 
     # 2026-11-11：這道擋原本放在 cfg_save／mset_save／mark 後面，AI 處理中存的設定會被 AI 存檔整份蓋掉
-    if act in ("upload", "draft", "edit", "undo", "chat", "note", "cfg_save", "mset_save", "mark", "plan_pick", "remove_settings", "export") and running:
+    if act in ("upload", "draft", "edit", "undo", "chat", "note", "cell_note", "cfg_save", "mset_save", "mark", "plan_pick", "remove_settings", "export") and running:
         return 409, {"ok": False, "error": "AI 還在處理上一個動作，請等它完成"}
 
     if act == "cfg_save":
@@ -4395,9 +4532,37 @@ def handle(path, body):
                 return 400, {"ok": False, "error": "還沒有班表"}
             try:
                 chs = [dict(c, value=cell_from_span(c["span"])) if isinstance(c.get("span"), dict) else c for c in body.get("changes") or []]
+                shifts_ = _ext(st).get("shifts") or {}
+                dtypes_ = set(st["template"]["info"]["dayTypes"])
+                for c in chs:   # 2026-11-13：改班視窗選的標籤（value 沒給＝這格原本的內容）
+                    if c.get("value") is None:
+                        c["value"] = (st["schedule"].get(c.get("emp")) or {}).get(str(int(c.get("day", 0))), "")
+                    if c.get("tag"):
+                        c["value"] = cell_with_tag(c["value"], c["tag"], c.get("tag_win"), shifts_, dtypes_)
                 _apply(st, chs, "店長在日曆上改")
             except ValueError as ex:
                 return 400, {"ok": False, "error": str(ex)}
+            _save(st)
+            return 200, _public(st)
+
+    if act == "cell_note":   # 2026-11-13 經營者：某天某人的備註（開會、特休取消…）；文字留在工作台與排班分析儀表板，104 員工備註用複製的
+        try:
+            eid, day = str(body.get("emp") or ""), int(body.get("day") or 0)
+            text = note_clean(body.get("text"))
+        except (TypeError, ValueError) as ex:
+            return 400, {"ok": False, "error": str(ex)}
+        with lk:
+            st = _load(store, ym)
+            info = (st.get("template") or {}).get("info") or {}
+            if eid not in {e["id"] for e in info.get("emps") or []} or day not in {d["d"] for d in info.get("days") or []}:
+                return 400, {"ok": False, "error": "找不到這位夥伴或這一天"}
+            notes = st.setdefault("notes", {})
+            if text:
+                notes.setdefault(eid, {})[str(day)] = text
+            else:
+                (notes.get(eid) or {}).pop(str(day), None)
+                if not notes.get(eid):
+                    notes.pop(eid, None)
             _save(st)
             return 200, _public(st)
 
