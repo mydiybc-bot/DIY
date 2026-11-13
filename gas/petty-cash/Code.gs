@@ -19,7 +19,7 @@
      每期每單位（或每人）限次、過截止日自動算下一期、截止前可刪可重送、專人審核（通過／退回）、退回時交辦到該店「門市今日」。
      動作與規則見檔尾「總部申請作業」那一段。read 多收 kind（advance／vendor／training）調整 AI 提示。
    ===================================================================== */
-var VER = 'pc-2026-11-12.1';
+var VER = 'pc-2026-11-13.1';
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -417,7 +417,7 @@ function authSetup_() {
 /* =====================================================================
    🏢 費用申請（2026-11-03 經營者交辦；原名總部申請作業，同日晚改名、改免密碼）
    前端 static/hq-apply.html（各單位）、static/hq-apply-admin.html（審核專人）
-   單位（14 個）：1～12 店＋出貨中心＋體驗中心。身分＝權限中心密碼：1～N 店＝store_N、出貨中心＝purchase_dc、體驗中心＝task_hq
+   單位（14 個）：1～12 店＋出貨中心＋體驗中心；另有「測試用」（2026-11-13，放測試資料，見 TEST_UNIT）。身分＝權限中心密碼：1～N 店＝store_N、出貨中心＝purchase_dc、體驗中心＝task_hq
      （經營者 2026-11-03 裁定 A：分店共用門市組密碼＋自己選單位；要改成每單位一組，只要改 unitDash_）。
    審核專人＝權限中心新列 apply_review（authorize 時由 applyAuthSetup_ 補列，密碼空白，經營者在權限後台設）。
    密碼一律在這裡向權限中心驗（結果快取 10 分鐘，只存雜湊），不靠前端遮。
@@ -439,8 +439,11 @@ var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API（門市今日交辦） */
 var TZ = 'Asia/Taipei', AUTH_SEC = 600, REVIEW_DASH = 'apply_review', HQ_DASH = 'task_hq';
 var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
-  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
-var UNIT_DASH = { '出貨中心': 'purchase_dc', '體驗中心': HQ_DASH };
+  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心', '測試用'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
+/* 2026-11-13 經營者：加一個「測試用」單位專門放測試／示範資料（原本 1 店的 DEMO 假申請、王小明／李小華搬過來）。
+   測試用的申請：不佔額度（isTest_）、退回不交辦（沒有門市今日）、審核後台預設清單與件數不列，單位篩選選「測試用」才看得到，匯出總表也不含 */
+var TEST_UNIT = '測試用';
+var UNIT_DASH = { '出貨中心': 'purchase_dc', '體驗中心': HQ_DASH, '測試用': HQ_DASH };
 /* 申請項目：period＝期別規則、scope＝額度算單位還是人、max＝每期幾次（0＝不限）、review＝要不要專人審核、subs＝子類 */
 var AP_TYPES = {
   petty: { label: '零用金', emoji: '🧾', period: 'half', scope: 'unit', max: 1, review: false },
@@ -621,8 +624,8 @@ function canEdit_(r) {
   return r.status === 'done' && apToday_() <= r.deadline;
 }
 function apFind_(tb, id) { return tb.rows.filter(function (x) { return x.id === String(id) && x.deleted !== 'Y'; })[0]; }
-/* 測試資料不佔額度（2026-11-11 經營者）：編號 DEMO 開頭（示範假申請）或申請人姓名含「測試」 */
-function isTest_(r) { return /^DEMO/i.test(String(r.id || '')) || /測試/.test(String(r.who || '')); }
+/* 測試資料不佔額度（2026-11-11 經營者）：編號 DEMO 開頭（示範假申請）或申請人姓名含「測試」；2026-11-13 加：單位＝測試用 */
+function isTest_(r) { return r.unit === TEST_UNIT || /^DEMO/i.test(String(r.id || '')) || /測試/.test(String(r.who || '')); }
 function countUsed_(rows, type, sub, unit, who, periodKey, lim) {
   return rows.filter(function (r) {
     if (isTest_(r)) return false;
@@ -792,8 +795,9 @@ function rvLogin_(b) { rvAuth_(b); return { ttl_hours: 12, types: AP_TYPES, unit
 function rvList_(b) {
   rvAuth_(b);
   var tb = apLoad_('apply', AP_HEAD, 6000), st = String(b.status || ''), ty = String(b.type || ''), un = String(b.unit || ''), pe = String(b.period || '');
-  var rows = tb.rows.filter(function (r) {
-    if (r.deleted === 'Y') return false;
+  /* 2026-11-13：測試用單位的申請只在單位篩選選「測試用」時出現（件數也只算看得到的） */
+  var base = tb.rows.filter(function (r) { return r.deleted !== 'Y' && (un === TEST_UNIT ? r.unit === TEST_UNIT : r.unit !== TEST_UNIT); });
+  var rows = base.filter(function (r) {
     if (st && st !== 'all' && r.status !== st) return false;
     if (ty && r.type !== ty) return false;
     if (un && r.unit !== un) return false;
@@ -802,8 +806,8 @@ function rvList_(b) {
   });
   rows.sort(function (a, c) { return c.created.localeCompare(a.created); });
   var counts = { pending: 0, approved: 0, rejected: 0, done: 0 };
-  tb.rows.forEach(function (r) { if (r.deleted !== 'Y' && counts.hasOwnProperty(r.status)) counts[r.status]++; });
-  var periods = {}; tb.rows.forEach(function (r) { if (r.deleted !== 'Y') periods[r.period] = r.period_label; });
+  base.forEach(function (r) { if (counts.hasOwnProperty(r.status)) counts[r.status]++; });
+  var periods = {}; base.forEach(function (r) { periods[r.period] = r.period_label; });
   return { rows: rows.slice(0, 500).map(function (r) { return apView_(r, false); }), counts: counts, periods: periods };
 }
 function rvGet_(b) {
@@ -888,7 +892,8 @@ function rvExport_(b) {
   var type = String(b.type || ''), pe = String(b.period || '');
   if (!AP_TYPES[type] || !pe) throw fail_('請選項目和期別', 'input');
   var want = AP_TYPES[type].review ? 'approved' : 'done';
-  var rows = apLoad_('apply', AP_HEAD, 6000).rows.filter(function (r) { return r.deleted !== 'Y' && r.type === type && r.period === pe && r.status === want; });
+  var testOnly = String(b.unit || '') === TEST_UNIT;   /* 2026-11-13：總表不含測試用單位（單位篩選選測試用時只匯測試用） */
+  var rows = apLoad_('apply', AP_HEAD, 6000).rows.filter(function (r) { return r.deleted !== 'Y' && r.type === type && r.period === pe && r.status === want && (r.unit === TEST_UNIT) === testOnly; });
   rows.sort(function (a, c) { return UNITS.indexOf(a.unit) - UNITS.indexOf(c.unit) || a.created.localeCompare(c.created); });
   return { type: type, period: pe, label: rows.length ? rows[0].period_label : pe, apps: rows.map(function (r) { return apView_(r, true); }) };
 }
@@ -902,49 +907,8 @@ function applyAuthSetup_() {
   sh.appendRow([REVIEW_DASH, '會計後台審核', '', 12, 'Y', new Date(), '2026-11-03 Claude 新增（費用申請審核後台）；密碼空白＝還不能用，請在權限後台設定']);
   return '新增 ' + REVIEW_DASH + '（' + before + ' → ' + sh.getLastRow() + ' 列，備份分頁 ' + bk.getName() + '）';
 }
-/* 2026-11-03 經營者要看畫面：清掉 apply／apply_log／dim_staff 全部資料，放進「1店 台中精明」橫跨 10 月、11 月（訓練費跨第 3、4 季）的假申請。
-   只在編輯器執行（不用重新部署）。正式上線後不要再跑（會清掉真資料）。 */
-function seedDemo_20261103() {
-  var ss = logSheet_().getParent(), U = '1店 台中精明';
-  ['apply', 'apply_log', 'dim_staff'].forEach(function (n) { var sh = ss.getSheetByName(n); if (sh && sh.getLastRow() > 1) sh.deleteRows(2, sh.getLastRow() - 1); });
-  var st = apSheet_('dim_staff', STAFF_HEAD);
-  st.appendRow([U, '王小明', 'Y', new Date(), 'demo']); st.appendRow([U, '李小華', 'Y', new Date(), 'demo']);
-  var sh = apSheet_('apply', AP_HEAD);
-  function d(s) { var p = s.split(/[- :]/).map(Number); return new Date(p[0], p[1] - 1, p[2], p[3] || 9, p[4] || 0, 0); }
-  function row(o) {
-    var pl = { type: o.type, unit: U, who: o.who, date: o.created.slice(0, 10), rows: o.rows, sum: o.amount, sub: o.sub || '', subReason: o.subReason || '', note: o.note || '', summary: o.summary };
-    sh.appendRow([o.id, d(o.created), o.type, o.sub || '', U, o.who, o.period, o.label, o.deadline, o.status, o.amount, o.rows.length, o.summary, JSON.stringify(pl), '[]',
-      o.reviewer || '', o.reviewNote || '', o.reviewedAt || '', '', '', d(o.created), o.notice || '']);
-  }
-  var P = { items: '', category: '', amount: 0, invoice_no: '', note: '', grp: '' };
-  row({ id: 'DEMO1010A', created: '2026-10-10 10:12', type: 'petty', who: '王小明', period: '2026-10-A', label: '2026 年 10 月上半期', deadline: '2026-10-15', status: 'done', amount: 1250, summary: '3 筆 $1,250：雞蛋-全聯、洗碗精-全聯、郵資-郵局',
-    rows: [{ grp: 'a', items: '雞蛋-全聯', category: '5201 進貨食材', amount: 816, invoice_no: 'AB-10233456', note: '' }, { grp: 'a', items: '洗碗精-全聯', category: '6240 雜費', amount: 139, invoice_no: 'AB-10233456', note: '' }, { grp: 'b', items: '郵資-郵局', category: '6206 郵電費', amount: 295, invoice_no: '', note: '掛號 5 件' }] });
-  row({ id: 'DEMO1022A', created: '2026-10-22 15:40', type: 'petty', who: '王小明', period: '2026-10-B', label: '2026 年 10 月下半期', deadline: '2026-10-25', status: 'done', amount: 680, summary: '2 筆 $680：水果-繁昌青果、桶裝瓦斯-大台中瓦斯',
-    rows: [{ grp: 'a', items: '水果-繁昌青果', category: '5201 進貨食材', amount: 380, invoice_no: '', note: '' }, { grp: 'b', items: '桶裝瓦斯-大台中瓦斯', category: '6209 水電費', amount: 300, invoice_no: 'CD-55667788', note: '' }] });
-  row({ id: 'DEMO1102A', created: '2026-11-02 09:05', type: 'petty', who: '王小明', period: '2026-11-A', label: '2026 年 11 月上半期', deadline: '2026-11-15', status: 'done', amount: 452, summary: '1 筆 $452：麵粉/砂糖-全聯',
-    rows: [{ grp: 'a', items: '麵粉/砂糖-全聯', category: '5201 進貨食材', amount: 452, invoice_no: 'AB-11002233', note: '' }] });
-  row({ id: 'DEMO1009B', created: '2026-10-09 11:20', type: 'advance', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-15', status: 'approved', amount: 1740, summary: '3 筆 $1,740：停車費-嘟嘟房、高鐵-台中台北、文具-九乘九', reviewer: '許琇婷', reviewedAt: '2026-10-13 14:02:00', reviewNote: '',
-    rows: [{ items: '停車費-嘟嘟房', invoice_no: '', amount: 120, payee: '王小明', note: '', category: '6204 差旅交通費' }, { items: '高鐵-台中台北來回', invoice_no: '', amount: 1400, payee: '王小明', note: '10/6 體驗中心會議', category: '6204 差旅交通費' }, { items: '文具-九乘九', invoice_no: 'EF-20991122', amount: 220, payee: '王小明', note: '', category: '6240 雜費' }] });
-  row({ id: 'DEMO1103B', created: '2026-11-03 10:30', type: 'advance', who: '李小華', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-15', status: 'rejected', amount: 560, summary: '1 筆 $560：聚餐-鼎泰豐', reviewer: '許琇婷', reviewedAt: '2026-11-03 16:10:00', reviewNote: '聚餐收據請附參加人員名單，並改報職工福利', notice: 'task:DEMO',
-    rows: [{ items: '聚餐-鼎泰豐', invoice_no: 'GH-33445566', amount: 560, payee: '李小華', note: '', category: '6219 職工福利' }] });
-  row({ id: 'DEMO1020C', created: '2026-10-20 16:00', type: 'transfer', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-25', status: 'approved', amount: 1335, summary: '2 筆 $1,335：細砂糖、無鹽奶油', reviewer: '許琇婷', reviewedAt: '2026-10-27 09:30:00',
-    rows: [{ date: '2026-10-12', from: U, to: '3店 台北南京', items: '細砂糖', qty: 1500, price: 0.09, amount: 135 }, { date: '2026-10-18', from: U, to: '2店 台中草悟道', items: '無鹽奶油', qty: 4, price: 300, amount: 1200 }] });
-  row({ id: 'DEMO1103C', created: '2026-11-03 11:15', type: 'transfer', who: '王小明', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-25', status: 'pending', amount: 540, summary: '1 筆 $540：動物性鮮奶油',
-    rows: [{ date: '2026-11-01', from: U, to: '2店 台中草悟道', items: '動物性鮮奶油', qty: 3, price: 180, amount: 540 }] });
-  row({ id: 'DEMO1011D', created: '2026-10-11 14:45', type: 'vendor', sub: '常態', who: '王小明', period: '2026-10', label: '2026 年 10 月', deadline: '2026-10-15', status: 'approved', amount: 15880, summary: '1 筆 $15,880：永紐｜對帳單 9月', reviewer: '許琇婷', reviewedAt: '2026-10-14 10:00:00',
-    rows: [{ vendor: '永紐', items: '對帳單 9月', invoice_no: '', amount: 15880, note: '', category: '5201 進貨食材' }] });
-  row({ id: 'DEMO1103D', created: '2026-11-03 13:20', type: 'vendor', sub: '非常態', who: '李小華', period: '2026-11', label: '2026 年 11 月', deadline: '2026-11-15', status: 'pending', amount: 3200, summary: '1 筆 $3,200：明昕｜送貨單 No.20261102-7', subReason: '萬聖節活動臨時追加包材',
-    rows: [{ vendor: '明昕', items: '送貨單 No.20261102-7', invoice_no: 'JK-77889900', amount: 3200, note: '請 11/15 前匯款', category: '6240 雜費' }] });
-  row({ id: 'DEMO0920E', created: '2026-09-20 17:00', type: 'training', who: '王小明', period: '2026-Q3', label: '2026 年第 3 季（7～9 月）', deadline: '2026-10-15', status: 'approved', amount: 3600, summary: '1 筆 $3,600：翻糖進階班-台北烘焙學苑', reviewer: '許琇婷', reviewedAt: '2026-10-02 11:30:00',
-    rows: [{ items: '翻糖進階班', vendor: '台北烘焙學苑', date: '2026-09-14', payee: '王小明', amount: 3600, invoice_no: 'AB-11223344', note: '', category: '6240 雜費' }] });
-  row({ id: 'DEMO1103E', created: '2026-11-03 14:00', type: 'training', who: '李小華', period: '2026-Q4', label: '2026 年第 4 季（10～12 月）', deadline: '2027-01-15', status: 'pending', amount: 2800, summary: '1 筆 $2,800：咖啡拉花初階-台中咖啡學院',
-    rows: [{ items: '咖啡拉花初階', vendor: '台中咖啡學院', date: '2026-10-28', payee: '李小華', amount: 2800, invoice_no: '', note: '', category: '6240 雜費' }] });
-  var n = sh.getLastRow(), gP = AP_HEAD.indexOf('period') + 1, gD = AP_HEAD.indexOf('deadline') + 1;
-  sh.getRange(2, gP, n - 1, 1).setNumberFormat('@'); sh.getRange(2, gD, n - 1, 1).setNumberFormat('@');
-  try { CacheService.getScriptCache().remove('ap:limits:v1'); } catch (e) { }
-  Logger.log('demo 寫入 %s 筆申請、2 位姓名（1店 台中精明）', n - 1);
-}
-
+/* 2026-11-13：原本的 seedDemo_20261103（會清空 apply／apply_log／dim_staff 再放假資料）已拿掉，避免正式上線後誤跑清掉真資料。
+   示範／測試資料改放「測試用」單位（TEST_UNIT）。 */
 /* 第二次授權用（2026-11-03）：在編輯器選這個函式按「執行」→ 允許 Drive（存單據照片）、建四個分頁、補權限中心一列 */
 function authorizeApply() {
   var sh = apSheet_('apply', AP_HEAD); apSheet_('dim_limit', LIMIT_HEAD); apSheet_('dim_staff', STAFF_HEAD); apSheet_('apply_log', APLOG_HEAD);
