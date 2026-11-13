@@ -439,7 +439,7 @@ var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5
 var ANN_API = 'https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec';   /* 公告及工作清單 API（門市今日交辦） */
 var TZ = 'Asia/Taipei', AUTH_SEC = 600, REVIEW_DASH = 'apply_review', HQ_DASH = 'task_hq';
 var UNITS = ['1店 台中精明', '2店 台中草悟道', '3店 台北南京', '4店 台北士林', '5店 台南Focus', '6店 新竹文化', '7店 新北板橋', '8店 新北新店',
-  '9店 桃園中壢', '10店 桃園藝文', '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心', '測試用'];   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
+  '11店 台北信義', '12店 高雄SKM Park', '出貨中心', '體驗中心', '測試用'];   /* 2026-11-13 經營者：拿掉 9 店 桃園中壢、10 店 桃園藝文（兩店名單、申請都是 0 筆） */   /* 正式店名（經營者 2026-11-03）；前端 UNITS 要一致 */
 /* 2026-11-13 經營者：加一個「測試用」單位專門放測試／示範資料（原本 1 店的 DEMO 假申請、王小明／李小華搬過來）。
    測試用的申請：不佔額度（isTest_）、退回不交辦（沒有門市今日）、審核後台預設清單與件數不列，單位篩選選「測試用」才看得到，匯出總表也不含 */
 var TEST_UNIT = '測試用';
