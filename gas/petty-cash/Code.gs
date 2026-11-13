@@ -19,7 +19,7 @@
      每期每單位（或每人）限次、過截止日自動算下一期、截止前可刪可重送、專人審核（通過／退回）、退回時交辦到該店「門市今日」。
      動作與規則見檔尾「總部申請作業」那一段。read 多收 kind（advance／vendor／training）調整 AI 提示。
    ===================================================================== */
-var VER = 'pc-2026-11-13.2';   /* 11-13.2：審核後台可直接修改申請明細（rv_edit） */
+var VER = 'pc-2026-11-13.3';   /* 11-13.2：審核後台可直接修改申請明細（rv_edit）；11-13.3：零用金修改紀錄改用申請表的「編碼」 */
 var REQ_SS = '10K3j3mzGz8uFlIUQI7PXz11I-3W8aTCVRnA_6jgUpIs';   /* 食譜系統_申請單（dim_role） */
 var AI_URL = 'https://diybc-training.onrender.com/api/recipe/translate';
 var MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5'];          /* 收據常有手寫、熱感紙褪色 → 先用 Sonnet；模型名被拒才退 Haiku */
@@ -862,6 +862,10 @@ function rvEditRows_(type, old, edits) {
   if (!Array.isArray(edits) || !edits.length) throw fail_('至少要留一列明細（整筆不要的話請店家刪除，或退回）', 'input');
   if (edits.length > ROWS_MAX) throw fail_('明細最多 ' + ROWS_MAX + ' 列', 'input');
   var used = {}, rows = [], log = [], sum = 0, order = [];
+  /* 2026-11-13：零用金的申請表是「同一張單據（同 grp 連續幾列）＝一個編碼」，紀錄與錯誤訊息用編碼＋品項，才對得上申請表；其他項目一列一號 */
+  var code = null;
+  if (type === 'petty') { code = []; var no = 0; old.forEach(function (r, k) { if (!k || old[k - 1].grp !== r.grp) no++; code.push(no); }); }
+  var lab = function (i) { return code ? '編碼' + code[i] + '「' + rvShow_('items', old[i].items) + '」' : '第' + (i + 1) + '列'; };
   edits.forEach(function (e, k) {
     var i = Number(e && e.i);
     if (!(i >= 0 && i < old.length) || Math.floor(i) !== i || used[i]) throw fail_('明細對不上，請重新打開這筆再改', 'input');
@@ -872,22 +876,22 @@ function rvEditRows_(type, old, edits) {
       var v = e[key];
       if (key === 'amount' || key === 'qty' || key === 'price') {
         v = Number(String(v == null ? '' : v).replace(/[,\s]/g, '') || 0);
-        if (!isFinite(v) || v < 0) throw fail_('第 ' + (i + 1) + ' 列' + RV_LABEL[key] + '要填 0 以上的數字', 'input');
+        if (!isFinite(v) || v < 0) throw fail_(lab(i) + RV_LABEL[key] + '要填 0 以上的數字', 'input');
         v = Math.round(v * 10) / 10;
       } else v = apClean_(v, key === 'note' ? NOTE_MAX : 120).trim();
       var was = o[key];
       if (String(was == null ? '' : was) !== String(v)) {   /* 只檢查有改的欄位（原本就不在清單裡的舊值不擋） */
-        if (key === 'category' && ACCTS.indexOf(v) < 0) throw fail_('第 ' + (i + 1) + ' 列會計科目不在清單裡', 'input');
+        if (key === 'category' && ACCTS.indexOf(v) < 0) throw fail_(lab(i) + '會計科目不在清單裡', 'input');
         if ((key === 'from' || key === 'to') && UNITS.indexOf(v) < 0) throw fail_('第 ' + (i + 1) + ' 列' + RV_LABEL[key] + '單位不對', 'input');
         if (key === 'date' && v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw fail_('第 ' + (i + 1) + ' 列日期格式不對', 'input');
         ch.push(RV_LABEL[key] + ' ' + rvShow_(key, was) + '→' + rvShow_(key, v)); o[key] = v; }
     });
     if (type === 'transfer') o.amount = Math.round((Number(o.qty) || 0) * (Number(o.price) || 0) * 10) / 10;
-    if (ch.length) log.push('第' + (i + 1) + '列 ' + ch.join('、'));
+    if (ch.length) log.push(lab(i) + ' ' + ch.join('、'));
     sum += Number(o.amount) || 0;
     rows.push(o);
   });
-  old.forEach(function (r, i) { if (!used[i]) log.push('刪掉第' + (i + 1) + '列（' + rvShow_('items', r.items) + ' $' + (Number(r.amount) || 0).toLocaleString('en-US') + '）'); });
+  old.forEach(function (r, i) { if (!used[i]) log.push(code ? '刪掉' + lab(i) + ' $' + (Number(r.amount) || 0).toLocaleString('en-US') : '刪掉第' + (i + 1) + '列（' + rvShow_('items', r.items) + ' $' + (Number(r.amount) || 0).toLocaleString('en-US') + '）'); });
   if (order.some(function (x, k) { return k && x < order[k - 1]; })) log.push('調整順序');
   return { rows: rows, sum: Math.round(sum * 10) / 10, log: log };
 }
