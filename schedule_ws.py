@@ -2075,7 +2075,7 @@ def _draft_worker_ai(store, ym):
                 st["history"] = (st.get("history") or [])[-19:] + [{"schedule": st["schedule"], "why": "AI 重排前"}]
             st.pop("draft", None)   # 這次是 AI 排的：說明用 AI 寫的，不要被「照目前班表重寫」蓋掉
             st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],
-                      chat=(st.get("chat") or []) + [{"role": "ai", "text": "✅ 初稿排好了。" + ("檢查全部通過。" if chk["ok"] else f"還有 {len(chk['errors'])} 項 ❌ 沒改掉，請看下方檢查結果或跟我說要怎麼改。"), "ts": time.time()}])
+                      chat=(st.get("chat") or []) + [{"role": "ai", "text": "排好了！" + ("規定都有守住。" if chk["ok"] else f"還有 {len(chk['errors'])} 個地方要你看一下，寫在下面的檢查結果，也可以直接跟我說要怎麼改。"), "ts": time.time()}])
             _save(st)
         _job(k, status="done", step="初稿完成")
     except Exception as ex:   # noqa: BLE001 — 背景工作要把錯誤留給畫面看
@@ -2506,15 +2506,18 @@ def _draft_worker(store, ym):
             st["draft"] = {"mode": "pt", "at": time.time(), "rules": [_rule_text(r, names_) for r in rules], "bad": list(bad),
                            "unmet": [f"{_rule_text(u['rule'], names_)}：{'、'.join(str(d) for d in u['days'])} 號沒做到" for u in res.get("unmet") or []]}
             nsup = sum(len(v) for v in (chk.get("support") or {}).values())
-            msg = "✅ 排好了（兼職優先）。" + ("硬規則全部通過。" if chk["ok"] else f"有 {len(chk['errors'])} 項沒過（多半是人不夠），看「檢查結果」。") + (f"正職共有 {nsup} 人天{SUPPORT_TXT}，列在排班結果裡。" if nsup else "")
+            # 2026-11-13 經營者：對話要自然、不要機械感
+            msg = "排好了！" + ("規定都有守住。" if chk["ok"] else f"有 {len(chk['errors'])} 個地方還要你看一下（多半是那天人不夠），寫在下面的檢查結果。")
+            if nsup:
+                msg += f"正職在本店有 {nsup} 天排不到班，可以去別家店幫忙，名單在排班結果裡。"
             if res.get("extras"):
-                msg += f"有 {sum(g['got'] - g['need'] for g in res['extras'])} 人次比設定多（正職時數要排滿、班不夠分），列在報告裡。"
+                msg += f"有幾天多排了人（共 {sum(g['got'] - g['need'] for g in res['extras'])} 人次），是為了讓正職時數夠。"
             if bad:
-                msg += f"有 {len(bad)} 條備註沒辦法自動套用，列在報告裡。"
+                msg += f"你寫的備註有 {len(bad)} 條我看不太懂，先沒套用，寫在報告裡。"
             if res.get("unmet"):
-                msg += f"⚠ 有 {len(res['unmet'])} 條備註／店規因為人手不夠沒完全做到，列在報告裡。"
+                msg += f"有 {len(res['unmet'])} 條備註因為人手不夠沒辦法完全照做，也寫在報告裡。"
             st.update(ext=ext, schedule=sched, report=report, check=chk, api_messages=[],
-                      chat=(st.get("chat") or []) + [{"role": "ai", "text": msg + "要改哪裡直接跟我說。", "ts": time.time()}])
+                      chat=(st.get("chat") or []) + [{"role": "ai", "text": msg + "想改哪裡，直接跟我說就好。", "ts": time.time()}])
             _save(st)
         _job(k, status="done", step="初稿完成")
     except Exception as ex:   # noqa: BLE001 — 背景工作要把錯誤留給畫面看
@@ -2771,16 +2774,34 @@ def _region_worker(rg, ym):
         _job(jk, status="error", step=f"區域排班失敗：{type(ex).__name__}: {str(ex)[:300]}")
 
 
+# 2026-11-13 經營者：工作台 AI 講話「很程式碼感、機械感、不自然」→ 統一說話方式（店長、魔導師對話都用）
+TONE_RULES = """
+## 說話方式（最重要，每一句都要照做）
+- 你是店裡排班很熟的老同事，用 LINE 回店長：口語、親切、直接講重點，像人在講話，不像系統報告。
+- 一般 2～5 句就好。先講結果（「好了」「可以」「這天沒辦法，因為…」），再補一句原因或下一步。
+- 不要用標題、粗體小標、分隔線、表格；店長明確要看「每個人幾次／幾小時」這種比較時，才用很短的清單（最多 5 行），不要畫表格。
+- 列點最多 3 點、不要一層套一層。
+- 人用名字、日期寫「12/12（六）」，不要寫工號。
+- 不要用這些字：人天、方案、硬規則、檢查結果、❌、⚠、格子、欄位、工具、設定值、兼職優先、可支援其他店、彈性挪假（要講就說「多放的假，之後要補上班」）、例假日／休息日（一般說「休假」，只有店長問到才分）。
+- 不要重複店長已經知道的事，不要每次都把所有提醒再列一遍；只講這次改動有關的，還有真的需要店長決定的事。
+- 有事要店長決定時，最後只問一個問題，用「要不要我…？」「你想先處理哪個？」這種口氣。
+- 範例（好）：「好了，12/7（一）吳予茜改早班、張家瑋改晚班，兩個人的時數都沒變。12/12（六）早上還是少一個人，要不要我問問同區的店能不能來幫忙？」
+- 範例（不好）：「**改了什麼** 12/7：吳予茜（0045）平日晚班→平日早班……**檢查結果** ❌ 2 項 ⚠ 5 項」
+"""
+
 # ── 魔導師對話框（2026-11-06 經營者：魔導師也要有 AI 對話框提出調整）：改的是「目前這個方案」，按「採用」才寫進各店 ──
 RG_CHAT_RULES = """
 ## 這次的工作：魔導師在「區域排班」對話框要你調整整區的方案
 - 你看到的是整區排好的班表（兼職優先：兼職排到希望的時數，正職本店排不滿的去同區別店支援）（同區每家店），還沒寫進各店；魔導師按「採用」才會寫進去。
 - 工具：
- 1. rg_apply：直接改某店某人某天的格子（一次可改多格、可跨店）。調去別家店上班＝在夥伴「自己店」的格子寫那家店的班別時段，每段加「@支援#崗位」（崗位見下方各店的調店崗位），例「13:00-15:00@支援#台南店,15:30-21:30@支援#台南店」；原本被調走的那天改回自己店上班就寫自己店的班別名稱。
+ 1. rg_apply：直接改某店某人某天的格子（一次可改多格、可跨店）。調去別家店上班（2026-11-13 經營者「混合做法」）：
+    ・這人已在那家店的名單上（下方那家店的夥伴清單有他）→ 改「那家店」名單上他那天的格子寫那家店的班別名稱，同時把他「自己店」那天改成空白（""，不要標休假）。
+    ・不在那家店名單上 → 在他「自己店」的格子寫那家店的班別時段，每段加「@支援#崗位」（崗位見下方各店的調店崗位），例「13:00-15:00@支援#台南店,15:30-21:30@支援#台南店」。
+    ・例假、休息日、國定假日只標在他自己店。同一個人同一天只能有一家店的格子有內容（104 規定）。原本被調走的那天改回自己店上班就寫自己店的班別名稱。
  2. rg_rerun：加條件後讓程式整區重排這個方案（約 1～3 分鐘），適合「某人整月不要調店」「某人某幾天一定要調去某店」「某人某幾天不能上班」「某店某天某班要幾人」這類條件。條件會記住，之後按「整區排初稿」也會照樣套。
  3. rg_undo：復原上一次改動。
 - 所有夥伴（正職、兼職）都可以調去同城別家店（2026-11-11 經營者固定規定）；魔導師說某人不要調店，就用 rg_rerun 加條件。
-- 回覆規矩：每句話都要給答案；能做就直接做好再說明；做不到說清楚卡在哪一條規則並給 2～3 個做法；改完用一兩句白話說改了什麼、檢查結果（各店 ❌／⚠ 有幾項）；不要貼整張表、不要提程式內部用語；用繁體中文。
+- 回覆規矩：每句話都要給答案；能做就直接做好再說明；做不到就白話說卡在哪裡，給 2～3 個做法；改完一兩句話說改了什麼、還有沒有哪天哪店缺人；用繁體中文。說話方式照下面「說話方式」。
 - 檢查結果有新的 ❌ 一定要再改到沒有才回覆（人真的不夠時說清楚缺在哪天哪店）。
 """
 
@@ -2836,7 +2857,7 @@ def _rg_table_text(sts, P):
 
 def _rg_system(rg, ym, ctx):
     stores, sts, cfgs, mss = ctx
-    parts = [RULES, RG_CHAT_RULES, f"\n## 區域：{rg}（{ym[:4]} 年 {int(ym[4:])} 月）"]
+    parts = [RULES, RG_CHAT_RULES, TONE_RULES, f"\n## 區域：{rg}（{ym[:4]} 年 {int(ym[4:])} 月）"]
     for s in stores:
         info = sts[s]["template"]["info"]
         parts.append(f"\n### {s} {_sname(s)}（104 班表：{info['title']}；調來這家店時崗位填「{_region_pos(rg, s)}」）")
@@ -3050,7 +3071,7 @@ def _region_pick(rg, ym, mode):
                       region={"name": rg, "mode": mode, "at": now},
                       draft=dict(x.get("draft") or {"rules": list((x.get("ext") or {}).get("notes") or []), "bad": [], "unmet": []}, mode=mode, at=time.time(), region=rg))
             st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(),
-                                                    "text": f"魔導師用「{PLAN_NAME[mode]}」排好整區（{rg}）的班表，本店班表已換成這一版（調店的格子標「支援＋店名」）。要改哪裡直接跟我說；換錯可按「復原上一步」。"}]
+                                                    "text": f"魔導師幫{rg}區一起排好了，本店的班表已經換成這一版。去別家店幫忙的日子會寫「支援＋店名」，別家店來幫忙的人也會寫在班表上。想改哪裡直接跟我說；想換回來可以按「復原上一步」。"}]
             _save(st)
     for s in REGIONS[rg]:
         with _lock(_key(s, ym)):
@@ -3070,9 +3091,9 @@ CHAT_RULES = """
  1. 每句話都要給答案，不准只回「我不懂」「做不到」。
  2. 能做就直接做好（例：改了某人的班造成缺人，就順手找最合適的人補上），再說明。做不到或會違規：說清楚卡在哪一條規則，給 2～3 個可以選的做法。
  3. 意思不明確（沒說哪一天、哪個人）：先說「我理解成：…」，照最合理的理解做，最後問一句要不要改。
- 4. 改完用一兩句白話說「改了什麼、誰補上、檢查結果」，不要貼整張表，不要提程式內部用語（格子文法、工具、JSON）。
+ 4. 改完用一兩句話說「改了什麼、誰補上、還有哪天缺人」，說話方式照下面「說話方式」。
  5. 只處理本店排班；其他話題回「我只負責本店排班，其他問題請洽總部」。
- 6. 檢查結果有新的 ❌ 一定要再改到沒有才回覆；⚠ 要告訴店長。
+ 6. 檢查結果有新的 ❌ 一定要再改到沒有才回覆；新的 ⚠ 用白話告訴店長（例：「這樣她會連上 6 天，要不要讓她 12/9 休？」）。
  7. 回覆用繁體中文，不要夾雜英文字。
 - 「本月設定」是店長填的設定表；格子開頭的 [指休]、[包館] 等是 104 班表上的標籤。說「設定表上是指休」只能根據本月設定的【指休】日期，不可以用格子標籤推論。
 - 店長問「別家店能不能派人來補班」「缺的人能不能請 X 號店支援」：一定先用 support_eval 評估（約 1～3 分鐘）。它會把本店和那幾家店的人放在一起重新排一次，看本店補不補得滿、來支援的店會不會反而缺人——**只是評估，不會改任何一家店的班表**。你也**絕對不可以**改別家店的班表（apply_changes 只能改本店的人；別家店的人不在本店名單上，也寫不進本店班表）。回覆時用白話說：本店缺的日子能不能補滿、建議誰哪天來支援、對方店會不會因此缺人、他們的工時會不會超過或不足、有沒有 104 崗位要先加；最後提醒「真的要調，請魔導師在『區域排班』採用，或請兩家店長自己協調後各改各的班表」。店長沒說哪家店：先評估同區的店；本店不在任何一區（或同區沒有別家店），就問店長想找哪幾家店。
@@ -3238,7 +3259,7 @@ def _support_eval(store, ym, helpers, jk):
 
 def _chat_system(st):
     cfg = cfg_load(st["store"])
-    return (RULES + CHAT_RULES + "\n## 本店這個月的設定（AI 從設定表讀到的）\n" +
+    return (RULES + CHAT_RULES + TONE_RULES + "\n## 本店這個月的設定（AI 從設定表讀到的）\n" +
             json.dumps(_ext(st, cfg), ensure_ascii=False) +
             "\n\n## 本月設定（店長填的表單原文）\n" + form_text(st, cfg) +
             "\n\n## 104 範本\n- 班表：" + st["template"]["info"]["title"] +
@@ -3476,8 +3497,9 @@ def sync104(payload, force_dash=False):
                     st["schedule"] = cells
                     adopted = True
                     st["chat"] = (st.get("chat") or []) + [{"role": "ai", "ts": time.time(), "text":
-                        f"📥 已照 104 的班表（{res['status']}，104 最後存檔 {dt.datetime.utcfromtimestamp((item.get('modify') or 0) / 1000) + dt.timedelta(hours=8):%m/%d %H:%M}）更新工作台"
-                        + (f"，跟原本差 {len(d)} 格。" if st.get("history") and isinstance(d[0], tuple) else "。")}]
+                        f"📥 104 上的班表有更新（{dt.datetime.utcfromtimestamp((item.get('modify') or 0) / 1000) + dt.timedelta(hours=8):%m/%d %H:%M} 存檔，{res['status']}），我已經換成 104 的版本"
+                        + (f"，跟原本不一樣的有 {len(d)} 格。" if st.get("history") and isinstance(d[0], tuple) else "。")
+                        + ("想換回來可以按「復原上一步」。" if st.get("history") else "")}]
                 st["s104_adopted"] = item.get("modify") or 0
             if st.get("schedule"):
                 st["check"] = run_check(st)
