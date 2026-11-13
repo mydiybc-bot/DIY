@@ -4214,6 +4214,8 @@ def handle(path, body):
         running = (_jobs.get(k) or {}).get("status") == "running"
 
     if act == "el_year":   # 2026-11-13：班表下方每人每月早／晚班次數（畫面載入後另外讀，不拖慢主畫面）
+        if str(who) != "hq":   # 2026-11-13 經營者：只有管理者（體驗中心登入）看得到，各店店長看不到
+            return 403, {"ok": False, "error": "這張表只有體驗中心看得到"}
         with lk:
             st = _load(store, ym)
         return 200, el_year(st)
