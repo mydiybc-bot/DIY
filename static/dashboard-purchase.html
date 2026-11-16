@@ -308,6 +308,8 @@ table.nwt.nwin{min-width:520px;background:#fff}
 .nwsum .nwdess{font-size:13px;margin-top:6px;line-height:1.7}
 .nwsum .nwdess b{display:inline-block;margin:0 6px 0 0}
 .nwcat{display:inline-block;padding:0 6px;border-radius:6px;font-size:12px;font-weight:700;background:#F1F5F9;color:#334155}
+table.nwt tr.nwgrp td{background:#F3EBE3;color:#4A3228;font-weight:800;font-size:13.5px;padding:5px 8px;border-top:2px solid #E0C9A8}   /* 2026-11-16 分類標題列 */
+table.nwt tr.nwgrp td span{font-weight:400;color:#8A7F78;font-size:12px}
 details.nwdet{margin:4px 0 10px}
 details.nwdet>summary{cursor:pointer;font-weight:700;color:#6F4E45;padding:6px 4px;list-style:none}
 details.nwdet>summary::-webkit-details-marker{display:none}
@@ -328,6 +330,9 @@ details.nwdet>summary::-webkit-details-marker{display:none}
   table.nwt.nwone td.nword{order:2}
   table.nwt.nwone td.nwoth{order:3}
   table.nwt.nwone .nwv{flex:1;min-width:0}
+  table.nwt.nwone tr.nwgrp{padding:0;border-bottom:0}
+  table.nwt.nwone tr.nwgrp td{display:block}
+  table.nwt.nwone tr.nwgrp td::before{content:none}
 }
 details.xhelp{margin:6px 0;font-size:12.5px;color:#555}
 details.xhelp>summary{cursor:pointer;color:#1565C0;font-weight:600;list-style:none;display:inline-block}
@@ -1980,6 +1985,11 @@ function viewNewItems(){nwLoad();var hq=ST.role!=="店長";
 function nwCampNeed(st,s,ek,names){var m=s&&(NEWAGG[String(st)]||{})[s.id];if(!m)return {qty:0,has:false};var q=0,has=false;
   (m.parts||[]).forEach(function(p){if((ek&&p.ev===ek)||names.some(function(n){return nwWhoHas(p.who,n);})){q+=num(p.qty);has=true;}});return {qty:q,has:has};}
 var NW_CATORD={"食材":1,"耗材":2,"器具":3,"模具":4};
+/* 2026-11-16 經營者：「這些品項應該要有類別，食材，耗材，器模具，同時依照這類別排序」→ 整檔總表固定分三段（器具＋模具合併成器模具，段內器具在前），每段一列標題；
+   點「叫貨方式／是否已下單」排序只在段內排，不再把分類打散。主檔還沒有的品項放最後「未分類」。 */
+function nwCatG(s){var c=s?String(s.cat||""):"";return c==="器具"||c==="模具"?"器模具":(c==="食材"||c==="耗材")?c:"未分類";}
+var NW_CATG_ORD={"食材":1,"耗材":2,"器模具":3,"未分類":9},NW_CATG_ICON={"食材":"🥚","耗材":"📦","器模具":"🔧","未分類":"❔"};
+function nwCatRank(s){return (NW_CATG_ORD[nwCatG(s)]||9)*10+(s&&s.cat==="模具"?1:0);}
 /* 2026-11-09 經營者：「叫貨方式和是否已下單二個欄位，讓我可以排序」→ 整檔總表點欄位標題排序：第一下↑、第二下↓、第三下回到原本順序（分類）。
    叫貨方式：出貨中心→向廠商→自購→店內自製→廠商未設定→主檔還沒有；是否已下單：還沒下單→讀取中→已下單→已開賣→看不到的（廠商／自購／自製）。只排畫面，不改資料。 */
 var NW_MODEORD={dc:1,vendor:2,self:3,semi:4,none:6};
@@ -1996,7 +2006,7 @@ function nwCampSumHTML(sub,ds,hq,embed){if(!NW.bom||!ds.length)return '';   /* e
   var map={},order=[];
   ds.forEach(function(d){var xd=nwDays(d);nwItems(d).filter(function(i){return i.isNew;}).forEach(function(it){var k=it.s?it.s.id:"n:"+it.m,e=map[k];
     if(!e){e=map[k]={it:it,who:[],d:d,x:xd,ms:xd.sell};order.push(k);}if(xd.sell>e.ms)e.ms=xd.sell;if(e.who.indexOf(d.bom)<0)e.who.push(d.bom);if(xd.dl<e.x.dl){e.d=d;e.x=xd;}if(it.excl&&!e.it.excl)e.it=it;});});
-  var rows=order.map(function(k){return map[k];}).sort(function(a,b){var ca=a.it.s?(NW_CATORD[a.it.s.cat]||9):9,cb=b.it.s?(NW_CATORD[b.it.s.cat]||9):9;return (ca-cb)||(b.it.excl-a.it.excl)||(a.it.m<b.it.m?-1:1);});
+  var rows=order.map(function(k){return map[k];}).sort(function(a,b){return (nwCatRank(a.it.s)-nwCatRank(b.it.s))||(b.it.excl-a.it.excl)||(a.it.m<b.it.m?-1:1);});
   var ext=(cinfo.early?'　·　自己人搶先 <b>'+escH(String(cinfo.early).slice(5).replace("-","/"))+'</b>':'')
     +(cinfo.ship?'　·　第一批配貨 <b>'+escH(String(cinfo.ship).slice(5).replace("-","/"))+'</b>':'')
     +(cinfo.ops?cinfo.ops.map(function(o){return '　·　'+escH(o[0])+' <b>'+escH(o[1])+'</b>';}).join(''):'');
@@ -2015,15 +2025,17 @@ function nwCampSumHTML(sub,ds,hq,embed){if(!NW.bom||!ds.length)return '';   /* e
       else if(one){e._k=nwOrdRank(sts[0],s,since,xr);e._t="";}
       else{var need=0,ord=0,wait=false;if(s)sts.forEach(function(st){if(nwModeOf(st,s).k!=="dc")return;var nn=dur?parOf(st,s)>0:nwCampNeed(st,s,ek,names).qty>0;if(!nn)return;need++;var o=nwOrdered(st,s,since);if(o===null)wait=true;else if(o.n>0)ord++;});
         e._k=!need?9:(e.ms<0&&ord<need)?4:wait?2:ord>=need?3:1+ord/need/2;e._t="";}});
-    rows.sort(function(a,b){return so.d*((a._k-b._k)||(a._t<b._t?-1:a._t>b._t?1:0))||(a._i-b._i);});}
+    rows.sort(function(a,b){return (NW_CATG_ORD[nwCatG(a.it.s)]-NW_CATG_ORD[nwCatG(b.it.s)])||so.d*((a._k-b._k)||(a._t<b._t?-1:a._t>b._t?1:0))||(a._i-b._i);});}   /* 2026-11-16：先分類、段內才照點的欄位排 */
   h+='<div class="sub" style="margin-top:8px;font-weight:700;color:#4A3228">這檔要準備的新東西（'+rows.length+' 項）</div>'
     +'<div class="nwwrap"><table class="nwt'+(one?' nwone':'')+'"><tr class="nwhdr"><th>品項</th>'+(embed?'':'<th>分類</th><th>用在</th>')+'<th class="right">'+qTh+'</th>'+(embed?'':'<th>叫貨日</th>')+nwSortTh("mode","叫貨方式")+nwSortTh("ord",one?'是否已下單':'已下單（出貨中心）')+'</tr>';
-  rows.forEach(function(e){var it=e.it,s=it.s,own=s?s.name:it.m,vn=(it.p&&it.p.vname)?String(it.p.vname).trim():"",dur=!!(s&&isDur(s)),key="sum|"+sub+"|"+(s?s.id:it.m),open=!!(ST.nwExp||{})[key],sold=e.ms<0,xr=sold?{dl:e.x.dl,left:e.x.left,sell:e.ms}:e.x;   /* 2026-10-18：sold＝用到它的甜點都開賣了 */
+  var gCnt={},gCur=null;rows.forEach(function(e){var g=nwCatG(e.it.s);gCnt[g]=(gCnt[g]||0)+1;});
+  rows.forEach(function(e){var g0=nwCatG(e.it.s);if(g0!==gCur){gCur=g0;h+='<tr class="nwgrp"><td colspan="'+(embed?4:7)+'">'+NW_CATG_ICON[g0]+' '+g0+'<span>（'+gCnt[g0]+' 項）</span></td></tr>';}   /* 2026-11-16 分類標題列 */
+    var it=e.it,s=it.s,own=s?s.name:it.m,vn=(it.p&&it.p.vname)?String(it.p.vname).trim():"",dur=!!(s&&isDur(s)),key="sum|"+sub+"|"+(s?s.id:it.m),open=!!(ST.nwExp||{})[key],sold=e.ms<0,xr=sold?{dl:e.x.dl,left:e.x.left,sell:e.ms}:e.x;   /* 2026-10-18：sold＝用到它的甜點都開賣了 */
     var nm='<b>'+escH(own)+'</b>'+(it.fresh?'<span class="nwtag">🆕</span>':'')+(it.excl?'<span class="nwtag ex">本檔專屬</span>':'<span class="nwtag sh">共用</span>')
       +((it.p&&it.p.sticker&&it.p.sticker!==own)?'<div class="sub muted">貼紙：'+escH(it.p.sticker)+'</div>':'')+(vn&&vn!==own?'<div class="sub muted">廠商叫「'+escH(vn)+'」</div>':'')
       +(s?'':'<div class="sub" style="color:#B3261E">主檔還沒有這個品項</div>');
-    var cat='<span class="nwcat">'+escH(s?s.cat:"—")+'</span>',who=escH(e.who.join("、")),dl=nwMd(e.x.dl);
-    if(embed)nm+='<div class="sub muted">'+escH(s?s.cat:"")+(s?'・':'')+'用在 '+who+(e.x.dl.getTime()!==x0.dl.getTime()?'・叫貨日 '+dl:'')+'</div>';   /* 2026-10-18 合併頁：4 欄 */
+    var cat='<span class="nwcat">'+escH(s?nwCatG(s):"—")+'</span>',who=escH(e.who.join("、")),dl=nwMd(e.x.dl);
+    if(embed)nm+='<div class="sub muted">'+escH(s?nwCatG(s):"")+(s?'・':'')+'用在 '+who+(e.x.dl.getTime()!==x0.dl.getTime()?'・叫貨日 '+dl:'')+'</div>';   /* 2026-10-18 合併頁：4 欄 */
     var xq=embed&&e.x.dl.getTime()===x0.dl.getTime()?{dl:e.x.dl,left:e.x.left,sell:e.x.sell,hideDl:true}:e.x;   /* 叫貨日已在卡片抬頭，數字底下不再每列重複 */
     if(one){var st=sts[0],md=nwModeOf(st,s),qty;
       if(dur){var pv=parOf(st,s);qty=pv>0?'<b>'+dec(pv)+' '+escH(s.useUnit||"個")+'</b><div class="sub muted">本店標配</div>':'<span style="color:#B45309">還沒設標配</span><div class="sub muted">要幾個請問體驗中心</div>';}
