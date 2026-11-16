@@ -239,6 +239,30 @@ function i18nNumDiff_(sh, th, okx) {   /* okx：詞典譯名自帶的數字（�
   return extra.length ? '譯文多了數字 ' + extra.join(',') + '（原文沒有對應的字）' : '';
 }
 function i18nPh_(h) { return (String(h || '').match(/\[\[IMG\d+\]\]/g) || []).sort().join(','); }
+
+/* ---------------- 固定譯文（2026-11-16 經營者：「要，做固定」） ----------------
+   全部食譜共用、一字不差的頁（例：第 4 步「量匙怎麼舀」），各支各翻會出現幾十種寫法，還會翻錯（詰め方、盛り付け方）。
+   英文標題相同、內文含每一句 en → 不送 AI、不給譯者，直接換成這裡的譯文（HTML 標籤、圖片位置照原文）；
+   英文只要改了一個字就對不到 → 照舊交給 AI 翻（要更新這裡的譯文）。自動翻譯（i18nWork_）、Claude 投遞口（i18nPull_／i18nPut_）都套用。 */
+var I18N_FIXED = [
+  { t: 'How to Fill Your Spoon', en: ['Scoop and gently shake: level for 1 spoon, half full for ½ spoon.', 'Swipe left to start making.'], tr: {
+    ja: { t: '計量スプーンのすくい方', s: ['すくって軽く振り、1杯はすりきり、½杯は半分くらいまで入れます。', '左にスワイプして作り始めましょう。'] },
+    ko: { t: '계량스푼 뜨는 방법', s: ['재료를 떠서 살살 흔들어 주세요. 1스푼은 가장자리에 맞춰 평평하게, ½스푼은 반 정도만 채우면 돼요.', '왼쪽으로 넘겨 만들기를 시작하세요.'] },
+    vi: { t: 'Cách múc muỗng đong', s: ['Múc nguyên liệu rồi lắc nhẹ: 1 muỗng thì ngang bằng miệng muỗng, ½ muỗng thì khoảng một nửa muỗng là được.', 'Vuốt sang trái để bắt đầu làm bánh.'] },
+    id: { t: 'Cara Mengisi Sendok Takar', s: ['Ambil bahan dengan sendok, lalu goyangkan perlahan: 1 sendok rata dengan bibir sendok, ½ sendok cukup sekitar setengahnya.', 'Geser ke kiri untuk mulai membuat.'] },
+    th: { t: 'วิธีตักด้วยช้อนตวง', s: ['ตักวัตถุดิบแล้วเขย่าเบา ๆ: 1 ช้อนให้เสมอขอบช้อน ส่วน ½ ช้อนตักประมาณครึ่งช้อนก็พอ', 'ปัดไปทางซ้ายเพื่อเริ่มทำ'] } } }
+];
+function i18nFixedSlide_(s, lang) {   /* 原文這一頁有固定譯文 → {t, h}；沒有 → null */
+  if (!s) return null;
+  var h = String(s.h || ''), t = String(s.t || '');
+  for (var i = 0; i < I18N_FIXED.length; i++) {
+    var f = I18N_FIXED[i], tr = f.tr[lang];
+    if (!tr || t !== f.t || !f.en.every(function (x) { return h.indexOf(x) >= 0; })) continue;
+    f.en.forEach(function (x, j) { h = h.split(x).join(tr.s[j]); });
+    return { t: tr.t, h: h };
+  }
+  return null;
+}
 /* 一頁譯文對原文：回傳問題清單（空＝通過） */
 function i18nCheckSlide_(s, t, okx) {
   var bad = [];
@@ -499,6 +523,7 @@ function i18nWork_(id, lang, by, redict, opt) {
   var base = opt.auto && prev ? i18nLiveContent_(rm.sh, prev) : null, reuse = base ? i18nAlign_(base, src, true) : [];
   (opt.redo || []).forEach(function (k) { if (reuse[k]) reuse[k] = null; });   /* 測試用：指定的頁強制重翻 */
   var todo = []; src.slides.forEach(function (s, i) { if (!reuse[i]) todo.push(i); });
+  var fixed = {}; todo = todo.filter(function (i) { var f = i18nFixedSlide_(src.slides[i], lang); if (f) { fixed[i] = f; return false; } return true; });   /* 固定譯文的頁不送 AI（2026-11-16） */
   var nameKeep = !!(base && base.name && base.snk === i18nHash_(String(src.name || ''))), presKeep = !!(base && base.spk === i18nHash_(String(src.pres || '')));
   var oldAt = base && base.slides && base.slides.length === src.slides.length ? base.slides : null;   /* 頁數沒變：同頁碼的舊譯文給 AI 當底 */
   /* 標題：上一版用過的照用，只翻新出現的 */
@@ -509,6 +534,7 @@ function i18nWork_(id, lang, by, redict, opt) {
   var sys = i18nSystem_(lang, src, D, local, tt), model = cred.model;
   var out = { name: nameKeep ? String(base.name || '') : '', pres: presKeep ? String(base.pres || '') : '', slides: [] };
   reuse.forEach(function (s, i) { if (s) out.slides[i] = { t: String(s.t || ''), h: String(s.h || '') }; });
+  Object.keys(fixed).forEach(function (i) { out.slides[i] = fixed[i]; tt[src.slides[i].t] = fixed[i].t; });
   var chunks = [], cur = [], n = 0;   /* 只把要翻的頁分段：每段最多 4 頁、5,000 字 */
   todo.forEach(function (i) {
     var len = (src.slides[i].t || '').length + (src.slides[i].h || '').length;
@@ -1180,7 +1206,7 @@ function i18nPull_(p) {
   /* 只翻改到的頁（2026-11-05）：放行過的上一版裡字沒變的頁直接沿用（keep），只回要翻的頁；同頁碼的舊譯文附在 prev 給譯者參考 */
   var base = cur ? i18nLiveContent_(rm.sh, cur) : null, reuse = base ? i18nAlign_(base, src, true) : [], keep = [], prev = {}, tt = {};
   src.slides.forEach(function (s, i) {
-    if (reuse[i]) { keep.push(i); return; }
+    if (reuse[i] || i18nFixedSlide_(s, lang)) { keep.push(i); return; }   /* 固定譯文的頁不給譯者（投遞時伺服器自己填，2026-11-16） */
     if (base && base.slides && base.slides.length === src.slides.length && base.slides[i]) prev[i] = base.slides[i];
   });
   if (base) src.slides.forEach(function (s) { if (s.t && base.titles && base.titles[s.t]) tt[s.t] = base.titles[s.t]; });   /* 沿用頁的標題譯法，新頁同標題照用 */
@@ -1229,6 +1255,7 @@ function i18nPut_(p) {
   if (!partial && sl.length !== src.slides.length) throw fail_('頁數不對：原文 ' + src.slides.length + ' 頁，收到 ' + sl.length + ' 頁', 'bad');
   var out = { name: String(p.name || '').trim(), pres: String(p.pres || '').trim(), slides: [] };
   sl.forEach(function (s) { var k = Number(s.k); if (!(k >= 0 && k < src.slides.length) || out.slides[k]) throw fail_('頁碼 k 不對或重複：' + s.k, 'bad'); out.slides[k] = { t: String(s.t || '').trim(), h: String(s.h || '') }; });
+  src.slides.forEach(function (s, i) { var f = i18nFixedSlide_(s, lang); if (f) out.slides[i] = f; });   /* 固定譯文的頁一律用固定版（譯者送什麼都蓋掉，2026-11-16） */
   var reused = 0;
   if (partial) {   /* 只翻改到的頁（2026-11-05）：沒送的頁＝字沒變，從放行過的上一版沿用；名稱、保存方式沒變也沿用 */
     var rm0 = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r0 = rm0.rows.filter(function (r) { return r.key === id + '|' + lang; })[0];
