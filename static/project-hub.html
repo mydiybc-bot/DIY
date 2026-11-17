@@ -76,6 +76,7 @@ window.__ime=(function(){
   .bar{height:8px;background:#EDE7E2;border-radius:4px;overflow:hidden}.bar>div{height:100%;background:#23436E}
   /* 2026-11-17 已完成專案：綠框綠底＋實心綠章，跟進行中的一眼分開 */
   .pcard.done{background:#F2FAF4;border:2px solid #3E8E5A}.pcard.done h3{color:#2E6B43}.pcard.done .bar>div{background:#3E8E5A}
+  .btn.okbtn{background:#3E8E5A;border-color:#3E8E5A;color:#fff}
   .pill.donebig{background:#3E8E5A;color:#fff;font-size:14px;padding:3px 12px}
   .donebar{background:#3E8E5A;color:#fff;font-weight:700;border-radius:10px;padding:10px 14px;margin:0 0 12px;font-size:15px}
   .kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:#5E5852}
@@ -596,6 +597,39 @@ function confirmSave(title, summary, run){
   ]);
 }
 
+/* ---------- 專案標成完成／改回進行中（2026-11-17 經營者：每個專案要有完成按鍵；階段一起改完成） ---------- */
+function markDone(p){
+  if (!editing()) { toast('請先輸入專案推動密碼'); $('editBtn').onclick(); return; }
+  var t = today();
+  if (p.status === '完成') {
+    confirmSave('改回進行中？', '「' + esc(p.name) + '」狀態：完成 → <b>進行中</b><div class="muted" style="margin-top:6px">階段狀態不會變。</div>', function(){
+      return post({ action: 'save', table: 'projects', row: { project_id: p.project_id, status: '進行中' } }).then(function(r){ upsert('projects', r.data); render(); return '已改回進行中'; });
+    });
+    return;
+  }
+  var open = of('phases', p.project_id).filter(function(x){ return x.status !== '完成'; });
+  var tag = '✅ ' + t + ' 標成完成', note = String(p.note || '');
+  dlg('✅ 把這個專案標成完成？', '<div>「<b>' + esc(p.name) + '</b>」狀態：' + esc(p.status) + ' → <b>完成</b></div>'
+    + (open.length ? '<div style="margin-top:8px">還沒完成的階段 ' + open.length + ' 個：<ul>' + open.map(function(x){ return '<li>第 ' + esc(x.no) + ' 階段 ' + esc(x.title) + '（' + esc(x.status) + '）</li>'; }).join('') + '</ul></div>'
+      + '<label style="display:flex;gap:6px;align-items:center;font-weight:700"><input type="checkbox" id="doneAll" checked> 這 ' + open.length + ' 個階段也一起改成完成（完成日 ' + md(t) + '）</label>' : '<div class="muted" style="margin-top:6px">所有階段都已完成。</div>')
+    + '<div class="muted" style="margin-top:6px">備註最後會加一行「' + esc(tag) + '」。</div>', [
+    { t: '取消', ghost: 1 },
+    { t: '確定標成完成', fn: function(btn){
+      var all = open.length && $('doneAll') && $('doneAll').checked, list = all ? open : [], k = 0;
+      btn.disabled = true; btn.textContent = '儲存中…';
+      var row = { project_id: p.project_id, status: '完成', note: note.indexOf(tag) >= 0 ? note : (note ? note + '\n' : '') + tag };
+      var step = function(){
+        if (k >= list.length) return Promise.resolve();
+        var x = list[k++]; btn.textContent = '階段 ' + k + '/' + list.length + '…';
+        return post({ action: 'save', table: 'phases', row: { phase_id: x.phase_id, status: '完成', done_at: t } }).then(function(r){ upsert('phases', r.data); return step(); });
+      };
+      post({ action: 'save', table: 'projects', row: row }).then(function(r){ upsert('projects', r.data); return step(); })
+        .then(function(){ close(); render(); toast('已標成完成' + (list.length ? '（含 ' + list.length + ' 個階段）' : '')); })
+        .catch(function(e){ btn.disabled = false; btn.textContent = '確定標成完成'; $('dlgE').textContent = e.message + '（已存好的會保留，可再按一次補完）'; render(); });
+    } }
+  ]);
+}
+
 /* ---------- 編輯模式 ---------- */
 function editing(){ return !!S.pw; }
 function paintEditBtn(){ var b = $('editBtn'); b.textContent = editing() ? '✏️ 編輯中（按這裡離開）' : '🔒 進入編輯'; b.classList.toggle('on', editing()); }
@@ -790,7 +824,8 @@ function renderProject(p, tab){
   var h = '<div style="margin:0 0 8px"><a href="#" id="back">← 全部專案</a></div>'
     + (p.status === '完成' ? '<div class="donebar">✅ 這個專案已完成</div>' : '')
     + '<div class="card"><div class="phead"><h2>' + esc(p.name) + '</h2><span class="pill st-' + esc(p.status) + '">' + esc(p.status) + '</span>'
-    + (editing() ? '<button class="btn ghost" type="button" id="editP">✏️ 修改專案</button>' : '') + '</div>'
+    + (editing() ? '<button class="btn ghost" type="button" id="editP">✏️ 修改專案</button>' : '')
+    + (p.status === '完成' ? '<button class="btn ghost" type="button" id="doneP">↩️ 改回進行中</button>' : '<button class="btn okbtn" type="button" id="doneP">✅ 標成完成</button>') + '</div>'
     + '<div style="margin:6px 0">' + esc(p.goal) + '</div>'
     + '<div class="kv"><span>期間：' + range(p.start, p.due) + '</span><span>專案窗口：' + esc(p.owner || '未定') + '</span><span>階段完成 ' + s.done + '/' + s.n + '</span>'
     + (s.late.length ? '<span class="pill late">⚠ 過期檢查點：' + s.late.map(function(x){ return '第 ' + esc(x.no) + ' 階段'; }).join('、') + '</span>' : '') + '</div>'
@@ -801,6 +836,7 @@ function renderProject(p, tab){
   $('app').innerHTML = h;
   $('back').onclick = function(e){ e.preventDefault(); go(''); };
   if ($('editP')) $('editP').onclick = function(){ openForm('projects', p); };
+  $('doneP').onclick = function(){ markDone(p); };
   Array.prototype.forEach.call(document.querySelectorAll('[data-t]'), function(el){ el.onclick = function(){ go(p.project_id, el.getAttribute('data-t')); }; });
   if (tab === 'plan') tabPlan(p);
   else if (tab === 'dec') tabDec(p);
