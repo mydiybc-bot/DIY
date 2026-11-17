@@ -45,9 +45,15 @@
       noticeTitle: 'ข้อควรทราบ', notice: ['สูตรนี้ออกแบบมาอย่างละเอียด การเปลี่ยนแปลงใด ๆ จะมีผลต่อผลลัพธ์', 'หากต้องการใช้วัตถุดิบที่ไม่มีในสูตร กรุณาติดต่อพนักงาน (วัตถุดิบเพิ่มเติมต้องซื้อเพิ่ม)', 'กรุณาล้างอุปกรณ์และภาชนะที่ใช้แล้ว', 'เนื้อหาสูตรนี้ได้รับการคุ้มครองลิขสิทธิ์ ห้ามถ่ายภาพ ถ่ายวิดีโอ จดบันทึก หรือคัดลอกด้วยวิธีใด ๆ'],
       agree: 'ฉันอ่านข้อความข้างต้นแล้ว', agreeFirst: 'กรุณาติ๊ก "ฉันอ่านแล้ว" ก่อน', tray: 'หยิบถาดหนึ่งใบ แล้วเริ่มจากหน้าถัดไป',
       bowlP: 'ชามพลาสติก', bowlC: 'ชามเซรามิก', oneBowl: 'วัตถุดิบหนึ่งอย่างต่อหนึ่งภาชนะ', where: 'ดูตำแหน่ง', menu: 'เมนู', next: 'ถัดไป', prev: 'ก่อนหน้า', steps: 'รายการขั้นตอน',
-      done: 'เสร็จแล้ว! ขอบคุณ', doneSub: 'หากมีข้อสงสัย สอบถามพนักงานได้เลย', backMenu: 'กลับไปที่เมนู', reload: 'โหลดวิดีโออีกครั้ง', pres: 'วิธีเก็บรักษา', close: 'ปิด' }
+      done: 'เสร็จแล้ว! ขอบคุณ', doneSub: 'หากมีข้อสงสัย สอบถามพนักงานได้เลย', backMenu: 'กลับไปที่เมนู', reload: 'โหลดวิดีโออีกครั้ง', pres: 'วิธีเก็บรักษา', close: 'ปิด' },
+    /* zh：中文試看（2026-11-17），文字照後台平板頁 */
+    zh: { intro: '[ 第一次來必讀 ]', introBody: '這台平板電腦就是您今天的老師。\n請依照畫面上的說明，一步一步製作。\n有任何問題，隨時可以詢問服務人員。', ready: '準備好了嗎？\n往左滑開始製作 ►►►',
+      noticeTitle: '注意事項', notice: ['配方比例經專業設定，自行增減恐影響成品。', '如需使用食譜以外的食材，請洽服務人員（額外食材需加購）。', '使用過的器具與容器請自行清洗。', '本食譜受著作權保護，請勿拍照、錄影、抄寫或以其他方式複製。'],
+      agree: '我已閱讀以上內容', agreeFirst: '請先勾選「我已閱讀以上內容」', tray: '將平板放置托盤，帶著托盤進行製作',
+      bowlP: '彩色塑膠碗', bowlC: '白色瓷碗', oneBowl: '照食材旁的圖拿，一種食材一個容器', where: '看位置', menu: '選單', next: '下一步', prev: '上一步', steps: '步驟清單',
+      done: '完成了！辛苦了', doneSub: '有任何問題，請洽服務人員。', backMenu: '回到選單', reload: '重新載入影片', pres: '保存方式', close: '關閉' }
   };
-  var HTML_LANG = { en: 'en', ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th' };
+  var HTML_LANG = { en: 'en', ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th', zh: 'zh-Hant' };
 
   var CSS = '.trv{position:fixed;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;overflow:clip;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
     + '.trv *{box-sizing:border-box}'
@@ -121,7 +127,7 @@
        步驟頁位置先放「讀取中」；資料到了呼叫 fill(data) 補上步驟頁，客人停在哪頁就留在哪頁。讀不到 → fail(訊息) 顯示「再讀一次」（opt.onRetry）。
      ②圖片只載「目前頁＋前一頁＋後兩頁」：步驟大圖與內文圖片先放 data-lz，翻到附近才給 src（影片本來就只載目前頁）。 */
   var T_LOAD = { en: ['Loading…', 'Could not load the recipe', 'Reload'], ja: ['読み込み中…', 'レシピを読み込めませんでした', 'もう一度読み込む'], ko: ['불러오는 중…', '레시피를 불러오지 못했습니다', '다시 불러오기'],
-    vi: ['Đang tải…', 'Không tải được công thức', 'Tải lại'], id: ['Memuat…', 'Resep gagal dimuat', 'Muat ulang'], th: ['กำลังโหลด…', 'โหลดสูตรไม่สำเร็จ', 'โหลดอีกครั้ง'] };
+    vi: ['Đang tải…', 'Không tải được công thức', 'Tải lại'], id: ['Memuat…', 'Resep gagal dimuat', 'Muat ulang'], th: ['กำลังโหลด…', 'โหลดสูตรไม่สำเร็จ', 'โหลดอีกครั้ง'], zh: ['讀取中…', '食譜讀取失敗', '再讀一次'] };
   Object.keys(T_LOAD).forEach(function (k) { if (T[k]) { T[k].loading = T_LOAD[k][0]; T[k].loadErr = T_LOAD[k][1]; T[k].retry = T_LOAD[k][2]; } });
   CSS += '.trv-wait{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*4);font-size:calc(var(--u)*4.5);font-weight:800;text-align:center;padding:10%}'
     + '.trv-wait small{font-size:calc(var(--u)*2.6);font-weight:600;color:#8a7a70}'
@@ -164,7 +170,7 @@
           order.sort(function (a, b) { var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
           order.forEach(function (a) {
             var ar = (data.areas || {})[a] || {}, list = groups[a].slice().sort(function (x, y) { var r = function (c) { return c === 'container1' ? 1 : c === 'container2' ? 2 : 0; }; return r(x.c) - r(y.c); });
-            var ao = AREA_ORIG[a] || ['', ar.en || '']; if (lang === 'en') ao = [ao[0], '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
+            var ao = AREA_ORIG[a] || ['', ar.en || '']; if (lang === 'en') ao = [ao[0], '']; if (lang === 'zh') ao = ['', '']; h += '<div class="trv-area"><div class="trv-aname"><span>' + esc(ar.name || '') + (origTxt(ao[0], ao[1]) ? ' <span class="o">' + esc(origTxt(ao[0], ao[1])) + '</span>' : '') + '</span>' + (ar.img ? ' <button type="button" class="trv-where" data-zoom="' + esc(abs(ar.img)) + '">📍 ' + esc(L.where) + '</button>' : '') + '</div><div class="trv-ings">'
               + list.map(function (g) { var ic = g.c === 'container1' ? BACK + '/img/pbowl.png' : g.c === 'container2' ? BACK + '/img/cbowl.png' : ''; return '<div class="trv-ing">' + (ic ? '<img src="' + ic + '" alt="">' : '') + '<span>' + esc(g.n) + ' <span class="q">' + esc(qtyTxt(g.q, g.u)) + '</span>' + (origTxt(g.zh, lang === 'en' ? '' : g.en) ? '<span class="o">' + esc(origTxt(g.zh, lang === 'en' ? '' : g.en)) + '</span>' : '') + '</span></div>'; }).join('') + '</div></div>';
           });
           h += '<div style="height:calc(var(--u)*14)"></div>';
