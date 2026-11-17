@@ -74,6 +74,10 @@ window.__ime=(function(){
   .pcard:hover{border-color:#9FB4D3}
   .pcard h3{margin:0;font-size:17px;color:#23436E}
   .bar{height:8px;background:#EDE7E2;border-radius:4px;overflow:hidden}.bar>div{height:100%;background:#23436E}
+  /* 2026-11-17 已完成專案：綠框綠底＋實心綠章，跟進行中的一眼分開 */
+  .pcard.done{background:#F2FAF4;border:2px solid #3E8E5A}.pcard.done h3{color:#2E6B43}.pcard.done .bar>div{background:#3E8E5A}
+  .pill.donebig{background:#3E8E5A;color:#fff;font-size:14px;padding:3px 12px}
+  .donebar{background:#3E8E5A;color:#fff;font-weight:700;border-radius:10px;padding:10px 14px;margin:0 0 12px;font-size:15px}
   .kv{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:#5E5852}
   .pfiles{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
   .pfiles .pfl{font-size:13px;font-weight:700;color:#5E5852}
@@ -672,9 +676,9 @@ function load(){
 function sortNo(a, b){ return (Number(a.no) || 0) - (Number(b.no) || 0); }
 function of(table, pid){ return S.b[table].filter(function(x){ return x.project_id === pid; }).sort(sortNo); }
 function projStats(p){
-  var ph = of('phases', p.project_id), done = ph.filter(function(x){ return x.status === '完成'; }).length, t = today();
-  var late = ph.filter(function(x){ return x.status !== '完成' && x.check_due && x.check_due < t; });
-  var next = ph.filter(function(x){ return x.status !== '完成'; })[0], it = { n: 0, t: 0 };
+  var ph = of('phases', p.project_id), done = ph.filter(function(x){ return x.status === '完成'; }).length, t = today(), fin = p.status === '完成';
+  var late = fin ? [] : ph.filter(function(x){ return x.status !== '完成' && x.check_due && x.check_due < t; });
+  var next = fin ? null : ph.filter(function(x){ return x.status !== '完成'; })[0], it = { n: 0, t: 0 };
   ph.forEach(function(x){ var s = itemStat(x); it.n += x.status === '完成' ? s.t : s.n; it.t += s.t; });
   return { n: ph.length, done: done, late: late, next: next, items: it, dec: of('decisions', p.project_id).filter(function(x){ return x.status !== '已決定'; }).length };
 }
@@ -740,10 +744,16 @@ function render(){
 function renderList(){
   var order = { '進行中': 0, '未開始': 1, '暫停': 2, '完成': 3 };
   var ps = S.b.projects.slice().sort(function(a, b){ return (order[a.status] - order[b.status]) || ((Number(a.sort) || 99) - (Number(b.sort) || 99)) || String(a.due).localeCompare(String(b.due)); });
-  var h = /* 2026-10-27 經營者：首頁「本週要做」整塊拿掉（weekPanel 函式保留不呼叫；提醒信不受影響） */ '<div class="phead" style="margin:14px 0 12px"><h2>全部專案（' + ps.length + '）</h2>' + (editing() ? '<button class="btn" type="button" id="addP">＋ 新增專案</button>' : '') + '</div>';
+  var h = /* 2026-10-27 經營者：首頁「本週要做」整塊拿掉（weekPanel 函式保留不呼叫；提醒信不受影響） */ '<div class="phead" style="margin:14px 0 12px"><h2>' + (ps.some(function(p){ return p.status === '完成'; }) ? '進行中的專案（' + ps.filter(function(p){ return p.status !== '完成'; }).length + '）' : '全部專案（' + ps.length + '）') + '</h2>' + (editing() ? '<button class="btn" type="button" id="addP">＋ 新增專案</button>' : '') + '</div>';
   if (!ps.length) h += '<div class="card empty">還沒有專案</div>';
-  h += '<div class="grid">' + ps.map(function(p){
-    var s = projStats(p), pct = s.n ? Math.round(s.done / s.n * 100) : 0;
+  var card = function(p){
+    var s = projStats(p), fin = p.status === '完成', pct = fin ? 100 : s.n ? Math.round(s.done / s.n * 100) : 0;
+    if (fin) return '<div class="card pcard done" role="link" tabindex="0" data-p="' + esc(p.project_id) + '">'
+      + '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><h3>' + esc(p.name) + '</h3><span class="pill donebig">✅ 已完成</span></div>'
+      + '<div class="muted">' + esc(p.goal) + '</div>'
+      + '<div class="bar" aria-label="已完成"><div style="width:100%"></div></div>'
+      + '<div class="kv"><span>' + range(p.start, p.due) + '</span><span>窗口：' + esc(p.owner || '未定') + '</span>' + (filesOf(p).length ? '<span>📎 ' + filesOf(p).length + ' 個檔案</span>' : '') + '</div>'
+      + '</div>';
     return '<div class="card pcard" role="link" tabindex="0" data-p="' + esc(p.project_id) + '">'
       + '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><h3>' + esc(p.name) + '</h3><span class="pill st-' + esc(p.status) + '">' + esc(p.status) + '</span>'
       + (s.late.length ? '<span class="pill late">⚠ ' + s.late.length + ' 個檢查點過期</span>' : '') + '</div>'
@@ -754,7 +764,11 @@ function renderList(){
       + (s.dec ? '<span style="color:#8A5A00;font-weight:700">待決定 ' + s.dec + ' 件</span>' : '') + '</div>'
       + (s.next ? '<div style="font-size:13px">下一個檢查點：<b>' + esc(s.next.checkpoint || s.next.title) + '</b>（' + mdw(s.next.check_due) + '）</div>' : '')
       + '</div>';
-  }).join('') + '</div>' + peopleCard();
+  };
+  var act = ps.filter(function(p){ return p.status !== '完成'; }), fins = ps.filter(function(p){ return p.status === '完成'; });
+  h += '<div class="grid">' + act.map(card).join('') + '</div>'
+    + (fins.length ? '<h2 style="margin:22px 0 12px;color:#2E6B43">✅ 已完成（' + fins.length + '）</h2><div class="grid">' + fins.map(card).join('') + '</div>' : '')
+    + peopleCard();
   $('app').innerHTML = h;
   Array.prototype.forEach.call(document.querySelectorAll('[data-p]'), function(el){
     el.onclick = function(){ go(el.getAttribute('data-p')); };
@@ -774,6 +788,7 @@ function renderProject(p, tab){
   tools.forEach(function(t){ tabs = tabs.concat(TOOL_TABS[t] || [[t, TOOLS[t]]]); });
   if (!tabs.some(function(t){ return t[0] === tab; })) tab = 'plan';
   var h = '<div style="margin:0 0 8px"><a href="#" id="back">← 全部專案</a></div>'
+    + (p.status === '完成' ? '<div class="donebar">✅ 這個專案已完成</div>' : '')
     + '<div class="card"><div class="phead"><h2>' + esc(p.name) + '</h2><span class="pill st-' + esc(p.status) + '">' + esc(p.status) + '</span>'
     + (editing() ? '<button class="btn ghost" type="button" id="editP">✏️ 修改專案</button>' : '') + '</div>'
     + '<div style="margin:6px 0">' + esc(p.goal) + '</div>'
