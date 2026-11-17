@@ -3037,6 +3037,39 @@ function rcSemiApply(list){var msg=[];
     msg.push('🧪 半成品「'+b.name+'」讀到 '+b.items.length+' 樣材料，「🧾 用料」表加一列「'+b.name+' 1 份」（成本＝材料加總）');
     b.bad.forEach(function(x){msg.push('（半成品「'+b.name+'」這行看不懂、沒帶入：'+x+'）')})});
   return msg}
+/* 2026-11-17 經營者：「匯入食譜有『(限當日壽星)_自選版』這個關鍵字時，裡面會有不同的蛋糕體跟夾餡配方，請搭配成本最高的組合來產生即時成本」。
+   食譜名稱有這個關鍵字 → 步驟標題「選項 - 步驟」（例：巧克力 - 製作麵糊1、焦糖鮮奶油+三色脆球-製作夾餡）是客人選一的選項；
+   同一種步驟（去掉結尾數字：製作麵糊、製作夾餡）的不同選項＝一組，組名取產品特色「●主體(3選1)」「●內餡(3選1)」（選項名對到最多的那段），對不到就用步驟名。
+   該步「食材工具」列的品項自動設成「🔀 客人選一」（og 組／oo 選項）→ 成本卡每組只算最貴的選項（optModel）＝最貴的組合。
+   沒有自己食材的選項（例：原味，材料都在共用步驟）成本當 0，不會是最貴；其他共用步驟的品項照舊每份都算。 */
+var BD_RE=/[（(]\s*限當日壽星\s*[)）]\s*[_＿]?\s*自選版/;
+var BD_STEP=/^(.+?)\s*[-－–—]\s*(.+?)$/;
+function bdGroups(rc){var G={},order=[];
+  (rc.steps||[]).forEach(function(st,si){var t=String(st.t||'').replace(/\s+/g,' ').trim();if(TX_ORIG_RE.test(t))return;var m=t.match(BD_STEP);if(!m)return;
+    var opt=m[1].trim(),act=m[2].replace(/\s*\d+\s*$/,'').trim();if(!opt||!act)return;
+    if(!G[act]){G[act]={act:act,name:act,opts:[],steps:{}};order.push(act)}
+    if(G[act].opts.indexOf(opt)<0)G[act].opts.push(opt);G[act].steps[si]=opt});
+  var gs=order.map(function(a){return G[a]}).filter(function(g){return g.opts.length>=2});
+  var sq=function(x){return String(x||'').replace(/\s+/g,'')};
+  var segs=String((rc.info||{}).desc||'').split('●').map(function(s){var m=s.match(/^\s*([^(（:：●]+?)\s*[（(]\s*\d+\s*選\s*[1一]\s*[)）]\s*[:：]?([\s\S]*)$/);return m?{name:m[1].trim(),txt:sq(m[2])}:null}).filter(Boolean);
+  var used={};
+  gs.forEach(function(g){var best=null,bs=0;segs.forEach(function(s){var c=g.opts.filter(function(o){return s.txt.indexOf(sq(o))>=0}).length;if(c>bs){bs=c;best=s}});
+    var nm=best?best.name:g.act;if(used[nm])nm=nm+'（'+g.act+'）';used[nm]=1;g.name=nm});
+  return gs}
+/* 把「選項」步驟裡的品項設成客人選一。got＝parseRecipeHTML 讀到的品項（文件順序，跟 AP.lines 一對一）；對步驟的 .ingred 依序找同名同量的 */
+function bdApply(rcs,got,lines){var flat=[],info=[];
+  rcs.forEach(function(rc){var on=BD_RE.test(String(rc.name||'')+' '+String(rc.file||'')),gs=on?bdGroups(rc):[];if(on)info.push({rc:rc,gs:gs});
+    (rc.steps||[]).forEach(function(st,si){var g=null,o='';gs.forEach(function(x){if(x.steps.hasOwnProperty(si)){g=x;o=x.steps[si]}});
+      (st.ing||[]).forEach(function(x){flat.push({n:R.stripPos(x[0]),q:x[1],g:g,o:o})})})});
+  if(!info.length)return [];
+  var j=0,have={};
+  got.forEach(function(l,i){for(var k=j;k<flat.length;k++){var f=flat[k];if(f.n===l.m&&f.q===l.q){j=k+1;
+      if(f.g&&lines[i]){lines[i].og=f.g.name;lines[i].oo=f.o;lines[i].op='';(have[f.g.name]=have[f.g.name]||{})[f.o]=1}return}}});
+  var msg=[];
+  info.forEach(function(x){if(!x.gs.length){msg.push('食譜名稱有「(限當日壽星)_自選版」，但步驟標題沒有「選項 - 步驟」的寫法（例：巧克力 - 製作麵糊1），沒有自動設定客人選一；請自己在「🧾 用料」表按「🔀 設成客人選一的選項」');return}
+    x.gs.forEach(function(g){var h=have[g.name]||{},none=g.opts.filter(function(o){return !h[o]});
+      msg.push(g.name+'（'+g.opts.length+' 選 1）：'+g.opts.join('／')+(none.length?'；'+none.join('、')+' 沒有自己另外的材料（成本當 0）':''))})});
+  return msg}
 function importFiles(fs){if(!fs||!fs.length)return;
   var got=[],names=[],warns=[],text='',done=0,rcs=[],bad='';
   Array.prototype.forEach.call(fs,function(f){readRecipeFile(f).then(function(res){
@@ -3053,6 +3086,7 @@ function importFiles(fs){if(!fs||!fs.length)return;
         AP.lines=got.map(function(l){var s=skuOf(l.m);var cat=s?s.cat:(R.isTool(l.m)?'器具':'食材');
           var z=mapZone(l.zone)||defaultZone(l.m,cat);
           var o=newLine();o.m=l.m;o.q=l.q;o.u=l.u;o.zone=z;o.cat=s?'':cat;o.id=s?s.id:'';spConv(o,l.par);return o});   /* 2026-10-29 平匙→克數 */
+        AP.optMsg=bdApply(rcs,got,AP.lines);   /* 2026-11-17：壽星自選版 → 選項步驟的品項設成客人選一（成本取最貴組合） */
         var sms=rcSemiSteps(rcs);AP.semiMsg=sms.length?rcSemiApply(sms):[];   /* 2026-11-03：「半成品(…)」步驟 → 半成品＋表一一列 */
         var tu=rcs.length?stepUse(rcs.map(function(rc){return Object.assign({},rc,{steps:(rc.steps||[]).filter(function(st){return !RC_SEMI_RE.test(String(st.t||''))})})}),got):null;   /* 2026-10-19：步驟內文寫了用量、清單沒列的品項自動加進表一（半成品那步不算） */
         if(tu)tu.add.forEach(function(x){AP.lines.push(txLine(x))});
@@ -5556,6 +5590,7 @@ function paint(){var root=document.getElementById('apRoot');
    +'</div></details></div>';
   if(AP.warn.length)s+='<div class="ap-note"><b>匯入時有 '+AP.warn.length+' 行看不懂，沒有算進來：</b><div class="ap-muted">'+esc(AP.warn.slice(0,12).join('｜'))+(AP.warn.length>12?' …':'')+'</div></div>';
   if(AP.semiMsg&&AP.semiMsg.length)s+='<div class="ap-note"><b>🧪 食譜裡的半成品（已自動帶入，請到下方半成品區確認用料與原包裝成本）</b><div class="ap-muted">'+AP.semiMsg.map(esc).join('<br>')+'</div></div>';   /* 2026-11-03 */
+  if(AP.optMsg&&AP.optMsg.length)s+='<div class="ap-note"><b>🎂 壽星自選版：'+(AP.lines.some(function(l){return String(l.og||'').trim()})?'已自動設好「🔀 客人選一」，成本用每組最貴的選項（＝最貴的組合）':'沒有自動設定客人選一')+'</b><div class="ap-muted">'+AP.optMsg.map(esc).join('<br>')+'</div></div>';   /* 2026-11-17 */
   if(AP.txt)s+=txNoteHTML();
   if(AP.miss.length)s+='<div class="ap-note"><b>⚠ 食譜內文提到、但「食材工具」清單沒列的品項（'+AP.miss.length+' 項）</b><div class="ap-muted">這些沒被計入成本，門市備料與週用量推算也會漏。請主廚補進食材清單，或手動加到「🧾 用料」表。</div><div style="margin-top:4px"><b>'+esc(AP.miss.join('、'))+'</b></div></div>';
   /* 半成品製作 */
