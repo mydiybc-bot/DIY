@@ -418,6 +418,10 @@ window.SpoonHint=(function(){
   #tab-apply .ap-ckrow.must>span{color:#8B1E1A}
   #tab-apply .ap-ckrow.ask>span{color:#7A4F00}
   #tab-apply .ap-ckrow.done>span{color:#2F5D33}
+  #tab-apply .ap-ck.note{border:1px solid #A9C4DE;background:#F3F8FC}
+  #tab-apply .ap-ck.note .ap-ckh{color:#1F4E79}
+  #tab-apply .ap-ckrow.note{border-top-color:#CFE0EF}
+  #tab-apply .ap-ckrow.note>span{color:#1F4E79}
   #tab-apply .ap-ckrow button{padding:2px 8px;font-size:12px}
   /* 2026-10-22 🏷 取名小幫手 */
   #tab-apply .ap-nmh{margin-top:4px;font-size:12px;line-height:1.6;white-space:normal;color:#5D4A3E}
@@ -2289,9 +2293,12 @@ function zoneBanWhy(zb){return zb+'品只能放'+ZONES.filter(function(z){return
 var _zClr=[];   /* 改存放方式時被清空區域的列（只在畫面提示，不存進草稿） */
 function zoneOptsHTML(l){return '<option value="">— 請選 —</option>'+ZONES.map(function(z){var b=zoneBan(l.store,z),cur=l.zone===z;
   return '<option value="'+esc(z)+'"'+(cur?' selected':'')+(b&&!cur?' disabled':'')+'>'+esc(z)+(b?'（'+esc(b)+'不可放）':'')+'</option>'}).join('')}
+/* 2026-11-17 經營者：存放方式選「模具」、區域沒填 → 註記但不擋送件 */
+function mzoneNote(l){return !!l&&String(l.store||'').trim()==='模具'&&!String(l.zone||'').trim()}
 function zoneHintHTML(l){var zb=zoneBan(l.store,l.zone);
   if(zb)return '<div class="ap-hint" style="color:#B3261E">⚠ '+esc(zoneBanWhy(zb))+'，請改選</div>';
   if(_zClr.indexOf(l)>=0&&!l.zone)return '<div class="ap-hint" style="color:#8A5A00">存放方式改了，原本的區域不能放，已清空，請重選</div>';
+  if(mzoneNote(l))return '<div class="ap-hint" style="color:#1F4E79">📝 模具還沒填區域（不擋送件，之後任何人都可以補）</div>';
   return ''}
 function zoneCellHTML(l){return '<select data-nf="zone">'+zoneOptsHTML(l)+'</select><div data-zhint>'+zoneHintHTML(l)+'</div>'}
 /* 2026-11-10 經營者：表二存放方式選「模具」時，後面的「區域」任何人都可以改（各單位身分、104 申請表連結都行；伺服器 patchReq_ 同一條）。
@@ -2674,7 +2681,8 @@ function ckList(){var out=[],U=(AP.ext&&AP.ext.units)||{};
     if(nw&&!tool&&!u&&num(l.q)>0)add('must','nounit|'+nm,'「'+nm+'」沒填單位：新品項一定要寫單位（例：g、顆、片），採購量才有單位',g1);
     if(unitParen(l))add('must','paren|'+nm,'「'+nm+'」單位「'+u+'」有括號：單位只寫「'+unitBare(u)+'」，括號裡的說明放備註（不然採購系統對不到單位）',g1);
     var um=unitMis(l);if(um)add('must','unit|'+nm,'「'+nm+'」原包裝規格「'+l.pkgSpec+'」是'+ckFamName(um.sp.f,um.sp.t)+'，每份用量「'+num(l.q)+' '+u+'」是'+ckFamName(um.uf,um.ut)+'：單位對不上，成本和採購量會算錯',g1);
-    if(inTable2(l)&&l.take==='自取'&&!String(l.zone||'').trim())add('must','zone|'+nm,'「'+nm+'」拿取方式是自取，但沒選區域：客人不知道去哪裡拿',g2);
+    if(inTable2(l)&&mzoneNote(l))add('note','mzone|'+nm,'「'+nm+'」存放方式是模具，還沒填區域（不擋送件；之後任何人都可以補）',g2);   /* 2026-11-17 經營者：模具沒填區域只註記、不擋（自取也不擋） */
+    else if(inTable2(l)&&l.take==='自取'&&!String(l.zone||'').trim())add('must','zone|'+nm,'「'+nm+'」拿取方式是自取，但沒選區域：客人不知道去哪裡拿',g2);
     var zb=inTable2(l)?zoneBan(l.store,l.zone):'';if(zb)add('must','zonebad|'+nm,'「'+nm+'」存放方式是'+zb+'，區域卻選「'+l.zone+'」：'+zoneBanWhy(zb)+'，請改選區域',g2);
     if(tool)return;
     var sp=ckSpec(l.split),ut=ckTok(u),uf=ckFam(ut);
@@ -2689,7 +2697,8 @@ function ckList(){var out=[],U=(AP.ext&&AP.ext.units)||{};
     var lk=String((U[nm]||{})['購買連結']||'').trim(),vd=String((U[nm]||{})['供應商覆寫']||'').trim()||String((nw?l.vendor:skuVendor(l))||'').trim(),pl=ckPlat(lk,true),pv=ckPlat(vd,false);
     if(lk&&pl&&pv&&pl!==pv)add('ask','link|'+nm+'|'+vd+'|'+lk.slice(0,60),'「'+nm+'」進貨廠商是「'+vd+'」，購買連結卻是'+pl+'的網址：請確認是哪一家',g2)});
   semiT2List().forEach(function(x){var l=x.o,nm=String(l.m||'').trim(),zb=zoneBan(l.store,l.zone);   /* 2026-11-03 半成品材料列在表二也要擋 */
-    if(zb)add('must','zonebad|'+nm,'「'+nm+'」存放方式是'+zb+'，區域卻選「'+l.zone+'」：'+zoneBanWhy(zb)+'，請改選區域','n'+x.key)});
+    if(zb)add('must','zonebad|'+nm,'「'+nm+'」存放方式是'+zb+'，區域卻選「'+l.zone+'」：'+zoneBanWhy(zb)+'，請改選區域','n'+x.key);
+    if(nm&&mzoneNote(l))add('note','mzone|'+nm,'「'+nm+'」存放方式是模具，還沒填區域（不擋送件；之後任何人都可以補）','n'+x.key)});
   AP.semis.forEach(function(s,si){var nm=semiName(s);if(!nm)return;var l=lineByName(s.link),g='s'+si;
     if(l&&s.store&&l.store&&s.store!==l.store)add('ask','sstore|'+nm+'|'+s.store+'|'+l.store,'半成品「'+nm+'」存放方式是「'+s.store+'」，「🆕 新增食材/器模具」表的「'+l.m+'」的存放方式卻是「'+l.store+'」：請統一',g);
     var txt=[s.usage,s.steps,s.note,l?l.shelf:'',l?l.lnote:''].join('\n'),D={},mm,re=/(冷藏|冷凍|常溫)[^0-9\n，,。；;]{0,6}?(\d+)\s*天/g;
@@ -2701,19 +2710,21 @@ function ckList(){var out=[],U=(AP.ext&&AP.ext.units)||{};
     if(s.maker==='門市'&&/出貨中心[^。\n]{0,12}(裁切|剪|分裝|製作|做)/.test(nt))add('ask','smaker2|'+nm,'半成品「'+nm+'」製作單位是門市，但說明／備註寫由出貨中心處理：到底誰做？',g)});
   return out}
 function ckAcked(){var o={};String(AP.head.chkok||'').split('¦').forEach(function(x){if(x)o[x]=1});return o}
-function ckOpen(){var ok=ckAcked();return ckList().filter(function(x){return x.lv==='must'||!ok[x.sig]})}
+function ckOpen(){var ok=ckAcked();return ckList().filter(function(x){return x.lv!=='note'&&(x.lv==='must'||!ok[x.sig])})}   /* 註記（note）不擋、不必確認 */
 var _ckL=[];
 function ckHTML(){var L=ckList();_ckL=L;if(!L.length)return '';var ok=ckAcked(),edit=!lockedReq()&&!unitMode();
-  var open=[],done=[];L.forEach(function(x,k){(x.lv==='must'||!ok[x.sig]?open:done).push(k)});
-  function row(k,isDone){var x=L[k];return '<div class="ap-ckrow '+(isDone?'done':x.lv)+'"><span>'+(isDone?'✓':x.lv==='must'?'🔴':'🟡')+' '+esc(x.t)+'</span>'
+  var open=[],done=[],notes=[];L.forEach(function(x,k){(x.lv==='note'?notes:x.lv==='must'||!ok[x.sig]?open:done).push(k)});
+  function row(k,isDone){var x=L[k];return '<div class="ap-ckrow '+(isDone?'done':x.lv)+'"><span>'+(isDone?'✓':x.lv==='must'?'🔴':x.lv==='note'?'📝':'🟡')+' '+esc(x.t)+'</span>'
     +'<button class="ap-btn2" data-ckgo="'+k+'">看那一格</button>'
     +(edit&&x.act==='ctrl'?'<button class="ap-btn2" data-ckact="'+k+'">幫我清掉</button>':'')
     +(edit&&!isDone&&x.lv==='ask'?'<button class="ap-btn2" data-ckok="'+k+'">確認沒問題</button>':'')
     +(edit&&isDone?'<button class="ap-btn2" data-ckundo="'+k+'">取消確認</button>':'')+'</div>'}
-  if(!open.length)return '<details class="ap-ck ok"><summary>✅ 內容檢查：'+done.length+' 項主廚已確認沒問題（點開看）</summary>'+done.map(function(k){return row(k,true)}).join('')+'</details>';
+  var noteH=notes.length?'<div class="ap-ck note"><div class="ap-ckh">📝 註記：'+notes.length+' 項（不擋送件，提醒之後補上）</div>'+notes.map(function(k){return row(k,false)}).join('')+'</div>':'';
+  if(!open.length&&!done.length)return noteH;
+  if(!open.length)return '<details class="ap-ck ok"><summary>✅ 內容檢查：'+done.length+' 項主廚已確認沒問題（點開看）</summary>'+done.map(function(k){return row(k,true)}).join('')+'</details>'+noteH;
   return '<div class="ap-ck"><div class="ap-ckh">🔎 內容檢查：還有 '+open.length+' 個地方要處理</div><div class="ap-muted" style="margin:2px 0 4px">🔴 一定要改（不然成本、採購量會算錯），改好才能產出連結／送件；🟡 前後寫法不一致，請看一下，真的沒問題就按「確認沒問題」。</div>'
     +open.map(function(k){return row(k,false)}).join('')
-    +(done.length?'<details style="margin-top:4px"><summary class="ap-muted">已確認沒問題 '+done.length+' 項</summary>'+done.map(function(k){return row(k,true)}).join('')+'</details>':'')+'</div>'}
+    +(done.length?'<details style="margin-top:4px"><summary class="ap-muted">已確認沒問題 '+done.length+' 項</summary>'+done.map(function(k){return row(k,true)}).join('')+'</details>':'')+'</div>'+noteH}
 /* 表一品項下方：單位防呆紅框（只有 🆕 非器具；括號／對不上／已填原包裝幾個） */
 function ckBoxInner(l,i){if(!isNewItem(l)||isToolLine(l)||!String(l.m||'').trim())return '';var h='',lk=lockedReq()||unitMode(),u=String(l.u||'').trim();
   if(unitParen(l))h+='<div class="ap-sim">⚠ 單位「'+esc(u)+'」有括號說明：單位只寫「'+esc(unitBare(u))+'」，括號裡的放備註'+(lk?'':' <button class="ap-btn2" data-ckpar="'+i+'">幫我移到備註</button>')+'</div>';
