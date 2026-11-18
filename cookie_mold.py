@@ -53,10 +53,10 @@ MAX_STL = 6_000_000
 DEFAULT_CFG = {
     "daily_budget_twd": 50,
     "usd_twd": 32.5,
-    "check_model": "gemini-2.5-flash-lite",
-    "image_model": "gemini-2.5-flash-image",
-    # 單價（美元／每百萬 token）；上線前要用實際帳單核對
-    "price": {"check_in": 0.10, "check_out": 0.40, "image_in": 0.30, "image_out": 30.0},
+    "check_model": "gemini-3.1-flash-lite",
+    "image_model": "gemini-3.1-flash-lite-image",   # 2026-11-18 實測：線條粗、乾淨、約 5 秒；2.5-flash-image 寫實版線太細不能用
+    # 單價（美元／每百萬 token，2026-11-18 查官方定價頁）；image_out＝圖片輸出、image_text_out＝圖像模型順帶輸出的文字
+    "price": {"check_in": 0.25, "check_out": 1.50, "image_in": 0.25, "image_out": 30.0, "image_text_out": 1.50},
 }
 _LOCK = threading.RLock()
 _LAST_CLEAN = 0.0
@@ -137,7 +137,11 @@ def _b64(s: str, limit: int) -> bytes:
 def _log_cost(kind: str, model: str, usage: dict, uid: str) -> float:
     c, p = cfg(), cfg()["price"]
     tin, tout = int(usage.get("promptTokenCount") or 0), int(usage.get("candidatesTokenCount") or 0)
-    usd = (tin * p[kind + "_in"] + tout * p[kind + "_out"]) / 1e6
+    img = sum(int(d.get("tokenCount") or 0) for d in usage.get("candidatesTokensDetails") or [] if d.get("modality") == "IMAGE")
+    if kind == "image" and img:      # 圖片 token 與文字 token 單價不同，分開算
+        usd = (tin * p["image_in"] + img * p["image_out"] + max(0, tout - img) * p.get("image_text_out", 0)) / 1e6
+    else:
+        usd = (tin * p[kind + "_in"] + tout * p[kind + "_out"]) / 1e6
     twd = round(usd * c["usd_twd"], 4)
     row = {"at": _now().isoformat(timespec="seconds"), "day": _now().strftime("%Y-%m-%d"), "kind": kind, "model": model,
            "in": tin, "out": tout, "twd": twd, "uid": uid}
@@ -218,13 +222,15 @@ CHECK_PROMPT = (
     "clear (true if the subject is in focus and large enough to draw)."
 )
 LINE_PROMPT = {
-    "real": ("Redraw the main subject of this photo as a clean black-and-white line drawing for a 7 cm cookie stamp. "
-             "Keep the subject's real proportions and recognisable outline, but simplify details. "),
+    "real": ("Redraw the main subject of this photo as a bold, heavily simplified black-and-white colouring-book line drawing for a 7 cm cookie stamp. "
+             "Keep the subject's real pose, proportions and recognisable outline (not chibi), but draw it as if with a thick black marker: "
+             "fewer than 25 strokes in total, no fur strokes, no clothing patterns, no small details; if the face would be small, reduce it to simple dots and one short line. "),
     "q": ("Redraw the main subject of this photo as a cute chibi / kawaii style black-and-white line drawing for a 7 cm cookie stamp: "
           "big head, small body, very simple friendly face, even fewer lines than a realistic drawing. "),
 }
 LINE_RULES = (
-    "Strict rules: pure white background; solid black lines only; every line thick and of uniform width (about 2.5% of the image width); "
+    "Strict rules: pure white background; solid black lines only; every line the same heavy marker weight (about 25 pixels wide on a 1024-pixel image); "
+    "thin or hairline strokes are forbidden; "
     "no shading, no gray, no hatching, no fill, no texture, no fur strokes; gaps between neighbouring lines at least as wide as a line; "
     "one closed outer silhouette; only a few interior lines (eyes, nose, mouth, ears, one or two key markings); "
     "no text, no border, no background objects; subject centred and filling about 80% of a square 1:1 image."

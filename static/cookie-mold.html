@@ -795,7 +795,8 @@ async function fromLineArt(b64) {
   /* 最外圈那條線就是切模的牆，不用再做壓紋；量出它多粗，連同安全距離一起去掉 */
   const tot = new Float32Array(20), ic = new Float32Array(20); let silArea = 0;
   for (let i = 0; i < W * H; i++) { if (field[i] >= 0) continue; silArea++; const b = Math.floor(-field[i] / 0.25); if (b < 20) { tot[b]++; ic[b] += lines[i]; } }
-  let est = 2; for (let b = 1; b < 20; b++) if (tot[b] && ic[b] / tot[b] < 0.5) { est = b * 0.25; break; }      /* 第 0 格貼著邊緣、取樣不準，從第 1 格看起 */
+  let est = 2, on = false;                                   /* 從邊緣往內：先遇到外圈線（墨多），再離開它（墨少）→ 離開的深度就是外圈線的內緣 */
+  for (let b = 0; b < 20; b++) { const fr = tot[b] ? ic[b] / tot[b] : 0; if (!on && fr >= 0.5) on = true; else if (on && fr < 0.5) { est = b * 0.25; break; } }
   const keep = Math.min(3.5, Math.max(0.8, est)) + CFG.minGapMm;
   for (let i = 0; i < W * H; i++) if (field[i] > -keep) lines[i] = 0;
   const rawN = lines.reduce((a, b) => a + b, 0);
@@ -828,6 +829,21 @@ function drawAI(r) {
   b.drawImage(lc, S / 2 - r.cx / PX_PER_MM * k, S / 2 - r.cy / PX_PER_MM * k, r.W / PX_PER_MM * k, r.H / PX_PER_MM * k);
   b.lineWidth = 5; b.strokeStyle = '#E8822B'; b.lineJoin = 'round'; b.stroke(path);
 }
+/* AI 線稿 → 可印性檢查 → 換掉上面的 3D 模具與餅乾模擬 */
+async function applyLine(b64, style) {
+  const res = {style};
+    const r = await fromLineArt(b64);
+    state.r = r; build3D(r); drawAI(r);
+    state.stl = makeSTL(state.geoms);
+    $('sizeTxt').textContent = `餅乾大小約 ${(r.widthMm / 10).toFixed(1)} × ${(r.heightMm / 10).toFixed(1)} 公分（模具最長邊 ${(CFG.outerDiameterMm / 10).toFixed(0)} 公分內）`;
+    const w = []; if (r.ai.complex) w.push('線條還是太多太密，壓在餅乾上容易糊成一片。建議改選 Q 版，或重新生成一次。');
+    if (r.ai.sparse) w.push('這次的內部線條很少，壓出來的細節不明顯。可以重新生成一次。');
+    if (r.ai.thickened > 0.05 || r.ai.specks) w.push('太細的線已經自動加粗、太小的碎點已經刪掉，模具才印得出來。');
+    $('aiWarn').innerHTML = w.map(t => `<div>・${t}</div>`).join(''); show('aiWarn', w.length > 0);
+    state.aiLast = {design: ai.design, style: res.style, widthMm: r.widthMm, heightMm: r.heightMm, stlBytes: state.stl.size, ai: r.ai};
+}
+state.applyLine = applyLine;
+state.snap = t => { setTab(t); three.ctl.autoRotate = false; three.cam.position.set(0, 150, 70); three.ctl.update(); three.renderer.render(three.scene, three.cam); return three.renderer.domElement.toDataURL('image/jpeg', 0.85); };   /* 驗收截圖用 */
 async function generate() {
   if (ai.busy) return;
   if (!state.im) return popup('請先選一張照片', '先在上面選一張照片試玩，再來生成 AI 細節版。');
@@ -838,15 +854,7 @@ async function generate() {
     if (!res.ok) { if (res.code === 'login') { ai.token = ''; localStorage.removeItem('cm:token'); } aiMsg(res.msg); return; }
     if (res.user && ai.st) ai.st.user = res.user;
     ai.design = res.design_id;
-    const r = await fromLineArt(res.line);
-    state.r = r; build3D(r); drawAI(r);
-    state.stl = makeSTL(state.geoms);
-    $('sizeTxt').textContent = `餅乾大小約 ${(r.widthMm / 10).toFixed(1)} × ${(r.heightMm / 10).toFixed(1)} 公分（模具最長邊 ${(CFG.outerDiameterMm / 10).toFixed(0)} 公分內）`;
-    const w = []; if (r.ai.complex) w.push('線條還是太多太密，壓在餅乾上容易糊成一片。建議改選 Q 版，或重新生成一次。');
-    if (r.ai.sparse) w.push('這次的內部線條很少，壓出來的細節不明顯。可以重新生成一次。');
-    if (r.ai.thickened > 0.05 || r.ai.specks) w.push('太細的線已經自動加粗、太小的碎點已經刪掉，模具才印得出來。');
-    $('aiWarn').innerHTML = w.map(t => `<div>・${t}</div>`).join(''); show('aiWarn', w.length > 0);
-    state.aiLast = {design: ai.design, style: res.style, widthMm: r.widthMm, heightMm: r.heightMm, stlBytes: state.stl.size, ai: r.ai};
+    await applyLine(res.line, res.style);
     show('aiResult', true); $('view').scrollIntoView({behavior:'smooth', block:'center'});
   } catch (e) {
     aiMsg(e instanceof Friendly ? e.title + '：' + e.message : '這次沒有成功，請再試一次。'); if (!(e instanceof Friendly)) console.error(e);
