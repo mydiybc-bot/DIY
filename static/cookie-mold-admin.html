@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<!-- 2026-11-18 新建「🍪 餅乾模審核後台」（AI 專屬餅乾模第二階段，總部用）
+     待審設計（原照片、AI 線稿、修好的線條、3D 預覽、客人資料、到店日與門市）→ 通過／退回（退回要寫白話原因，客人回試玩頁看得到）→ 下載 STL。
+     每週待印清單（到店日前一個週一中午截止、週二列印、週三隨貨出貨）、客人名單與「已付訂金」開關、每日 AI 花費與次數。
+     後端 cookie_mold.py（/api/cookie-mold/admin/…）；密碼問權限中心（dashboard=cookiemold），只存在這個分頁（關掉就要重輸）。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>餅乾模審核後台｜自己做烘焙聚樂部</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FFF8EC;color:#40210F;line-height:1.55}
+  button,input,textarea{font-family:inherit}
+  .top{background:#FDD35D;padding:.7rem 1rem;font-weight:900;box-shadow:0 2px 8px rgba(64,33,15,.15)}
+  main{max-width:70rem;margin:0 auto;padding:1rem}
+  .tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:0 0 1rem}
+  .tabs button{border:2px solid #E6D2A8;background:#FFFDF7;color:#40210F;border-radius:999px;padding:.45rem 1rem;font-size:1rem;font-weight:800;cursor:pointer}
+  .tabs button.on{background:#FDD35D;border-color:#E8A200}
+  .card{background:#fff;border:1px solid #F1E3C8;border-radius:1rem;padding:1rem;margin:0 0 1rem}
+  .btn{border:0;border-radius:999px;background:#E8822B;color:#fff;font-weight:800;font-size:.95rem;padding:.5rem 1.1rem;cursor:pointer}
+  .btn.ok{background:#2F8F5B}.btn.no{background:#C7473F}.btn.ghost{background:#fff;color:#40210F;border:2px solid #E6D2A8}
+  .imgs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.6rem;margin:.6rem 0}
+  .imgs figure{margin:0;text-align:center;font-size:.8rem;font-weight:700;color:#6B4A36}
+  .imgs img,.imgs .v3{width:100%;aspect-ratio:1/1;object-fit:contain;background:#F7EEDD;border-radius:.6rem;display:block}
+  .info{display:flex;flex-wrap:wrap;gap:.3rem 1.2rem;font-size:.95rem}
+  .info b{color:#8A6F5E;font-weight:700;margin-right:.3rem}
+  .tag{display:inline-block;border-radius:999px;padding:.05rem .7rem;font-size:.85rem;font-weight:800;background:#FDD35D}
+  .tag.approved{background:#BFE5CC}.tag.rejected{background:#F6C6C2}
+  textarea{width:100%;min-height:4rem;border:2px solid #E6D2A8;border-radius:.7rem;padding:.6rem;font-size:1rem;margin:.5rem 0}
+  input[type=password]{border:2px solid #E6D2A8;border-radius:.7rem;padding:.6rem .8rem;font-size:1rem}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  th,td{border-bottom:1px solid #F1E3C8;padding:.45rem .5rem;text-align:left}
+  th{color:#8A6F5E;font-size:.85rem}
+  .big{font-size:1.6rem;font-weight:900}
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.6rem;margin-bottom:1rem}
+  .kpi div{background:#FFFDF7;border:1px solid #F1E3C8;border-radius:.8rem;padding:.6rem .8rem}
+  .kpi small{display:block;color:#8A6F5E;font-weight:700}
+  .warn{background:#FFF1F0;border:1px solid #E9A7A3;border-radius:.6rem;padding:.5rem .7rem;margin:0 0 1rem;font-weight:700}
+  .hide{display:none!important}
+  .muted{color:#8A6F5E}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div class="top">🍪 餅乾模審核後台</div>
+<main>
+  <section class="card" id="gate">
+    <h2 style="margin-top:0">請輸入後台密碼</h2>
+    <input type="password" id="pw" autocomplete="off"> <button class="btn" id="pwBtn">進入</button>
+    <p class="muted" id="gateMsg"></p>
+  </section>
+  <div id="app" class="hide">
+    <div class="tabs" id="tabs">
+      <button data-t="review" class="on">待審設計</button><button data-t="all">全部設計</button><button data-t="weekly">每週待印</button><button data-t="users">客人與訂金</button><button data-t="stats">AI 花費</button>
+    </div>
+    <div id="body"></div>
+  </div>
+</main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const $ = id => document.getElementById(id), API = '/api/cookie-mold/admin/';
+const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let pw = sessionStorage.getItem('cm:adm') || '', tab = 'review';
+async function api(name, body) {
+  try { const r = await fetch(API + name, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(Object.assign({pwd: pw}, body || {}))}); return await r.json(); }
+  catch (e) { return {ok:false, msg:'連線不太順，請再試一次。'}; }
+}
+async function enter() {
+  const r = await api('stats', {days: 1});
+  if (!r.ok) { $('gateMsg').textContent = pw ? r.msg : ''; sessionStorage.removeItem('cm:adm'); return; }
+  sessionStorage.setItem('cm:adm', pw); $('gate').classList.add('hide'); $('app').classList.remove('hide'); render();
+}
+$('pwBtn').onclick = () => { pw = $('pw').value.trim(); enter(); };
+$('pw').addEventListener('keydown', e => { if (e.key === 'Enter') $('pwBtn').click(); });
+$('tabs').onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; tab = t; [...$('tabs').children].forEach(b => b.classList.toggle('on', b.dataset.t === t)); render(); };
+const LAB = {submitted:'待審', approved:'已通過', rejected:'已退回'}, STY = {real:'寫實版', q:'Q 版'};
+
+function designCard(d) {
+  const c = d.customer || {};
+  return `<div class="card" data-id="${d.id}">
+    <div class="info"><span class="tag ${d.status}">${LAB[d.status] || d.status}</span><span><b>風格</b>${STY[d.style] || d.style}</span><span><b>客人</b>${esc(c.name)}（${esc(d.name)}）</span><span><b>電話</b>${esc(c.phone)}</span>
+      <span><b>門市</b>${esc(c.store)}</span><span><b>到店日</b>${esc(c.visit)}</span><span><b>列印截止</b>${esc(d.cutoff)}（週一中午）</span><span><b>送出</b>${esc((d.submitted || '').replace('T', ' ').slice(0, 16))}</span></div>
+    ${d.status === 'rejected' ? `<p style="margin:.4rem 0 0"><b>退回原因：</b>${esc(d.reason)}</p>` : ''}
+    <div class="imgs"><figure><img data-k="photo" alt="">原照片</figure><figure><img data-k="raw" alt="">AI 線稿</figure><figure><img data-k="line" alt="">修好的線條</figure><figure><div class="v3" data-k="v3"></div>3D 預覽（可拖曳）</figure></div>
+    <button class="btn ghost" data-a="load">載入圖片與 3D</button> <button class="btn ghost" data-a="stl">下載 STL</button>
+    ${d.status === 'submitted' ? `<textarea data-k="reason" placeholder="退回時請用白話寫原因，客人會看到。例：鬍鬚太細印不出來，請改選 Q 版再送一次。"></textarea>
+      <button class="btn ok" data-a="approve">通過</button> <button class="btn no" data-a="reject">退回</button> <span class="muted" data-k="msg"></span>` : ''}
+  </div>`;
+}
+const b64bytes = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+function view3D(box, bytes) {
+  const dv = new DataView(bytes.buffer), n = dv.getUint32(80, true), pos = new Float32Array(n * 9);
+  for (let i = 0; i < n; i++) for (let j = 0; j < 9; j++) pos[i * 9 + j] = dv.getFloat32(84 + i * 50 + 12 + j * 4, true);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.computeVertexNormals();
+  const r = new THREE.WebGLRenderer({antialias:true, alpha:true}); r.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); r.setSize(box.clientWidth, box.clientHeight); box.innerHTML = ''; box.appendChild(r.domElement);
+  const sc = new THREE.Scene(), cam = new THREE.PerspectiveCamera(35, 1, 1, 2000); cam.position.set(0, 150, 120);
+  sc.add(new THREE.HemisphereLight(0xffffff, 0xcbb89a, 1.2)); const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(-60, 90, 120); sc.add(sun);
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({color:0xF08A2E, roughness:.55, side:THREE.DoubleSide})); m.rotation.x = -Math.PI / 2; sc.add(m);
+  const ctl = new OrbitControls(cam, r.domElement); ctl.enablePan = false; ctl.target.set(0, 4, 0); ctl.update();
+  const draw = () => r.render(sc, cam); ctl.addEventListener('change', draw); draw();
+}
+async function loadFiles(card) {
+  const id = card.dataset.id;
+  for (const k of ['photo', 'raw', 'line']) { const f = await api('file', {id, kind: k}); const im = card.querySelector(`img[data-k="${k}"]`); if (f.ok) im.src = 'data:image/' + (k === 'photo' ? 'jpeg' : 'png') + ';base64,' + f.data; else im.alt = f.msg; }
+  const f = await api('file', {id, kind: 'stl'}); if (f.ok) view3D(card.querySelector('[data-k="v3"]'), b64bytes(f.data));
+}
+$('body').onclick = async e => {
+  const a = e.target.dataset && e.target.dataset.a; if (!a) return;
+  const card = e.target.closest('[data-id]'), uid = e.target.dataset.uid;
+  if (a === 'paid') { const r = await api('paid', {uid, on: e.target.dataset.on === '1'}); if (r.ok) render(); return; }
+  if (!card) return; const id = card.dataset.id;
+  if (a === 'load') return loadFiles(card);
+  if (a === 'stl') { const f = await api('file', {id, kind: 'stl'}); if (!f.ok) return alert(f.msg); const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([b64bytes(f.data)], {type:'model/stl'})); l.download = 'cookie-mold-' + id + '.stl'; l.click(); return; }
+  if (a === 'approve' || a === 'reject') {
+    const reason = card.querySelector('[data-k="reason"]').value, msg = card.querySelector('[data-k="msg"]');
+    const r = await api('review', {id, action: a, reason}); if (!r.ok) { msg.textContent = r.msg; return; } render();
+  }
+};
+async function render() {
+  const B = $('body'); B.innerHTML = '<p class="muted">讀取中…</p>';
+  if (tab === 'review' || tab === 'all') {
+    const r = await api('list', {status: tab === 'all' ? 'all' : 'submitted'}); if (!r.ok) return B.innerHTML = `<p>${esc(r.msg)}</p>`;
+    B.innerHTML = r.designs.length ? r.designs.map(designCard).join('') : '<p class="muted">目前沒有' + (tab === 'all' ? '' : '待審的') + '設計。</p>';
+  } else if (tab === 'weekly') {
+    const r = await api('weekly'); if (!r.ok) return B.innerHTML = `<p>${esc(r.msg)}</p>`;
+    B.innerHTML = '<p class="muted">規則：到店日前一個週一中午截止 → 週二列印 → 週三隨貨出貨（到店日至少在截止週一的 4 天後）。只列已通過的設計。</p>' +
+      (r.weeks.length ? r.weeks.map(w => `<div class="card"><h3 style="margin:0 0 .5rem">截止 ${w.cutoff}（一）中午｜列印 ${w.print}（二）｜出貨 ${w.ship}（三）｜共 ${w.items.length} 個</h3>
+        <table><tr><th>到店日</th><th>門市</th><th>客人</th><th>電話</th><th>風格</th><th>STL</th></tr>${w.items.map(i => `<tr data-id="${i.id}"><td>${esc(i.customer.visit)}</td><td>${esc(i.customer.store)}</td><td>${esc(i.customer.name)}</td><td>${esc(i.customer.phone)}</td><td>${STY[i.style]}</td><td><button class="btn ghost" data-a="stl">下載</button></td></tr>`).join('')}</table></div>`).join('') : '<p class="muted">目前沒有待印的模具。</p>');
+  } else if (tab === 'users') {
+    const r = await api('users'); if (!r.ok) return B.innerHTML = `<p>${esc(r.msg)}</p>`;
+    B.innerHTML = `<div class="card"><p class="muted" style="margin-top:0">線上付款還沒串接：確認客人已付訂金後，在這裡手動打開，客人就可以無限次重新生成。</p><table><tr><th>客人</th><th>登入時間</th><th>生成次數</th><th>免費已用</th><th>已付訂金</th><th></th></tr>${r.users.map(u => `<tr><td>${esc(u.name)}<br><span class="muted">${esc(u.uid)}</span></td><td>${esc((u.created || '').replace('T', ' ').slice(0, 16))}</td><td>${u.gen || 0}</td><td>${u.free_used ? '是' : '否'}</td><td>${u.paid ? '<span class="tag approved">已付</span>' : '未付'}</td><td><button class="btn ${u.paid ? 'ghost' : 'ok'}" data-a="paid" data-uid="${esc(u.uid)}" data-on="${u.paid ? 0 : 1}">${u.paid ? '改回未付' : '設為已付訂金'}</button></td></tr>`).join('')}</table></div>`;
+  } else {
+    const r = await api('stats', {days: 30}); if (!r.ok) return B.innerHTML = `<p>${esc(r.msg)}</p>`;
+    B.innerHTML = (r.ai_note ? `<div class="warn">⚠️ ${esc(r.ai_note)}</div>` : '') +
+      `<div class="kpi"><div><small>今天已花</small><span class="big">NT$${r.today_twd}</span></div><div><small>每日上限</small><span class="big">NT$${r.budget_twd}</span></div><div><small>AI 生成</small><span class="big">${r.ai_open ? '開放中' : '暫停中'}</span></div><div><small>使用模型</small>${esc(r.models.image)}<br>${esc(r.models.check)}</div></div>
+      <div class="card"><table><tr><th>日期</th><th>AI 花費（元）</th><th>生成次數</th><th>照片檢查次數</th><th>登入人數</th><th>確認設計數</th></tr>${r.days.map(d => `<tr><td>${d.day}</td><td>${d.twd}</td><td>${d.gen}</td><td>${d.check}</td><td>${d.logins}</td><td>${d.confirmed}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">還沒有紀錄</td></tr>'}</table></div>`;
+  }
+}
+if (pw) enter();
+</script>
+</body>
+</html>
