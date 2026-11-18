@@ -31,6 +31,7 @@ function i18nzTry_(p) {
   src.slides.forEach(function (s) { s.tw = I18NZ_TW.test(s.t || '') ? 1 : 0; });
   var en = enid ? i18nSrc_(enid) : null;
   var G = i18nzGloss_(src, en, p.dry ? 'ja' : lang);
+  if (p.gloss) G = i18nzGlossUse_(src, p.gloss);   /* 第二輪：用中文品名重建的詞彙表（本機產生、經過檢查） */
   if (p.dry) return { data: { src: src, swap: swap, gloss: G.lines, gstat: G.stat, en_name: en ? en.name : '', sec: Math.round((Date.now() - t0) / 1000) } };
   var local = en ? (i18nGuideNames_()[i18nNameKey_(en.name)] || {})[lang] || '' : '';
   var r = i18nzWork_(src, lang, G, local, t0 + 330000);
@@ -104,6 +105,7 @@ function i18nzNumDiff_(sh, th, okx) {   /* okx：詞彙表譯名自帶的數字�
   a.forEach(function (x) { var j = left.indexOf(x); if (j < 0) miss.push(x); else left.splice(j, 1); });
   if (miss.length) return '原文的數字 ' + miss.join(',') + ' 譯文沒有（原文 ' + (a.join(',') || '無') + '／譯文 ' + (b.join(',') || '無') + '）';
   var pt = i18nPlain_(sh), extra = [], room = {};
+  if (/分滿/.test(pt)) room['10'] = (pt.match(/分滿/g) || []).length + (pt.match(/十/g) || []).length;   /* 8分滿 → 8/10 */
   left.forEach(function (x) {
     if (okx && okx[x]) return;
     if (room[x] == null) room[x] = I18NZ_NUMW[x] ? (pt.match(I18NZ_NUMW[x]) || []).length : 0;
@@ -139,6 +141,11 @@ function i18nzSystem_(lang, src, G, local, tt) {
     '* Never change any number, weight, time, temperature, speed or count; write them with Arabic numerals exactly as in the source. Chinese number words (一、兩、半) may be written naturally in the target language.',
     '* Keep emojis and symbols (●, ※, ⭐, ►, 【】, ［］). Chinese quotes 「」 may become the normal quotes of the target language. Translate 小教室 / DIY小教室 as a short local label that keeps the word "DIY".',
     '* Taiwan baking terms: 克林姆 = custard cream (made from custard powder; NOT whipped cream); 動植鮮 / 動植鮮奶油 = whipped topping cream (dairy + vegetable fat); 鮮奶油 / 動物鮮奶油 = whipping cream; 平匙 = a level spoonful; 打發 = whip; 拌勻 = mix well; 過篩 = sift; 刮刀 = rubber spatula; 抹刀 = frosting spatula; 擠花袋 = piping bag; 花嘴 = piping tip; 攪拌機 = electric mixer; 取放區 / 取料區 = the pick-up area in the store; 計時器 = timer; 自己人 = the store\'s membership program.',
+    '* Store name: 自己做 / 自己做烘焙聚樂部 = "DIYBC" (Latin letters, never Chinese). 小教室 / 自己做小教室 / DIY小教室 = "DIY Tip" (exactly in English, e.g. "※DIY Tip:").',
+    '* Piping shapes written as Chinese characters: 「米」字 = a ✳ star shape (lines radiating from the center; do not add a number); 「口」字 = a square outline □. Describe the shape in the target language and add the symbol; never leave the Chinese character.',
+    '* 麵糊 = batter (the mixed liquid dough); never use the same word as flour / cake flour (低筋麵粉).' + (lang === 'th' ? ' Thai: 麵糊 = ส่วนผสมแป้ง; never แป้งเค้ก or แป้ง alone for batter.' : ''),
+    '* 8分滿 = filled to 8/10 (keep the 8). 先不… = do not … yet.',
+    '* Never leave any Chinese character in the translation (Japanese kanji are fine for Japanese words).',
     '* When the text mentions an ingredient, tool, mold, area or box from the glossary below, use exactly that translation.',
     '* "t" is the page title (short). Translate it the same way every time it repeats.',
     local ? '* The dessert name in this language is: ' + local + ' (use it wherever the dessert name appears; return "" for "name").' : '* "name" is the Chinese dessert name: translate it naturally into the target language (translate notes like (葷) = contains meat-based gelatin, (全素) = vegan).',
@@ -151,6 +158,7 @@ function i18nzTitles_(src, titles, lang, cred, local, U) {
   if (!titles.length) return {};
   var sys = ['You translate the page titles of one DIY baking recipe (customers follow a tablet page by page) from Traditional Chinese (Taiwan) into ' + I18N_LABEL[lang] + '.',
     'Short titles. Keep numbers (1, 2, 2-1) exactly. The same Chinese wording must always get the same translation; similar titles with a number (抹面1 / 抹面2) must share the same words.',
+    'Terms: 麵糊 = batter (never the same word as flour; Thai: ส่วนผสมแป้ง, never แป้งเค้ก); 蛋白霜 = meringue; 克林姆 = custard cream (not whipped cream); 動植鮮 = whipped topping cream; 自己做 = "DIYBC"; 小教室 = "DIY Tip". Never leave Chinese characters (Japanese kanji are fine for Japanese words).',
     'Dessert: ' + src.name + (local ? ' (local name: ' + local + ')' : '') + '. Return every k exactly as given.'].join('\n');
   var schema = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { k: { type: 'string' }, tr: { type: 'string' } }, required: ['k', 'tr'], additionalProperties: false } } }, required: ['items'], additionalProperties: false };
   var r = i18nzOne_(sys, JSON.stringify({ titles: titles.map(function (t, j) { return { k: String(j), zh: t }; }) }), schema, cred, U), m = {};
@@ -255,6 +263,7 @@ function i18nzReview_(src, out, pages, withName, withPres, lang, G, cred, U) {
     '* a safety warning (hot, gloves, knife, freezer) missing; a Chinese or English sentence left untranslated, garbled text, broken HTML;',
     '* a price turned into a local currency (đồng, 円, 원, บาท, rupiah); "10元硬幣" means a Taiwan NT$10 coin;',
     '* an ingredient/tool name that contradicts the glossary or the Chinese (克林姆 custard cream is NOT whipped cream; 動植鮮 is whipped topping cream; 攪拌機 electric mixer; 柚子 pomelo is not yuzu; 麵糊 batter is not flour).',
+    '* house rules (correct, do not report): the dessert name is written "local name｜original Chinese name" on purpose (the Chinese part is kept for staff); 自己做 = "DIYBC"; 小教室 = "DIY Tip" in English; 「米」字 = ✳ star shape, 「口」字 = □ square outline; 8分滿 = 8/10 full;' + (lang === 'th' ? ' Thai batter ส่วนผสมแป้ง ≠ cake flour แป้งเค้ก (batter written as แป้งเค้ก is "block");' : '') + ' Chinese characters left in a non-Japanese translation are "block".',
     'Everything else (slightly stiff wording, could be more natural) is "minor". Do not report differences in style that keep the meaning.',
     'k is the page number given. Use k = -1 for problems in the dessert name or storage advice. Return an empty list if there are no problems. Write "what" briefly in Traditional Chinese.',
     'Glossary (Chinese → ' + I18N_LABEL[lang] + '):', G.lines.join('\n') || '(none)'].join('\n');
@@ -299,7 +308,7 @@ function i18nzReviewAny_(p) {
   var lang = String(p.lang || '').trim(), zid = String(p.zid || '').trim().toLowerCase(), enid = String(p.enid || '').trim().toLowerCase();
   if (I18N_LANGS.indexOf(lang) < 0) throw fail_('lang 不對', 'bad');
   var pg = i18nFetchPages_([zid])[0]; if (pg.code !== 200) throw fail_('後台回 HTTP ' + pg.code, 'rbnet');
-  var G = i18nzGloss_(i18nParse_(pg.text, zid), enid ? i18nSrc_(enid) : null, lang);
+  var zsrc = i18nParse_(pg.text, zid), G = p.gloss ? i18nzGlossUse_(zsrc, p.gloss) : i18nzGloss_(zsrc, enid ? i18nSrc_(enid) : null, lang);
   var fs = { name: String(p.name_zh || ''), pres: String(p.pres_zh || ''), slides: [] }, fo = { name: String(p.name_tr || ''), pres: String(p.pres_tr || ''), slides: [] }, ix = [];
   (p.pages || []).forEach(function (x, i) { fs.slides[i] = { t: String(x.zh_t || ''), h: String(x.zh_h || '') }; fo.slides[i] = { t: String(x.tr_t || ''), h: String(x.tr_h || '') }; ix.push(i); });
   var cred = i18nCred_(); cred.model = I18N_AUTO_MODEL;
@@ -308,3 +317,41 @@ function i18nzReviewAny_(p) {
 }
 ACTIONS.i18nZReview = function (p, a) { return i18nzReviewAny_(p, a); };
 NOAUTH.i18nZReview = 1; READS.i18nZReview = 1;
+
+/* 第二輪（2026-11-18 經營者「先補規則重跑」）：詞彙表改用「中文品名」當索引。
+   p.gloss＝{中文名: 譯名}（品項、取放區都放一起）；只挑這支食譜用到的。 */
+function i18nzGlossUse_(src, gl) {
+  var lines = [], map = {}, seen = {};
+  src.slides.forEach(function (s) {
+    s.ings.forEach(function (g) {
+      [i18nSplitName_(g.n).core, g.an].forEach(function (zh) {
+        zh = rbTrim_(zh || ''); if (!zh || seen[zh]) return; seen[zh] = 1;
+        var tr = gl[zh]; if (tr) { lines.push('- ' + zh + ' → ' + tr); map[zh] = tr; }
+      });
+    });
+  });
+  return { lines: lines, map: map, stat: { items: Object.keys(seen).length, hit: lines.length, rebuilt: 1 } };
+}
+/* 動作 i18nZGloss（投遞通行碼）：{lang, items:[{zh, kind:item|area, cur 現行譯名（從英文名來，可能錯）}]} → 從中文重新定譯名。不寫任何分頁。 */
+function i18nzGlossMake_(p) {
+  i18nWriteKey_(p);
+  var lang = String(p.lang || ''); if (I18N_LANGS.indexOf(lang) < 0) throw fail_('lang 不對', 'bad');
+  var items = p.items || [], cred = i18nCred_(); cred.model = I18N_AUTO_MODEL;
+  var U = { inp: 0, out: 0, calls: 0 }, out = [];
+  var sys = ['You fix the glossary of a DIY baking studio in Taiwan: ingredient, tool, mold, box and store-area labels shown on a tablet recipe, from Traditional Chinese (Taiwan) into ' + I18N_LABEL[lang] + '.',
+    '"zh" is the ORIGINAL Chinese label and the only authority. "cur" is the current translation, made from an English name that is sometimes wrong.',
+    'Keep "cur" exactly when it means the same thing as zh (consistency with printed stickers matters). Replace it only when its meaning differs from zh, or it is missing.',
+    'kind=item: short noun phrase, no explanation. kind=area: a storage area in the store where customers pick things up. Keep brand names (Oreo, Nutella…) and keep every number (6吋, 4號).',
+    'Taiwan terms: 克林姆 = custard cream (made from custard powder; NOT whipped cream, NOT 生クリーム/생크림/kem tươi); 動植鮮 / 動植鮮奶油 = whipped topping cream (dairy + vegetable fat); 鮮奶油 / 動物鮮奶油 = whipping cream (dairy); 麵糊 = batter (never the same word as flour); 低筋麵粉 = cake flour; 蛋黃液 = liquid egg yolk (an ingredient, not egg wash); 攪拌機 = electric mixer.',
+    lang === 'th' ? 'Thai: 麵糊 = ส่วนผสมแป้ง (batter); never use แป้งเค้ก or แป้ง alone for batter.' : '',
+    'Return every k exactly as given, with changed=true when you replaced cur, and a very short reason in Traditional Chinese.'].join('\n');
+  var schema = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { k: { type: 'string' }, tr: { type: 'string' }, changed: { type: 'boolean' }, why: { type: 'string' } }, required: ['k', 'tr', 'changed', 'why'], additionalProperties: false } } }, required: ['items'], additionalProperties: false };
+  for (var i = 0; i < items.length; i += 80) {
+    var part = items.slice(i, i + 80);
+    var r = i18nzOne_(sys, JSON.stringify({ items: part.map(function (x, j) { return { k: String(j), kind: x.kind || 'item', zh: x.zh, cur: x.cur || '' }; }) }), schema, cred, U);
+    (r.json.items || []).forEach(function (it) { var x = part[Number(it.k)]; if (x) out.push({ zh: x.zh, kind: x.kind, cur: x.cur || '', tr: rbTrim_(it.tr), changed: !!it.changed, why: it.why || '' }); });
+  }
+  return { data: { items: out, usage: U } };
+}
+ACTIONS.i18nZGloss = function (p, a) { return i18nzGlossMake_(p, a); };
+NOAUTH.i18nZGloss = 1; READS.i18nZGloss = 1;
