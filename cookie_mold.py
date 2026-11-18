@@ -60,6 +60,12 @@ DEFAULT_CFG = {
 }
 _LOCK = threading.RLock()
 _LAST_CLEAN = 0.0
+# 多人同時使用（2026-11-18 經營者：一天可能一千人、同時多人在線）
+MAX_GEN = 3                 # 同時最多幾個人在生成（其餘請他稍等，避免被 Gemini 以超過頻率擋下、也不拖慢訓練站）
+COOLDOWN = 15               # 同一個人兩次生成至少隔幾秒（防狂按）
+_GEN_SEM = threading.BoundedSemaphore(MAX_GEN)
+_LAST_GEN: dict[str, float] = {}
+_SPENT: dict[str, float] = {}   # 當日花費記在記憶體（{日期: 元}），不必每次重讀整份紀錄檔
 
 
 class Fail(Exception):
@@ -134,8 +140,11 @@ def _log_cost(kind: str, model: str, usage: dict, uid: str) -> float:
     twd = round(usd * c["usd_twd"], 4)
     row = {"at": _now().isoformat(timespec="seconds"), "day": _now().strftime("%Y-%m-%d"), "kind": kind, "model": model,
            "in": tin, "out": tout, "twd": twd, "uid": uid}
-    with _LOCK, open(_dir() / "cost_log.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with _LOCK:
+        spent_today()   # 先確定今天的累計已載入
+        with open(_dir() / "cost_log.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _SPENT[row["day"]] = _SPENT.get(row["day"], 0.0) + twd
     return twd
 
 
@@ -148,7 +157,11 @@ def _cost_rows() -> list[dict]:
 
 def spent_today() -> float:
     d = _now().strftime("%Y-%m-%d")
-    return round(sum(r["twd"] for r in _cost_rows() if r.get("day") == d), 2)
+    with _LOCK:
+        if d not in _SPENT:      # 每天第一次（或伺服器重開後）才讀檔
+            _SPENT.clear()
+            _SPENT[d] = sum(r["twd"] for r in _cost_rows() if r.get("day") == d)
+        return round(_SPENT[d], 2)
 
 
 def ai_open() -> bool:
@@ -286,6 +299,20 @@ def _generate(b: dict) -> dict:
     if u.get("free_used") and not u.get("paid"):
         raise Fail("quota", "免費的 AI 生成已經用過了。付訂金預約後，就可以無限次重新生成、慢慢調整到滿意。", 402)
     photo = _b64(b.get("photo"), MAX_PHOTO)
+    with _LOCK:
+        if time.time() - _LAST_GEN.get(uid, 0) < COOLDOWN:
+            raise Fail("slow", "剛剛才生成過，請等幾秒再按一次。", 429)
+        _LAST_GEN[uid] = time.time()
+    if not _GEN_SEM.acquire(blocking=False):
+        _LAST_GEN.pop(uid, None)
+        raise Fail("busy", "現在同時很多人在生成，請等 30 秒左右再按一次（不會扣掉你的次數）。", 429)
+    try:
+        return _generate_locked(uid, u, style, photo)
+    finally:
+        _GEN_SEM.release()
+
+
+def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
     c = cfg()
     img_part = {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(photo).decode()}}
     # 1. AI 照片檢查（輕量模型）

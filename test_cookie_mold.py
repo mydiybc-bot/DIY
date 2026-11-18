@@ -14,7 +14,9 @@ def cm(monkeypatch):
     monkeypatch.setenv("COOKIE_MOLD_ADMIN_TEST", "adm")
     monkeypatch.delenv("COOKIE_MOLD_MOCK_CHECK", raising=False)
     import cookie_mold
-    return importlib.reload(cookie_mold)
+    m = importlib.reload(cookie_mold)
+    m.COOLDOWN = 0          # 測試連續生成時不等冷卻
+    return m
 
 
 def call(cm, _act, **body):
@@ -101,3 +103,24 @@ def test_cutoff_rule(cm):
     assert cm.cutoff_for(date(2026, 12, 4)) == date(2026, 11, 30)     # 週五到店 → 同週週一截止
     assert cm.cutoff_for(date(2026, 12, 6)) == date(2026, 11, 30)     # 週日到店 → 同週週一
     assert cm.cutoff_for(date(2026, 12, 2)) == date(2026, 11, 23)     # 週三到店（還沒送到）→ 前一週週一
+
+
+def test_busy_and_cooldown(cm):
+    t = login(cm)
+    for _ in range(cm.MAX_GEN):
+        assert cm._GEN_SEM.acquire(blocking=False)                    # 模擬已有 3 個人正在生成
+    s, r = call(cm, "generate", token=t, photo=PHOTO)
+    assert s == 429 and r["code"] == "busy"
+    for _ in range(cm.MAX_GEN):
+        cm._GEN_SEM.release()
+    assert call(cm, "generate", token=t, photo=PHOTO)[0] == 200       # 忙線被擋不扣次數、也不進冷卻
+    assert call(cm, "admin/paid", pwd="adm", uid="test:amy", on=True)[0] == 200
+    cm.COOLDOWN = 15
+    assert call(cm, "generate", token=t, photo=PHOTO)[1]["code"] == "slow"   # 剛生成完馬上再按 → 請稍等
+
+
+def test_spent_cache_survives_reload(cm):
+    cm._log_cost("image", "x", {"promptTokenCount": 0, "candidatesTokenCount": 10000}, "u")
+    a = cm.spent_today()
+    cm._SPENT.clear()                                                  # 模擬伺服器重開
+    assert a > 0 and cm.spent_today() == a
