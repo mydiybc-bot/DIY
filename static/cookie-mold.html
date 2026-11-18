@@ -297,12 +297,13 @@ async function detect(im) {
   for (let i = 0; i < P; i++) { t[i] = d[i * 4 + 2]; t[P + i] = d[i * 4 + 1]; t[2 * P + i] = d[i * 4]; }
   const out = await sess.run({[sess.inputNames[0]]: new ort.Tensor('float32', t, [1, 3, N, N])});
   const o = out[sess.outputNames[0]].data;
-  let best = null, row = 0;
+  let best = null, row = 0, thing = 0;      /* thing＝最強的「非人非動物」物體分數（盤子、車、建築上的鐘…） */
   for (const st of [8, 16, 32]) {
     const g = N / st;
     for (let gy = 0; gy < g; gy++) for (let gx = 0; gx < g; gx++, row++) {
       const b = row * 85, obj = o[b + 4];
       if (obj < 0.12) continue;
+      for (let k = 0; k < 80; k++) if (!(k in CREATURES)) { const sc = obj * o[b + 5 + k]; if (sc > thing) thing = sc; }
       for (const k in CREATURES) {
         const sc = obj * o[b + 5 + (+k)];
         if (sc < 0.12) continue;      /* 2026-11-18 由 0.25 放寬：天竺鼠等少見寵物分數只有 0.16；風景、食物實測最高 0.04，仍擋得住 */
@@ -314,6 +315,7 @@ async function detect(im) {
       }
     }
   }
+  if (best) best.thing = thing; else best = {none:true, thing};
   return best;
 }
 
@@ -437,7 +439,7 @@ function tidy(loop, step) {
 async function analyse(im, progress) {
   if (Math.min(im.ow, im.oh) < 480) throw new Friendly('這張照片太小了', `這張照片只有 ${im.ow}×${im.oh}，放大做成模具會糊掉。請換一張原始照片（不要用截圖或縮圖）。`, 'small');
   progress('正在找照片裡的主角…', 25); await tick();
-  mark('a0'); const det = await detect(im); mark('aDet');
+  mark('a0'); const det0 = await detect(im), det = det0.none ? null : det0; mark('aDet');
   progress('正在去背…', 45); await tick();
   const prob = await segment(im); mark('aSeg');
   progress('正在描出外框…', 65); await tick();
@@ -447,11 +449,14 @@ async function analyse(im, progress) {
   for (let i = 0; i < N * N; i++) { if (prob[i] > 0.5) { bin[i] = 1; fg++; conf += prob[i]; } if (prob[i] > 0.2 && prob[i] < 0.8) mid++; }
   conf = fg ? conf / fg : 0; const fgFrac = fg / (N * N), midRatio = fg ? mid / fg : 1;
   const bigDet = det && det.area >= 0.04;
-  const dbg = {det: det && {name:det.name, score:+det.score.toFixed(2), area:+det.area.toFixed(3)}, fgFrac:+fgFrac.toFixed(3), conf:+conf.toFixed(3), midRatio:+midRatio.toFixed(3)};
+  /* 認不出是人或哪種動物（兔子、天竺鼠、烏龜…模型沒學過）時的放行條件（2026-11-18 經營者的兔子照片被擋）：
+     畫面裡沒有明顯的「東西」（盤子、車、招牌…），而且去背結果很乾淨、主角大小適中 → 當成寵物放行。
+     風景照的去背結果邊緣模糊（midRatio 高）或把握低（conf 低），會被擋在這裡。 */
+  const clean = det0.thing < 0.3 && conf >= 0.95 && midRatio < 0.12 && fgFrac >= 0.08 && fgFrac <= 0.7;
+  const dbg = {det: det && {name:det.name, score:+det.score.toFixed(2), area:+det.area.toFixed(3)}, thing:+det0.thing.toFixed(2), clean, fgFrac:+fgFrac.toFixed(3), conf:+conf.toFixed(3), midRatio:+midRatio.toFixed(3)};
   state.dbg = dbg;
-  if (det && !bigDet) throw new Friendly('主角在照片裡太小了', '請選一張主角佔畫面大一點的照片，或把照片裁切到只剩主角再試一次。', 'tiny');
-  /* 認不出人或動物就擋下（風景、食物、物品）；只靠去背會把湖、山也當成主角 */
-  if (!bigDet) throw new Friendly('找不到主角', '請選一張主角清楚的照片：一隻寵物或一個人、佔畫面大一點、背景單純一點。', 'nosubject');
+  if (det && !bigDet && !clean) throw new Friendly('主角在照片裡太小了', '請選一張主角佔畫面大一點的照片，或把照片裁切到只剩主角再試一次。', 'tiny');
+  if (!bigDet && !clean) throw new Friendly('找不到主角', '請選一張主角清楚的照片：一隻寵物或一個人、佔畫面大一點、背景單純一點。', 'nosubject');
   const {lab, list} = components(bin, N, N);
   let pick = null, bestOv = -1;
   const sx = N / im.cv.width, sy = N / im.cv.height;
