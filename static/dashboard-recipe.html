@@ -3112,6 +3112,16 @@ function txWV(u){return new RegExp('^('+TX_WV+')$','i').test(u)}
 /* 2026-11-17 經營者：「原始食譜」頁只是把整份材料克數列給人參考（例：裝飾鮮奶油 70g 在原始食譜和「用刮刀挖取70g」各寫一次 → 被加成 140g），
    步驟內文找用量時整頁跳過，用量只看實際操作的步驟。標題含「原始食譜」或「原始配方」都算。 */
 var TX_ORIG_RE=/原始(食譜|配方)/;
+/* 2026-11-18 經營者（草莓蛋糕壽星自選版：「從冰箱拿取裝飾鮮奶油…挖取100g」沒算進成本，100g 反而被配給「磅秤」）→「一起修」：
+   ①TX_SEP：主檔是同一樣、但食譜裡是不同用途的品名（裝飾鮮奶油＝打發好的，動植鮮＝液態的；主檔裝飾鮮奶油已併入動植鮮）→ 清單列了動植鮮，步驟的裝飾鮮奶油照樣另外算。
+   ②器具／模具（例：磅秤）不會分到「同一步沒歸屬的重量」。
+   ③「取20g裝飾鮮奶油至…」：前面步驟已經拿過這個品項（例：挖取100g），後面單寫「取 N g」＝從已拿的份量分出來，不再相加（拿取／挖取／舀取…不算）。 */
+var TX_SEP=['裝飾鮮奶油'];
+/* ④TX_SHIELD：比主檔品名長、不是主檔品項的字（「調色鮮奶油」「有色鮮奶油」裡的「奶油」是鮮奶油，不是主檔的奶油 F008）→ 先占住，不當成主檔品項 */
+var TX_SHIELD=['鮮奶油'];
+/* ⑤照片版步驟：標題「X(照片)」「X(拍)」而同一支食譜也有標題「X」的步驟 → 同一個動作，找用量時跳過照片版（例：草莓瀑布蛋糕兩個拿取裝飾鮮奶油，原始食譜共 150g 不是 300g） */
+var TX_TWIN=/^(.+?)[（(](?:照片|拍)[)）]$/;
+var TX_PORTION=/(?:^|[^拿挖領舀夾秤量])取\s*\d+(?:\.\d+)?\s*(?:公克|毫升|公斤|kg|g|克|ml|cc)\s*$/i;
 function stepUse(rcs,got){
   var listed={},block={};
   got.forEach(function(l){var n=R.stripPos(l.m);listed[n]=1;var s=skuOf(n);if(s)listed['#'+s.id]=1;block[n]=1});
@@ -3119,12 +3129,19 @@ function stepUse(rcs,got){
   AP.semis.forEach(function(sm){[semiName(sm),String(sm.name||'').trim()].forEach(function(n){if(n)block[n]=1})});
   var LN=Object.keys(listed).filter(function(n){return n[0]!=='#'});
   function inListed(n){if(listed[n])return true;for(var k=0;k<LN.length;k++)if(LN[k].indexOf(n)>=0)return true;return false}   /* 「緞帶」已被清單的「粉紅色緞帶」涵蓋 */
+  function isListed(h){return inListed(h.n)||!!(h.o&&listed['#'+h.o.id]&&TX_SEP.indexOf(h.n)<0)}   /* 2026-11-18 TX_SEP 的品名不因同一主檔品項已列而略過 */
   var steps=[];
-  rcs.forEach(function(rc){(rc.steps||[]).forEach(function(st){if(TX_ORIG_RE.test(String(st.t||'')))return;var t=st.t+'\n'+txPlain(st.h);if(!/若不需要加購/.test(t))steps.push(t)})});
+  rcs.forEach(function(rc){
+    var TT={};(rc.steps||[]).forEach(function(st){TT[String(st.t||'').replace(/\s+/g,'')]=1});
+    (rc.steps||[]).forEach(function(st){if(TX_ORIG_RE.test(String(st.t||'')))return;
+      var m2=String(st.t||'').replace(/\s+/g,'').match(TX_TWIN);if(m2&&TT[m2[1]])return;   /* 2026-11-18 「拿取裝飾鮮奶油(照片)」和「拿取裝飾鮮奶油」同一個動作，照片版不重複算 */
+      var t=st.t+'\n'+txPlain(st.h);if(!/若不需要加購/.test(t))steps.push(t)})});
   (steps.join('\n').match(/(?:即為|即是|即完成|，為)\s*[^\s，。、,.!！?？()（）:：~～*]{2,10}/g)||[]).forEach(function(x){block[x.replace(/^(?:即為|即是|即完成|，為)\s*/,'')]=1});
+  steps.forEach(function(T){var m3=T.split('\n')[0].replace(/[（(][^）)]*[）)]/g,'').replace(/\s+/g,'').match(/製作([^\d\-－–—+＋]{2,10})[\d\-－–—]*$/);if(m3&&TX_SEP.indexOf(m3[1])<0)block[m3[1]]=1});   /* 2026-11-18 標題「製作覆盆子凍3」＝這支甜點自己做的，不當成要買的品項 */
   var words=[],seen={};
   function addW(n,o,b){n=String(n||'').trim();if(n.length<2||seen[n])return;seen[n]=1;words.push({n:n,o:o,b:b})}
   Object.keys(block).forEach(function(n){addW(n,null,1)});
+  TX_SHIELD.forEach(function(n){addW(n,null,1)});   /* 2026-11-18 「調色鮮奶油」裡的「奶油」不是奶油 */
   R.skus().forEach(function(o){addW(o.name,o,0)});var AL=R.aliasMap?R.aliasMap():{};Object.keys(AL).forEach(function(a){addW(a,AL[a],0)});
   words.sort(function(a,b){return b.n.length-a.n.length||b.b-a.b});
   var NUM='(\\d+(?:\\.\\d+)?|[一二兩三四五六七八九十半]+)',UN='('+TX_WV+'|'+TX_CNT+')(?![A-Za-z])';
@@ -3141,23 +3158,33 @@ function stepUse(rcs,got){
     toks.forEach(function(t){if(/^\s*(?:冷|溫|熱|冰)?水/.test(T.slice(t.e)))t.used=true});
     hits.forEach(function(h){var am=T.slice(h.e).match(AFTER),bm=!am&&T.slice(Math.max(0,h.s-14),h.s).match(BEFORE);
       if(am){h.q=cnNum(am[1]);h.u=am[2];var t=tokAt(h.e,h.e+am[0].length);if(t)t.used=true}
-      else if(bm){h.q=parseFloat(bm[1]);h.u=bm[2];for(var k=0;k<toks.length;k++)if(toks[k].e<=h.s&&toks[k].e>=h.s-3)toks[k].used=true}});
+      else if(bm){h.q=parseFloat(bm[1]);h.u=bm[2];h.por=TX_PORTION.test(T.slice(Math.max(0,h.s-14),h.s));for(var k=0;k<toks.length;k++)if(toks[k].e<=h.s&&toks[k].e>=h.s-3&&toks[k].s>=h.s-bm[0].length)toks[k].used=true}});   /* 2026-11-18 只標這次對到的那個數量（「15g至1個塑膠碗」的 15g 不會被「1個」一起吃掉） */
     /* 主檔沒有的品名：只認「品名＋重量／容量」緊接著寫（例：綜合水果100g） */
     toks.forEach(function(t){if(t.used||!txWV(t.u))return;var rm=T.slice(0,t.s).match(/([一-鿿]{2,})[\s（(]*約?\s*$/);if(!rm)return;
       var run=rm[1],k=run.length-1;while(k>=0&&!TX_CUT.test(run[k]))k--;var n=run.slice(k+1);
       if(n.length<2||n.length>8||block[n]||skuOf(n)||/水$/.test(n))return;
       t.used=true;hits.push({n:n,o:null,b:0,s:t.s-n.length,e:t.s,q:t.q,u:t.u})});
-    var pend=hits.filter(function(h){return !h.b&&h.o&&!(h.q>0&&txWV(h.u))&&!inListed(h.n)&&!listed['#'+h.o.id]}),pk={};pend.forEach(function(h){pk[h.o.id]=1});
+    function cand(h){return !h.b&&h.o&&(h.o.cat==='食材'||txWV(String(h.o.useUnit||'')))&&!(h.q>0&&txWV(h.u))&&!isListed(h)}   /* 2026-11-18 沒歸屬的重量只配給食材（或用量單位是 g／ml 的），不配給磅秤、擠花袋這類 */
+    /* 2026-11-18「2. 從冰箱拿取裝飾鮮奶油／3. 用刮刀挖取85g至工作盆中，15g至塑膠碗中」：挖取那行沒寫品名 → 算給前一、兩行拿取的那一樣（同一行幾個重量相加＝100g） */
+    var LS=[],off=0;T.split('\n').forEach(function(x){LS.push({s:off,e:off+x.length,t:x});off+=x.length+1});
+    LS.forEach(function(L,li){if(!/[挖舀]取\s*\d/.test(L.t))return;
+      var ws=toks.filter(function(t){return !t.used&&txWV(t.u)&&t.s>=L.s&&t.s<L.e});
+      if(!ws.length||ws.some(function(t){return t.u!==ws[0].u})||hits.some(function(h){return cand(h)&&h.s>=L.s&&h.s<L.e}))return;
+      for(var j=li-1;j>=0&&j>=li-2;j--){var c=hits.filter(function(h){return cand(h)&&h.s>=LS[j].s&&h.s<LS[j].e});
+        if(c.length===1){c[0].q=ws.reduce(function(a,t){return a+t.q},0);c[0].u=ws[0].u;c[0].s2=ws[0].s;ws.forEach(function(t){t.used=true});break}
+        if(c.length>1)break}});
+    var pend=hits.filter(cand),pk={};pend.forEach(function(h){pk[h.o.id]=1});
     var rest=toks.filter(function(t){return !t.used&&txWV(t.u)});
-    if(rest.length===1&&Object.keys(pk).length===1)pend.forEach(function(h){h.q=rest[0].q;h.u=rest[0].u;h.s2=rest[0].s});
+    if(rest.length===1&&Object.keys(pk).length===1)pend.forEach(function(h){h.q=rest[0].q;h.u=rest[0].u;h.s2=rest[0].s;h.por=TX_PORTION.test(T.slice(Math.max(0,rest[0].s-14),rest[0].e))});   /* 「取20g的裝飾鮮奶油」也算分裝 */
     var per={};
-    hits.forEach(function(h){if(h.b||inListed(h.n)||(h.o&&listed['#'+h.o.id]))return;var key=h.o?'#'+h.o.id:h.n;
+    hits.forEach(function(h){if(h.b||isListed(h))return;var key=h.o?'#'+h.o.id:h.n;
       var wv=h.q>0&&txWV(h.u),src=lineAt(T,h.s2!=null?h.s2:h.s);
       var p=per[key]||(per[key]={m:h.n,o:h.o,q:0,u:'',src:src,cq:0,cu:''});
-      if(wv&&h.q>p.q){p.q=h.q;p.u=h.u;p.src=src}else if(!wv&&h.q>0&&!p.cq){p.cq=h.q;p.cu=h.u}});
+      if(wv&&h.q>p.q){p.q=h.q;p.u=h.u;p.src=src;p.por=!!h.por}else if(!wv&&h.q>0&&!p.cq){p.cq=h.q;p.cu=h.u}});
     Object.keys(per).forEach(function(key){var p=per[key],t=tot[key];
       if(!t){t=tot[key]={m:p.m,o:p.o,q:0,u:'',src:[],qsrc:[],cq:0,cu:''};order.push(key)}
-      if(p.q>0&&(!t.u||t.u===p.u)){t.q+=p.q;t.u=p.u;t.qsrc.push(p.src)}else if(t.src.length<2&&t.src.indexOf(p.src)<0)t.src.push(p.src);
+      if(p.q>0&&p.por&&t.q>0&&t.u===p.u){}   /* 2026-11-18 從前面已拿的份量分出來，不再加 */
+      else if(p.q>0&&(!t.u||t.u===p.u)){t.q+=p.q;t.u=p.u;t.qsrc.push(p.src)}else if(t.src.length<2&&t.src.indexOf(p.src)<0)t.src.push(p.src);
       if(p.cq&&!t.cq){t.cq=p.cq;t.cu=p.cu}})});
   var add=[],ask=[],tool=[];
   order.forEach(function(key){var t=tot[key],tl=t.o?(t.o.cat==='器具'||t.o.cat==='模具'):false;
