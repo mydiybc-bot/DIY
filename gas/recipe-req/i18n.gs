@@ -304,7 +304,8 @@ function i18nSources_() {
 var I18N_ZH = [
   { id: '8fb61bba-1139-425b-91c8-b54ef5eae96b', name: '小黑炭Oreo蛋糕 ①原始版（門市現行）' },
   { id: '852d4cb4-ddd0-4346-9d6f-151a8d59dacb', name: '小黑炭Oreo蛋糕 ②簡化版試作' },
-  { id: 'fea011e8-2a6e-466a-8a3b-089d64b5d655', name: '小黑炭Oreo蛋糕 ③簡化版試作2（影片合併）' }
+  { id: 'fea011e8-2a6e-466a-8a3b-089d64b5d655', name: '小黑炭Oreo蛋糕 ③簡化版試作2（影片合併）' },
+  { id: '05584c26-e8c5-44e0-8b15-05aaa99bf086', name: '小黑炭Oreo蛋糕 ④簡化版試作3（抹面2頁）' }
 ];
 function i18nZh_() { var m = {}; I18N_ZH.forEach(function (z) { m[String(z.id).toLowerCase()] = z.name || '中文試看'; }); return m; }
 function i18nFetchPages_(ids) {
