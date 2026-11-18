@@ -411,8 +411,10 @@ function showPick(msg){
   $login.innerHTML = '<h1>📋 自己做決策中心</h1><p title="選一次，這台裝置會記住">你是哪裡的？</p>' +
     '<button class="hqb" data-r="hq">🏢 體驗中心（經營者・區主管）</button>' +
     ZONES.map(function(z){ return '<div class="zn">' + z[0] + '</div><div class="pk">' + z[1].map(function(id){ return '<button data-r="s' + id + '">' + id + ' ' + esc(shortOf(id)) + '</button>'; }).join('') + '</div>'; }).join('') +
-    '<div class="msg">' + esc(msg || '') + '</div>';
-  $login.querySelectorAll('[data-r]').forEach(function(b){ b.onclick = function(){ var r = b.getAttribute('data-r'); lsp(LK, r); showPw(r, ''); }; });
+    '<div class="msg">' + esc(msg || '') + '</div>' +
+    (A.pass() ? '<button class="lk" id="outAll">🔒 登出這台裝置（各儀表板都要重新輸入密碼）</button>' : '');
+  $login.querySelectorAll('[data-r]').forEach(function(b){ b.onclick = function(){ var r = b.getAttribute('data-r'); lsp(LK, r); if (!passIn(r)) showPw(r, ''); }; });   /* 第 3 段：有通行證就直接進去 */
+  var oa = document.getElementById('outAll'); if (oa) oa.onclick = function(){ if (!confirm('登出這台裝置？各儀表板都要重新輸入密碼')) return; A.logout(); lsp(LK, null); showPick(''); };
 }
 function showPw(r, msg){
   var hq = r === 'hq', sid = hq ? 0 : Number(r.slice(1));
@@ -431,18 +433,33 @@ function showPw(r, msg){
   $go.onclick = function(){
     var v = $pw.value.trim(); if (!v || busy) return;
     busy = true; $go.disabled = true; $go.textContent = '確認中…'; $m.className = 'msg'; $m.textContent = '';
-    A.verify(dashOf(hq ? 'hq' : 'store', sid), v, function(res){
+    A.login(v, dashOf(hq ? 'hq' : 'store', sid), function(res){   /* 第 3 段：改走 login＝順便拿到通行證（其他頁不用再輸入）；記的是通行證，不再把密碼明文存在這台裝置 */
       busy = false; $go.disabled = false; $go.textContent = '進去';
-      if (res && res.ok) return loginOk(hq ? 'hq' : 'store', sid, v, res.ttl_hours);
+      if (res && res.ok && res.here !== false) return loginOk(hq ? 'hq' : 'store', sid, res.token || v, res.ttl_hours, res.token ? res.exp : 0);
       var e = (res && res.error) || '驗證失敗';
-      if (e.indexOf('密碼錯誤') > -1) { e = '密碼不對，再試一次'; $pw.value = ''; }
+      if (res && res.ok) { e = '這是「' + (res.ident_name || '其他身分') + '」的密碼，這裡要用：' + (res.need || '更高一層') + ' 的密碼'; $pw.value = ''; }
+      else if (e.indexOf('密碼錯誤') > -1) { e = '密碼不對，再試一次'; $pw.value = ''; }
       $m.className = 'msg'; $m.textContent = e; $pw.focus();
     }, function(t){ $m.className = 'msg info'; $m.textContent = t; });
   };
 }
-function loginOk(role, sid, pw, ttl){
+/* 2026-11-18 密碼重建第 3 段：手上有能開這個身分的通行證（在首頁或任何儀表板登入過）→ 不用再輸密碼，通行證當密碼用
+   （各分頁照舊把它送給後端，後端拿去問權限中心，認得）。體驗中心以上的身分直接進體驗中心這一邊；門市身分選自己的店就進去。
+   BADK＝被後端退回過的通行證（只記在這個分頁），不再自動拿來用，免得一直繞回來。 */
+var BADK = 'dc_bad_tok';
+function isTok(s){ return /^pass1\./.test(String(s || '')); }
+function passIn(r){
+  var hq = r === 'hq', sid = hq ? 0 : Number(r.slice(1)), p = A.pass(dashOf(hq ? 'hq' : 'store', sid)), bad = '';
+  try { bad = sessionStorage.getItem(BADK) || ''; } catch(_){}
+  if (!p || p.t === bad) return false;
+  loginOk(hq ? 'hq' : 'store', sid, p.t, 0, p.x);
+  return true;
+}
+/* 背景確認通行證還有效（每張每小時最多問一次）；被收回 → 清掉這裡的登入，下次開頁重新來（不打斷正在用的人） */
+function watch(){ A.recheck(function(ch){ if (ch && AU && isTok(AU.pw) && A.token(dashOf(AU.role, AU.sid)) !== AU.pw) lsp(AK, null); }); }
+function loginOk(role, sid, pw, ttl, exp){
   var h = Number(ttl) || (role === 'hq' ? 12 : 720);
-  AU = { role: role, sid: role === 'hq' ? 0 : sid, pw: pw, exp: Date.now() + h * 3600e3 };
+  AU = { role: role, sid: role === 'hq' ? 0 : sid, pw: pw, exp: Number(exp) > Date.now() ? Number(exp) : Date.now() + h * 3600e3 };
   lsp(AK, JSON.stringify(AU)); lsp(LK, role === 'hq' ? 'hq' : 's' + sid);
   if (role === 'store') { lsp('st_sid', String(sid)); lsp('st_pw_' + sid, pw); }   /* 跟原「門市今日」同一份，舊書籤也通 */
   start();
@@ -451,7 +468,7 @@ function loginOk(role, sid, pw, ttl){
 function migrate(sid, cb){
   var pw = lsg('st_pw_' + sid); if (!pw) return cb(false);
   $login.style.display = ''; $login.innerHTML = '<h1>📋 自己做決策中心</h1><p>⏳ 正在用這台裝置記住的店密碼登入…</p>';
-  A.verify('store_' + sid, pw, function(res){ if (res && res.ok) { loginOk('store', sid, pw, res.ttl_hours); cb(true); } else { if (!(res && res.net)) lsp('st_pw_' + sid, null); /* 2026-11-11：連不上權限中心不刪記住的店密碼，只有明確答錯才刪 */ cb(false); } });
+  A.login(pw, 'store_' + sid, function(res){ if (res && res.ok && res.here !== false) { loginOk('store', sid, res.token || pw, res.ttl_hours, res.token ? res.exp : 0); cb(true); } else { if (!(res && res.net)) lsp('st_pw_' + sid, null); /* 2026-11-11：連不上權限中心不刪記住的店密碼，只有明確答錯才刪 */ cb(false); } });
 }
 
 /* ---------- 主畫面 ---------- */
@@ -468,6 +485,8 @@ function start(){
   sel.onchange = function(){ SID = Number(sel.value); lsp(HSK, String(SID)); ['today', 'sm', 'note'].forEach(drop); show(CUR, '', true); };
   $tabs.innerHTML = visTabs().map(function(t){ return '<button class="tab" role="tab" data-k="' + t.k + '">' + t.t + '</button>'; }).join('');
   $tabs.querySelectorAll('[data-k]').forEach(function(b){ b.onclick = function(){ show(b.getAttribute('data-k'), ''); }; });
+  document.getElementById('out').innerHTML = A.pass() ? '🔄<span class="lg"> 換身分・登出</span>' : '🔒<span class="lg"> 登出</span>';
+  document.getElementById('out').title = A.pass() ? '換身分，或登出這台裝置' : '登出';
   sizeHdr();
   var h = parseHash();
   if (h.t === 'mg') show('hq', 'mg');
@@ -500,23 +519,25 @@ document.getElementById('home').onclick = function(){ location.href = 'hub.html'
   document.getElementById('freqX').onclick = cl;
   box.addEventListener('click', function(e){ if (e.target === box) cl(); });
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') cl(); }); })();
-document.getElementById('out').onclick = function(){ if (confirm('登出這台裝置？下次要重新輸密碼')) logout(); };
+document.getElementById('out').onclick = function(){ if (A.pass() || confirm('登出這台裝置？下次要重新輸密碼')) logout(); };   /* 第 3 段：有通行證＝回到選身分那一頁（不用密碼就能換）；整台登出在那一頁最下面 */
 
 /* 給裡面各分頁用（同網域）：拿身分、切分頁、密碼失效時叫回登入畫面 */
 window.DC = {
   auth: function(){ return readAuth(); },
   sid: function(){ return SID; },
   go: function(k, sub){ show(k, sub || ''); },
-  relogin: function(msg){ var r = AU ? (AU.role === 'hq' ? 'hq' : 's' + AU.sid) : ''; lsp(AK, null); AU = null; Object.keys(FR).forEach(drop); if (r) showPw(r, msg || '密碼已更換或過期，請重新輸入'); else showPick(msg); }
+  relogin: function(msg){ var r = AU ? (AU.role === 'hq' ? 'hq' : 's' + AU.sid) : ''; if (AU && isTok(AU.pw)) { try { sessionStorage.setItem(BADK, AU.pw); } catch(_){} } lsp(AK, null); AU = null; Object.keys(FR).forEach(drop); if (r) showPw(r, msg || '密碼已更換或過期，請重新輸入'); else showPick(msg); }
 };
 
 /* ---------- 開始 ---------- */
 (function(){
   AU = readAuth();
-  if (AU) return start();
+  if (AU) { watch(); return start(); }
   var qs = Number(new URLSearchParams(location.search).get('s'));
   var last = lsg(LK) || '';
   if (qs >= 1 && qs <= 12) last = 's' + qs;
+  if (A.can('task_hq')) last = 'hq';   /* 第 3 段：體驗中心以上的身分（通行證）直接進體驗中心這一邊，裡面可以切看 12 家店 */
+  if (/^(?:hq|s(?:[1-9]|1[0-2]))$/.test(last) && passIn(last)) return;
   if (/^s(?:[1-9]|1[0-2])$/.test(last)) return migrate(Number(last.slice(1)), function(ok){ if (!ok) showPw(last, ''); });
   if (last === 'hq') return showPw('hq', '');
   showPick('');

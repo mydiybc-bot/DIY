@@ -34,6 +34,253 @@ window.__ime=(function(){
      夥伴正職／兼職、指休／特休／可上日點格子、特殊日）；Excel 上傳留在「📎 備用」。表單只在第一次載入、換店月、存檔成功後重建
      （renderForms），3 秒輪詢不碰表單；輸入框有焦點或正在選字時不重建。班表加「營業額」「日獎金」列與每人「日獎金」欄，
      🎁 日獎金卡可下載給會計的日獎金表（總部一次全店）。 -->
+<script>
+/* ===== AUTH-CORE v3 BEGIN（權限中心連線核心；v2＝2026-10-02 待處理事項 1002 #3，v3＝2026-11-18 密碼重建第 2 段）=====
+   全站共用（hub、各儀表板、admin-auth、決策中心、費用申請…），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+   ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
+      先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
+      「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
+   ② 預熱：閘門一出現先 ping（全站含其他分頁 90 秒只敲一次，__auth_ping_ts），8 秒沒回應或失敗再補一次。
+   ③ 儲存：登入紀錄寫不進去（瀏覽器空間被暫存塞滿）→ 先刪各儀表板「可重抓的暫存」（從最大的刪起）再寫；
+      還是不行 → 改存這個分頁（sessionStorage）→ 再不行只放行這一次。登入、草稿、設定一律不刪。
+   ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
+      Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
+      權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   ⑤ v3 登入一次整站通行：login(密碼) → 權限中心認出身分、發「通行證」（一串簽過章的字，不含密碼），存在 localStorage dash_pass（可同時有幾張）。
+      各頁閘門先看有沒有能開這一頁的通行證（pass／can），有就不問密碼；後端要驗密碼的地方把通行證（token）當密碼送即可。
+      recheck＝每張通行證每小時最多回權限中心問一次還有沒有效；只有明確回「已失效」（密碼換了、停用）才收掉，連不上不動。
+      logout＝登出這台裝置（通行證＋各頁登入紀錄＋各系統自己記的登入；平板外語食譜留著）。
+      權限中心被退回舊版（login 回 unknown action）→ 自動改走原本的 verify，只記這一頁。
+   緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
+(function(){
+  if (window.__dashAuth) return;
+  var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
+  var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action|登入已失效|不能開這一頁/;            /* 明確答案：不重試 */
+  var PING_KEY = '__auth_ping_ts', MEM = {};
+  var PASS_KEY = 'dash_pass', RECHECK_MS = 3600000, STAY = 'tablet_i18n';   /* STAY＝登出時留著的那一頁（門市平板給客人看的食譜） */
+  var OUT_RE = /^(dash_auth_|st_pw_\d|rcp:cred)|^(hub_unlocked|hub_unlocked_ttl|hub_role|hub_view|dc_auth_v1|sw_auth_v1|hqreview_auth|ann:pw|ann:pub|sv:pw|pm:pw|ph_pw)$/;   /* 登出要清的：各頁登入紀錄與各系統自己記的登入 */
+  function noop(){}
+  function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
+  function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
+  function ss(){ try { return window.sessionStorage || null; } catch(_){ return null; } }
+  function get(k){
+    var v = null, l = ls(), s = ss();
+    try { if (l) v = l.getItem(k); } catch(_){}
+    if (v == null) { try { if (s) v = s.getItem(k); } catch(_){} }
+    if (v == null && Object.prototype.hasOwnProperty.call(MEM, k)) v = MEM[k];
+    return v;
+  }
+  function del(k){
+    var l = ls(), s = ss();
+    try { if (l) l.removeItem(k); } catch(_){}
+    try { if (s) s.removeItem(k); } catch(_){}
+    delete MEM[k];
+  }
+  function setLocal(k, v){ var l = ls(); if (!l) return false; try { l.setItem(k, v); return true; } catch(_){ return false; } }
+  function evict(k, v){   /* 空間滿：從最大的暫存刪起，每刪一筆就再試寫一次 */
+    var l = ls(), list = [], i;
+    if (!l) return false;
+    try { for (i = 0; i < l.length; i++) { var x = l.key(i); if (x && CACHE_RE.test(x)) list.push([x, (l.getItem(x) || '').length]); } } catch(_){ return false; }
+    list.sort(function(a, b){ return b[1] - a[1]; });
+    for (i = 0; i < list.length; i++) {
+      try { l.removeItem(list[i][0]); } catch(_){}
+      if (setLocal(k, v)) return true;
+    }
+    return false;
+  }
+  function put(k, v){   /* 回傳存到哪裡：'local'／'session'／'memory' */
+    var s = ss(), l;
+    v = String(v);
+    if (setLocal(k, v) || evict(k, v)) { try { if (s) s.removeItem(k); } catch(_){} delete MEM[k]; return 'local'; }
+    try { l = ls(); if (l) l.removeItem(k); } catch(_){}
+    try { if (s) { s.setItem(k, v); delete MEM[k]; return 'session'; } } catch(_){}
+    MEM[k] = v; return 'memory';
+  }
+  function jsonp(qs, onData, onFail){   /* 送一發；回傳「收掉這一發」的函式（之後晚到的回應被吃掉，不報錯） */
+    var name = '__ac' + rid(), s = document.createElement('script'), over = false;
+    function end(){ if (over) return false; over = true; window[name] = noop; if (s.parentNode) s.parentNode.removeChild(s); return true; }
+    window[name] = function(d){ if (end()) onData(d); };
+    s.onerror = function(){ if (end()) onFail(); };
+    s.src = AUTH_API + '?' + qs + '&callback=' + name;
+    (document.head || document.documentElement).appendChild(s);
+    return end;
+  }
+  function parse(t){   /* 權限中心一律回 callback(...)（不帶 callback 參數時名字就是 callback）→ 剝掉外層；日後改回純 JSON 也吃 */
+    var m = /^\s*[\w$.]+\(([\s\S]*)\)\s*;?\s*$/.exec(t);
+    return JSON.parse(m ? m[1] : t);
+  }
+  function call(qs, onData, onFail){   /* 送一發（見 ④）：先 fetch 不帶 Google cookie，fetch 本身出錯才改走 JSONP；回傳「收掉這一發」的函式 */
+    var over = false, ac = null, endJ = null;
+    function end(){ if (over) return false; over = true; if (ac) { try { ac.abort(); } catch(_){} } if (endJ) endJ(); return true; }
+    function give(f, d){ setTimeout(function(){ f(d); }, 0); }   /* 移出 promise 鏈，閘門程式出錯時 console 看得到 */
+    if (!window.fetch) return jsonp(qs, onData, onFail);
+    try { ac = window.AbortController ? new AbortController() : null; } catch(_){ ac = null; }
+    fetch(AUTH_API + '?' + qs + '&callback=__acf', ac ? { credentials: 'omit', cache: 'no-store', signal: ac.signal } : { credentials: 'omit', cache: 'no-store' })
+      .then(function(r){
+        if (over) return;
+        if (!r.ok) { if (end()) give(onFail); return; }   /* Google 回 404／5xx＝跟 JSONP 的 onerror 一樣，交給上層補發 */
+        return r.text().then(function(t){
+          var d;
+          try { d = parse(t); } catch(_){ if (end()) give(onFail); return; }   /* 回的是 HTML 錯誤頁 */
+          if (end()) give(onData, d);
+        });
+      })
+      .catch(function(){   /* fetch 本身失敗（CORS 被擋、網路、錯誤頁沒帶 CORS 標頭）→ 這一發改走 JSONP */
+        if (over) return;
+        endJ = jsonp(qs, function(d){ if (end()) onData(d); }, function(){ if (end()) onFail(); });
+      });
+    return end;
+  }
+  function mark(){ try { var l = ls(); if (l) l.setItem(PING_KEY, String(Date.now())); } catch(_){} }
+  function warm(nav){   /* nav＝馬上要換頁（hub 點卡片）：改用 keepalive，換頁後請求照樣送達 */
+    var last = 0, now = Date.now(), l = ls();
+    try { last = Number(l && l.getItem(PING_KEY)) || 0; } catch(_){}
+    if (now - last >= 0 && now - last < 90000) return false;
+    mark();
+    if (nav && window.fetch) {
+      try { fetch(AUTH_API + '?action=ping&callback=__acnav', { mode: 'no-cors', credentials: 'omit', keepalive: true, cache: 'no-store' }).catch(noop); return true; } catch(_){}
+    }
+    (function ping(k){
+      var t = setTimeout(function(){ end(); if (k < 2) ping(k + 1); }, 8000);
+      var end = call('action=ping', function(){ clearTimeout(t); }, function(){ clearTimeout(t); if (k < 2) setTimeout(function(){ ping(k + 1); }, 2500); });
+    })(1);
+    return true;
+  }
+  function read(qs, cb, prog){   /* 唯讀請求（verify、login、admin_list）＝可以安全重送 */
+    var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
+    function finish(r){
+      var i;
+      if (done) return;
+      done = true;
+      for (i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+      for (i = 0; i < ends.length; i++) ends[i]();
+      if (r && r.ok) mark();
+      cb(r);
+    }
+    function fail(){
+      finish({ ok: false, net: true, error: navigator.onLine === false ? '這台裝置目前沒有網路，請確認 Wi-Fi 後再按一次'
+        : lastErr ? '權限中心暫時無法回應，請稍後再按一次（' + lastErr.slice(0, 60) + '）'
+        : '連不上權限中心，請檢查網路後再按一次' });
+    }
+    function again(){
+      if (n < 3 && Date.now() - t0 < 26000) timers.push(setTimeout(fire, 700));
+      else if (live <= 0) fail();
+    }
+    function fire(){
+      if (done || n >= 3) return;
+      n++; live++;
+      if (n > 1 && prog) { try { prog('連線較慢，自動重試中（第 ' + n + ' 次）…'); } catch(_){} }
+      ends.push(call(qs, function(d){
+        live--;
+        if (done) return;
+        if (d && d.ok) return finish(d);
+        if (d && (d.locked || d.expired || d.denied || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
+        again();
+      }, function(){ live--; if (!done) again(); }));
+    }
+    fire();
+    timers.push(setTimeout(fire, 6000), setTimeout(fire, 14000), setTimeout(fail, 32000));
+  }
+  function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
+    read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
+  }
+  /* ── ⑤ v3 通行證 ──  一張＝{t 通行證, i 身分代號, n 身分名稱, l 是誰（新品申請表身分才有）, x 到期時間, g 能開的頁, a 權限後台(edit／view／空), c 上次回權限中心確認的時間} */
+  function plist(){   /* 還沒過期的通行證 */
+    var a, out = [], now = Date.now(), i, p;
+    try { a = JSON.parse(get(PASS_KEY) || '[]'); } catch(_){ a = null; }
+    if (!a || !a.length) return out;
+    for (i = 0; i < a.length; i++) { p = a[i]; if (p && p.t && p.g && p.g.length != null && Number(p.x) > now) out.push(p); }
+    return out;
+  }
+  function psave(a){ if (a.length) put(PASS_KEY, JSON.stringify(a)); else del(PASS_KEY); }
+  function lv(a){ return a === 'edit' ? 2 : a === 'view' ? 1 : 0; }
+  function covers(q, p){   /* q 這張完全包含 p（能開的頁、效期、權限後台都不輸） */
+    var i;
+    if (Number(q.x) < Number(p.x) || lv(q.a) < lv(p.a)) return false;
+    for (i = 0; i < p.g.length; i++) if (q.g.indexOf(p.g[i]) < 0) return false;
+    return true;
+  }
+  function tidy(a){   /* 被別張完全包含的丟掉；兩張一樣大留後面那張（較新） */
+    var out = [], i, j, drop;
+    for (i = 0; i < a.length; i++) {
+      drop = false;
+      for (j = 0; j < a.length && !drop; j++) if (j !== i && covers(a[j], a[i]) && !(covers(a[i], a[j]) && i > j)) drop = true;
+      if (!drop) out.push(a[i]);
+    }
+    return out;
+  }
+  function keepPass(r){   /* 把 login 回來的通行證收進來 */
+    var a = plist(), out = [], i;
+    for (i = 0; i < a.length; i++) if (a[i].t !== r.token) out.push(a[i]);
+    out.push({ t: r.token, i: r.ident || '', n: r.ident_name || '', l: r.label || '', x: Number(r.exp) || 0, g: r.grants || [], a: r.admin || '', c: Date.now() });
+    psave(tidy(out));
+  }
+  function pass(id){   /* 能開這一頁的通行證（有好幾張拿權限最大的）；不給 id＝手上權限最大的那張；沒有回 null */
+    var a = plist(), best = null, i;
+    for (i = 0; i < a.length; i++) if ((!id || a[i].g.indexOf(id) >= 0) && (!best || a[i].g.length > best.g.length)) best = a[i];
+    return best;
+  }
+  function can(id){ return !!pass(id); }
+  function token(id){ var p = pass(id); return p ? p.t : ''; }   /* 給後端驗的那一串（當密碼送） */
+  function login(pwd, dash, cb, prog){   /* dash＝在哪一頁登入（可空）。回應多 here（這一頁開不開得了）、need（開不了時要哪個身分）、ident_name */
+    read('action=login&dashboard=' + encodeURIComponent(dash || '') + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), function(r){
+      if (r && !r.ok && /unknown action/.test(String(r.error || ''))) {   /* 權限中心被退回舊版 → 照舊只驗這一頁 */
+        if (!dash) return cb({ ok: false, legacy: true, error: '權限中心目前是舊版，請到各儀表板頁輸入密碼' });
+        return verify(dash, pwd, function(r2){ if (r2) r2.legacy = true; cb(r2); }, prog);
+      }
+      if (r && r.ok && r.token) { try { keepPass(r); } catch(_){} }
+      cb(r);
+    }, prog);
+  }
+  function patch(tok, fn){   /* 改某一張通行證（fn 回 null＝收掉） */
+    var a = plist(), out = [], i, q;
+    for (i = 0; i < a.length; i++) {
+      if (a[i].t === tok) { q = fn(a[i]); if (q) out.push(q); }
+      else out.push(a[i]);
+    }
+    psave(out);
+  }
+  function recheck(cb){   /* cb(changed)：changed＝有通行證被收掉或能開的頁變了 */
+    var a = plist(), now = Date.now(), todo = [], left, changed = false, i;
+    for (i = 0; i < a.length; i++) if (!(now >= Number(a[i].c) && now - Number(a[i].c) < RECHECK_MS)) todo.push(a[i].t);
+    left = todo.length;
+    if (!left) { if (cb) cb(false); return; }
+    function one(tok){
+      function done(){ if (--left <= 0 && cb) cb(changed); }
+      function later(){ patch(tok, function(p){ p.c = Date.now() - RECHECK_MS + 300000; return p; }); done(); }   /* 連不上：5 分鐘後再問，不動通行證 */
+      patch(tok, function(p){ p.c = now; return p; });   /* 先記「問過了」，同時開著的其他分頁就不會重複問 */
+      call('action=check&token=' + encodeURIComponent(tok), function(d){
+        if (d && d.ok && d.token === tok) {
+          patch(tok, function(p){
+            var g = d.grants || [];
+            if (g.join('|') !== p.g.join('|') || (d.admin || '') !== p.a) changed = true;
+            p.g = g; p.a = d.admin || ''; p.n = d.ident_name || p.n; p.x = Number(d.exp) || p.x; p.c = Date.now();
+            return p;
+          });
+          return done();
+        }
+        if (d && d.expired) { patch(tok, function(){ return null; }); changed = true; return done(); }
+        later();
+      }, later);
+    }
+    for (i = 0; i < todo.length; i++) one(todo[i]);
+  }
+  function logout(){
+    var a = plist(), keep = [], ks = [], i, k;
+    for (i = 0; i < a.length; i++) if (a[i].i === 'page' && a[i].g.length === 1 && a[i].g[0] === STAY) keep.push(a[i]);
+    psave(keep);
+    function scan(st){ var j, x; if (!st) return; try { for (j = 0; j < st.length; j++) { x = st.key(j); if (x && OUT_RE.test(x) && x !== 'dash_auth_' + STAY) ks.push(x); } } catch(_){} }
+    scan(ls()); scan(ss());
+    for (k in MEM) if (Object.prototype.hasOwnProperty.call(MEM, k) && OUT_RE.test(k) && k !== 'dash_auth_' + STAY) ks.push(k);
+    for (i = 0; i < ks.length; i++) del(ks[i]);
+  }
+  window.__dashAuth = { api: AUTH_API, ver: 3, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call,   /* call＝只送一發（admin-auth 的寫入用） */
+    login: login, pass: pass, can: can, token: token, recheck: recheck, logout: logout };
+})();
+/* ===== AUTH-CORE v3 END ===== */
+</script>
 <style>
 :root{--bg:#f6f4ef;--card:#fff;--ink:#2b2b2b;--mute:#6b6b6b;--line:#e3ded3;--acc:#c0622f;--acc2:#8a4a25;--ok:#2e7d32;--warn:#b26a00;--bad:#c62828;
   --wk:#fbf3e6;--rest:#eef1f5;--hol:#fde8e8;--chg:#fff3a6}
@@ -161,10 +408,11 @@ tr.sum td.bn{color:var(--ok);font-weight:600}tr.sum td.bn.x2{color:var(--bad)}tr
   <h2>登入</h2>
   <label>身分</label>
   <select id="lgAs"></select>
-  <label>密碼</label>
+  <label id="lgPwdLb">密碼</label>
   <input type="password" id="lgPwd" autocomplete="current-password">
   <div class="err" id="lgErr"></div>
   <button class="btn" id="lgBtn">登入</button>
+  <button class="btn ghost sm hide" id="lgOutAll" type="button" style="margin-left:8px">🔒 登出這台裝置</button>
 </div>
 
 <main id="app" class="hide">
@@ -302,7 +550,7 @@ function clearAuth(){try{localStorage.removeItem(AUTH_KEY)}catch(_){}}
 function post(act,data){
   var body=Object.assign({as:auth&&auth.as,pwd:auth&&auth.pwd,store:curStore(),ym:$('ymSel').value},data||{});
   return fetch(API+act,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(function(r){return r.json().catch(function(){throw new Error(r.status>=500?'系統正在更新，請等 1～2 分鐘再按一次':'錯誤 '+r.status)}).then(function(j){if(r.status===401){clearAuth();showLogin(j.error||'請重新登入')}if(!j.ok)throw new Error(j.error||('錯誤 '+r.status));return j})});
+    .then(function(r){return r.json().catch(function(){throw new Error(r.status>=500?'系統正在更新，請等 1～2 分鐘再按一次':'錯誤 '+r.status)}).then(function(j){if(r.status===401){if(auth&&/^pass1\./.test(auth.pwd||'')){try{sessionStorage.setItem('sw_bad_tok',auth.pwd)}catch(_){}}clearAuth();showLogin(j.error||'請重新登入')}if(!j.ok)throw new Error(j.error||('錯誤 '+r.status));return j})});
 }
 function curStore(){return auth&&auth.as==='hq'?$('storeSel').value:(auth&&auth.as)}
 
@@ -312,18 +560,32 @@ function curStore(){return auth&&auth.as==='hq'?$('storeSel').value:(auth&&auth.
   try{var ls=localStorage.getItem('sw_hq_store');if(ls&&$('storeSel').querySelector('option[value="'+ls+'"]'))$('storeSel').value=ls}catch(_){}   // 總部重新整理後記住上次選的店（2026-11-05 模擬）
   var d=new Date(),opts='';for(var i=-1;i<=2;i++){var x=new Date(d.getFullYear(),d.getMonth()+i,1);var v=x.getFullYear()+String(x.getMonth()+1).padStart(2,'0');opts+='<option value="'+v+'">'+x.getFullYear()+' 年 '+(x.getMonth()+1)+' 月</option>'}
   $('ymSel').innerHTML=opts;var nx=new Date(d.getFullYear(),d.getMonth()+1,1);$('ymSel').value=nx.getFullYear()+String(nx.getMonth()+1).padStart(2,'0');})();
-function showLogin(msg){$('login').classList.remove('hide');$('app').classList.add('hide');$('logoutBtn').classList.add('hide');$('storeSel').classList.add('hide');$('rgLink').classList.add('hide');$('who').textContent='';$('lgErr').textContent=msg||''}
+/* 2026-11-18 密碼重建第 3 段：手上有通行證（在首頁或任何儀表板登入過）→ 不用再輸密碼，通行證當密碼送（後端拿去問權限中心，認得）。
+   體驗中心以上的身分＝直接進體驗中心；門市身分＝選自己的店就進去（記住上次選的店）。SW_BAD＝被後端退回過的通行證，不再自動拿來用。 */
+var DA=window.__dashAuth, SW_BAD='sw_bad_tok', SW_LAST='sw_last_as';
+function dashOf(as){return as==='hq'?'task_hq':'store_'+as}
+function passOf(as){var p=DA.pass(dashOf(as)),bad='';try{bad=sessionStorage.getItem(SW_BAD)||''}catch(_){}return p&&p.t!==bad?p:null}
+function passIn(as){var p=passOf(as);if(!p)return false;auth={as:as,pwd:p.t,exp:p.x};saveAuth(auth);try{localStorage.setItem(SW_LAST,as)}catch(_){}enter();return true}
+function bootPass(){if(passOf('hq'))return passIn('hq');var l='';try{l=localStorage.getItem(SW_LAST)||localStorage.getItem('st_sid')||''}catch(_){}
+  if(/^([1-9]|1[0-2])$/.test(l)){$('lgAs').value=l;if(passOf(l))return passIn(l)}return false}
+function paintLogin(){var has=!!passOf($('lgAs').value);$('lgPwdLb').classList.toggle('hide',has);$('lgPwd').classList.toggle('hide',has);$('lgBtn').textContent=has?'進入':'登入';$('lgOutAll').classList.toggle('hide',!DA.pass())}
+function showLogin(msg){$('login').classList.remove('hide');$('app').classList.add('hide');$('logoutBtn').classList.add('hide');$('storeSel').classList.add('hide');$('rgLink').classList.add('hide');$('who').textContent='';$('lgErr').textContent=msg||'';paintLogin()}
+$('lgAs').onchange=function(){$('lgErr').textContent='';paintLogin()};
 $('lgBtn').onclick=function(){
-  var a={as:$('lgAs').value,pwd:$('lgPwd').value};if(!a.pwd){$('lgErr').textContent='請輸入密碼';return}
+  var as=$('lgAs').value,pwd=$('lgPwd').value;
+  if(passOf(as)){passIn(as);return}
+  if(!pwd){$('lgErr').textContent='請輸入密碼';return}
   $('lgBtn').disabled=true;$('lgErr').textContent='驗證中…';
-  fetch(API+'login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)}).then(function(r){return r.json()})
-   .then(function(j){$('lgBtn').disabled=false;if(!j.ok){$('lgErr').textContent=j.error||'登入失敗';return}
-     a.exp=Date.now()+TTL;auth=a;saveAuth(a);$('lgPwd').value='';enter()})
-   .catch(function(){$('lgBtn').disabled=false;$('lgErr').textContent='連不上伺服器，請再試一次'});
+  DA.login(pwd,dashOf(as),function(r){$('lgBtn').disabled=false;
+    if(r&&r.ok&&r.here!==false){auth={as:as,pwd:r.token||pwd,exp:r.token?Number(r.exp):Date.now()+TTL};saveAuth(auth);try{localStorage.setItem(SW_LAST,as)}catch(_){}$('lgPwd').value='';$('lgErr').textContent='';enter();return}
+    $('lgErr').textContent=r&&r.ok?'這是「'+(r.ident_name||'其他身分')+'」的密碼，這個身分要用：'+(r.need||'更高一層')+' 的密碼':((r&&r.error)||'登入失敗');
+    if(r&&(r.ok||/密碼錯誤/.test(r.error||'')))$('lgPwd').value='';
+  },function(t){$('lgErr').textContent=t});
 };
 $('lgPwd').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.isComposing)$('lgBtn').click()});
-$('logoutBtn').onclick=function(){clearAuth();auth=null;showLogin('')};
-function enter(){$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');formKey='';
+$('logoutBtn').onclick=function(){clearAuth();auth=null;showLogin('')};   /* 有通行證＝回到選身分（不用密碼就能換）；整台登出按登入框裡的「登出這台裝置」 */
+$('lgOutAll').onclick=function(){if(!confirm('登出這台裝置？各儀表板都要重新輸入密碼'))return;DA.logout();clearAuth();auth=null;showLogin('')};
+function enter(){$('logoutBtn').textContent=DA.pass()?'換身分・登出':'登出';$('login').classList.add('hide');$('app').classList.remove('hide');$('logoutBtn').classList.remove('hide');formKey='';
   if(auth.as==='hq'){$('storeSel').classList.remove('hide');$('rgLink').classList.remove('hide');$('who').textContent='🏢 體驗中心'}else{$('who').textContent=auth.as+' 號店 '+STORES[auth.as]}
   prevRaw={};chg={};refresh(true)}
 $('storeSel').onchange=$('ymSel').onchange=function(){try{localStorage.setItem('sw_hq_store',$('storeSel').value)}catch(_){}prevRaw={};chg={};formKey='';S=null;
@@ -849,7 +1111,7 @@ $('edOk').onclick=function(){var txt=$('edTxt').value.trim(),sp=txt?null:edSpan(
   run.then(function(){$('edOk').disabled=false;$('edModal').style.display='none'})
    .catch(function(e){$('edOk').disabled=false;$('edErr').textContent=e.message})};
 
-auth=loadAuth();if(auth)enter();else showLogin('');
+auth=loadAuth();if(auth)enter();else if(!bootPass())showLogin('');
 })();
 </script>
 </body>

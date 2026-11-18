@@ -7815,14 +7815,15 @@ function shWire(){
    定位同整頁閘門：防誤操作與防路人，不是資安邊界（Console 改 ST.role 仍可繞過，見 auth-center skill 地雷 3）。 */
 var HQ_KEY="dash_auth_purchase_hq",HQ_DASH="purchase_hq";
 var HQ_API="https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec";
-function hqOK(){var A=window.__dashAuth;try{var o=JSON.parse(A.get(HQ_KEY)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(HQ_KEY);}catch(e){}return false;}   /* 2026-10-02 讀寫改走 AUTH-CORE（空間滿時改存本分頁也讀得到） */
+function hqOK(){var A=window.__dashAuth;if(A.can(HQ_DASH))return true;   /* 2026-11-18 第 3 段：手上有採購經營者或老闆的通行證 → 不用再輸密碼 */
+  try{var o=JSON.parse(A.get(HQ_KEY)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(HQ_KEY);}catch(e){}return false;}   /* 2026-10-02 讀寫改走 AUTH-CORE（空間滿時改存本分頁也讀得到） */
 /* 2026-09-28 cm 批：第二道密碼改成「依身分」——總部＝purchase_hq（原樣），出貨中心＝purchase_dc（權限中心 dim_auth 要有這一列）。
    店長不設密碼（降級不需要）。hqOK／hqVerify／hqAsk 保留原名，不帶參數時行為與原本完全相同。 */
 var ROLE_GATES={"總部":{key:HQ_KEY,dash:HQ_DASH,title:"🔒 體驗中心／經營者",desc:'這個身分可以修改<b>主檔、季節指數、單位對照</b>與<b>全 12 店的店別參數</b>，需要密碼。',ph:"請輸入體驗中心密碼",ok:"已切換為體驗中心／經營者"},
   "出貨中心":{key:"dash_auth_purchase_dc",dash:"purchase_dc",title:"🔒 出貨中心",desc:'這個身分處理<b>出貨中心訂單、庫存</b>與查看<b>檔期備貨</b>，需要密碼。<b>體驗中心／經營者的密碼也可以用。</b>（主檔與效期已併入體驗中心主檔，請切「體驗中心／經營者」維護）',ph:"請輸入出貨中心或體驗中心密碼",ok:"已切換為出貨中心"}};
 function roleOK(role){var g=ROLE_GATES[role];if(!g)return true;if(role==="總部")return hqOK();
   if(role==="出貨中心"&&hqOK())return true;   /* 經營者 09-28：出貨中心負責人＝總部管理人，這台已驗過總部就不用再輸一次 */
-  var A=window.__dashAuth;try{var o=JSON.parse(A.get(g.key)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(g.key);}catch(e){}return false;}
+  var A=window.__dashAuth;if(A.can(g.dash))return true;try{var o=JSON.parse(A.get(g.key)||"null");if(o&&o.exp&&Date.now()<o.exp)return true;A.del(g.key);}catch(e){}return false;}
 function hqPing(){window.__dashAuth.warm();}   /* 先預熱，免得使用者輸完密碼還要等 GAS 冷啟動（2026-10-02 改走 head 的 AUTH-CORE：全站 90 秒節流＋沒回應補一次） */
 function hqVerify(pwd,cb,dash){   /* 2026-10-02 改走 AUTH-CORE：慢或被 Google 回 404 自動補發（每按一次最多 3 發），密碼錯誤等明確答案立刻停；進度顯示在框內。HQ_API 保留備查（＝AUTH-CORE 的 AUTH_API） */
   window.__dashAuth.verify(dash||HQ_DASH,pwd,cb,function(t){var m=document.getElementById("hqMsg");if(m){m.style.color="#666";m.textContent=t;}});}
@@ -7845,16 +7846,17 @@ function hqAsk(role){
   d.querySelector("#hqCancel").onclick=close;
   function submit(){if(go.disabled)return;var p=inp.value;if(!p){msg.style.color="#C0392B";msg.textContent="請輸入密碼";return;}   /* 2026-10-02 驗證中再按 Enter 不重送 */
     go.disabled=true;msg.style.color="#666";msg.textContent="驗證中…";
-    hqVerify(p,function cbv(r){
-      /* 出貨中心：權限中心還沒有 purchase_dc 這一列（回「查無此儀表板設定」，不計入錯誤次數）→ 改用總部密碼驗一次 */
+    /* 2026-11-18 第 3 段：改走 login＝認身分、發通行證（之後其他頁、下次切身分都不用再輸入）；密碼對但身分不夠 → 說明要用哪一種 */
+    window.__dashAuth.login(p,g.dash,function cbv(r){
+      /* 出貨中心：權限中心還沒有 purchase_dc 這一列（舊版權限中心回「查無此儀表板設定」，不計入錯誤次數）→ 改用總部密碼驗一次 */
       if(role==="出貨中心"&&!cbv.fb&&r&&!r.ok&&/查無此儀表板設定/.test(r.error||"")){cbv.fb=1;hqVerify(p,cbv,HQ_DASH);return;}
-      if(r&&r.ok){var hrs=(+r.ttl_hours>0?+r.ttl_hours:12);
-        window.__dashAuth.put(g.key,JSON.stringify({exp:Date.now()+hrs*3600000}));   /* 2026-10-02 空間滿時先清可重抓的暫存再寫，仍不行改存本分頁 */
+      if(r&&r.ok&&(r.here!==false||roleOK(role))){var hrs=(+r.ttl_hours>0?+r.ttl_hours:12);
+        if(!r.token)window.__dashAuth.put(g.key,JSON.stringify({exp:Date.now()+hrs*3600000}));   /* 有通行證就不另外記；權限中心是舊版才照舊記這一格 */
         close();ST.role=role;ST.exp={};var sel=$("#roleSel");if(sel)sel.value=role;render();
-        toast(g.ok+"（"+hrs+" 小時內免再輸入）");return;}
+        toast(g.ok+(r.token?"":"（"+hrs+" 小時內免再輸入）"));return;}
       go.disabled=false;msg.style.color="#C0392B";
-      msg.textContent=(r&&r.error)||"密碼錯誤";
-      try{inp.select();}catch(e){}},g.dash);}
+      msg.textContent=r&&r.ok?"這是「"+(r.ident_name||"其他身分")+"」的密碼，這個身分要用："+(r.need||"採購經營者或老闆")+" 的密碼":((r&&r.error)||"密碼錯誤");
+      try{inp.select();}catch(e){}},function(t){msg.style.color="#666";msg.textContent=t;});}
   go.onclick=submit;
   inp.onkeydown=function(e){if(e.key==="Enter")submit();};
   setTimeout(function(){try{inp.focus();}catch(e){}},50);}

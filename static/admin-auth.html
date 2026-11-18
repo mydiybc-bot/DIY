@@ -31,6 +31,7 @@ window.__ime=(function(){
 <!-- v1.2 2026-07-30：修正過期說明文字（原稱 pnl/月會仍走 PWD_B，實際已納管） -->
 <!-- v1.4 2026-10-30：分組密碼——用組別密碼的列顯示「🔗 用「某組」」、沒有密碼欄（改密碼請改最上面三組：門市／體驗中心／老闆） -->
 <!-- v1.3 2026-10-02：加入全站共用 AUTH-CORE v2；登入／重新載入列表（admin_list，唯讀）改為慢或 404 自動補發＋開頁預熱；儲存、解鎖、改管理密碼（寫入）仍只送一次 -->
+<!-- v1.5 2026-11-18 密碼重建第 3 段：不用單獨的管理密碼。老闆或會計在首頁／任何儀表板登入過就直接進來；老闆可看可改，會計只能看（老闆那一組不顯示）、可解鎖。原管理密碼暫時還能用。 -->
 <!-- 2026-07-30 v1：10 個儀表板密碼集中管理（讀寫「權限中心」GAS／dim_auth）。
      本頁不放任何密碼；管理密碼僅存在記憶體，關頁即清。變更紀錄見 Sheet 的 auth_log 分頁。 -->
 <style>
@@ -74,9 +75,10 @@ td input.ttl{width:58px}
 
   <!-- 登入 -->
   <div class="card" id="login">
-    <div style="font-weight:800;margin-bottom:8px">管理密碼</div>
+    <div style="font-weight:800;margin-bottom:4px">登入</div>
+    <div class="hint" style="margin-bottom:8px">請輸入老闆或會計審核的密碼（在首頁登入過就不用再輸入）。</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <input type="password" id="admPwd" placeholder="管理密碼" title="dim_auth 的 __admin__ 列；僅暫存於本頁記憶體，重新整理或關閉即需重新輸入" style="flex:1;min-width:220px" autocomplete="new-password" name="pw-admin" data-lpignore="true" data-1p-ignore>
+      <input type="password" id="admPwd" placeholder="老闆或會計審核的密碼" title="老闆、會計審核的密碼；原本的管理密碼（dim_auth 的 __admin__ 列）暫時也還能用" style="flex:1;min-width:220px" autocomplete="new-password" name="pw-admin" data-lpignore="true" data-1p-ignore>
       <button id="loginBtn" onclick="doLogin()">登入</button>
     </div>
     <div class="msg" id="loginMsg"></div>
@@ -84,6 +86,7 @@ td input.ttl{width:58px}
 
   <!-- 主面板 -->
   <div id="panel">
+    <div class="card hint" id="modeNote" style="display:none;font-weight:700"></div>
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
         <div style="font-weight:800">儀表板密碼一覽</div>
@@ -102,7 +105,7 @@ td input.ttl{width:58px}
       <div class="msg" id="listMsg"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="admCard">
       <div style="font-weight:800;margin-bottom:8px">變更管理密碼</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input type="password" id="newAdmPwd" placeholder="新的管理密碼" style="flex:1;min-width:200px">
@@ -368,7 +371,11 @@ td input.ttl{width:58px}
 const AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 
 let ADM = '';   /* 管理密碼，僅記憶體 */
+let TOK = '';   /* v1.5：老闆／會計的通行證（有它就不用管理密碼） */
+let MODE = 'edit';   /* v1.5：'edit' 可改｜'view' 只能看（權限中心回的） */
 let LIST = [];
+function cred(){ return TOK ? 'token=' + encodeURIComponent(TOK) : 'admin_pwd=' + encodeURIComponent(ADM); }
+function credObj(){ return TOK ? { token: TOK } : { admin_pwd: ADM }; }
 
 function jsonp(params, timeoutMs = 45000){   /* 寫入只送一次。2026-10-15 改走 AUTH-CORE 的 call：先 fetch 不帶 Google cookie（多帳號登入的 Chrome 也能存），fetch 出錯才走 JSONP */
   return new Promise((resolve) => {
@@ -386,25 +393,53 @@ function setMsg(id, text, ok){
   el.className = 'msg ' + (ok ? 'ok' : 'err');
 }
 
+/* 2026-11-18 v1.5（密碼重建第 3 段，經營者：權限後台讓老闆和會計後台審核看得到即可，不用單獨密碼）：
+   ①手上有老闆或會計的通行證（在首頁／任何儀表板登入過）→ 開頁直接進來，不問密碼 ②沒有 → 在這裡輸入老闆或會計審核的密碼（原本的管理密碼暫時也還能用）
+   ③老闆＝可看可改；會計＝只能看（老闆那一組的密碼不顯示）、可以解鎖。權限由權限中心判斷（admin_list 回 mode），這裡只是照著畫。 */
+function openPanel(r){
+  MODE = r.mode === 'view' ? 'view' : 'edit';
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('panel').style.display = 'block';
+  const p = TOK ? window.__dashAuth.pass('apply_review') : null, note = document.getElementById('modeNote');
+  note.style.display = 'block';
+  note.textContent = MODE === 'view' ? '目前登入：' + ((p && p.n) || '🟣 會計') + '｜只能看、不能改（老闆那一組的密碼不顯示）；被鎖住的頁可以按「解鎖」。要改密碼請老闆登入。'
+    : '目前登入：' + (TOK ? ((p && p.n) || '🔴 老闆') : '管理密碼') + '｜可以看、可以改。';
+  document.getElementById('admCard').style.display = MODE === 'view' ? 'none' : '';
+  renderList(r.list || []);
+}
+function listBy(qs, msgId){ return new Promise(res => window.__dashAuth.read('action=admin_list&' + qs, res, t => setMsg(msgId, t, true))); }
 async function doLogin(){
   const pwd = (document.getElementById('admPwd').value||'').trim();
   if(!pwd) return;
   const btn = document.getElementById('loginBtn');
   if(btn.disabled) return;   /* 2026-10-02 驗證中再按 Enter 不重送 */
   btn.disabled = true; btn.textContent = '驗證中…';
-  /* 2026-10-02：讀取（admin_list）改走 AUTH-CORE 自動補發；寫入（儲存／解鎖／改管理密碼）仍用下方 jsonp 只送一次 */
-  const r = await new Promise(res => window.__dashAuth.read('action=admin_list&admin_pwd=' + encodeURIComponent(pwd), res, t => setMsg('loginMsg', t, true)));
+  /* 先當成原本的管理密碼試（不對也不算錯誤次數）；不是 → 當成老闆／會計審核的密碼登入，拿通行證 */
+  let r = await listBy('admin_pwd=' + encodeURIComponent(pwd), 'loginMsg');
+  if (r && r.ok) ADM = pwd;
+  else if (!(r && r.net)) {
+    const lr = await new Promise(res => window.__dashAuth.login(pwd, 'apply_review', res, t => setMsg('loginMsg', t, true)));
+    if (lr && lr.ok && lr.token && lr.admin) { TOK = lr.token; r = await listBy(cred(), 'loginMsg'); if (!(r && r.ok)) TOK = ''; }
+    else if (lr && lr.ok) r = { ok: false, clear: true, error: '這是「' + (lr.ident_name || '其他身分') + '」的密碼；權限後台要用老闆或會計審核的密碼' };
+    else r = lr;
+  }
   btn.disabled = false; btn.textContent = '登入';
-  if(r && r.ok){
-    ADM = pwd;
-    document.getElementById('login').style.display = 'none';
-    document.getElementById('panel').style.display = 'block';
-    renderList(r.list || []);
-  } else {
+  if(r && r.ok){ setMsg('loginMsg', '', true); openPanel(r); }
+  else {
     setMsg('loginMsg', (r && r.error) || '登入失敗', false);
-    if(/密碼錯誤/.test((r && r.error) || '')) document.getElementById('admPwd').value = '';   /* 2026-10-02 只有密碼錯誤才清空 */
+    if((r && r.clear) || /密碼錯誤/.test((r && r.error) || '')) document.getElementById('admPwd').value = '';   /* 2026-10-02 只有密碼錯誤才清空 */
   }
 }
+/* 開頁：有老闆或會計的通行證就直接進（開得了「會計後台審核」的身分＝會計、老闆；a＝在權限後台的權限） */
+(async function(){
+  const p = window.__dashAuth.pass('apply_review');
+  if (!p || !p.a) return;
+  setMsg('loginMsg', '已登入「' + p.n + '」，讀取中…', true);
+  TOK = p.t;
+  const r = await listBy(cred(), 'loginMsg');
+  if (r && r.ok) { setMsg('loginMsg', '', true); openPanel(r); }
+  else { TOK = ''; setMsg('loginMsg', (r && r.net) ? r.error : '登入已失效，請重新輸入密碼', false); }
+})();
 document.getElementById('admPwd').addEventListener('keydown', e => { if(e.key === 'Enter') doLogin(); });
 /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在載入後才把別頁已存密碼填進來，分三個時點強制清空 */
 (function(){ var _a = document.getElementById('admPwd'); _a.value=''; setTimeout(function(){ _a.value=''; }, 60); setTimeout(function(){ _a.value=''; }, 300); })();
@@ -412,7 +447,7 @@ window.__dashAuth.warm();   /* 2026-10-02 開頁先預熱權限中心（全站 9
 
 async function loadList(){
   setMsg('listMsg', '載入中…', true);
-  const r = await new Promise(res => window.__dashAuth.read('action=admin_list&admin_pwd=' + encodeURIComponent(ADM), res, t => setMsg('listMsg', t, true)));
+  const r = await new Promise(res => window.__dashAuth.read('action=admin_list&' + cred(), res, t => setMsg('listMsg', t, true)));
   if(r && r.ok){ renderList(r.list || []); setMsg('listMsg', '', true); }
   else setMsg('listMsg', (r && r.error) || '載入失敗', false);
 }
@@ -425,12 +460,12 @@ function renderList(list){
     <tr>
       <td class="name"><b>${escH(d.name)}</b><br><span class="id">${escH(d.dashboard_id)}</span></td>
       <td style="white-space:nowrap">${(d.group && d.group_active) ? `<span class="hint" title="這頁用組別密碼；要改請改最上面那一組">🔗 用「${escH(d.group_name)}」</span>` : `
-        <input class="pwd" type="password" id="p_${i}" value="${escH(d.password)}">
+        <input class="pwd" type="${d.boss_only ? 'text' : 'password'}" id="p_${i}" value="${escH(d.password)}"${MODE === 'view' ? ' readonly' : ''}>
         <button class="eye" onclick="togglePwd(${i})" title="顯示/隱藏">👁</button>`}
       </td>
-      <td><input class="ttl" type="number" min="1" id="t_${i}" value="${d.ttl_hours}"></td>
+      <td><input class="ttl" type="number" min="1" id="t_${i}" value="${d.ttl_hours}"${MODE === 'view' ? ' disabled' : ''}></td>
       <td>
-        <select id="e_${i}">
+        <select id="e_${i}"${MODE === 'view' ? ' disabled' : ''}>
           <option value="Y" ${d.enabled === 'Y' ? 'selected' : ''}>Y</option>
           <option value="N" ${d.enabled === 'N' ? 'selected' : ''}>N</option>
         </select>
@@ -440,7 +475,7 @@ function renderList(list){
       </td>
       <td class="updated hidecol">${d.updated_at || ''}</td>
       <td class="hidecol"><span class="hint">${escH(d.note || '')}</span></td>
-      <td><button id="s_${i}" onclick="saveRow(${i})">儲存</button></td>
+      <td>${MODE === 'view' ? '' : `<button id="s_${i}" onclick="saveRow(${i})">儲存</button>`}</td>
     </tr>`).join('');
 }
 
@@ -456,7 +491,7 @@ async function saveRow(i){
   btn.disabled = true; btn.textContent = '…';
   const r = await jsonp({
     action: 'admin_set',
-    admin_pwd: ADM,
+    ...credObj(),
     dashboard: d.dashboard_id,
     new_pwd: (document.getElementById('p_' + i) || {value: ''}).value,   /* 用組別密碼的列沒有密碼欄 → 不改密碼 */
     ttl_hours: document.getElementById('t_' + i).value,
@@ -469,7 +504,7 @@ async function saveRow(i){
 
 async function unlockRow(i){
   const d = LIST[i];
-  const r = await jsonp({action:'admin_unlock', admin_pwd:ADM, dashboard:d.dashboard_id});
+  const r = await jsonp({action:'admin_unlock', ...credObj(), dashboard:d.dashboard_id});
   if(r && r.ok){ setMsg('listMsg', '✅ ' + d.name + ' 已解除鎖定（表格已重新讀取，其他列還沒儲存的修改要重填）', true); loadList(); }
   else setMsg('listMsg', (r && r.error) || '解鎖失敗', false);
 }
@@ -477,7 +512,7 @@ async function unlockRow(i){
 async function changeAdmin(){
   const np = document.getElementById('newAdmPwd').value.trim();
   if(!np){ setMsg('admMsg', '請輸入新的管理密碼', false); return; }
-  const r = await jsonp({action:'admin_set', admin_pwd:ADM, dashboard:'__admin__', new_pwd:np});
+  const r = await jsonp({action:'admin_set', ...credObj(), dashboard:'__admin__', new_pwd:np});
   if(r && r.ok){
     setMsg('admMsg', '✅ 管理密碼已更新，請以新密碼重新登入', true);
     setTimeout(() => location.reload(), 1200);

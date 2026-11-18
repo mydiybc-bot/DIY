@@ -421,8 +421,8 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
 
   <div class="view" id="vLogin" hidden>
     <div class="card login">
-      <h2>🔐 審核人員密碼</h2>
-      <div class="fld"><label for="lgPw">密碼（權限中心「會計後台審核」）</label><input id="lgPw" type="password" autocomplete="new-password" name="pw-hqreview" data-lpignore="true" data-1p-ignore></div>
+      <h2 id="lgTitle">🔐 審核人員密碼</h2>
+      <div class="fld" id="lgPwFld"><label for="lgPw">密碼（權限中心「會計後台審核」）</label><input id="lgPw" type="password" autocomplete="new-password" name="pw-hqreview" data-lpignore="true" data-1p-ignore></div>
       <div class="fld"><label for="lgName" title="寫在審核紀錄上">你的名字</label><input id="lgName" type="text" maxlength="20" placeholder="例：許琇婷"></div>
       <div class="err" id="lgErr"></div>
       <button class="btn big" id="lgBtn" type="button" style="width:100%">進入</button>
@@ -511,6 +511,13 @@ function api(body, ms) {
     return r;
   });
 }
+/* 2026-11-18 密碼重建第 3 段：手上有能開「會計後台審核」的通行證（會計或老闆在首頁／任何儀表板登入過）→ 不用再輸密碼，通行證當密碼送
+   （後端拿去問權限中心，認得）；只要填過名字就直接進來。RV_BAD＝被後端退回過的通行證，不再自動拿來用。 */
+var RV_BAD = 'hqreview_bad_tok';
+function isTok(s) { return /^pass1\./.test(String(s || '')); }
+function passTok() { var p = window.__dashAuth.pass(REVIEW_DASH), bad = ''; try { bad = sessionStorage.getItem(RV_BAD) || ''; } catch (e) { } return p && p.t !== bad ? p : null; }
+function paintLogin() { var has = !!passTok(); $('lgPwFld').style.display = has ? 'none' : ''; $('lgTitle').textContent = has ? '🔐 會計後台審核' : '🔐 審核人員密碼'; }
+function passEnter(nm) { var p = passTok(); if (!p || !nm) return false; A = { pw: p.t, name: nm, exp: p.x }; lsSet(AUTH_KEY, JSON.stringify(A)); lsSet('hqreview_name', nm); enter(); return true; }
 function loadAuth() { try { var o = JSON.parse(lsGet(AUTH_KEY) || 'null'); if (o && o.pw && o.exp > Date.now()) { A = o; return true; } } catch (e) { } return false; }
 function initLogin() {
   var inp = $('lgPw'); inp.value = ''; setTimeout(function () { inp.value = ''; }, 60); setTimeout(function () { inp.value = ''; }, 300);
@@ -519,19 +526,27 @@ function initLogin() {
   function go() {
     var v = inp.value.trim(), nm = $('lgName').value.trim(), err = $('lgErr'), btn = $('lgBtn');
     if (!nm) { err.textContent = '請填名字'; return; }
+    if (passEnter(nm)) { err.textContent = ''; return; }
     if (!v || busy) return;
     busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = ''; err.style.color = '#C43030';
-    window.__dashAuth.verify(REVIEW_DASH, v, function (r) {
+    window.__dashAuth.login(v, REVIEW_DASH, function (r) {
       busy = false; btn.disabled = false; btn.textContent = '進入';
-      if (r && r.ok) { A = { pw: v, name: nm, exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }; lsSet(AUTH_KEY, JSON.stringify(A)); lsSet('hqreview_name', nm); inp.value = ''; enter(); }
+      if (r && r.ok && r.here !== false) { A = { pw: r.token || v, name: nm, exp: r.token ? Number(r.exp) : Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }; lsSet(AUTH_KEY, JSON.stringify(A)); lsSet('hqreview_name', nm); inp.value = ''; enter(); }
+      else if (r && r.ok) { err.textContent = '這是「' + (r.ident_name || '其他身分') + '」的密碼，審核要用：' + (r.need || '會計或老闆') + ' 的密碼'; inp.value = ''; inp.focus(); }
       else { var m = (r && r.error) || '驗證失敗'; if (m.indexOf('密碼錯誤') > -1) { m = '審核密碼不對'; inp.value = ''; } if (m.indexOf('查無') > -1) m = '權限中心還沒有「apply_review」這一列：請先在 GAS 執行 authorizeApply，再到權限後台設密碼'; err.textContent = m; inp.focus(); }
     }, function (t) { err.style.color = '#6F4E45'; err.textContent = t; });
   }
   $('lgBtn').addEventListener('click', go);
   inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
-  $('logoutBtn').addEventListener('click', function () { logout(); });
+  $('logoutBtn').addEventListener('click', function () {
+    if (window.__dashAuth.pass()) { if (!confirm('登出這台裝置？各儀表板都要重新輸入密碼')) return; window.__dashAuth.logout(); }   /* 第 3 段：登入是整站通行的，登出也是整台 */
+    logout();
+  });
 }
-function logout(msg) { A = { pw: '', name: '', exp: 0 }; lsDel(AUTH_KEY); $('unitBadge').hidden = true; show('vLogin'); if (msg) $('lgErr').textContent = msg; }
+function logout(msg) {
+  if (msg && isTok(A.pw)) { try { sessionStorage.setItem(RV_BAD, A.pw); } catch (e) { } }   /* 後端說失效的通行證：不再自動拿來用，改請他輸密碼 */
+  A = { pw: '', name: '', exp: 0 }; lsDel(AUTH_KEY); $('unitBadge').hidden = true; show('vLogin'); paintLogin(); $('lgErr').textContent = msg || '';
+}
 function enter() {
   $('rvName').textContent = A.name; $('unitBadge').hidden = false; show('vMain');
   $('fType').innerHTML = '<option value="">全部項目</option>' + ORDER.filter(function (k) { return k !== 'petty'; }).map(function (k) { return '<option value="' + k + '">' + TYPES[k].emoji + ' ' + TYPES[k].label + '</option>'; }).join('');
@@ -861,7 +876,12 @@ function buildSummary(type, r) {
     return wb.xlsx.writeBuffer();
   }).then(function (buf) { return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); });
 }
-function startApp() { initLogin(); if (loadAuth()) enter(); else { show('vLogin'); window.__dashAuth.warm(); setTimeout(function () { $('lgPw').focus(); }, 150); } }
+function startApp() {
+  initLogin();
+  if (loadAuth()) return enter();
+  if (passEnter(lsGet('hqreview_name'))) return;
+  show('vLogin'); paintLogin(); window.__dashAuth.warm(); setTimeout(function () { $(passTok() ? 'lgName' : 'lgPw').focus(); }, 150);
+}
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startApp); else startApp();
 </script>
 </body>
