@@ -158,8 +158,8 @@ details.xhelp[open]>summary{margin-bottom:4px}
 details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;padding:8px 10px;line-height:1.6}
 </style>
 <script>
-/* ===== AUTH-CORE v2 BEGIN（權限中心連線核心，2026-10-02 待處理事項 1002 #3）=====
-   全站 12 頁共用（hub、10 個儀表板、admin-auth），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
+/* ===== AUTH-CORE v3 BEGIN（權限中心連線核心；v2＝2026-10-02 待處理事項 1002 #3，v3＝2026-11-18 密碼重建第 2 段）=====
+   全站共用（hub、各儀表板、admin-auth、決策中心、費用申請…），本段一字不差；要改就全部一起改，改完跑比對（見 auth-center skill）。
    ① 驗證自動重試：第 1 發 6 秒沒回 → 並行補第 2 發；14 秒再補第 3 發；某一發被 Google 回 404／伺服器錯 → 0.7 秒後補下一發。
       先回來的有效答案為準，晚到的自動丟掉；每按一次最多 3 發、最多等 32 秒。
       「密碼錯誤／已停用／查無／嘗試次數過多」是明確答案 → 立刻停，不再補發（防暴力鎖定 15 次／10 分鐘）。
@@ -169,13 +169,20 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
    ④ 2026-10-15 多帳號修正：每一發先用 fetch 且不帶 Google cookie（credentials:'omit'）讀回應。
       Chrome 同時登入多個 Google 帳號時，<script>（JSONP）一定帶 cookie → Google 轉到 /macros/u/1/… 回 503 → 登入失敗。
       權限中心回的是 callback({...})（有 CORS），剝掉外層取 JSON；fetch 本身出錯（CORS 被擋、網路）才改走原本的 JSONP。
+   ⑤ v3 登入一次整站通行：login(密碼) → 權限中心認出身分、發「通行證」（一串簽過章的字，不含密碼），存在 localStorage dash_pass（可同時有幾張）。
+      各頁閘門先看有沒有能開這一頁的通行證（pass／can），有就不問密碼；後端要驗密碼的地方把通行證（token）當密碼送即可。
+      recheck＝每張通行證每小時最多回權限中心問一次還有沒有效；只有明確回「已失效」（密碼換了、停用）才收掉，連不上不動。
+      logout＝登出這台裝置（通行證＋各頁登入紀錄＋各系統自己記的登入；平板外語食譜留著）。
+      權限中心被退回舊版（login 回 unknown action）→ 自動改走原本的 verify，只記這一頁。
    緊急繞過格式不變：localStorage dash_auth_<id> = {exp}；hub_unlocked = 時間戳。 */
 (function(){
   if (window.__dashAuth) return;
   var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
   var CACHE_RE = /^(dpc:|pnlc1:)|^(pos_cache_v2|resv_pos_net_v1|resv_revisit_monthly_v1|dec_bundle_v1)$/;   /* 只列可重抓的暫存 */
-  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action/;            /* 明確答案：不重試 */
+  var FINAL_RE = /密碼錯誤|已停用|查無|嘗試次數過多|缺少參數|不允許|unknown action|登入已失效|不能開這一頁/;            /* 明確答案：不重試 */
   var PING_KEY = '__auth_ping_ts', MEM = {};
+  var PASS_KEY = 'dash_pass', RECHECK_MS = 3600000, STAY = 'tablet_i18n';   /* STAY＝登出時留著的那一頁（門市平板給客人看的食譜） */
+  var OUT_RE = /^(dash_auth_|st_pw_\d|rcp:cred)|^(hub_unlocked|hub_unlocked_ttl|hub_role|hub_view|dc_auth_v1|sw_auth_v1|hqreview_auth|ann:pw|ann:pub|sv:pw|pm:pw|ph_pw)$/;   /* 登出要清的：各頁登入紀錄與各系統自己記的登入 */
   function noop(){}
   function rid(){ return Date.now().toString(36) + Math.floor(Math.random() * 1e8).toString(36); }
   function ls(){ try { return window.localStorage || null; } catch(_){ return null; } }
@@ -263,7 +270,7 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
     })(1);
     return true;
   }
-  function read(qs, cb, prog){   /* 唯讀請求（verify、admin_list）＝可以安全重送 */
+  function read(qs, cb, prog){   /* 唯讀請求（verify、login、admin_list）＝可以安全重送 */
     var t0 = Date.now(), done = false, n = 0, live = 0, ends = [], timers = [], lastErr = '';
     function finish(r){
       var i;
@@ -291,7 +298,7 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
         live--;
         if (done) return;
         if (d && d.ok) return finish(d);
-        if (d && (d.locked || FINAL_RE.test(String(d.error || '')))) return finish(d);
+        if (d && (d.locked || d.expired || d.denied || FINAL_RE.test(String(d.error || '')))) return finish(d);
         lastErr = String((d && d.error) || lastErr);   /* 其他錯誤（GAS 例外、空回應）＝暫時性 → 補下一發 */
         again();
       }, function(){ live--; if (!done) again(); }));
@@ -302,12 +309,105 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
   function verify(dash, pwd, cb, prog){   /* rq＝這一次按鈕的編號，補發的幾發都一樣（現在的 GAS 不看它；日後 GAS 可用它讓同一次按鈕的錯誤密碼只算 1 次） */
     read('action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), cb, prog);
   }
-  window.__dashAuth = { api: AUTH_API, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call };   /* call＝只送一發（admin-auth 的寫入用） */
+  /* ── ⑤ v3 通行證 ──  一張＝{t 通行證, i 身分代號, n 身分名稱, l 是誰（新品申請表身分才有）, x 到期時間, g 能開的頁, a 權限後台(edit／view／空), c 上次回權限中心確認的時間} */
+  function plist(){   /* 還沒過期的通行證 */
+    var a, out = [], now = Date.now(), i, p;
+    try { a = JSON.parse(get(PASS_KEY) || '[]'); } catch(_){ a = null; }
+    if (!a || !a.length) return out;
+    for (i = 0; i < a.length; i++) { p = a[i]; if (p && p.t && p.g && p.g.length != null && Number(p.x) > now) out.push(p); }
+    return out;
+  }
+  function psave(a){ if (a.length) put(PASS_KEY, JSON.stringify(a)); else del(PASS_KEY); }
+  function lv(a){ return a === 'edit' ? 2 : a === 'view' ? 1 : 0; }
+  function covers(q, p){   /* q 這張完全包含 p（能開的頁、效期、權限後台都不輸） */
+    var i;
+    if (Number(q.x) < Number(p.x) || lv(q.a) < lv(p.a)) return false;
+    for (i = 0; i < p.g.length; i++) if (q.g.indexOf(p.g[i]) < 0) return false;
+    return true;
+  }
+  function tidy(a){   /* 被別張完全包含的丟掉；兩張一樣大留後面那張（較新） */
+    var out = [], i, j, drop;
+    for (i = 0; i < a.length; i++) {
+      drop = false;
+      for (j = 0; j < a.length && !drop; j++) if (j !== i && covers(a[j], a[i]) && !(covers(a[i], a[j]) && i > j)) drop = true;
+      if (!drop) out.push(a[i]);
+    }
+    return out;
+  }
+  function keepPass(r){   /* 把 login 回來的通行證收進來 */
+    var a = plist(), out = [], i;
+    for (i = 0; i < a.length; i++) if (a[i].t !== r.token) out.push(a[i]);
+    out.push({ t: r.token, i: r.ident || '', n: r.ident_name || '', l: r.label || '', x: Number(r.exp) || 0, g: r.grants || [], a: r.admin || '', c: Date.now() });
+    psave(tidy(out));
+  }
+  function pass(id){   /* 能開這一頁的通行證（有好幾張拿權限最大的）；不給 id＝手上權限最大的那張；沒有回 null */
+    var a = plist(), best = null, i;
+    for (i = 0; i < a.length; i++) if ((!id || a[i].g.indexOf(id) >= 0) && (!best || a[i].g.length > best.g.length)) best = a[i];
+    return best;
+  }
+  function can(id){ return !!pass(id); }
+  function token(id){ var p = pass(id); return p ? p.t : ''; }   /* 給後端驗的那一串（當密碼送） */
+  function login(pwd, dash, cb, prog){   /* dash＝在哪一頁登入（可空）。回應多 here（這一頁開不開得了）、need（開不了時要哪個身分）、ident_name */
+    read('action=login&dashboard=' + encodeURIComponent(dash || '') + '&pwd=' + encodeURIComponent(pwd) + '&rq=' + rid(), function(r){
+      if (r && !r.ok && /unknown action/.test(String(r.error || ''))) {   /* 權限中心被退回舊版 → 照舊只驗這一頁 */
+        if (!dash) return cb({ ok: false, legacy: true, error: '權限中心目前是舊版，請到各儀表板頁輸入密碼' });
+        return verify(dash, pwd, function(r2){ if (r2) r2.legacy = true; cb(r2); }, prog);
+      }
+      if (r && r.ok && r.token) { try { keepPass(r); } catch(_){} }
+      cb(r);
+    }, prog);
+  }
+  function patch(tok, fn){   /* 改某一張通行證（fn 回 null＝收掉） */
+    var a = plist(), out = [], i, q;
+    for (i = 0; i < a.length; i++) {
+      if (a[i].t === tok) { q = fn(a[i]); if (q) out.push(q); }
+      else out.push(a[i]);
+    }
+    psave(out);
+  }
+  function recheck(cb){   /* cb(changed)：changed＝有通行證被收掉或能開的頁變了 */
+    var a = plist(), now = Date.now(), todo = [], left, changed = false, i;
+    for (i = 0; i < a.length; i++) if (!(now >= Number(a[i].c) && now - Number(a[i].c) < RECHECK_MS)) todo.push(a[i].t);
+    left = todo.length;
+    if (!left) { if (cb) cb(false); return; }
+    function one(tok){
+      function done(){ if (--left <= 0 && cb) cb(changed); }
+      function later(){ patch(tok, function(p){ p.c = Date.now() - RECHECK_MS + 300000; return p; }); done(); }   /* 連不上：5 分鐘後再問，不動通行證 */
+      patch(tok, function(p){ p.c = now; return p; });   /* 先記「問過了」，同時開著的其他分頁就不會重複問 */
+      call('action=check&token=' + encodeURIComponent(tok), function(d){
+        if (d && d.ok && d.token === tok) {
+          patch(tok, function(p){
+            var g = d.grants || [];
+            if (g.join('|') !== p.g.join('|') || (d.admin || '') !== p.a) changed = true;
+            p.g = g; p.a = d.admin || ''; p.n = d.ident_name || p.n; p.x = Number(d.exp) || p.x; p.c = Date.now();
+            return p;
+          });
+          return done();
+        }
+        if (d && d.expired) { patch(tok, function(){ return null; }); changed = true; return done(); }
+        later();
+      }, later);
+    }
+    for (i = 0; i < todo.length; i++) one(todo[i]);
+  }
+  function logout(){
+    var a = plist(), keep = [], ks = [], i, k;
+    for (i = 0; i < a.length; i++) if (a[i].i === 'page' && a[i].g.length === 1 && a[i].g[0] === STAY) keep.push(a[i]);
+    psave(keep);
+    function scan(st){ var j, x; if (!st) return; try { for (j = 0; j < st.length; j++) { x = st.key(j); if (x && OUT_RE.test(x) && x !== 'dash_auth_' + STAY) ks.push(x); } } catch(_){} }
+    scan(ls()); scan(ss());
+    for (k in MEM) if (Object.prototype.hasOwnProperty.call(MEM, k) && OUT_RE.test(k) && k !== 'dash_auth_' + STAY) ks.push(k);
+    for (i = 0; i < ks.length; i++) del(ks[i]);
+  }
+  window.__dashAuth = { api: AUTH_API, ver: 3, get: get, put: put, del: del, warm: warm, read: read, verify: verify, call: call,   /* call＝只送一發（admin-auth 的寫入用） */
+    login: login, pass: pass, can: can, token: token, recheck: recheck, logout: logout };
 })();
-/* ===== AUTH-CORE v2 END ===== */
+/* ===== AUTH-CORE v3 END ===== */
 /* 2026-07-30 儀表板權限閘門 v1：密碼由「權限中心」GAS 集中管理（Sheet dim_auth），每頁獨立密碼＋TTL
    2026-10-02 v2（待處理事項 1002 #3）：連線與儲存改用上方 AUTH-CORE（自動重試／預熱／空間滿不卡）。
-   本段 10 個儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
+   2026-11-18 v3（密碼重建第 2 段）：登入一次整站通行。①手上有能開這一頁的通行證 → 直接進，不問密碼 ②舊版登入紀錄／緊急繞過（dash_auth_<id> = {exp}，沒有 p 記號）效期內照舊放行
+   ③都沒有才出密碼框；輸入任何一個身分的密碼都可以（門市／體驗中心／老闆…），權限中心認出身分後發通行證，之後其他頁不用再輸入。密碼對但這一頁開不了 → 告訴他要用哪一種密碼。
+   本段各儀表板一字不差，只有 DASH_ID、DASH_NAME 兩行不同（P&L 放行旗標、食譜簽核連結也寫在這裡，依 DASH_ID 生效）。 */
 (function(){
   var DASH_ID = 'reviews';
   var DASH_NAME = 'Google 評論';   /* 與 dim_auth 的 name 欄一致 */
@@ -321,21 +421,37 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
     var f = window['__' + DASH_ID + 'StartApp'];
     if (f) { window['__' + DASH_ID + 'StartApp'] = null; f(); }
   }
+  /* 有能開這一頁的通行證 → 把這一頁的登入紀錄對齊通行證（P&L、訂位、月會自己的程式還在讀這一格；p:1＝這筆是跟著通行證的，通行證沒了就不算數） */
+  function live(){
+    var p = A.pass(DASH_ID), o = null;
+    if (!p) return false;
+    try { o = JSON.parse(A.get(KEY) || 'null'); } catch(_){}
+    if (!(o && o.p && o.exp === p.x)) A.put(KEY, JSON.stringify({ exp: p.x, p: 1 }));
+    return true;
+  }
+  if (live()) {
+    pass();
+    /* 背景確認通行證還有效（每張每小時最多問一次）。被收回（密碼換了、停用、換組）→ 清掉這一頁的紀錄，下次開頁就要重新登入；不打斷正在用的人 */
+    A.recheck(function(changed){ if (changed && !A.can(DASH_ID)) A.del(KEY); });
+    return;
+  }
   try {
     var o = JSON.parse(A.get(KEY) || 'null');
-    if (o && o.exp && Date.now() < o.exp) { pass(); return; }      /* 效期內 → 放行 */
+    if (o && !o.p && o.exp && Date.now() < o.exp) { pass(); return; }      /* 舊版登入紀錄／緊急繞過：效期內 → 放行 */
   } catch(_){}
   A.del(KEY);
   document.documentElement.style.visibility = 'hidden';
   /* 2026-08-05 效能：閘門顯示的同時先 ping 預熱權限中心 GAS，使用者輸完密碼時引擎已暖機（2026-10-02 起全站 90 秒節流＋沒回應補一次） */
   A.warm();
   function show(){
+    var me = A.pass();   /* 已經登入、但這一頁開不了的人：告訴他現在是誰 */
     var d = document.createElement('div');
     d.id = 'authGate';
     d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#4A3228;display:flex;align-items:center;justify-content:center;visibility:visible';
     d.innerHTML = '<div style="background:#fff;border-radius:14px;padding:28px 26px;width:min(320px,86vw);text-align:center;font-family:system-ui">'
       + '<div style="font-size:17px;font-weight:800;color:#4A3228;margin-bottom:4px">🔐 ' + (DASH_NAME || document.title.split(/[|｜—]/)[0].trim() || '儀表板') + '</div>'
-      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入本儀表板密碼</div>'
+      + '<div style="font-size:12px;color:#6F4E45;margin-bottom:14px">請輸入密碼<br>登入一次，其他頁面不用再輸入</div>'
+      + '<div id="agWho" style="font-size:12px;color:#8B3A2A;font-weight:700;margin:-6px 0 12px;display:none"></div>'
       + '<div style="position:relative">'
       + '<input id="agPwd" type="password" autocomplete="new-password" name="pw-' + DASH_ID + '" data-lpignore="true" data-1p-ignore style="width:100%;box-sizing:border-box;padding:10px 40px 10px 10px;border:1px solid #D8C8BE;border-radius:8px;font-size:15px">'
       + '<button type="button" id="agEye" aria-label="顯示密碼" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:16px;cursor:pointer;padding:4px;line-height:1">👁</button>'
@@ -344,7 +460,8 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
       + '<button id="agBtn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#7B4B36;color:#fff;font-size:15px;font-weight:700;cursor:pointer">進入</button>'
       + '<div style="margin-top:12px"><a href="hub.html" style="font-size:12px;color:#6F4E45">⬅ 回首頁</a></div></div>';
     document.body.appendChild(d);
-    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr');
+    var inp = document.getElementById('agPwd'), btn = document.getElementById('agBtn'), err = document.getElementById('agErr'), who = document.getElementById('agWho');
+    if (me && me.n && who) { who.textContent = '目前登入的是「' + me.n + '」，這一頁要用更高一層的密碼'; who.style.display = 'block'; }
     /* 2026-09-03 修跨頁自動填入污染：瀏覽器可能在建立後才把別頁已存密碼填進來，分三個時點強制清空 */
     inp.value=''; setTimeout(function(){ inp.value=''; }, 60); setTimeout(function(){ inp.value=''; }, 300);
     var eye = document.getElementById('agEye');
@@ -358,10 +475,11 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
     function go(){
       var v = (inp.value||'').trim(); if (!v || busy) return;
       busy = true; btn.disabled = true; btn.textContent = '驗證中…'; err.textContent = '';
-      A.verify(DASH_ID, v, function(r){
+      A.login(v, DASH_ID, function(r){
         busy = false; err.style.color = '#C43030';
-        if (r && r.ok) {
-          A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
+        if (r && r.ok && r.here !== false) {
+          /* 有通行證 → live() 記成跟著通行證的紀錄；權限中心是舊版（沒有通行證）→ 照舊只記這一頁 */
+          if (!live()) A.put(KEY, JSON.stringify({ exp: Date.now() + (Number(r.ttl_hours) || 12) * 3600 * 1000 }));
           /* 2026-08-05 效能：比照 POS 08-03 修法，不再 location.reload()。
              頁面在輸入密碼期間已於遮罩後完成資料載入與渲染，重整會全部重跑（多等 5-15 秒），
              改為就地拆除遮罩即可。 */
@@ -370,9 +488,14 @@ details.xhelp>div{background:#F7F9FC;border:1px solid #E3E8EF;border-radius:8px;
           pass();
         } else {
           var _msg = (r && r.error) || '驗證失敗';
+          if (r && r.ok) {   /* 密碼是對的（已登入成那個身分），只是這一頁開不了 */
+            _msg = '這是「' + (r.ident_name || '其他身分') + '」的密碼，開不了這一頁' + (r.need ? '。這一頁要用：' + r.need + ' 的密碼' : '');
+            inp.value = '';
+            if (who) who.style.display = 'none';
+          }
           /* 2026-09-03 只在密碼錯誤時附加說明，連線失敗／逾時／已停用維持原文。
              2026-10-02 也只有密碼錯誤才清空欄位；連不上時保留密碼，直接再按一次「進入」即可 */
-          if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（各儀表板密碼不同；欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
+          else if (_msg.indexOf('密碼錯誤') > -1) { _msg += '（欄位若已被瀏覽器預填，請先清空再輸入）'; inp.value = ''; }
           err.textContent = _msg;
           btn.disabled = false; btn.textContent = '進入';
           if (eye && inp.type !== 'password') { inp.type = 'password'; eye.textContent = '👁'; }
