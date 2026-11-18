@@ -6,10 +6,35 @@
      3D 列印檔（STL）在手機上產生並暫存（IndexedDB，7 天自動清掉），本階段只存不送印；網址加 ?admin=1 才會出現下載鈕（總部測試用）。
      範例牆：讀「餅乾模範例牆 API」（GAS，雲端硬碟資料夾放圖就更新）；讀不到時顯示佔位圖。
      測試用網址參數：?src=圖片網址（不經上傳直接載入）、&blur=數字（把測試圖弄糊）、&debug=1（顯示檢查數字）。
-     這頁沒有可打字的輸入框，所以沒放 IME-GUARD；第二階段若加輸入框要照 tools/check_ime_guard.py 的規定加。 -->
+     2026-11-18 第二階段：登入後免費 AI 生成一次（寫實版／Q 版）→ 線稿在手機上做可印性檢查（太細加粗、碎點刪除、離外框太近的去掉）
+       → 內部線條變成模具上的凸起壓紋、餅乾上的凹紋（同一份資料）→ 確認設計送總部審核。後端 cookie_mold.py（/api/cookie-mold/…）。
+       有姓名、電話等輸入框，所以放了 IME-GUARD（tools/check_ime_guard.py REQUIRED）。輸入框只建一次、不會邊打邊重畫。 -->
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
+<script>
+/* ===== IME-GUARD（2026-10-17 晚，經營者：新品申請表的搜尋框打不出中文，「全部測試、確保正常」）=====
+   病因：注音／倉頡選字時，每按一個鍵瀏覽器就送一次 input；各分頁的 oninput 一收到就重畫，把正在選字的輸入框換掉。
+   做法（整頁共用，不用逐一改各分頁）：
+   ①選字中（compositionstart～compositionend，或事件帶 isComposing）的 input／keydown／keyup 在最外層攔下，各分頁的程式收不到
+   ②選完字（compositionend）補送一次 input，各分頁照常收到「最後打好的字」
+   ③window.__ime.on＝現在是否在選字；有延遲重畫的地方（例：BOM 搜尋 250ms 後重畫）重畫前先看它，選字中就不重畫 */
+window.__ime=(function(){
+  var st={on:false};
+  function isTyping(t){return t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range|color|date|time|datetime-local|month|week|hidden|image|reset)$/i.test(t.type||'')))}
+  document.addEventListener('compositionstart',function(e){if(isTyping(e.target))st.on=true},true);
+  document.addEventListener('compositionend',function(e){st.on=false;var t=e.target;if(!isTyping(t))return;
+    setTimeout(function(){try{t.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}},0)},true);
+  ['input','keydown','keyup','keypress'].forEach(function(type){
+    document.addEventListener(type,function(e){if(!isTyping(e.target))return;
+      if(type==='input'&&st.on&&!e.isComposing&&e.inputType&&!/Composition/.test(e.inputType))st.on=false;   /* 保險：選字被取消、沒收到 compositionend → 一般打字照常 */
+      if(e.isComposing||st.on||(type!=='input'&&e.keyCode===229))e.stopImmediatePropagation()},true)});
+  document.addEventListener('focusout',function(e){if(isTyping(e.target))st.on=false},true);
+  window.addEventListener('blur',function(){st.on=false});
+  return st;
+})();
+</script>
+<!-- 2026-10-17 全站中文輸入保護：上面這段 IME-GUARD 與 dashboard-recipe.html 一字不差（檢查：python3 tools/check_ime_guard.py）。要改就全站一起改，不要只改一頁。 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>AI 專屬餅乾模・免費試玩｜自己做烘焙聚樂部</title>
 <meta name="description" content="上傳寵物或你在乎的人的照片，馬上看到專屬餅乾模與餅乾成品模擬。照片只在你的手機上處理，不會上傳。">
@@ -61,6 +86,11 @@
   .ex .ph{display:flex;align-items:center;justify-content:center;font-size:1.8rem}
   .modal{position:fixed;inset:0;background:rgba(64,33,15,.55);display:flex;align-items:center;justify-content:center;padding:1rem;z-index:20}
   .modal .box{background:#fff;border-radius:1rem;padding:1.2rem;max-width:24rem;width:100%;text-align:center}
+  .fld{display:block;margin:.6rem 0 0;font-weight:700;font-size:.9rem}
+  .fld input,.fld select{display:block;width:100%;margin-top:.25rem;padding:.7rem .8rem;font:inherit;font-size:1rem;border:2px solid #E6D2A8;border-radius:.7rem;background:#FFFDF7;color:#40210F}
+  .my{border:1px solid #F1E3C8;border-radius:.7rem;padding:.6rem .8rem;margin:.5rem 0 0;font-size:.9rem}
+  .my b{display:inline-block;border-radius:999px;padding:.05rem .6rem;background:#FDD35D;margin-right:.4rem}
+  .my.rejected b{background:#F6C6C2}.my.approved b{background:#BFE5CC}
   #dbg{font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;color:#555;background:#f4f4f4;border-radius:.5rem;padding:.5rem;margin-top:.6rem}
 </style>
 <script type="importmap">
@@ -125,12 +155,65 @@
       <p class="note" style="text-align:center">免費試玩版只做外型輪廓；眼睛、鼻子等五官細節要用下面的 AI 版本。</p>
       <button type="button" class="btn ghost hide" id="stlBtn" style="margin-top:.6rem">下載 3D 列印檔（總部測試用）</button>
     </div>
-    <div class="card" style="text-align:center">
-      <h2>想看有五官細節的版本？</h2>
-      <p style="margin:0 0 .8rem;color:#6B4A36">加入官方 LINE，免費幫你生成一次寫實版或 Q 版。</p>
-      <button type="button" class="btn line" id="lineBtn">加入 LINE 免費生成一次</button>
+    <div class="card" id="aiCard">
+      <h2 style="text-align:center">③ 想看有五官細節的版本？</h2>
+      <div id="aiIntro" style="text-align:center">
+        <p style="margin:0 0 .8rem;color:#6B4A36">加入官方 LINE，免費幫你生成一次寫實版或 Q 版。</p>
+        <button type="button" class="btn line" id="lineBtn">加入 LINE 免費生成一次</button>
+      </div>
+      <div id="aiLogin" class="hide">
+        <button type="button" class="btn line" id="lineLoginBtn">用 LINE 登入</button>
+        <div id="testLogin" class="hide">
+          <p class="note">測試期間：請輸入測試通行碼登入（正式開放後會改成 LINE 登入）。</p>
+          <label class="fld">測試通行碼<input type="password" id="tCode" autocomplete="off"></label>
+          <label class="fld">暱稱<input type="text" id="tName" maxlength="20" autocomplete="off"></label>
+          <button type="button" class="btn" id="tLoginBtn" style="margin-top:.8rem">登入</button>
+        </div>
+      </div>
+      <div id="aiPick" class="hide">
+        <p id="aiHello" style="margin:0 0 .6rem;text-align:center;font-weight:700"></p>
+        <div id="aiCan">
+          <div class="tabs">
+            <button type="button" id="stReal" class="on">寫實版</button>
+            <button type="button" id="stQ">Q 版（大頭可愛）</button>
+          </div>
+          <button type="button" class="btn" id="genBtn">開始生成</button>
+          <p class="note" style="text-align:center" id="aiQuota"></p>
+        </div>
+      </div>
+      <div id="aiWork" class="hide" style="text-align:center">
+        <p style="margin:0;font-weight:700">AI 正在畫線稿…大約 20～40 秒，請不要關掉這一頁。</p>
+        <div class="bar" style="height:.5rem;background:#F1E3C8;border-radius:999px;overflow:hidden;margin:.6rem 0"><i id="aiBar" style="display:block;height:100%;width:5%;background:#06C755;border-radius:999px;transition:width 30s linear"></i></div>
+      </div>
+      <div id="aiMsg" class="warn hide"></div>
+    </div>
+    <div class="card hide" id="aiResult">
+      <h2>④ AI 細節版</h2>
+      <div class="pair">
+        <figure><canvas id="cvRaw" width="480" height="480"></canvas>AI 畫的線稿</figure>
+        <figure><canvas id="cvLine" width="480" height="480"></canvas>修成模具做得出來的線條</figure>
+      </div>
+      <div class="warn hide" id="aiWarn"></div>
+      <p class="note" style="text-align:center">上面的 3D 模具和餅乾模擬已經換成這個版本，往上滑就看得到。</p>
+      <button type="button" class="btn ghost" id="regenBtn" style="margin-top:.6rem">重新生成</button>
+      <button type="button" class="btn" id="toConfirm" style="margin-top:.6rem">確認設計，送總部審核</button>
+    </div>
+    <div class="card hide" id="confirmCard">
+      <h2>⑤ 預約資料</h2>
+      <p class="note" style="margin-top:0">模具要先列印再送到門市，所以到店日期要選得晚一點。線上付訂金功能準備中，送出後由總部跟你聯絡。</p>
+      <label class="fld">姓名<input type="text" id="cName" maxlength="30" autocomplete="name"></label>
+      <label class="fld">手機號碼<input type="tel" id="cPhone" maxlength="12" inputmode="numeric" autocomplete="tel"></label>
+      <label class="fld">要去的門市<select id="cStore"></select></label>
+      <label class="fld">預計到店日期<input type="date" id="cVisit"></label>
+      <div class="warn hide" id="confirmMsg"></div>
+      <button type="button" class="btn" id="sendBtn" style="margin-top:.8rem">送出，給總部審核</button>
     </div>
     <label class="btn ghost" for="file" style="margin-bottom:1rem">再試一張照片</label>
+  </section>
+
+  <section class="card hide" id="myCard">
+    <h2>我的設計</h2>
+    <div id="myList"></div>
   </section>
 
   <section class="card">
@@ -143,8 +226,8 @@
 
 <div class="modal hide" id="lineModal">
   <div class="box">
-    <h2>AI 細節版即將開放</h2>
-    <p style="margin:0 0 1rem">有五官細節的寫實版、Q 版正在準備中，開放後加入官方 LINE 就能免費生成一次。敬請期待！</p>
+    <h2 id="modalTitle">AI 細節版即將開放</h2>
+    <p style="margin:0 0 1rem" id="modalMsg">有五官細節的寫實版、Q 版正在準備中，開放後加入官方 LINE 就能免費生成一次。敬請期待！</p>
     <button type="button" class="btn" id="lineClose">我知道了</button>
   </div>
 </div>
@@ -395,13 +478,18 @@ async function analyse(im, progress) {
   if (sharp < SHARP_MIN) throw new Friendly('這張照片有點模糊', '模糊的照片做出來的外型會不準。請換一張對焦清楚、沒有晃到的照片。', 'blurry');
 
   mark('aPick');
+  return outline(im.cv.width, im.cv.height, prob, sub, pick, dbg);
+}
+/* 主角的範圍 → 套模具規格 → 外框、牆、底板（照片去背與 AI 線稿共用） */
+function outline(srcW, srcH, prob, sub, pick, dbg) {
+  const N = 320, sx = N / srcW, sy = N / srcH;
   /* 3. 放大到模具尺寸（最長邊含底板不超過外徑） */
   const maxSil = (CFG.outerDiameterMm - 2 * CFG.flangeWidthMm) * PX_PER_MM;
-  const rw = (pick.x1 - pick.x0 + 1) / N * im.cv.width, rh = (pick.y1 - pick.y0 + 1) / N * im.cv.height;   /* 主角在照片上的真實寬高 */
+  const rw = (pick.x1 - pick.x0 + 1) / N * srcW, rh = (pick.y1 - pick.y0 + 1) / N * srcH;   /* 主角在照片上的真實寬高 */
   const sc = maxSil / Math.max(rw, rh), margin = Math.ceil((CFG.flangeWidthMm + 3) * PX_PER_MM);
   const W = Math.ceil(rw * sc) + 2 * margin, H = Math.ceil(rh * sc) + 2 * margin;
   const soft = new Float32Array(N * N); for (let i = 0; i < N * N; i++) soft[i] = sub[i] ? Math.max(prob[i], 0.75) : Math.min(prob[i], 0.25);
-  const up = new Float32Array(W * H), ox = pick.x0 / N * im.cv.width, oy = pick.y0 / N * im.cv.height;
+  const up = new Float32Array(W * H), ox = pick.x0 / N * srcW, oy = pick.y0 / N * srcH;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const u = ((x - margin) / sc + ox) * sx - 0.5, v = ((y - margin) / sc + oy) * sy - 0.5;
     if (u < -1 || v < -1 || u > N || v > N) continue;
@@ -409,7 +497,7 @@ async function analyse(im, progress) {
     const fu = Math.min(1, Math.max(0, u - u0)), fv = Math.min(1, Math.max(0, v - v0));
     up[y * W + x] = (soft[v0 * N + u0] * (1 - fu) + soft[v0 * N + u1] * fu) * (1 - fv) + (soft[v1 * N + u0] * (1 - fu) + soft[v1 * N + u1] * fu) * fv;
   }
-  const factor = sc * im.cv.width / N;     /* 去背結果被放大幾倍 → 決定要修多順 */
+  const factor = sc * srcW / N;     /* 去背結果被放大幾倍 → 決定要修多順 */
   const sm = gauss(up, W, H, Math.max(3, factor * 0.9));
   let m = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) m[i] = sm[i] > 0.5 ? 1 : 0;
   mark('aUp'); keepLargest(m, W, H); const before = m.reduce((a, b) => a + b, 0);
@@ -494,12 +582,13 @@ function cookieTextures(r) {
   for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
     const mmx = (x / (T - 1)) * span - half, mmy = half - (y / (T - 1)) * span;
     const gx = Math.round(r.cx + mmx * PX_PER_MM), gy = Math.round(r.cy - mmy * PX_PER_MM);
-    const d = gx >= 0 && gy >= 0 && gx < r.W && gy < r.H ? -r.field[gy * r.W + gx] : 0;        /* 離邊緣幾公釐 */
+    const inG = gx >= 0 && gy >= 0 && gx < r.W && gy < r.H, d = inG ? -r.field[gy * r.W + gx] : 0;        /* 離邊緣幾公釐 */
+    const gv = inG && r.lineSoft ? r.lineSoft[gy * r.W + gx] : 0;                                       /* 這一點是不是壓紋（0～1） */
     const edge = 1 - Math.min(1, Math.max(0, d / 7)), e = edge * edge;
     const n1 = noise(grid, G, x / T * 0.999, y / T * 0.999), n2 = noise(grid2, G2, x / T * 0.999, y / T * 0.999), speck = rnd() < 0.012 ? -28 : 0;
-    const v = (n1 - 0.5) * 22 + (n2 - 0.5) * 26 + speck, i = (y * T + x) * 4;
+    const v = (n1 - 0.5) * 22 + (n2 - 0.5) * 26 + speck - 64 * gv, i = (y * T + x) * 4;
     ci.data[i] = 232 - 58 * e + v; ci.data[i + 1] = 184 - 72 * e + v * 0.9; ci.data[i + 2] = 112 - 66 * e + v * 0.6; ci.data[i + 3] = 255;
-    const h = 128 + (n1 - 0.5) * 110 + (n2 - 0.5) * 50 + speck * 2; bi.data[i] = bi.data[i + 1] = bi.data[i + 2] = h; bi.data[i + 3] = 255;
+    const h = 128 + (n1 - 0.5) * 110 + (n2 - 0.5) * 50 + speck * 2 - 120 * gv; bi.data[i] = bi.data[i + 1] = bi.data[i + 2] = h; bi.data[i + 3] = 255;
   }
   c.putImageData(ci, 0, 0); b.putImageData(bi, 0, 0);
   const map = new THREE.CanvasTexture(col), bm = new THREE.CanvasTexture(bump); map.colorSpace = THREE.SRGBColorSpace;
@@ -528,9 +617,36 @@ function build3D(r) {
   const paper = new THREE.Mesh(new THREE.CircleGeometry(tex.span * 0.95, 48), new THREE.MeshBasicMaterial({color:0xFFFCF5}));
   paper.position.z = -0.05; cookie.add(paper);
   state.geoms = [plateG, wallG];
+  if (r.lines) { const rg = ridgeGeom(r); if (rg) { mold.add(new THREE.Mesh(rg, new THREE.MeshStandardMaterial({color:0xC9621A, roughness:0.55, side:THREE.DoubleSide}))); state.geoms.push(rg); } }
   const dist = Math.max(r.widthMm, r.heightMm) * 2.3 + 40;
   three.cam.position.set(0, dist * 0.78, dist * 0.62); three.ctl.target.set(0, 4, 0); three.ctl.autoRotate = true; three.ctl.update();
   setTab(state.tab || 'cookie');
+}
+/* 內部線條 → 模具底板上的凸起壓紋（每 0.25 公釐一格的小方塊，比列印噴嘴還細） */
+function ridgeGeom(r) {
+  const C = 2, gw = Math.floor(r.W / C), gh = Math.floor(r.H / C), g = new Uint8Array(gw * gh), L = r.lines; let any = 0;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) { const i = y * C * r.W + x * C; if (L[i] + L[i + 1] + L[i + r.W] + L[i + r.W + 1] >= 2) { g[y * gw + x] = 1; any++; } }
+  if (!any) return null;
+  const z0 = CFG.plateThicknessMm, z1 = z0 + CFG.embossDepthMm, P = [];
+  const X = gx => -((gx * C - r.cx) / PX_PER_MM), Y = gy => -((gy * C - r.cy) / PX_PER_MM);      /* x 鏡射，跟模具一致 */
+  const quad = (a, b, c, d, n) => {                                                              /* n＝朝外的方向；自動調整頂點順序 */
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    if ((uy * vz - uz * vy) * n[0] + (uz * vx - ux * vz) * n[1] + (ux * vy - uy * vx) * n[2] < 0) { const t = b; b = d; d = t; }
+    P.push(...a, ...b, ...c, ...a, ...c, ...d);
+  };
+  const at = (x, y) => x >= 0 && y >= 0 && x < gw && y < gh && g[y * gw + x];
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    if (!g[y * gw + x]) continue;
+    const x0 = X(x), x1 = X(x + 1), y0 = Y(y), y1 = Y(y + 1), dx = Math.sign(x1 - x0), dy = Math.sign(y1 - y0);
+    quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1]);
+    quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1]);
+    if (!at(x - 1, y)) quad([x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [-dx, 0, 0]);
+    if (!at(x + 1, y)) quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], [dx, 0, 0]);
+    if (!at(x, y - 1)) quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -dy, 0]);
+    if (!at(x, y + 1)) quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0, dy, 0]);
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(P), 3)); geo.computeVertexNormals();
+  return geo;
 }
 function setTab(t) {
   state.tab = t; if (!three) return;
@@ -573,6 +689,7 @@ async function run(src) {
     mark('imgLoaded'); const r = await analyse(im, progress); mark('aDone');
     progress('正在做 3D 模具…', 85); await tick();
     show('result', true);                  /* 先顯示，3D 畫面才量得到大小 */
+    state.im = im; state.r = r; ai.design = null; show('aiResult', false); show('confirmCard', false);
     draw2D(im, r); mark('d2'); build3D(r); mark('d3');
     const stl = makeSTL(state.geoms); state.stl = stl;
     saveLocal({at:Date.now(), stl, inner:r.inner, widthMm:r.widthMm, heightMm:r.heightMm, cfg:CFG});
@@ -597,11 +714,168 @@ async function run(src) {
 }
 $('file').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) run(f); });
 $('tabMold').onclick = () => setTab('mold'); $('tabCookie').onclick = () => setTab('cookie');
-$('lineBtn').onclick = () => show('lineModal', true); $('lineClose').onclick = () => show('lineModal', false);
+$('lineClose').onclick = () => show('lineModal', false);
 $('lineModal').onclick = e => { if (e.target.id === 'lineModal') show('lineModal', false); };
 $('stlBtn').onclick = () => { if (!state.stl) return; const a = document.createElement('a'); a.href = URL.createObjectURL(state.stl); a.download = 'cookie-mold.stl'; a.click(); };
 state.run = run;
 if (QS.get('src')) run(QS.get('src'));
+
+/* ================= 第二階段：AI 細節版 ================= */
+const API = '/api/cookie-mold/';
+const ai = {token: localStorage.getItem('cm:token') || '', st: null, style: 'real', design: null, busy: false};
+state.ai = ai;
+async function api(name, body) {
+  try { const r = await fetch(API + name, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {})}); return await r.json(); }
+  catch (e) { return {ok:false, code:'net', msg:'連線不太順，請再試一次。'}; }
+}
+function popup(title, msg) { $('modalTitle').textContent = title; $('modalMsg').textContent = msg; show('lineModal', true); }
+function aiMsg(t) { $('aiMsg').textContent = t || ''; show('aiMsg', !!t); }
+async function refreshStatus() {
+  ai.st = await api('status', {token: ai.token});
+  if (ai.st.ok && !ai.st.user && ai.token) { ai.token = ''; localStorage.removeItem('cm:token'); }
+  renderAI(); if (ai.st.ok && ai.st.user) loadMy();
+}
+function renderAI() {
+  const st = ai.st || {}, u = st.user;
+  show('aiIntro', !u); show('aiLogin', false); show('aiPick', !!u); show('aiWork', false);
+  if (!st.ok) return;
+  if (!st.ai_open) { aiMsg('今天的 AI 生成名額已經用完了，明天再來；上面的免費試玩照常可以玩。'); show('aiIntro', false); show('aiPick', false); return; }
+  aiMsg('');
+  if (u) {
+    $('aiHello').textContent = (u.name ? u.name + '，' : '') + (u.paid ? '你已付訂金，可以不限次數重新生成。' : u.free_used ? '你的免費 AI 生成已經用過了。' : '你有 1 次免費 AI 生成，選一種風格：');
+    show('aiCan', u.can_generate);
+    if (!u.can_generate) aiMsg('付訂金預約後，就可以無限次重新生成、慢慢調整到滿意。訂金付款方式請洽官方 LINE。');
+    $('aiQuota').textContent = u.paid ? '' : '免費版只能選一種風格生成一次，請想好再按。';
+    show('regenBtn', u.paid);
+  }
+  if (st.stores && !$('cStore').options.length) $('cStore').innerHTML = '<option value="">請選擇</option>' + st.stores.map(x => `<option>${x}</option>`).join('');
+}
+$('lineBtn').onclick = () => {
+  const st = ai.st || {};
+  if (!st.ok) return popup('AI 細節版暫時連不上', '請過一下再試一次；上面的免費試玩不受影響。');
+  if (!st.line_login && !st.test_login) return popup('AI 細節版即將開放', '有五官細節的寫實版、Q 版正在準備中，開放後加入官方 LINE 就能免費生成一次。敬請期待！');
+  show('aiIntro', false); show('aiLogin', true); show('lineLoginBtn', st.line_login); show('testLogin', st.test_login);
+};
+$('lineLoginBtn').onclick = () => popup('LINE 登入即將開放', 'LINE 登入正在準備中，敬請期待！');
+$('tLoginBtn').onclick = async () => {
+  const r = await api('login', {test_code: $('tCode').value, name: $('tName').value});
+  if (!r.ok) return aiMsg(r.msg);
+  ai.token = r.token; localStorage.setItem('cm:token', r.token); $('tCode').value = ''; refreshStatus();
+};
+const setStyle = v => { ai.style = v; $('stReal').classList.toggle('on', v === 'real'); $('stQ').classList.toggle('on', v === 'q'); };
+$('stReal').onclick = () => setStyle('real'); $('stQ').onclick = () => setStyle('q');
+
+/* AI 線稿 → 模具做得出來的線條（可印性檢查）→ 外框與壓紋 */
+async function fromLineArt(b64) {
+  const img = new Image();
+  await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = 'data:image/png;base64,' + b64; });
+  const L = 1024, c = document.createElement('canvas'); c.width = c.height = L;
+  const x = c.getContext('2d', {willReadFrequently:true}); x.fillStyle = '#fff'; x.fillRect(0, 0, L, L);
+  const f = Math.min(L / img.naturalWidth, L / img.naturalHeight), w = img.naturalWidth * f, h = img.naturalHeight * f; x.drawImage(img, (L - w) / 2, (L - h) / 2, w, h);
+  const d = x.getImageData(0, 0, L, L).data, ink = new Uint8Array(L * L); let inkN = 0;
+  for (let i = 0; i < L * L; i++) if (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2] < 150) { ink[i] = 1; inkN++; }
+  if (inkN < L * L * 0.004) throw new Friendly('這次畫出來的線條太少', '請重新生成一次，或換一張主角更清楚的照片。', 'empty');
+  /* 主角範圍＝線條圍起來的區域（從四邊往內淹，淹不到的就是主角） */
+  const N = 320, k = L / N, ink3 = new Uint8Array(N * N);
+  for (let y = 0; y < N; y++) for (let xx = 0; xx < N; xx++) { let n = 0; for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) n += ink[Math.min(L - 1, Math.floor((y + j / 3) * k)) * L + Math.min(L - 1, Math.floor((xx + i / 3) * k))]; ink3[y * N + xx] = n >= 2 ? 1 : 0; }
+  const wallI = grow(ink3, N, N, 2), free = wallI.map(v => v ? 0 : 1), cc = components(free, N, N), outside = new Set();
+  for (const q of cc.list) if (q.x0 === 0 || q.y0 === 0 || q.x1 === N - 1 || q.y1 === N - 1) outside.add(q.id);
+  const sil = new Uint8Array(N * N); for (let i = 0; i < N * N; i++) sil[i] = wallI[i] || !outside.has(cc.lab[i]) ? 1 : 0;
+  keepLargest(sil, N, N); fillHoles(sil, N, N);
+  const pick = components(sil, N, N).list[0];
+  if (!pick || pick.n < N * N * 0.05) throw new Friendly('這次畫出來的外型不完整', '請重新生成一次，或換一張主角更清楚的照片。', 'empty');
+  const dbg = {ai:true}, r = outline(L, L, Float32Array.from(sil), sil, pick, dbg);
+  /* 內部線條搬到模具的格子上 */
+  const {W, H, field, margin, sc, ox, oy} = r, P = PX_PER_MM; let lines = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) {
+    const i = y * W + xx; if (field[i] > -0.2) continue;
+    const u = Math.round((xx - margin) / sc + ox), v = Math.round((y - margin) / sc + oy);
+    if (u >= 0 && v >= 0 && u < L && v < L && ink[v * L + u]) lines[i] = 1;
+  }
+  /* 最外圈那條線就是切模的牆，不用再做壓紋；量出它多粗，連同安全距離一起去掉 */
+  const tot = new Float32Array(20), ic = new Float32Array(20); let silArea = 0;
+  for (let i = 0; i < W * H; i++) { if (field[i] >= 0) continue; silArea++; const b = Math.floor(-field[i] / 0.25); if (b < 20) { tot[b]++; ic[b] += lines[i]; } }
+  let est = 2; for (let b = 1; b < 20; b++) if (tot[b] && ic[b] / tot[b] < 0.5) { est = b * 0.25; break; }      /* 第 0 格貼著邊緣、取樣不準，從第 1 格看起 */
+  const keep = Math.min(3.5, Math.max(0.8, est)) + CFG.minGapMm;
+  for (let i = 0; i < W * H; i++) if (field[i] > -keep) lines[i] = 0;
+  const rawN = lines.reduce((a, b) => a + b, 0);
+  /* 太細的線加粗到最細線寬 */
+  const rr = CFG.minLineMm / 2 * P - 0.5, thick = grow(shrink(lines, W, H, rr), W, H, rr), thin = lines.map((v, i) => v && !thick[i] ? 1 : 0);
+  const thinN = thin.reduce((a, b) => a + b, 0), fat = thinN ? grow(thin, W, H, CFG.minLineMm / 2 * P * 0.55) : thin;
+  lines = lines.map((v, i) => (v && thick[i]) || fat[i] ? 1 : 0);
+  /* 碎點刪除 */
+  const minArea = (CFG.minLineMm * P) ** 2 * 1.5, cl = components(lines, W, H), small = new Set(cl.list.filter(q => q.n < minArea).map(q => q.id));
+  for (let i = 0; i < W * H; i++) if (small.has(cl.lab[i])) lines[i] = 0;
+  /* 線跟線太近（小於最小間距）會黏在一起 → 直接併成一條 */
+  const g = CFG.minGapMm / 2 * P; lines = shrink(grow(lines, W, H, g), W, H, g);
+  for (let i = 0; i < W * H; i++) if (field[i] > -CFG.minGapMm) lines[i] = 0;
+  const n = lines.reduce((a, b) => a + b, 0), comps = components(lines, W, H).list.length;
+  r.lines = lines; r.lineSoft = gauss(Float32Array.from(lines), W, H, 1.6); r.src = c;
+  r.ai = {fill: +(n / silArea).toFixed(3), comps, thickened: +(thinN / Math.max(1, rawN)).toFixed(3), specks: small.size, outerMm: est,
+          complex: n / silArea > 0.42 || comps > 45, sparse: n < silArea * 0.01};
+  return r;
+}
+function drawAI(r) {
+  const S = 480, a = $('cvRaw').getContext('2d'), b = $('cvLine').getContext('2d');
+  a.fillStyle = '#fff'; a.fillRect(0, 0, S, S); a.drawImage(r.src, 0, 0, S, S);
+  b.clearRect(0, 0, S, S);
+  const span = Math.max(r.widthMm, r.heightMm) + 8, k = S / span, path = new Path2D();
+  r.inner.forEach((p, i) => { const x = S / 2 + p[0] * k, y = S / 2 - p[1] * k; i ? path.lineTo(x, y) : path.moveTo(x, y); }); path.closePath();
+  b.fillStyle = '#FFF4DC'; b.fill(path);
+  const lc = document.createElement('canvas'); lc.width = r.W; lc.height = r.H; const lx = lc.getContext('2d'), id = lx.createImageData(r.W, r.H);
+  for (let i = 0; i < r.W * r.H; i++) if (r.lines[i]) { id.data[i * 4] = 110; id.data[i * 4 + 1] = 60; id.data[i * 4 + 2] = 20; id.data[i * 4 + 3] = 255; }
+  lx.putImageData(id, 0, 0);
+  b.drawImage(lc, S / 2 - r.cx / PX_PER_MM * k, S / 2 - r.cy / PX_PER_MM * k, r.W / PX_PER_MM * k, r.H / PX_PER_MM * k);
+  b.lineWidth = 5; b.strokeStyle = '#E8822B'; b.lineJoin = 'round'; b.stroke(path);
+}
+async function generate() {
+  if (ai.busy) return;
+  if (!state.im) return popup('請先選一張照片', '先在上面選一張照片試玩，再來生成 AI 細節版。');
+  ai.busy = true; aiMsg(''); show('aiPick', false); show('aiWork', true); show('aiResult', false); show('confirmCard', false);
+  $('aiBar').style.width = '5%'; setTimeout(() => { $('aiBar').style.width = '92%'; }, 50);
+  try {
+    const res = await api('generate', {token: ai.token, style: ai.style, photo: state.im.cv.toDataURL('image/jpeg', 0.85)});
+    if (!res.ok) { if (res.code === 'login') { ai.token = ''; localStorage.removeItem('cm:token'); } aiMsg(res.msg); return; }
+    if (res.user && ai.st) ai.st.user = res.user;
+    ai.design = res.design_id;
+    const r = await fromLineArt(res.line);
+    state.r = r; build3D(r); drawAI(r);
+    state.stl = makeSTL(state.geoms);
+    $('sizeTxt').textContent = `餅乾大小約 ${(r.widthMm / 10).toFixed(1)} × ${(r.heightMm / 10).toFixed(1)} 公分（模具最長邊 ${(CFG.outerDiameterMm / 10).toFixed(0)} 公分內）`;
+    const w = []; if (r.ai.complex) w.push('線條還是太多太密，壓在餅乾上容易糊成一片。建議改選 Q 版，或重新生成一次。');
+    if (r.ai.sparse) w.push('這次的內部線條很少，壓出來的細節不明顯。可以重新生成一次。');
+    if (r.ai.thickened > 0.05 || r.ai.specks) w.push('太細的線已經自動加粗、太小的碎點已經刪掉，模具才印得出來。');
+    $('aiWarn').innerHTML = w.map(t => `<div>・${t}</div>`).join(''); show('aiWarn', w.length > 0);
+    state.aiLast = {design: ai.design, style: res.style, widthMm: r.widthMm, heightMm: r.heightMm, stlBytes: state.stl.size, ai: r.ai};
+    show('aiResult', true); $('view').scrollIntoView({behavior:'smooth', block:'center'});
+  } catch (e) {
+    aiMsg(e instanceof Friendly ? e.title + '：' + e.message : '這次沒有成功，請再試一次。'); if (!(e instanceof Friendly)) console.error(e);
+  } finally { ai.busy = false; show('aiWork', false); renderAIKeepMsg(); }
+}
+function renderAIKeepMsg() { const t = $('aiMsg').textContent, on = !$('aiMsg').classList.contains('hide'); renderAI(); if (on && t && (ai.st || {}).ai_open !== false) aiMsg(t); }
+$('genBtn').onclick = generate; $('regenBtn').onclick = generate;
+$('toConfirm').onclick = () => { show('confirmCard', true); $('confirmCard').scrollIntoView({behavior:'smooth', block:'start'}); };
+$('sendBtn').onclick = async () => {
+  if (ai.busy || !ai.design || !state.stl) return; ai.busy = true;
+  const msg = t => { $('confirmMsg').textContent = t || ''; show('confirmMsg', !!t); };
+  try {
+    const buf = new Uint8Array(await state.stl.arrayBuffer()); let bin = '';
+    for (let i = 0; i < buf.length; i += 32768) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 32768));
+    const r = await api('confirm', {token: ai.token, design_id: ai.design, line: $('cvLine').toDataURL('image/png'), stl: btoa(bin),
+      customer: {name: $('cName').value, phone: $('cPhone').value, store: $('cStore').value, visit: $('cVisit').value}});
+    if (!r.ok) return msg(r.msg);
+    msg(''); show('confirmCard', false); show('aiResult', false);
+    popup('已經送出囉', '總部會檢查這個設計做不做得出來，結果會顯示在這一頁下面的「我的設計」。'); loadMy();
+  } finally { ai.busy = false; }
+};
+async function loadMy() {
+  const r = await api('my', {token: ai.token}); if (!r.ok) return;
+  const lab = {submitted:'審核中', approved:'已通過', rejected:'需要調整'}, esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  $('myList').innerHTML = r.designs.map(d => `<div class="my ${d.status}"><b>${lab[d.status] || d.status}</b>${d.style === 'q' ? 'Q 版' : '寫實版'}｜${esc((d.customer || {}).store)}｜到店 ${esc((d.customer || {}).visit)}` +
+    (d.status === 'rejected' ? `<div style="margin-top:.3rem">總部的說明：${esc(d.reason)}<br>請重新生成或換一張照片後再送一次。</div>` : d.status === 'approved' ? '<div style="margin-top:.3rem">模具會在到店前送到門市，到時見！</div>' : '') + '</div>').join('');
+  show('myCard', r.designs.length > 0);
+}
+refreshStatus();
 
 /* ================= 範例牆 ================= */
 const PLACEHOLDER = [{title:'範例照片準備中'}, {title:'範例照片準備中'}];

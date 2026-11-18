@@ -176,7 +176,8 @@ def _gemini(model: str, parts: list, want_image: bool) -> tuple[str, str, dict]:
     """回 (文字, 圖片 base64, 用量)。"""
     if os.environ.get("COOKIE_MOLD_MOCK"):   # 本機測試用：不連外、不花錢
         if want_image:
-            return "", _MOCK_PNG, {"promptTokenCount": 300, "candidatesTokenCount": 1290}
+            mp = os.environ.get("COOKIE_MOLD_MOCK_IMG")
+            return "", (base64.b64encode(Path(mp).read_bytes()).decode() if mp else _MOCK_PNG), {"promptTokenCount": 300, "candidatesTokenCount": 1290}
         return os.environ.get("COOKIE_MOLD_MOCK_CHECK") or '{"single_subject":true,"subject":"pet","cartoon_or_brand":false,"celebrity":false,"clear":true}', "", {"promptTokenCount": 300, "candidatesTokenCount": 40}
     key = os.environ.get("GEMINI_API_KEY", "")
     body: dict = {"contents": [{"role": "user", "parts": parts}]}
