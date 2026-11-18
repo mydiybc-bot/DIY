@@ -301,7 +301,11 @@ function i18nSources_() {
 /* 中文試看（2026-11-17 經營者：「放到給外國人使用的外語食譜，開一個中文的類別，我可以在外語食譜中看這個食譜」）：
    這裡列的後台食譜（不論啟用或停用）直接用後台中文原文、不翻譯、不進待翻清單；平板語言選單多一顆「中文」只列這幾支。
    要加／拿掉就改這個清單再部署；拿掉後每天重抓會把它標成下架（gone）。伺服器快照不收 zh → 平板讀這幾支時自動改問 Google。 */
-var I18N_ZH = [{ id: '852d4cb4-ddd0-4346-9d6f-151a8d59dacb', name: '小黑炭Oreo蛋糕 簡化版試作' }];
+var I18N_ZH = [
+  { id: '8fb61bba-1139-425b-91c8-b54ef5eae96b', name: '小黑炭Oreo蛋糕 ①原始版（門市現行）' },
+  { id: '852d4cb4-ddd0-4346-9d6f-151a8d59dacb', name: '小黑炭Oreo蛋糕 ②簡化版試作' },
+  { id: 'fea011e8-2a6e-466a-8a3b-089d64b5d655', name: '小黑炭Oreo蛋糕 ③簡化版試作2（影片合併）' }
+];
 function i18nZh_() { var m = {}; I18N_ZH.forEach(function (z) { m[String(z.id).toLowerCase()] = z.name || '中文試看'; }); return m; }
 function i18nFetchPages_(ids) {
   var sess = rbSession_();
