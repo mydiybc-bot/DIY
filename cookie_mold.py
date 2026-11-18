@@ -12,7 +12,7 @@
         /api/cookie-mold/my       {token}                  → 我的設計與審核結果（退回原因在這裡看）
   總部（每個都要帶 pwd，問權限中心 dashboard=cookiemold）：
         /api/cookie-mold/admin/list   {pwd, status?}       /admin/file {pwd, id, kind}
-        /api/cookie-mold/admin/review {pwd, id, action, reason}
+        /api/cookie-mold/admin/review {pwd, id, action, reason}   /admin/delete {pwd, id}（永久刪除）
         /api/cookie-mold/admin/paid   {pwd, uid, on}       /admin/users {pwd}
         /api/cookie-mold/admin/stats  {pwd, days?}         /admin/weekly {pwd}
 
@@ -489,6 +489,21 @@ def _admin_review(b: dict) -> dict:
     return {"status": d["status"]}
 
 
+def _admin_delete(b: dict) -> dict:
+    """永久刪除一個設計（資料與照片、線稿、列印檔一起刪，不能復原）。測試資料、客人取消時用。"""
+    p = _design_path(str(b.get("id") or ""))
+    with _LOCK:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise Fail("id", "找不到這個設計（可能已經刪掉了）。", 404)
+        for f in (_dir() / "files").glob(d["id"] + "*"):
+            f.unlink(missing_ok=True)
+        p.unlink(missing_ok=True)
+    print("[cookie_mold] deleted", d["id"], d.get("status"), flush=True)
+    return {"deleted": d["id"]}
+
+
 def _admin_paid(b: dict) -> dict:
     with _LOCK:
         users = _users()
@@ -562,7 +577,7 @@ def _cleanup() -> None:
 
 
 ROUTES = {"status": _status, "login": _login, "generate": _generate, "confirm": _confirm, "my": _my}
-ADMIN = {"list": _admin_list, "file": _admin_file, "review": _admin_review, "paid": _admin_paid,
+ADMIN = {"list": _admin_list, "file": _admin_file, "review": _admin_review, "delete": _admin_delete, "paid": _admin_paid,
          "users": _admin_users, "stats": _admin_stats, "weekly": _admin_weekly}
 
 

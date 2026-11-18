@@ -124,3 +124,18 @@ def test_spent_cache_survives_reload(cm):
     a = cm.spent_today()
     cm._SPENT.clear()                                                  # 模擬伺服器重開
     assert a > 0 and cm.spent_today() == a
+
+
+def test_admin_delete(cm):
+    t = login(cm)
+    did = call(cm, "generate", token=t, photo=PHOTO)[1]["design_id"]
+    visit = (cm.print_cutoff_min() + timedelta(days=1)).isoformat()
+    assert call(cm, "confirm", token=t, design_id=did, line=PHOTO, stl=PHOTO, customer={"name": "測試", "phone": "0900000000", "store": "1店", "visit": visit})[0] == 200
+    assert call(cm, "admin/review", pwd="adm", id=did, action="approve")[0] == 200
+    assert call(cm, "admin/delete", pwd="wrong", id=did)[0] in (401, 503)          # 沒密碼不能刪
+    assert call(cm, "admin/delete", pwd="adm", id=did)[1]["deleted"] == did
+    assert call(cm, "admin/list", pwd="adm", status="all")[1]["designs"] == []
+    assert call(cm, "admin/weekly", pwd="adm")[1]["weeks"] == []                    # 待印清單也跟著消失
+    assert call(cm, "admin/file", pwd="adm", id=did, kind="stl")[0] == 404          # 檔案也刪了
+    assert call(cm, "my", token=t)[1]["designs"] == []
+    assert call(cm, "admin/delete", pwd="adm", id=did)[0] == 404
