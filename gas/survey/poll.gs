@@ -196,6 +196,7 @@ function pollAuth_(pwd) {
     ok = on && real !== '' && String(pwd == null ? '' : pwd) === real;
   }
   if (!found) throw fail_('權限中心還沒有「門市問卷管理」的密碼列，請先執行 pollAuthSetup', 'auth');
+  if (!ok) ok = authCenterOk_(POLL_DASH, pwd);   /* 2026-11-18.13：通行證、組別密碼、更高身分的密碼（authCenterOk_ 在 Code.gs） */
   if (!ok) { c.put('ppwbad', String(bad + 1), 600); throw fail_('密碼不對（要用「門市問卷管理」這組密碼）', 'auth'); }
 }
 /* 檢查並整理題目；有問題整批擋下，訊息用白話 */

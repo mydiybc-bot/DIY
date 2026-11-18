@@ -15,7 +15,7 @@
          fact_response ＝ 每筆回答一列，只新增（time, id, store_no, store, recipe, src, lang, sec, q1…, ua）
    防濫用：網址公開、沒有密碼 → 每天全站最多 SUBMIT_CAP 筆；同一個 id 6 小時內只收一次。
    ===================================================================== */
-var VER = 'survey-2026-10-30.12';   /* .10：加門市內部調查（poll.gs）；.11：問卷設定搬進 dim_poll＋管理動作 */
+var VER = 'survey-2026-11-18.13';   /* .10：加門市內部調查（poll.gs）；.11：問卷設定搬進 dim_poll＋管理動作；.13：管理密碼也認權限中心的通行證 */
 var SUBMIT_CAP = 3000;                 /* 12 店一天最多約 1,200 位客人 */
 var TEXT_MAX = 500;
 var AGG_DAY_FROM = '2026-01-01';   /* 這天以前的歷史回覆用「月」彙總（agg_daily 一店一月一列），這天起用「日」彙總 */
@@ -25,6 +25,7 @@ var CM_HEAD = ['time', 'day', 'id', 'store_no', 'store', 'recipe', 'q14', 'q12',
 var YES = { q6: '是', q7: '是', q8: '是', q9: '是', q12: '是', q14: '會' };   /* 儀表板 KPI 的「好」答案 */
 var AUTH_SS = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4';   /* 儀表板權限中心（dim_auth） */
 var DASH_ID = 'survey', DASH_NAME = '顧客問卷';
+var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';   /* 儀表板權限中心（verify）；換網址時這裡也要改（auth-center skill 地雷 5） */
 
 /* 店號 ↔ 店名（問卷 q1 的選項；順序照北→南給客人看，店號照公司編號） */
 var STORES = [[3, '台北南京'], [4, '台北士林'], [11, '吳寶春自己做（台北信義A13）'], [7, '新北板橋'], [8, '新北新店'],
@@ -571,6 +572,26 @@ function rollbackImport() {
    讀：GET qlist → 全部題目（含停用）＋版本紀錄；寫：POST qsave／qrestore，要帶「顧客問卷」那組密碼（權限中心 dim_auth survey 列），
    後端直接讀 dim_auth 比對（明文存放，見 auth-center skill）；錯 10 次鎖 10 分鐘。每次存檔前把舊題目整份記進 dim_question_log。 */
 var KPI_LOCK = { q6: '是', q7: '是', q8: '是', q9: '是', q12: '是', q14: '會' };   /* 儀表板指標題：題型固定單選、這個答案一定要在 */
+/* 2026-11-18.13（儀表板密碼重建）：原本只認「dim_auth 這一列 C 欄」那一組字。現在那一組不對時，再交給權限中心 verify 判斷——
+   所以「登入一次整站通行」的通行證、這一頁所屬組別的密碼、更高身分（老闆…）的密碼也都會過。通過的結果快取 10 分鐘（只存雜湊）。
+   連不到權限中心 → 丟 auth_net（不算密碼錯誤次數）。用到 UrlFetchApp＝appsscript.json 要有 script.external_request，改完要重新授權一次（編輯器執行 authorizeFetch）。 */
+function acHash_(s) { return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)).slice(0, 32); }
+function authCenterOk_(dash, pwd) {
+  pwd = String(pwd == null ? '' : pwd).trim();
+  if (!pwd) return false;
+  var c = CacheService.getScriptCache(), key = 'ac:' + dash + ':' + acHash_(dash + '|' + pwd);
+  if (c.get(key)) return true;
+  var t;
+  try { t = UrlFetchApp.fetch(AUTH_API + '?action=verify&dashboard=' + encodeURIComponent(dash) + '&pwd=' + encodeURIComponent(pwd) + '&callback=cb', { muteHttpExceptions: true, followRedirects: true }).getContentText(); }
+  catch (e) { throw fail_('連不到權限中心，請稍後再試', 'auth_net'); }
+  var m = t.match(/^\s*[A-Za-z_$][\w$]*\(([\s\S]*)\);?\s*$/), j = null;
+  try { j = JSON.parse(m ? m[1] : t); } catch (e) { throw fail_('權限中心回應看不懂，請稍後再試', 'auth_net'); }
+  if (!j || !j.ok) return false;
+  try { c.put(key, '1', 600); } catch (e) { }
+  return true;
+}
+/* 重新授權用（加了對外連線的權限）：編輯器選 authorizeFetch → 執行 → 允許。只是敲一下權限中心的 ping，不改任何東西。 */
+function authorizeFetch() { var t = UrlFetchApp.fetch(AUTH_API + '?action=ping', { muteHttpExceptions: true }).getContentText(); Logger.log('權限中心回應：' + t + '｜' + VER); return t; }
 function authPwd_(pwd) {
   var c = CacheService.getScriptCache(), bad = Number(c.get('pwbad') || 0);
   if (bad >= 10) throw fail_('密碼錯太多次，請 10 分鐘後再試', 'locked');
@@ -579,6 +600,7 @@ function authPwd_(pwd) {
     var real = String(v[i][2] == null ? '' : v[i][2]), on = String(v[i][4] || 'Y').toUpperCase() !== 'N';
     ok = on && real !== '' && String(pwd == null ? '' : pwd) === real;
   }
+  if (!ok) ok = authCenterOk_(DASH_ID, pwd);   /* .13：通行證、組別密碼、更高身分的密碼 */
   if (!ok) { c.put('pwbad', String(bad + 1), 600); throw fail_('密碼不對（要用「顧客問卷」這組密碼）', 'auth'); }
 }
 function qLogSheet_() { return sheet_('dim_question_log', ['saved_at', 'by', 'n', 'json'], [1]); }
