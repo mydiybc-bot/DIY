@@ -66,6 +66,7 @@ COOLDOWN = 15               # 同一個人兩次生成至少隔幾秒（防狂�
 _GEN_SEM = threading.BoundedSemaphore(MAX_GEN)
 _LAST_GEN: dict[str, float] = {}
 _SPENT: dict[str, float] = {}   # 當日花費記在記憶體（{日期: 元}），不必每次重讀整份紀錄檔
+_AI_DOWN = {"until": 0.0, "note": ""}   # Gemini 帳戶沒額度／金鑰失效時，先暫停 AI 生成 10 分鐘並在後台顯示原因
 
 
 class Fail(Exception):
@@ -165,6 +166,8 @@ def spent_today() -> float:
 
 
 def ai_open() -> bool:
+    if _AI_DOWN["until"] > time.time():
+        return False
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("COOKIE_MOLD_MOCK")) and spent_today() < float(cfg()["daily_budget_twd"])
 
 
@@ -189,7 +192,11 @@ def _gemini(model: str, parts: list, want_image: bool) -> tuple[str, str, dict]:
         with urllib.request.urlopen(req, timeout=110, context=_CTX) as r:
             j = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raise Fail("ai", "AI 現在有點忙，請過一下再試一次。", 502) from RuntimeError(e.read()[:300])
+        detail = e.read()[:300]
+        if e.code in (401, 402, 403):     # 帳戶沒額度、金鑰失效：不是客人的問題，暫停 AI、讓總部在後台看到
+            _AI_DOWN.update(until=time.time() + 600, note=f"Gemini 回覆 {e.code}：帳戶額度用完或金鑰失效，請到 Google AI Studio 檢查（{_now().strftime('%m/%d %H:%M')}）")
+            raise Fail("closed", "AI 生成暫時休息中，請晚一點再來；免費試玩照常可以玩。", 503) from RuntimeError(detail)
+        raise Fail("ai", "AI 現在有點忙，請過一下再試一次。", 502) from RuntimeError(detail)
     except Exception as e:  # noqa: BLE001
         raise Fail("ai", "AI 現在連不上，請過一下再試一次。", 502) from e
     text, img = "", ""
@@ -508,7 +515,8 @@ def _admin_stats(b: dict) -> dict:
             slot(d["submitted"][:10])["confirmed"] += 1
     c = cfg()
     return {"days": sorted(by.values(), key=lambda s: s["day"], reverse=True), "today_twd": spent_today(),
-            "budget_twd": c["daily_budget_twd"], "ai_open": ai_open(), "models": {"check": c["check_model"], "image": c["image_model"]}}
+            "budget_twd": c["daily_budget_twd"], "ai_open": ai_open(),
+            "ai_note": _AI_DOWN["note"] if _AI_DOWN["until"] > time.time() else ("沒有設定 GEMINI_API_KEY" if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("COOKIE_MOLD_MOCK")) else ""), "models": {"check": c["check_model"], "image": c["image_model"]}}
 
 
 def _admin_weekly(_b: dict) -> dict:
