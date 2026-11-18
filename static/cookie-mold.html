@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<!-- 2026-11-18 新建「🍪 AI 專屬餅乾模・線上試玩」第一階段（免費試玩，零伺服器 AI 成本）
+     客人上傳寵物或人物照片 → 在客人手機上去背 → 做出主角剪影外框 → 3D 模具（可旋轉縮放）＋餅乾成品模擬。
+     照片完全不上傳：去背模型（static/cookie-mold/u2netp.onnx）與人／動物辨識模型（yolox_nano.onnx）都在瀏覽器裡跑，不呼叫任何付費服務。
+     模具規格：static/cookie-mold/mold-config.json（改那個檔就改尺寸）。
+     3D 列印檔（STL）在手機上產生並暫存（IndexedDB，7 天自動清掉），本階段只存不送印；網址加 ?admin=1 才會出現下載鈕（總部測試用）。
+     範例牆：讀「餅乾模範例牆 API」（GAS，雲端硬碟資料夾放圖就更新）；讀不到時顯示佔位圖。
+     測試用網址參數：?src=圖片網址（不經上傳直接載入）、&blur=數字（把測試圖弄糊）、&debug=1（顯示檢查數字）。
+     這頁沒有可打字的輸入框，所以沒放 IME-GUARD；第二階段若加輸入框要照 tools/check_ime_guard.py 的規定加。 -->
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>AI 專屬餅乾模・免費試玩｜自己做烘焙聚樂部</title>
+<meta name="description" content="上傳寵物或你在乎的人的照片，馬上看到專屬餅乾模與餅乾成品模擬。照片只在你的手機上處理，不會上傳。">
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{font-size:16px}
+  body{margin:0;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;background:#FFF8EC;color:#40210F;line-height:1.6}
+  button{font-family:inherit}
+  .top{background:#FDD35D;padding:.7rem 1rem;font-weight:900;font-size:1rem;box-shadow:0 2px 8px rgba(64,33,15,.15)}
+  .top small{font-weight:700;opacity:.8;margin-left:.4rem}
+  main{max-width:34rem;margin:0 auto;padding:1rem 1rem 4rem}
+  h1{font-size:1.6rem;line-height:1.3;margin:.6rem 0 .3rem}
+  h2{font-size:1.15rem;margin:0 0 .6rem}
+  .lead{margin:0 0 1rem;color:#6B4A36}
+  .card{background:#fff;border:1px solid #F1E3C8;border-radius:1rem;padding:1rem;margin:0 0 1rem;box-shadow:0 1px 3px rgba(64,33,15,.05)}
+  .steps{display:flex;gap:.5rem;margin:0 0 1rem;padding:0;list-style:none}
+  .steps li{flex:1;background:#fff;border:1px solid #F1E3C8;border-radius:.8rem;padding:.6rem .4rem;text-align:center;font-size:.85rem;font-weight:700}
+  .steps b{display:block;font-size:1.4rem}
+  .btn{display:block;width:100%;border:0;border-radius:999px;background:#E8822B;color:#fff;font-size:1.1rem;font-weight:900;padding:.9rem 1rem;min-height:3.2rem;cursor:pointer;text-align:center}
+  .btn:active{transform:scale(.98)}
+  .btn.line{background:#06C755}
+  .btn.ghost{background:#fff;color:#40210F;border:2px solid #E6D2A8}
+  .tips{margin:.8rem 0 0;padding-left:1.2rem;font-size:.9rem;color:#6B4A36}
+  .note{font-size:.82rem;color:#8A6F5E;margin:.6rem 0 0}
+  .hide{display:none!important}
+  #work .bar{height:.5rem;background:#F1E3C8;border-radius:999px;overflow:hidden;margin:.6rem 0}
+  #work .bar i{display:block;height:100%;width:5%;background:#E8822B;border-radius:999px;transition:width .4s}
+  #work p{margin:0;font-weight:700;text-align:center}
+  #err{border-color:#E9A7A3;background:#FFF4F3}
+  #err h2{color:#B3261E}
+  .pair{display:flex;gap:.6rem;align-items:stretch}
+  .pair figure{flex:1;margin:0;text-align:center;font-size:.82rem;font-weight:700;color:#6B4A36}
+  .pair canvas{width:100%;aspect-ratio:1/1;border-radius:.8rem;background:#F7EEDD;display:block;margin-bottom:.2rem}
+  .tabs{display:flex;gap:.4rem;margin:0 0 .6rem}
+  .tabs button{flex:1;border:2px solid #E6D2A8;background:#FFFDF7;color:#40210F;border-radius:999px;padding:.55rem .4rem;font-size:1rem;font-weight:800;min-height:2.8rem;cursor:pointer}
+  .tabs button.on{background:#FDD35D;border-color:#E8A200}
+  #view{width:100%;height:20rem;border-radius:.8rem;overflow:hidden;background:linear-gradient(#FBF3E2,#F1E3C8);touch-action:none;position:relative}
+  #view canvas{display:block;width:100%;height:100%}
+  .hint{font-size:.82rem;color:#8A6F5E;text-align:center;margin:.4rem 0 0}
+  .size{font-weight:800;text-align:center;margin:.6rem 0 0}
+  .warn{background:#FFF6D9;border:1px solid #F0D98A;border-radius:.6rem;padding:.5rem .7rem;font-size:.85rem;margin:.6rem 0 0}
+  .wall{display:grid;gap:.8rem}
+  .ex{border:1px solid #F1E3C8;border-radius:.8rem;padding:.6rem;background:#FFFDF7}
+  .ex .t{font-weight:800;margin:0 0 .4rem;font-size:.95rem}
+  .ex .row{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:.3rem;align-items:center}
+  .ex .row span{font-weight:900;color:#E8822B}
+  .ex figure{margin:0;text-align:center;font-size:.75rem;color:#6B4A36;font-weight:700}
+  .ex img,.ex .ph{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:.6rem;display:block;background:#F1E3C8}
+  .ex .ph{display:flex;align-items:center;justify-content:center;font-size:1.8rem}
+  .modal{position:fixed;inset:0;background:rgba(64,33,15,.55);display:flex;align-items:center;justify-content:center;padding:1rem;z-index:20}
+  .modal .box{background:#fff;border-radius:1rem;padding:1.2rem;max-width:24rem;width:100%;text-align:center}
+  #dbg{font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;color:#555;background:#f4f4f4;border-radius:.5rem;padding:.5rem;margin-top:.6rem}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
+</head>
+<body>
+<div class="top">自己做烘焙聚樂部<small>AI 專屬餅乾模</small></div>
+<main>
+  <h1>把你在乎的牠（他）<br>做成一塊餅乾</h1>
+  <p class="lead">上傳一張寵物或人的照片，馬上看到專屬餅乾模，還有餅乾烤出來的樣子。免費試玩，不用登入。</p>
+  <ol class="steps">
+    <li><b>📷</b>上傳照片</li>
+    <li><b>🧩</b>看專屬模具</li>
+    <li><b>🍪</b>到店親手做</li>
+  </ol>
+
+  <section class="card" id="upload">
+    <label class="btn" for="file" id="pickBtn">選一張照片開始</label>
+    <input type="file" id="file" accept="image/*" class="hide">
+    <ul class="tips">
+      <li>一張照片一個主角（一隻寵物或一個人）</li>
+      <li>主角清楚、佔畫面大一點，背景越單純越好</li>
+      <li>全身照、側面照的外型最有特色</li>
+    </ul>
+    <p class="note">🔒 照片只在你的手機上處理，不會上傳，也不會被保存到我們這裡。</p>
+  </section>
+
+  <section class="card hide" id="work">
+    <p id="workMsg">準備中…</p>
+    <div class="bar"><i id="workBar"></i></div>
+    <p class="note" style="text-align:center">第一次使用要多等幾秒，請不要關掉這一頁。</p>
+  </section>
+
+  <section class="card hide" id="err">
+    <h2 id="errTitle">這張照片不太適合</h2>
+    <p id="errMsg" style="margin:0 0 .8rem"></p>
+    <label class="btn" for="file">換一張照片</label>
+  </section>
+
+  <section class="hide" id="result">
+    <div class="card">
+      <h2>① 主角的外型</h2>
+      <div class="pair">
+        <figure><canvas id="cvPhoto" width="480" height="480"></canvas>你的照片</figure>
+        <figure><canvas id="cvCut" width="480" height="480"></canvas>去背後的外框</figure>
+      </div>
+      <div class="warn hide" id="trimNote"></div>
+    </div>
+    <div class="card">
+      <h2>② 專屬模具與餅乾</h2>
+      <div class="tabs">
+        <button type="button" id="tabCookie" class="on">🍪 餅乾模擬</button>
+        <button type="button" id="tabMold">🧩 3D 模具</button>
+      </div>
+      <div id="view"></div>
+      <p class="hint">用手指拖曳可以旋轉，兩指可以放大縮小</p>
+      <p class="hint hide" id="mirrorNote">模具看起來左右相反是正常的：壓下去之後，餅乾的方向就會跟照片一樣。</p>
+      <p class="size" id="sizeTxt"></p>
+      <p class="note" style="text-align:center">模擬圖僅供參考，實際成品會有些許差異。</p>
+      <p class="note" style="text-align:center">免費試玩版只做外型輪廓；眼睛、鼻子等五官細節要用下面的 AI 版本。</p>
+      <button type="button" class="btn ghost hide" id="stlBtn" style="margin-top:.6rem">下載 3D 列印檔（總部測試用）</button>
+    </div>
+    <div class="card" style="text-align:center">
+      <h2>想看有五官細節的版本？</h2>
+      <p style="margin:0 0 .8rem;color:#6B4A36">加入官方 LINE，免費幫你生成一次寫實版或 Q 版。</p>
+      <button type="button" class="btn line" id="lineBtn">加入 LINE 免費生成一次</button>
+    </div>
+    <label class="btn ghost" for="file" style="margin-bottom:1rem">再試一張照片</label>
+  </section>
+
+  <section class="card">
+    <h2>範例牆：照片 → 模具 → 餅乾</h2>
+    <div class="wall" id="wall"></div>
+    <p class="note" id="wallNote"></p>
+  </section>
+  <div id="dbg" class="hide"></div>
+</main>
+
+<div class="modal hide" id="lineModal">
+  <div class="box">
+    <h2>AI 細節版即將開放</h2>
+    <p style="margin:0 0 1rem">有五官細節的寫實版、Q 版正在準備中，開放後加入官方 LINE 就能免費生成一次。敬請期待！</p>
+    <button type="button" class="btn" id="lineClose">我知道了</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+/* ================= 設定 ================= */
+const BASE = 'cookie-mold/';
+/* 範例牆 API（GAS 專案「餅乾模範例牆 API」，原始碼 gas/cookie-mold-wall/）。讀不到或資料夾沒圖時顯示佔位圖。 */
+const WALL_API = 'https://script.google.com/macros/s/AKfycbw-G7JiySV1y7TBhqSwodxxZwyJbQkj7dYUFeI1vjGBErXIjW_2cCHgF5zBrCO7X1Q/exec';
+const QS = new URLSearchParams(location.search);
+const DEBUG = QS.get('debug') === '1', ADMIN = QS.get('admin') === '1';
+const PX_PER_MM = 8;                      /* 外框計算的精細度：1 公釐 8 格 */
+const CREATURES = {0:'人',14:'鳥',15:'貓',16:'狗',17:'馬',18:'羊',19:'牛',20:'象',21:'熊',22:'斑馬',23:'長頸鹿',77:'玩偶'};
+let CFG = {outerDiameterMm:70,embossDepthMm:1.5,minLineMm:1.2,minGapMm:1,wallThicknessMm:1.2,wallHeightMm:12,plateThicknessMm:2,flangeWidthMm:3,minProtrusionMm:2.4,minNotchMm:1.6,cookieThicknessMm:6};
+
+const $ = id => document.getElementById(id);
+const show = (id, on) => $(id).classList.toggle('hide', !on);
+const tick = () => new Promise(r => setTimeout(r, 30));
+const state = {busy:false, stl:null, last:null, t:{}};
+const T0 = performance.now(), mark = k => { state.t[k] = Math.round(performance.now() - T0); };
+window.__cm = state;   /* 驗收測試讀結果用 */
+
+class Friendly extends Error { constructor(title, msg, code){ super(msg); this.title = title; this.code = code; } }
+
+/* ================= 模型（頁面一開就先在背景下載，客人選照片時通常已經好了） ================= */
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+ort.env.wasm.numThreads = 1;
+const loadModel = name => ort.InferenceSession.create(BASE + name, {executionProviders:['wasm']});
+const cfgReady = fetch(BASE + 'mold-config.json').then(r => r.json()).then(j => { CFG = Object.assign(CFG, j); }).catch(() => {});
+const detReady = loadModel('yolox_nano.onnx');
+const segReady = loadModel('u2netp.onnx');
+detReady.then(() => mark('detLoaded'), () => {}); segReady.then(() => mark('segLoaded'), () => {});
+
+/* ================= 讀照片（超大檔自動縮小） ================= */
+async function loadImage(src) {
+  const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+  const img = new Image();
+  if (typeof src === 'string') img.crossOrigin = 'anonymous';
+  try {
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = url; });
+  } catch (e) {
+    throw new Friendly('這張照片讀不出來', '請換一張 JPG 或 PNG 格式的照片再試一次。', 'load');
+  }
+  const ow = img.naturalWidth, oh = img.naturalHeight;
+  const s = Math.min(1, 1024 / Math.max(ow, oh));
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(ow * s)); cv.height = Math.max(1, Math.round(oh * s));
+  const ctx = cv.getContext('2d', {willReadFrequently:true});
+  const blur = +QS.get('blur') || 0;      /* 測試用：把圖弄糊 */
+  if (blur && typeof src === 'string') ctx.filter = `blur(${blur * s}px)`;
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  if (typeof src !== 'string') URL.revokeObjectURL(url);
+  return {cv, ctx, ow, oh};
+}
+
+/* ================= 找主角：人或動物在哪裡 ================= */
+async function detect(im) {
+  const N = 416, sess = await detReady;
+  const r = Math.min(N / im.cv.width, N / im.cv.height), nw = Math.round(im.cv.width * r), nh = Math.round(im.cv.height * r);
+  const c = document.createElement('canvas'); c.width = N; c.height = N;
+  const x = c.getContext('2d', {willReadFrequently:true});
+  x.fillStyle = 'rgb(114,114,114)'; x.fillRect(0, 0, N, N); x.drawImage(im.cv, 0, 0, nw, nh);
+  const d = x.getImageData(0, 0, N, N).data, t = new Float32Array(3 * N * N), P = N * N;
+  for (let i = 0; i < P; i++) { t[i] = d[i * 4 + 2]; t[P + i] = d[i * 4 + 1]; t[2 * P + i] = d[i * 4]; }
+  const out = await sess.run({[sess.inputNames[0]]: new ort.Tensor('float32', t, [1, 3, N, N])});
+  const o = out[sess.outputNames[0]].data;
+  let best = null, row = 0;
+  for (const st of [8, 16, 32]) {
+    const g = N / st;
+    for (let gy = 0; gy < g; gy++) for (let gx = 0; gx < g; gx++, row++) {
+      const b = row * 85, obj = o[b + 4];
+      if (obj < 0.2) continue;
+      for (const k in CREATURES) {
+        const sc = obj * o[b + 5 + (+k)];
+        if (sc < 0.25) continue;
+        const cx = (o[b] + gx) * st / r, cy = (o[b + 1] + gy) * st / r, w = Math.exp(o[b + 2]) * st / r, h = Math.exp(o[b + 3]) * st / r;
+        const x0 = Math.max(0, cx - w / 2), y0 = Math.max(0, cy - h / 2), x1 = Math.min(im.cv.width, cx + w / 2), y1 = Math.min(im.cv.height, cy + h / 2);
+        const area = Math.max(0, x1 - x0) * Math.max(0, y1 - y0) / (im.cv.width * im.cv.height);
+        const rank = sc * Math.sqrt(area);
+        if (!best || rank > best.rank) best = {score:sc, cls:+k, name:CREATURES[k], x0, y0, x1, y1, area, rank};
+      }
+    }
+  }
+  return best;
+}
+
+/* ================= 去背：算出每一點是不是主角 ================= */
+async function segment(im) {
+  const N = 320, sess = await segReady;
+  const c = document.createElement('canvas'); c.width = N; c.height = N;
+  const x = c.getContext('2d', {willReadFrequently:true}); x.drawImage(im.cv, 0, 0, N, N);
+  const d = x.getImageData(0, 0, N, N).data, P = N * N, t = new Float32Array(3 * P);
+  let mx = 1; for (let i = 0; i < P * 4; i++) if ((i & 3) !== 3 && d[i] > mx) mx = d[i];
+  const M = [0.485, 0.456, 0.406], S = [0.229, 0.224, 0.225];
+  for (let i = 0; i < P; i++) for (let k = 0; k < 3; k++) t[k * P + i] = (d[i * 4 + k] / mx - M[k]) / S[k];
+  const out = await sess.run({[sess.inputNames[0]]: new ort.Tensor('float32', t, [1, 3, N, N])});
+  const o = out[sess.outputNames[0]].data, p = new Float32Array(P);
+  let lo = Infinity, hi = -Infinity; for (let i = 0; i < P; i++) { if (o[i] < lo) lo = o[i]; if (o[i] > hi) hi = o[i]; }
+  for (let i = 0; i < P; i++) p[i] = (o[i] - lo) / (hi - lo + 1e-9);
+  return p;
+}
+
+/* ================= 影像小工具 ================= */
+/* 連通區塊：回傳每格的區塊編號與各區塊資訊 */
+function components(bin, W, H) {
+  const lab = new Int32Array(W * H), list = [], stack = new Int32Array(W * H);
+  for (let s = 0; s < W * H; s++) {
+    if (!bin[s] || lab[s]) continue;
+    const id = list.length + 1; let sp = 0, n = 0, x0 = W, y0 = H, x1 = 0, y1 = 0;
+    stack[sp++] = s; lab[s] = id;
+    while (sp) {
+      const q = stack[--sp], x = q % W, y = (q - x) / W; n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && bin[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack[sp++] = q - 1; }
+      if (x < W - 1 && bin[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack[sp++] = q + 1; }
+      if (y > 0 && bin[q - W] && !lab[q - W]) { lab[q - W] = id; stack[sp++] = q - W; }
+      if (y < H - 1 && bin[q + W] && !lab[q + W]) { lab[q + W] = id; stack[sp++] = q + W; }
+    }
+    list.push({id, n, x0, y0, x1, y1});
+  }
+  return {lab, list};
+}
+function keepLargest(bin, W, H) {
+  const {lab, list} = components(bin, W, H); if (!list.length) return bin;
+  const top = list.reduce((a, b) => b.n > a.n ? b : a);
+  for (let i = 0; i < W * H; i++) bin[i] = lab[i] === top.id ? 1 : 0;
+  return bin;
+}
+/* 把主角裡面的破洞補起來（外框切模不能有洞） */
+function fillHoles(bin, W, H) {
+  const inv = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) inv[i] = bin[i] ? 0 : 1;
+  const {lab, list} = components(inv, W, H), edge = new Set();
+  for (const c of list) if (c.x0 === 0 || c.y0 === 0 || c.x1 === W - 1 || c.y1 === H - 1) edge.add(c.id);
+  for (let i = 0; i < W * H; i++) if (!bin[i] && !edge.has(lab[i])) bin[i] = 1;
+  return bin;
+}
+/* 距離：每一格到最近的「有」格子有多遠（格） */
+function distTo(bin, W, H) {
+  const INF = 1e20, f = new Float64Array(W * H), n = Math.max(W, H);
+  const v = new Int32Array(n), z = new Float64Array(n + 1), a = new Float64Array(n), b = new Float64Array(n);
+  for (let i = 0; i < W * H; i++) f[i] = bin[i] ? 0 : INF;
+  const pass = len => {
+    let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+    for (let q = 1; q < len; q++) {
+      let s;
+      do { const p = v[k]; s = ((a[q] + q * q) - (a[p] + p * p)) / (2 * q - 2 * p); } while (s <= z[k] && --k >= 0);
+      k++; v[k] = q; z[k] = s; z[k + 1] = INF;
+    }
+    k = 0;
+    for (let q = 0; q < len; q++) { while (z[k + 1] < q) k++; const p = v[k]; b[q] = (q - p) * (q - p) + a[p]; }
+  };
+  for (let x = 0; x < W; x++) { for (let y = 0; y < H; y++) a[y] = f[y * W + x]; pass(H); for (let y = 0; y < H; y++) f[y * W + x] = b[y]; }
+  const out = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) { for (let x = 0; x < W; x++) a[x] = f[y * W + x]; pass(W); for (let x = 0; x < W; x++) out[y * W + x] = Math.sqrt(b[x]); }
+  return out;
+}
+const shrink = (bin, W, H, r) => { const inv = bin.map(v => v ? 0 : 1), d = distTo(inv, W, H); return bin.map((v, i) => v && d[i] > r ? 1 : 0); };
+const grow = (bin, W, H, r) => { const d = distTo(bin, W, H); return bin.map((v, i) => d[i] <= r ? 1 : 0); };
+function gauss(f, W, H, sigma) {
+  const R = Math.max(1, Math.ceil(sigma * 3)), k = new Float32Array(2 * R + 1); let sum = 0;
+  for (let i = -R; i <= R; i++) { k[i + R] = Math.exp(-i * i / (2 * sigma * sigma)); sum += k[i + R]; }
+  for (let i = 0; i < k.length; i++) k[i] /= sum;
+  const t = new Float32Array(W * H), o = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (let i = -R; i <= R; i++) { const xx = Math.min(W - 1, Math.max(0, x + i)); s += f[y * W + xx] * k[i + R]; } t[y * W + x] = s; }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (let i = -R; i <= R; i++) { const yy = Math.min(H - 1, Math.max(0, y + i)); s += t[yy * W + x] * k[i + R]; } o[y * W + x] = s; }
+  return o;
+}
+/* 等高線：在距離場上描出指定距離的封閉外框（回傳最大的一圈） */
+function contour(f, W, H, level) {
+  const pts = new Map(), adj = new Map(), NV = W * H;
+  const link = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); (adj.get(b) || adj.set(b, []).get(b)).push(a); };
+  const cross = (x0, y0, x1, y1, id) => { if (!pts.has(id)) { const a = f[y0 * W + x0], b = f[y1 * W + x1], t = (level - a) / (b - a); pts.set(id, [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t]); } return id; };
+  for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++) {
+    const a = f[y * W + x] < level, b = f[y * W + x + 1] < level, c = f[(y + 1) * W + x + 1] < level, d = f[(y + 1) * W + x] < level;
+    const n = a + b + c + d; if (n === 0 || n === 4) continue;
+    const e = [];
+    if (a !== b) e.push(cross(x, y, x + 1, y, y * W + x));
+    if (b !== c) e.push(cross(x + 1, y, x + 1, y + 1, NV + y * W + x + 1));
+    if (c !== d) e.push(cross(x, y + 1, x + 1, y + 1, (y + 1) * W + x));
+    if (d !== a) e.push(cross(x, y, x, y + 1, NV + y * W + x));
+    if (e.length === 2) link(e[0], e[1]); else if (e.length === 4) { link(e[0], e[1]); link(e[2], e[3]); }
+  }
+  const seen = new Set(); let best = null, bestA = 0;
+  for (const start of adj.keys()) {
+    if (seen.has(start)) continue;
+    const loop = []; let cur = start, prev = -1;
+    while (cur !== undefined && !seen.has(cur)) { seen.add(cur); loop.push(pts.get(cur)); const nb = adj.get(cur); const nx = nb[0] !== prev && !seen.has(nb[0]) ? nb[0] : nb[1]; prev = cur; cur = nx; }
+    let A = 0; for (let i = 0; i < loop.length; i++) { const p = loop[i], q = loop[(i + 1) % loop.length]; A += p[0] * q[1] - q[0] * p[1]; }
+    if (Math.abs(A) > bestA) { bestA = Math.abs(A); best = loop; }
+  }
+  return best || [];
+}
+/* 外框重新取點並修順 */
+function tidy(loop, step) {
+  if (loop.length < 8) return loop;
+  const L = [0]; for (let i = 0; i < loop.length; i++) { const p = loop[i], q = loop[(i + 1) % loop.length]; L.push(L[i] + Math.hypot(q[0] - p[0], q[1] - p[1])); }
+  const total = L[loop.length], n = Math.max(24, Math.min(720, Math.round(total / step))); let out = [], j = 0;
+  for (let i = 0; i < n; i++) { const t = total * i / n; while (L[j + 1] < t) j++; const p = loop[j], q = loop[(j + 1) % loop.length], u = (t - L[j]) / (L[j + 1] - L[j] || 1); out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]); }
+  for (let pass = 0; pass < 2; pass++) out = out.map((p, i) => { const a = out[(i + n - 1) % n], b = out[(i + 1) % n]; return [(a[0] + 2 * p[0] + b[0]) / 4, (a[1] + 2 * p[1] + b[1]) / 4]; });
+  return out;
+}
+
+/* ================= 主流程：照片 → 外框 ================= */
+async function analyse(im, progress) {
+  if (Math.min(im.ow, im.oh) < 480) throw new Friendly('這張照片太小了', `這張照片只有 ${im.ow}×${im.oh}，放大做成模具會糊掉。請換一張原始照片（不要用截圖或縮圖）。`, 'small');
+  progress('正在找照片裡的主角…', 25); await tick();
+  mark('a0'); const det = await detect(im); mark('aDet');
+  progress('正在去背…', 45); await tick();
+  const prob = await segment(im); mark('aSeg');
+  progress('正在描出外框…', 65); await tick();
+
+  /* 1. 主角是哪一塊 */
+  const N = 320, bin = new Uint8Array(N * N); let fg = 0, conf = 0, mid = 0;
+  for (let i = 0; i < N * N; i++) { if (prob[i] > 0.5) { bin[i] = 1; fg++; conf += prob[i]; } if (prob[i] > 0.2 && prob[i] < 0.8) mid++; }
+  conf = fg ? conf / fg : 0; const fgFrac = fg / (N * N), midRatio = fg ? mid / fg : 1;
+  const bigDet = det && det.area >= 0.04;
+  const dbg = {det: det && {name:det.name, score:+det.score.toFixed(2), area:+det.area.toFixed(3)}, fgFrac:+fgFrac.toFixed(3), conf:+conf.toFixed(3), midRatio:+midRatio.toFixed(3)};
+  state.dbg = dbg;
+  if (det && !bigDet) throw new Friendly('主角在照片裡太小了', '請選一張主角佔畫面大一點的照片，或把照片裁切到只剩主角再試一次。', 'tiny');
+  /* 認不出人或動物就擋下（風景、食物、物品）；只靠去背會把湖、山也當成主角 */
+  if (!bigDet) throw new Friendly('找不到主角', '請選一張主角清楚的照片：一隻寵物或一個人、佔畫面大一點、背景單純一點。', 'nosubject');
+  const {lab, list} = components(bin, N, N);
+  let pick = null, bestOv = -1;
+  const sx = N / im.cv.width, sy = N / im.cv.height;
+  for (const c of list) {
+    let ov = c.n;
+    if (bigDet) { ov = 0; const X0 = Math.floor(det.x0 * sx), X1 = Math.ceil(det.x1 * sx), Y0 = Math.floor(det.y0 * sy), Y1 = Math.ceil(det.y1 * sy);
+      for (let y = Math.max(0, Y0); y < Math.min(N, Y1); y++) for (let x = Math.max(0, X0); x < Math.min(N, X1); x++) if (lab[y * N + x] === c.id) ov++; }
+    if (ov > bestOv) { bestOv = ov; pick = c; }
+  }
+  if (!pick || pick.n < N * N * 0.03) throw new Friendly('找不到主角', '請選一張主角清楚的照片：一隻寵物或一個人、佔畫面大一點、背景單純一點。', 'nosubject');
+  const sub = new Uint8Array(N * N); for (let i = 0; i < N * N; i++) sub[i] = lab[i] === pick.id ? 1 : 0;
+  fillHoles(sub, N, N);
+
+  /* 2. 模糊檢查：只看主角範圍的清晰度 */
+  const bw = 512 / Math.max(im.cv.width, im.cv.height), gw = Math.round(im.cv.width * bw), gh = Math.round(im.cv.height * bw);
+  const gc = document.createElement('canvas'); gc.width = gw; gc.height = gh;
+  const gx = gc.getContext('2d', {willReadFrequently:true}); gx.drawImage(im.cv, 0, 0, gw, gh);
+  const gd = gx.getImageData(0, 0, gw, gh).data, gray = new Float32Array(gw * gh);
+  for (let i = 0; i < gw * gh; i++) gray[i] = 0.299 * gd[i * 4] + 0.587 * gd[i * 4 + 1] + 0.114 * gd[i * 4 + 2];
+  const bx0 = Math.max(1, Math.floor(pick.x0 / N * gw)), bx1 = Math.min(gw - 2, Math.ceil(pick.x1 / N * gw)), by0 = Math.max(1, Math.floor(pick.y0 / N * gh)), by1 = Math.min(gh - 2, Math.ceil(pick.y1 / N * gh));
+  let s1 = 0, s2 = 0, cnt = 0;
+  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) { const i = y * gw + x, l = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - gw] - gray[i + gw]; s1 += l; s2 += l * l; cnt++; }
+  const sharp = cnt ? s2 / cnt - (s1 / cnt) ** 2 : 0; dbg.sharp = +sharp.toFixed(1);
+  if (sharp < SHARP_MIN) throw new Friendly('這張照片有點模糊', '模糊的照片做出來的外型會不準。請換一張對焦清楚、沒有晃到的照片。', 'blurry');
+
+  mark('aPick');
+  /* 3. 放大到模具尺寸（最長邊含底板不超過外徑） */
+  const maxSil = (CFG.outerDiameterMm - 2 * CFG.flangeWidthMm) * PX_PER_MM;
+  const rw = (pick.x1 - pick.x0 + 1) / N * im.cv.width, rh = (pick.y1 - pick.y0 + 1) / N * im.cv.height;   /* 主角在照片上的真實寬高 */
+  const sc = maxSil / Math.max(rw, rh), margin = Math.ceil((CFG.flangeWidthMm + 3) * PX_PER_MM);
+  const W = Math.ceil(rw * sc) + 2 * margin, H = Math.ceil(rh * sc) + 2 * margin;
+  const soft = new Float32Array(N * N); for (let i = 0; i < N * N; i++) soft[i] = sub[i] ? Math.max(prob[i], 0.75) : Math.min(prob[i], 0.25);
+  const up = new Float32Array(W * H), ox = pick.x0 / N * im.cv.width, oy = pick.y0 / N * im.cv.height;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const u = ((x - margin) / sc + ox) * sx - 0.5, v = ((y - margin) / sc + oy) * sy - 0.5;
+    if (u < -1 || v < -1 || u > N || v > N) continue;
+    const u0 = Math.max(0, Math.min(N - 1, Math.floor(u))), v0 = Math.max(0, Math.min(N - 1, Math.floor(v))), u1 = Math.min(N - 1, u0 + 1), v1 = Math.min(N - 1, v0 + 1);
+    const fu = Math.min(1, Math.max(0, u - u0)), fv = Math.min(1, Math.max(0, v - v0));
+    up[y * W + x] = (soft[v0 * N + u0] * (1 - fu) + soft[v0 * N + u1] * fu) * (1 - fv) + (soft[v1 * N + u0] * (1 - fu) + soft[v1 * N + u1] * fu) * fv;
+  }
+  const factor = sc * im.cv.width / N;     /* 去背結果被放大幾倍 → 決定要修多順 */
+  const sm = gauss(up, W, H, Math.max(3, factor * 0.9));
+  let m = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) m[i] = sm[i] > 0.5 ? 1 : 0;
+  mark('aUp'); keepLargest(m, W, H); const before = m.reduce((a, b) => a + b, 0);
+
+  /* 4. 套用模具規格：太窄的凹縫補平、太細的凸出去掉 */
+  const rNotch = CFG.minNotchMm / 2 * PX_PER_MM, rProt = CFG.minProtrusionMm / 2 * PX_PER_MM;
+  m = shrink(grow(m, W, H, rNotch), W, H, rNotch);
+  m = grow(shrink(m, W, H, rProt), W, H, rProt);
+  keepLargest(m, W, H); fillHoles(m, W, H);
+  const after = m.reduce((a, b) => a + b, 0); dbg.trimmed = +((before - after) / before).toFixed(3);
+  if (after < 0.5 * before || after < 400) throw new Friendly('這張照片的外型太細了', '主角的外型太細、太碎，做成餅乾模容易斷。請換一張主角比較完整、比較大的照片。', 'thin');
+
+  mark('aMorph');
+  /* 5. 距離場（公釐，主角裡面是負的）→ 之後外框、牆、底板、餅乾烤色都從這裡來 */
+  const dOut = distTo(m, W, H), dIn = distTo(m.map(v => v ? 0 : 1), W, H), sdf = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) sdf[i] = (m[i] ? -(dIn[i] - 0.5) : (dOut[i] - 0.5)) / PX_PER_MM;
+  const field = gauss(sdf, W, H, 2.2);
+  let bx = [W, H, 0, 0]; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (m[y * W + x]) { if (x < bx[0]) bx[0] = x; if (y < bx[1]) bx[1] = y; if (x > bx[2]) bx[2] = x; if (y > bx[3]) bx[3] = y; }
+  const cx = (bx[0] + bx[2]) / 2, cy = (bx[1] + bx[3]) / 2;
+  const toMm = loop => tidy(loop, 0.35 * PX_PER_MM).map(p => [(p[0] - cx) / PX_PER_MM, -(p[1] - cy) / PX_PER_MM]);
+  mark('aField');
+  const out = {
+    W, H, field, cx, cy, margin, sc, ox, oy, sub, pick,
+    inner: toMm(contour(field, W, H, 0)),
+    wall: toMm(contour(field, W, H, CFG.wallThicknessMm)),
+    flange: toMm(contour(field, W, H, CFG.flangeWidthMm)),
+    widthMm: (bx[2] - bx[0] + 1) / PX_PER_MM, heightMm: (bx[3] - bx[1] + 1) / PX_PER_MM, dbg
+  };
+  if (out.inner.length < 12 || out.wall.length < 12 || out.flange.length < 12) throw new Friendly('這張照片做不出外框', '請換一張主角清楚、背景單純一點的照片再試一次。', 'contour');
+  return out;
+}
+const SHARP_MIN = 30;   /* 清晰度門檻（主角範圍）；低於這個數字就請客人換照片 */
+
+/* ================= 2D：照片與去背外框 ================= */
+function draw2D(im, r) {
+  const a = $('cvPhoto').getContext('2d'), b = $('cvCut').getContext('2d'), S = 480;
+  const fit = Math.min(S / im.cv.width, S / im.cv.height), dw = im.cv.width * fit, dh = im.cv.height * fit;
+  a.clearRect(0, 0, S, S); a.drawImage(im.cv, (S - dw) / 2, (S - dh) / 2, dw, dh);
+  /* 右邊：把模具外框範圍內的照片貼出來，再畫上外框線 */
+  b.clearRect(0, 0, S, S);
+  const span = Math.max(r.widthMm, r.heightMm) + 8, k = S / span;      /* 1 公釐幾個畫面點 */
+  const path = new Path2D(); r.inner.forEach((p, i) => { const x = S / 2 + p[0] * k, y = S / 2 - p[1] * k; i ? path.lineTo(x, y) : path.moveTo(x, y); }); path.closePath();
+  b.save(); b.clip(path);
+  const pxPerImg = r.sc / PX_PER_MM * k;                                 /* 照片 1 點 = 幾個畫面點 */
+  const imgX = S / 2 + ((r.margin - r.cx) / PX_PER_MM) * k - r.ox * pxPerImg, imgY = S / 2 + ((r.margin - r.cy) / PX_PER_MM) * k - r.oy * pxPerImg;
+  b.drawImage(im.cv, imgX, imgY, im.cv.width * pxPerImg, im.cv.height * pxPerImg);
+  b.restore();
+  b.lineWidth = 5; b.strokeStyle = '#E8822B'; b.lineJoin = 'round'; b.stroke(path);
+}
+
+/* ================= 3D：模具與餅乾（同一份外框資料） ================= */
+let three = null;
+function initThree() {
+  const box = $('view'), renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setSize(box.clientWidth, box.clientHeight); box.appendChild(renderer.domElement);
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(35, box.clientWidth / box.clientHeight, 1, 2000);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xcbb89a, 1.15));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-60, 90, 120); scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xfff0d8, 0.5); fill.position.set(80, -40, 60); scene.add(fill);
+  const ctl = new OrbitControls(cam, renderer.domElement);
+  ctl.enableDamping = true; ctl.enablePan = false; ctl.minDistance = 70; ctl.maxDistance = 420; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.6;
+  ctl.addEventListener('start', () => { ctl.autoRotate = false; });
+  const mold = new THREE.Group(), cookie = new THREE.Group(); scene.add(mold, cookie);
+  let dirty = true;
+  const loop = () => { requestAnimationFrame(loop); if (!three || $('result').classList.contains('hide')) return; ctl.update(); renderer.render(scene, cam); };
+  requestAnimationFrame(loop);
+  addEventListener('resize', () => { if (!box.clientWidth) return; renderer.setSize(box.clientWidth, box.clientHeight); cam.aspect = box.clientWidth / box.clientHeight; cam.updateProjectionMatrix(); });
+  three = {renderer, scene, cam, ctl, mold, cookie, box, dirty};
+}
+const shapeOf = (pts, mirror) => new THREE.Shape(pts.map(p => new THREE.Vector2(mirror ? -p[0] : p[0], p[1])));
+function clearGroup(g) { while (g.children.length) { const c = g.children.pop(); c.geometry && c.geometry.dispose(); [].concat(c.material || []).forEach(m => { m.map && m.map.dispose(); m.bumpMap && m.bumpMap.dispose(); m.dispose(); }); } }
+
+/* 餅乾烤色：越靠邊越焦黃（從距離場算），加上細小顆粒 */
+function cookieTextures(r) {
+  const T = 512, col = document.createElement('canvas'), bump = document.createElement('canvas'); col.width = col.height = bump.width = bump.height = T;
+  const c = col.getContext('2d'), b = bump.getContext('2d'), ci = c.createImageData(T, T), bi = b.createImageData(T, T);
+  const span = Math.max(r.widthMm, r.heightMm) + 2, half = span / 2;
+  let seed = 12345; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const G = 64, grid = new Float32Array((G + 1) * (G + 1)).map(rnd), G2 = 12, grid2 = new Float32Array((G2 + 1) * (G2 + 1)).map(rnd);
+  const noise = (g, n, u, v) => { const x = u * n, y = v * n, x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = y0 * (n + 1) + x0; return (g[i] * (1 - fx) + g[i + 1] * fx) * (1 - fy) + (g[i + n + 1] * (1 - fx) + g[i + n + 2] * fx) * fy; };
+  for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) {
+    const mmx = (x / (T - 1)) * span - half, mmy = half - (y / (T - 1)) * span;
+    const gx = Math.round(r.cx + mmx * PX_PER_MM), gy = Math.round(r.cy - mmy * PX_PER_MM);
+    const d = gx >= 0 && gy >= 0 && gx < r.W && gy < r.H ? -r.field[gy * r.W + gx] : 0;        /* 離邊緣幾公釐 */
+    const edge = 1 - Math.min(1, Math.max(0, d / 7)), e = edge * edge;
+    const n1 = noise(grid, G, x / T * 0.999, y / T * 0.999), n2 = noise(grid2, G2, x / T * 0.999, y / T * 0.999), speck = rnd() < 0.012 ? -28 : 0;
+    const v = (n1 - 0.5) * 22 + (n2 - 0.5) * 26 + speck, i = (y * T + x) * 4;
+    ci.data[i] = 232 - 58 * e + v; ci.data[i + 1] = 184 - 72 * e + v * 0.9; ci.data[i + 2] = 112 - 66 * e + v * 0.6; ci.data[i + 3] = 255;
+    const h = 128 + (n1 - 0.5) * 110 + (n2 - 0.5) * 50 + speck * 2; bi.data[i] = bi.data[i + 1] = bi.data[i + 2] = h; bi.data[i + 3] = 255;
+  }
+  c.putImageData(ci, 0, 0); b.putImageData(bi, 0, 0);
+  const map = new THREE.CanvasTexture(col), bm = new THREE.CanvasTexture(bump); map.colorSpace = THREE.SRGBColorSpace;
+  return {map, bm, span};
+}
+function build3D(r) {
+  if (!three) initThree();
+  const {mold, cookie} = three; clearGroup(mold); clearGroup(cookie);
+  /* 模具：底板＋外框切模的牆。左右鏡射，這樣從握把那面看、和壓出來的餅乾，方向都跟照片一樣。 */
+  const pla = new THREE.MeshStandardMaterial({color:0xF08A2E, roughness:0.55, metalness:0.02});
+  const plateG = new THREE.ExtrudeGeometry(shapeOf(r.flange, true), {depth:CFG.plateThicknessMm, bevelEnabled:false, curveSegments:1});
+  const ws = shapeOf(r.wall, true); ws.holes.push(new THREE.Path(r.inner.map(p => new THREE.Vector2(-p[0], p[1]))));
+  const wallG = new THREE.ExtrudeGeometry(ws, {depth:CFG.wallHeightMm, bevelEnabled:false, curveSegments:1}); wallG.translate(0, 0, CFG.plateThicknessMm);
+  mold.add(new THREE.Mesh(plateG, new THREE.MeshStandardMaterial({color:0xFFD2A0, roughness:0.6})), new THREE.Mesh(wallG, pla));
+  mold.rotation.x = -Math.PI / 2;      /* 平放，切模的牆朝上 */
+  /* 餅乾：切模內側的形狀，套烤色 */
+  const tex = cookieTextures(r), t = CFG.cookieThicknessMm, bev = Math.min(1.4, t / 3);
+  const cg = new THREE.ExtrudeGeometry(shapeOf(r.inner, false), {depth:t - 2 * bev, bevelEnabled:true, bevelThickness:bev, bevelSize:bev, bevelOffset:-bev, bevelSegments:4, curveSegments:1});
+  cg.translate(0, 0, bev);
+  const pos = cg.attributes.position, uv = cg.attributes.uv, half = tex.span / 2;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) + half) / tex.span, (pos.getY(i) + half) / tex.span);
+  uv.needsUpdate = true;
+  const top = new THREE.MeshStandardMaterial({map:tex.map, bumpMap:tex.bm, bumpScale:0.9, roughness:0.92});
+  const side = new THREE.MeshStandardMaterial({map:tex.map, bumpMap:tex.bm, bumpScale:0.9, roughness:0.95, color:0xE2B988});
+  cookie.add(new THREE.Mesh(cg, [top, side])); cookie.rotation.x = -Math.PI / 2;
+  const paper = new THREE.Mesh(new THREE.CircleGeometry(tex.span * 0.95, 48), new THREE.MeshBasicMaterial({color:0xFFFCF5}));
+  paper.position.z = -0.05; cookie.add(paper);
+  state.geoms = [plateG, wallG];
+  const dist = Math.max(r.widthMm, r.heightMm) * 2.3 + 40;
+  three.cam.position.set(0, dist * 0.78, dist * 0.62); three.ctl.target.set(0, 4, 0); three.ctl.autoRotate = true; three.ctl.update();
+  setTab(state.tab || 'cookie');
+}
+function setTab(t) {
+  state.tab = t; if (!three) return;
+  three.mold.visible = t === 'mold'; three.cookie.visible = t === 'cookie';
+  show('mirrorNote', t === 'mold');
+  $('tabMold').classList.toggle('on', t === 'mold'); $('tabCookie').classList.toggle('on', t === 'cookie');
+}
+
+/* ================= 3D 列印檔（STL，單位公釐） ================= */
+function makeSTL(geoms) {
+  let n = 0; for (const g of geoms) n += g.attributes.position.count / 3;
+  const buf = new ArrayBuffer(84 + n * 50), dv = new DataView(buf); dv.setUint32(80, n, true);
+  let o = 84; const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), nn = new THREE.Vector3();
+  for (const g of geoms) { const p = g.attributes.position;
+    for (let i = 0; i < p.count; i += 3) {
+      a.fromBufferAttribute(p, i); b.fromBufferAttribute(p, i + 1); c.fromBufferAttribute(p, i + 2);
+      nn.copy(c).sub(b).cross(a.clone().sub(b)).normalize();
+      for (const v of [nn, a, b, c]) { dv.setFloat32(o, v.x, true); dv.setFloat32(o + 4, v.y, true); dv.setFloat32(o + 8, v.z, true); o += 12; }
+      o += 2;
+    } }
+  return new Blob([buf], {type:'model/stl'});
+}
+/* 只存在這支手機裡（IndexedDB），7 天後自動清掉；不上傳 */
+function db() { return new Promise((ok, no) => { const q = indexedDB.open('cookie-mold', 1); q.onupgradeneeded = () => q.result.createObjectStore('designs'); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); }); }
+async function saveLocal(rec) { try { const d = await db(); d.transaction('designs', 'readwrite').objectStore('designs').put(rec, 'last'); } catch (e) {} }
+async function cleanLocal() { try { const d = await db(), st = d.transaction('designs', 'readwrite').objectStore('designs'), q = st.get('last'); q.onsuccess = () => { if (q.result && Date.now() - q.result.at > 7 * 864e5) st.delete('last'); }; } catch (e) {} }
+cleanLocal();
+
+/* ================= 畫面流程 ================= */
+function progress(msg, pct) { $('workMsg').textContent = msg; $('workBar').style.width = pct + '%'; }
+async function run(src) {
+  if (state.busy) return; state.busy = true; state.last = null; state.error = null;
+  const t0 = performance.now();
+  show('upload', false); show('err', false); show('result', false); show('work', true); progress('正在讀取照片…', 8);
+  try {
+    mark('r0'); await tick(); mark('r1'); await cfgReady; mark('r2');
+    const im = await loadImage(src);
+    try { await Promise.all([detReady, segReady]); }
+    catch (e) { throw new Friendly('這個瀏覽器暫時不能試玩', '請改用最新版的 Chrome 或 Safari 再試一次；如果是在 LINE 裡打開，請點右上角改用瀏覽器開啟。', 'model'); }
+    mark('imgLoaded'); const r = await analyse(im, progress); mark('aDone');
+    progress('正在做 3D 模具…', 85); await tick();
+    show('result', true);                  /* 先顯示，3D 畫面才量得到大小 */
+    draw2D(im, r); mark('d2'); build3D(r); mark('d3');
+    const stl = makeSTL(state.geoms); state.stl = stl;
+    saveLocal({at:Date.now(), stl, inner:r.inner, widthMm:r.widthMm, heightMm:r.heightMm, cfg:CFG});
+    $('sizeTxt').textContent = `餅乾大小約 ${(r.widthMm / 10).toFixed(1)} × ${(r.heightMm / 10).toFixed(1)} 公分（模具最長邊 ${(CFG.outerDiameterMm / 10).toFixed(0)} 公分內）`;
+    const tn = $('trimNote'); tn.classList.toggle('hide', !(r.dbg.trimmed > 0.03));
+    tn.textContent = '太細的地方（例如細尾巴、鬍鬚、髮絲）做成餅乾容易斷，已經自動修掉或補順。';
+    show('stlBtn', ADMIN);
+    const secs = (performance.now() - t0) / 1000;
+    mark('end'); state.last = {secs:+secs.toFixed(1), t:Object.assign({}, state.t), widthMm:r.widthMm, heightMm:r.heightMm, points:r.inner.length, stlBytes:stl.size, dbg:r.dbg};
+    show('work', false);
+    $('result').scrollIntoView({behavior:'smooth', block:'start'});
+  } catch (e) {
+    show('work', false); show('result', false); show('err', true);
+    const f = e instanceof Friendly ? e : new Friendly('出了一點問題', '請再試一次，或換一張照片。', 'unknown');
+    if (!(e instanceof Friendly)) console.error(e);
+    $('errTitle').textContent = f.title; $('errMsg').textContent = f.message; state.error = {code:f.code, title:f.title, dbg:state.dbg, raw:String(e && e.message)};
+    $('err').scrollIntoView({behavior:'smooth', block:'center'});
+  } finally {
+    state.busy = false;
+    if (DEBUG) { show('dbg', true); $('dbg').textContent = JSON.stringify(state.last || state.error, null, 1); }
+  }
+}
+$('file').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) run(f); });
+$('tabMold').onclick = () => setTab('mold'); $('tabCookie').onclick = () => setTab('cookie');
+$('lineBtn').onclick = () => show('lineModal', true); $('lineClose').onclick = () => show('lineModal', false);
+$('lineModal').onclick = e => { if (e.target.id === 'lineModal') show('lineModal', false); };
+$('stlBtn').onclick = () => { if (!state.stl) return; const a = document.createElement('a'); a.href = URL.createObjectURL(state.stl); a.download = 'cookie-mold.stl'; a.click(); };
+state.run = run;
+if (QS.get('src')) run(QS.get('src'));
+
+/* ================= 範例牆 ================= */
+const PLACEHOLDER = [{title:'範例照片準備中'}, {title:'範例照片準備中'}];
+function renderWall(list, isReal) {
+  const cell = (url, icon, cap) => `<figure>${url ? `<img loading="lazy" src="${url}" alt="${cap}">` : `<div class="ph">${icon}</div>`}${cap}</figure>`;
+  const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  $('wall').innerHTML = list.map(x => `<div class="ex"><p class="t">${esc(x.title)}</p><div class="row">${cell(x.photo, '📷', '照片')}<span>→</span>${cell(x.mold, '🧩', '模具')}<span>→</span>${cell(x.cookie, '🍪', '烤好的餅乾')}</div></div>`).join('');
+  $('wallNote').textContent = isReal ? '以上都是真實照片、真實模具與實際烤出來的餅乾。' : '真實的照片、模具與餅乾對照圖即將上架。';
+}
+renderWall(PLACEHOLDER, false);
+if (WALL_API) {
+  const cb = '__wall' + Date.now(), s = document.createElement('script');
+  window[cb] = d => { try { const ok = (d && d.items || []).filter(x => x.photo || x.mold || x.cookie); if (ok.length) renderWall(ok, true); } catch (e) {} delete window[cb]; s.remove(); };
+  s.src = WALL_API + (WALL_API.includes('?') ? '&' : '?') + 'action=list&callback=' + cb; s.onerror = () => s.remove(); document.body.appendChild(s);
+}
+</script>
+</body>
+</html>
