@@ -57,7 +57,7 @@
  *       之後改程式一律「管理部署作業 → 編輯 → 新版本」，網址不變。
  */
 var DCO_TOKEN = 'dbc-dco-Rw8pZ3';
-var DCO_VER = 'v1.9.1-hct1box';
+var DCO_VER = 'v1.9.2-hctwbox';
 var DCO_TZ = 'Asia/Taipei';
 var SH_LINE = 'dc_order_line', SH_STOCK = 'dc_stock', SH_LOG = 'dc_log', SH_LOC = 'dc_loc';
 var H_LINE = ['訂單號', '店號', '下單時間', '狀態', '行號', 'sku_id', '品名', '單位', '訂購量', '單價', '實出量', '小計', '備註', '出貨時間', '新竹貨號', 'cid', '更新時間'];
@@ -950,7 +950,7 @@ function hctSetOrderNo_(id, no) {
 function hctPad2_(n) { n = String(n); return n.length < 2 ? '0' + n : n; }
 function hctEpino_(id, seq) { return String(id).replace(/[^A-Za-z0-9]/g, '') + hctPad2_(seq); }   /* 只能英文和數字 */
 
-/* 產生（或同日更正）托運單：{id, cs, boxes, weight, sizes:[60,90…], rcv:{name, tel, addr}}
+/* 產生（或同日更正）托運單：{id, cs, boxes, weight, weights:[3,7…]（v1.9.2 每箱重量，優先於 boxes＋weight）, sizes:[60,90…], rcv:{name, tel, addr}}
    W（重量）：v1.9 起也一箱一筆（總重量平均分）；S（總長）：一箱一筆，sizes 每箱尺寸。
    同一天、同客代、還沒交寄 → 第 i 箱沿用原託運單號＋貨號（新竹當更正）；多的新開、少的作廢。換客代或隔天 → 舊的全部作廢重開。 */
 function hctCreate_(b) {
@@ -963,6 +963,12 @@ function hctCreate_(b) {
     if (!sizes.length || sizes.length > 20) return { ok: false, error: '按尺寸計費：每箱都要選尺寸（1～20 箱）' };
     for (var i = 0; i < sizes.length; i++) if (!(HCT_SIZES[sizes[i]] || (sizes[i] >= 151 && sizes[i] <= 999))) return { ok: false, error: '第 ' + (i + 1) + ' 箱尺寸要是 60、90、120、150 或 151～999 公分' };
     items = sizes.map(function (s) { return { ejamt: 1, eqamt: s }; });
+  } else if (Array.isArray(b.weights) && b.weights.length) {
+    /* v1.9.2（2026-11-19 出貨中心：選兩件還是只有一個欄位填公斤）：每箱各填重量，一箱一筆、各自進位成整數公斤 */
+    var ws = b.weights.map(function (x) { return Math.ceil(dcoNum_(x)); });
+    if (ws.length > 20) return { ok: false, error: '件數要填 1～20 箱' };
+    for (var wi = 0; wi < ws.length; wi++) if (!(ws[wi] >= 1 && ws[wi] <= 99999)) return { ok: false, error: '第 ' + (wi + 1) + ' 箱重量要填 1 公斤以上（小數會進位）' };
+    items = ws.map(function (w) { return { ejamt: 1, eqamt: w }; });
   } else {
     var boxes = Math.floor(dcoNum_(b.boxes)), weight = Math.ceil(dcoNum_(b.weight));
     if (!(boxes >= 1 && boxes <= 20)) return { ok: false, error: '件數要填 1～20 箱' };

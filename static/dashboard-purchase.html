@@ -5266,6 +5266,8 @@ function hctRcv(store){var x=SLIP_SHIP[String(store)];if(!x)return null;
 function hctIn(id){ST.hctIn=ST.hctIn||{};return ST.hctIn[id]||(ST.hctIn[id]={});}
 /* 2026-11-12：新竹司機掃描機不跳多件 → 按重量也一箱一張托運單（後端 v1.9.1）。預設件數／總重量＝這張訂單現有托運單加總 */
 function hctSumB(L){var n=0;(L||[]).forEach(function(l){n+=Math.max(1,num(l.boxes)||1);});return n||1;}
+/* 2026-11-19 出貨中心：常溫（按重量）也每箱各填重量（後端 v1.9.2 收 weights）。更正時預設＝原托運單每箱重量（舊的一張多件單不帶） */
+function hctDefW(L,i,n){return (L&&L.length===n&&L.every(function(l){return l.mode!=="S"&&num(l.boxes)<=1;})&&L[i])?L[i].weight:"";}
 function hctSumW(L){var n=0;(L||[]).forEach(function(l){n+=num(l.weight);});return n||"";}
 /* 填寫區：客代（多個才給選）＋件數＋（按重量）總重量／（按尺寸）每箱尺寸。L＝要更正的那組托運單（帶預設值） */
 function hctForm(o,L,lab){var k=escA(o.id),E=hctIn(o.id),dis=DCO.busy?' disabled':'',cl=hctCsList();
@@ -5275,7 +5277,9 @@ function hctForm(o,L,lab){var k=escA(o.id),E=hctIn(o.id),dis=DCO.busy?' disabled
   if(tw)h+='<span style="font-size:12px;color:#B3261E;font-weight:600">⚠️ '+escH(tw)+'</span>';
   else if(ci.length)h+='<span style="font-size:12px;color:#00695C">❄️ 含冷藏／冷凍：'+escH(ci.slice(0,3).join("、")+(ci.length>3?" 等 "+ci.length+" 項":""))+'</span>';
   h+='<label style="font-size:13px">件數（箱） <input class="sm" type="number" min="1" max="20" step="1" style="width:60px" data-hctb="'+k+'" value="'+escA(nb)+'"></label>';
-  if(!S)h+='<label style="font-size:13px">總重量 <input class="sm" type="number" min="1" step="0.1" style="width:70px" data-hctw="'+k+'" value="'+escA(E.w!=null?E.w:(L&&L[0]&&L[0].mode!=="S"?hctSumW(L):""))+'" placeholder="公斤"> 公斤</label>';
+  if(!S){var nw=Math.max(1,Math.min(20,Math.floor(num(nb))||1));h+='<span style="font-size:13px">每箱重量</span>';
+    for(var j=0;j<nw;j++){var wv=(E.wb&&E.wb[j]!=null)?E.wb[j]:hctDefW(L,j,nw);
+      h+='<span style="font-size:13px;white-space:nowrap">第'+(j+1)+'箱 <input class="sm" type="number" min="0.1" step="0.1" style="width:62px" data-hctwb="'+k+'|'+j+'" value="'+escA(wv)+'" placeholder="公斤"> 公斤</span>';}}
   else{var n=Math.max(1,Math.min(20,Math.floor(num(nb))||1));h+='<span style="font-size:13px">每箱尺寸（長＋寬＋高）</span>';
     for(var i=0;i<n;i++){var v=(E.sz&&E.sz[i]!=null)?E.sz[i]:(L&&L[i]&&L[i].mode==="S"?L[i].weight:60),std=HCT_SZ.indexOf(num(v))>=0;
       h+='<span style="font-size:13px;white-space:nowrap">第'+(i+1)+'箱 <select class="sm" data-hctsz="'+k+'|'+i+'">'+HCT_SZ.map(function(s){return '<option value="'+s+'"'+(std&&num(v)===s?' selected':'')+'>'+s+'</option>';}).join('')+'<option value="x"'+(std?'':' selected')+'>151 以上</option></select>'
@@ -5379,10 +5383,10 @@ function hctBody(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[
     var sz=[];for(var i=0;i<b;i++){var v=num((E.sz&&E.sz[i]!=null)?E.sz[i]:(L[i]&&L[i].mode==="S"?L[i].weight:60));
       if(!(HCT_SZ.indexOf(v)>=0||(v>=151&&v<=999)))return {err:"第 "+(i+1)+" 箱尺寸要是 60、90、120、150 或 151～999 公分"};sz.push(v);}
     body.sizes=sz;desc=b+" 箱，每箱一張托運單（"+sz.map(function(s){return s+"";}).join("、")+" 公分）";}
-  else{var wt=num(E.w!=null?E.w:(L[0]&&L[0].mode!=="S"?hctSumW(L):""));
-    if(!(b>=1&&b<=20))return {err:"件數要填 1～20 箱"};
-    if(!(wt>0))return {err:"請填總重量（公斤）"};
-    body.boxes=b;body.weight=wt;desc=b+" 箱，每箱一張托運單（一個貨號）　總重量 "+Math.ceil(wt)+" 公斤平均分到每箱";}
+  else{if(!(b>=1&&b<=20))return {err:"件數要填 1～20 箱"};
+    var ws=[],wt=0;for(var j=0;j<b;j++){var w=num((E.wb&&E.wb[j]!=null)?E.wb[j]:hctDefW(L,j,b));if(!(w>0))return {err:"第 "+(j+1)+" 箱請填重量（公斤）"};ws.push(w);wt+=w;}
+    body.boxes=b;body.weights=ws;body.weight=wt;   /* weight＝合計：給還沒更新的後端用（會平均分） */
+    desc=b+" 箱，每箱一張托運單（"+ws.map(function(w){return Math.ceil(w);}).join("、")+" 公斤；小數進位）";}
   var rcv=hctRcv(o.store);if(!rcv)return {err:"這家店沒有收件地址"};body.rcv=rcv;
   return {o:o,L:L,cs:cs,body:body,desc:desc,rcv:rcv,warn:hctTempWarn(o,cs)};}
 function hctCreate(id){if(DCO.busy)return;var B=hctBody(id);if(B.err){toast(B.err);return;}
@@ -5452,7 +5456,7 @@ function hctTotCopies(){return lsGet("hctTotCopies")==="1"?1:2;}
 function hctView(){var dIn=ST.hctDay||ymd(new Date()),day=dIn.replace(/-/g,""),isToday=day===hctToday(),dsp=!!(HCT.cfg&&HCT.cfg.dispatch);
   var dErr=HCT.dayErr&&HCT.dayErr[day];
   if(HCT.day[day]===undefined&&!HCT.dayLd[day]&&!dErr)hctLoadDay(day);
-  var h='<div class="note tabhelp"><b>這頁做什麼：</b>看每天開了哪些新竹托運單、一次補印標籤、印「託運總表」交給司機'+(dsp?'、通知新竹來收件':'')+'。<br><b>怎麼做：</b>① 在每張訂單卡片下方'+(hctHasTemp()?'選溫層（常溫填件數＋總重量；低溫比較貴，填件數＋每箱尺寸）':'填件數、'+(hctCsList().some(function(c){return c.mode==="S";})?'重量或每箱尺寸':'總重量'))+' → 按「🚚 產生並列印托運單」，標籤一箱貼一張　② <b>每天 18:00 前</b>回這頁按「📋 確認今日出貨＋印託運總表」，總表照客代（常溫、低溫分開）各印一份、一式兩份，司機來收貨時簽名交接'+(dsp?'（同時會通知新竹來收件：15:00 前按當天收，之後排下一個工作天，週六日不派車）':'')+'。<br>③ 要另外補印：在下面表格<b>勾選托運單</b> → 按「🖨 補印標籤」或「📋 印託運總表」（沒勾＝這天全部；總表只印已確認出貨的）。<br>確認出貨後的托運單就不能作廢或更正了；還沒確認的，當天都可以在訂單卡片改或作廢。</div>'
+  var h='<div class="note tabhelp"><b>這頁做什麼：</b>看每天開了哪些新竹托運單、一次補印標籤、印「託運總表」交給司機'+(dsp?'、通知新竹來收件':'')+'。<br><b>怎麼做：</b>① 在每張訂單卡片下方'+(hctHasTemp()?'選溫層（常溫填件數＋每箱重量；低溫比較貴，填件數＋每箱尺寸）':'填件數、'+(hctCsList().some(function(c){return c.mode==="S";})?'重量或每箱尺寸':'總重量'))+' → 按「🚚 產生並列印托運單」，標籤一箱貼一張　② <b>每天 18:00 前</b>回這頁按「📋 確認今日出貨＋印託運總表」，總表照客代（常溫、低溫分開）各印一份、一式兩份，司機來收貨時簽名交接'+(dsp?'（同時會通知新竹來收件：15:00 前按當天收，之後排下一個工作天，週六日不派車）':'')+'。<br>③ 要另外補印：在下面表格<b>勾選托運單</b> → 按「🖨 補印標籤」或「📋 印託運總表」（沒勾＝這天全部；總表只印已確認出貨的）。<br>確認出貨後的托運單就不能作廢或更正了；還沒確認的，當天都可以在訂單卡片改或作廢。</div>'
     +'<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>出貨日</b><input type="date" id="hctDay" value="'+escA(dIn)+'"><span style="flex:1"></span><button class="btn sm ghost" data-hctday="1">🔄 重新整理</button></div>';
   if(dErr&&HCT.day[day]===undefined)return h+alertBig("stop","⛔ 讀不到這天的托運單","不是沒有托運單，是這次沒讀到（"+escH(dErr)+"）。按上面「🔄 重新整理」再試一次。")+'</div>';
   var list=HCT.day[day];if(list===undefined)return h+'<div class="loading">讀取中…</div></div>';
@@ -5542,6 +5546,7 @@ document.addEventListener("click",function(ev){var t=ev.target&&ev.target.closes
 document.addEventListener("input",function(ev){var t=ev.target,a;if(!t||!t.getAttribute)return;   /* 只記數字，不重畫（不會打斷輸入） */
   if((a=t.getAttribute("data-hctb"))!=null){hctIn(a).b=t.value;return;}
   if((a=t.getAttribute("data-hctw"))!=null){hctIn(a).w=t.value;return;}
+  if((a=t.getAttribute("data-hctwb"))!=null){var q=a.split("|"),Ew=hctIn(q[0]);Ew.wb=Ew.wb||[];Ew.wb[+q[1]]=t.value;return;}
   if((a=t.getAttribute("data-hctszx"))!=null){var p=a.split("|"),E=hctIn(p[0]);E.sz=E.sz||[];E.sz[+p[1]]=t.value;return;}});
 document.addEventListener("change",function(ev){var t=ev.target,a;if(!t||!t.getAttribute)return;
   if(t.id==="hctDay"&&t.value){ST.hctDay=t.value;render();return;}
@@ -5554,7 +5559,7 @@ document.addEventListener("change",function(ev){var t=ev.target,a;if(!t||!t.getA
   if(t.getAttribute("data-hctcopies")!=null){lsSet("hctTotCopies",t.value);render();return;}
   if((a=t.getAttribute("data-hctcs"))!=null){var E=hctIn(a);E.cs=t.value;E.sz=null;render();return;}   /* 換溫層（計費方式）：重畫填寫區（下拉選單，不影響打字） */
   if((a=t.getAttribute("data-hctsz"))!=null){var p=a.split("|"),E2=hctIn(p[0]);E2.sz=E2.sz||[];E2.sz[+p[1]]=t.value==="x"?151:num(t.value);render();return;}
-  if((a=t.getAttribute("data-hctb"))!=null&&hctCsOf(hctIn(a).cs!=null?hctIn(a).cs:((HCT.byId[a]||[])[0]||{}).cs).mode==="S"){render();return;}});   /* 按尺寸：改完箱數（離開欄位）才重畫每箱的尺寸選單 */
+  if((a=t.getAttribute("data-hctb"))!=null){render();return;}});   /* 改完箱數（離開欄位）才重畫每箱的尺寸／重量欄（2026-11-19 常溫也每箱一格） */
 /* ── 出貨中心庫存：多數品項＝無限量；少數記數量（同 Shopline 做法） ── */
 function viewDcStock(){if(!dcoOn())return dcoSetupNote();
   if(DCO.stock===null&&!DCO.stockLd)dcoLoadStock();
