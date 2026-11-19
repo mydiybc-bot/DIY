@@ -2176,7 +2176,8 @@ function fetchPos(name,btn){
 
 return { ensureInit, fetchPos, render, get ready(){ return READY; },
   /* 2026-09-05 供 ApplyMod（新品申請表）共用：同一套 costLines 引擎與已載入主檔，不另抓資料 */
-  costOf:costLines, skuOf:skuOf, isTool:isTool, conv:conv, priceOf:priceOf,
+  costOf:costLines, aliasOf:function(m){return ALIAS[m]||m},   /* 2026-11-19：costLines 用 ALIAS 把「雞蛋 (請打到塑膠碗)」算成「雞蛋」，申請表對回每列成本要用同一個名字 */
+  skuOf:skuOf, isTool:isTool, conv:conv, priceOf:priceOf,
   parseRecipeHTML:parseRecipeHTML, proseMiss:proseMiss, stripPos:stripPos, bomTsv:bomTsv,
   gq:gq, gqShared:gqShared, SKU_TQ:SKU_TQ, readIdOf:readIdOf, skus:function(){return SKUARR}, bom:function(){return BOM}, convs:function(){return CONV}, aliasMap:function(){return SKUALIAS} };
 })();
@@ -2964,7 +2965,7 @@ function computeCost(){
   var rows=r.rows.map(function(x){return {m:x.m,q:x.q,u:x.u,cat:x.cat,cost:x.cost,t:x.t,s:x.s,warn:x.warn||'',isNew:false}}).concat(newRows);
   /* 2026-10-17 經營者：主檔品項算不出成本（缺價、單位對不上）→ 主廚手填每份成本（t＝'M'），主檔負責人之後在採購系統補正確單價 */
   L.forEach(function(l){if(isNewItem(l)||isToolLine(l))return;var mc=num(l.mc);if(!(mc>0))return;var nm=String(l.m).trim();
-    rows.forEach(function(x){if(x.m===nm&&x.cost===null){x.cost=mc;x.t='M';x.s='主廚手填（採購主檔還算不出這項成本，請主檔負責人補正確單價或單位）';x.manual=true}})});
+    rows.forEach(function(x){if(rowNm(x,nm)&&x.cost===null){x.cost=mc;x.t='M';x.s='主廚手填（採購主檔還算不出這項成本，請主檔負責人補正確單價或單位）';x.manual=true}})});
   /* 2026-10-17 客人選一：每組只算最貴的選項；同一品名只出現在「非最貴選項」的列＝不計入（optOut） */
   var OM=optModel(),inBest={},inOther={},optCut={};
   OM.order.forEach(function(g){var gg=OM.G[g],best=null;
@@ -2984,8 +2985,10 @@ function computeCost(){
 /* 2026-10-18 經營者（擠花袋 4 個＋3 個兩列，每列都顯示 7 個的 26 元）：成本引擎會把同一品項、同單位的列加總成一筆；
    畫面與申請單逐列內容改成「這一列的數量 ÷ 合計數量 × 合計成本」，並註明同品項合計。成本卡總額照舊只算一次。
    主廚手填（M）、待換算／🆕（每列各自一筆，li 對應）不拆。 */
+/* 2026-11-19 經營者：「雞蛋 (請打到塑膠碗)」成本有算進總額，表一那格卻顯示「—」→ 成本引擎用 ALIAS 換成主檔名（雞蛋）算，這裡也認那個名字 */
+function rowNm(x,nm){return x.m===nm||(!x.li&&R.aliasOf&&x.m===R.aliasOf(nm))}
 function rowOf(c,l){var nm=String(l.m||'').trim(),u=String(l.u||'').trim()||'g';
-  var rs=c.rows.filter(function(x){return x.m===nm});if(!rs.length)return null;
+  var rs=c.rows.filter(function(x){return rowNm(x,nm)});if(!rs.length)return null;
   var own=rs.filter(function(x){return x.li===l})[0];if(own)return own;
   var agg=rs.filter(function(x){return !x.li&&x.u===u})[0]||rs.filter(function(x){return !x.li})[0]||rs[0];
   var lq=num(l.q);
