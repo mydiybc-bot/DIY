@@ -262,6 +262,15 @@ window.SpoonHint=(function(){
   #tab-apply .ap-drop:hover{background:#EAF5F2}
   #tab-apply .ap-drop.on{background:#DDF1EC;border-color:#00695C;border-style:solid}
   #tab-apply .ap-drop *{pointer-events:none}
+  /* 2026-11-19 打後台食譜名稱匯入 */
+  #tab-apply .ap-bk{margin:6px 0 4px}
+  #tab-apply .ap-bk input[type=search]{width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:8px 10px;border:1px solid #9CC9BF;border-radius:8px}
+  #tab-apply .ap-bkl{display:flex;flex-direction:column;gap:2px;margin-top:4px;max-height:320px;overflow:auto;border:1px solid #E3ECE9;border-radius:8px;background:#fff}
+  #tab-apply .ap-bki{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:0;border-bottom:1px solid #F2ECE8;background:#fff;padding:6px 10px;cursor:pointer;font-family:inherit;font-size:13px;color:#2A2320}
+  #tab-apply .ap-bki:hover{background:#EAF5F2}
+  #tab-apply .ap-bki .ap-muted{font-size:12px}
+  #tab-apply .ap-bkon{color:#2E6B43;font-weight:700}
+  #tab-apply .ap-bkoff{color:#8A7F78;font-weight:700}
   #tab-apply .ap-goto{border:1px solid #F0DFC0;background:#FFF2CC;color:#8A5A00;border-radius:9px;padding:1px 6px;font-size:12px;cursor:pointer;font-family:inherit}
   #tab-apply .ap-items td.ap-t2name{font-weight:700;color:#00695C}
   #tab-apply .ap-pin{padding:3px 8px;font-size:12px;white-space:nowrap}
@@ -3233,6 +3242,45 @@ function importFiles(fs){if(!fs||!fs.length)return;
         if(!String(AP.head.name||'').trim())AP.head.name=AP.srcName;
         OUT=null;saveDraft();render()}})})}
 
+/* 2026-11-19 經營者：「在上傳檔案的地方可以輸入食譜系統後台的食譜名稱，自動匯入」
+   食譜清單沿用 🧬 食譜演化的 lineage（免密碼、只讀；IndexedDB diybc_lineage 有快取先用）→ 打字只重畫結果區（#apBkRes），不重建輸入框（中文輸入安全）；
+   點選一支 → 申請單 API rcpZip（跟 🗂 找食譜同一個動作，要身分密碼、任何身分都可以；只讀後台「匯出」）取那一支的 .doc → 解壓 → 照拖檔一樣走 importFiles。 */
+var BKQ='',BKROWS=null,BKLOADP=null,BKBUSY='',BK_JSZIP='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+function bkNorm(s){return String(s||'').toLowerCase().replace(/[\s　]+/g,'').replace(/（/g,'(').replace(/）/g,')')}
+function bkIdbGet(){return new Promise(function(res){var done=false,fin=function(v){if(!done){done=true;res(v||null)}};setTimeout(function(){fin(null)},1500);
+  try{var r=indexedDB.open('diybc_lineage',1);r.onupgradeneeded=function(){r.result.createObjectStore('kv')};
+    r.onsuccess=function(){try{var q=r.result.transaction('kv').objectStore('kv').get('v1');q.onsuccess=function(){fin(q.result)};q.onerror=function(){fin(null)}}catch(e){fin(null)}};r.onerror=function(){fin(null)}}catch(e){fin(null)}})}
+function bkLoad(){if(BKROWS)return Promise.resolve(BKROWS);if(BKLOADP)return BKLOADP;
+  BKLOADP=bkIdbGet().then(function(c){if(c&&c.rows)return c;var n=0,go=function(){n++;return apiPost({action:'lineage'}).then(function(j){if(!j.ok||!j.data){if(n<3)return wait(1500).then(go);throw new Error(j.msg||'系統忙碌')}return j.data})};return go()})
+    .then(function(d){var H=d.head||[],ix={};H.forEach(function(h,i){ix[h]=i});
+      BKROWS=(d.rows||[]).map(function(r){var o={id:String(r[ix.recipe_id]||''),name:String(r[ix.name]||''),lang:String(r[ix.lang]||''),on:r[ix.status]==='Active',upd:String(r[ix.upd]||''),cat:String(r[ix.cat]||'')};o.k=bkNorm(o.name);return o})
+        .filter(function(o){return o.id&&o.name}).sort(function(a,b){return (b.on-a.on)||b.upd.localeCompare(a.upd)});return BKROWS})
+    .catch(function(e){BKLOADP=null;throw e});return BKLOADP}
+function bkPaint(msg,bad){var el=document.getElementById('apBkRes');if(!el)return;
+  if(BKBUSY){el.innerHTML='<div class="ap-muted">⏳ '+esc(BKBUSY)+'</div>';return}
+  if(msg){el.innerHTML='<div class="'+(bad?'ap-bad':'ap-muted')+'">'+esc(msg)+'</div>';return}
+  var q=bkNorm(BKQ);if(!q){el.innerHTML='';return}
+  if(!BKROWS){el.innerHTML='<div class="ap-muted">⏳ 讀食譜後台清單中…（第一次約 10～40 秒）</div>';return}
+  var ws=q.split(/[|｜]/).filter(Boolean),hit=BKROWS.filter(function(o){return o.id.toLowerCase()===q||ws.every(function(w){return o.k.indexOf(w)>=0})}),top=hit.slice(0,15);
+  if(!top.length){el.innerHTML='<div class="ap-muted">找不到名稱有「'+esc(BKQ)+'」的食譜（可以只打幾個字，例：草莓蛋糕）</div>';return}
+  el.innerHTML='<div class="ap-bkl">'+top.map(function(o){return '<button type="button" class="ap-bki" data-bkid="'+esc(o.id)+'"><b>'+esc(o.name)+'</b><span class="ap-muted">'+(o.on?'<span class="ap-bkon">啟用中</span>':'<span class="ap-bkoff">停用</span>')+' '+esc(o.lang==='繁體中文'?'中文':o.lang)+(o.cat?'・'+esc(o.cat):'')+(o.upd?'・更新 '+esc(o.upd.slice(0,10)):'')+'</span></button>'}).join('')+'</div>'
+    +(hit.length>top.length?'<div class="ap-muted">還有 '+(hit.length-top.length)+' 支，再多打幾個字縮小範圍</div>':'')}
+function bkJSZip(){if(window.JSZip)return Promise.resolve(window.JSZip);return new Promise(function(res,rej){var s=document.createElement('script');s.src=BK_JSZIP;s.onload=function(){window.JSZip?res(window.JSZip):rej(new Error('解壓工具載入失敗'))};s.onerror=function(){rej(new Error('解壓工具載入失敗'))};document.head.appendChild(s)})}
+function bkB64(s){var bin=atob(s),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
+function bkPick(id){if(BKBUSY)return;var o=(BKROWS||[]).filter(function(x){return x.id===id})[0];if(!o)return;
+  credRun(null,'從食譜後台取食譜檔要身分密碼（任何身分都可以）。',function(c,onR){BKBUSY='從食譜後台取「'+o.name+'」的食譜檔…';bkPaint();return apiPost({action:'rcpZip',role:c.role,password:c.pw,ids:[o.id]},onR)},
+    function(c,r){if(!r||!r.ok){BKBUSY='';bkPaint('❌ 取檔失敗：'+((r&&r.msg)||'沒有回應')+'。請稍後再點一次。',true);return}
+      BKBUSY='解開食譜檔…';bkPaint();
+      bkJSZip().then(function(JSZip){return JSZip.loadAsync(bkB64(r.data.b64))}).then(function(z){var fs=[];z.forEach(function(p,f){if(!f.dir&&/\.(docx?|html?)$/i.test(f.name))fs.push(f)});
+          if(!fs.length)throw new Error('後台給的壓縮檔裡沒有食譜檔');var f=fs[0];return f.async('blob').then(function(b){return new File([b],f.name.split('/').pop()||(o.name+'.doc'))})})
+        .then(function(file){BKBUSY='';BKQ='';importFiles([file])},function(e){BKBUSY='';bkPaint('❌ '+e.message,true)})})}
+function bkWire(root){var q=root.querySelector('#apBkQ');if(!q)return;
+  var go=function(){if(window.__ime&&__ime.on)return;BKQ=q.value;bkPaint();if(BKQ.trim()&&!BKROWS)bkLoad().then(function(){bkPaint()},function(e){bkPaint('❌ 讀不到食譜後台清單：'+e.message+'。請稍後再試。',true)})};
+  q.oninput=function(e){if(e.isComposing)return;go()};q.addEventListener('compositionend',function(){setTimeout(go,0)});
+  q.onfocus=function(){if(!BKROWS)bkLoad().then(function(){if(BKQ.trim())bkPaint()},function(){})};
+  var res=root.querySelector('#apBkRes');if(res)res.onclick=function(e){var b=e.target.closest('[data-bkid]');if(b)bkPick(b.getAttribute('data-bkid'))};
+  if(BKQ.trim())bkPaint()}
+
 /* 2026-10-19 經營者：「綜合水果只顯示在步驟內容中，沒有顯示在食材工具下方，裝飾鮮奶油也是；這些品項也需要顯示在新品儀表板的品項中，避免少算成本」
    食譜步驟寫了重量／容量、但「食材工具」清單沒列的品項（例：標題「脫模(+綜合水果100g/塑膠碗)」、內容「從冰箱拿取裝飾鮮奶油…用刮刀挖取85g」）
    → 匯入時自動加進表一（標 🤖、附原文），主檔沒有的照樣標 🆕 進表二；
@@ -5754,6 +5802,7 @@ function paint(){var root=document.getElementById('apRoot');
   /* 匯入 */
   s+='<div class="ap-card"><div class="ap-h">📄 匯入食譜檔（主廚給的 .doc 或 .docx）</div><div class="ap-muted" style="margin-bottom:6px">'
    +(AP.srcName?('目前來源：<b>'+esc(AP.srcName)+'</b>'):'')+'</div>'+rcLineHTML()+'<label class="ap-drop" id="apDrop" title="把食譜檔拉進來，或點一下選檔案"><input type="file" id="apFile" accept=".doc,.docx,.html,.htm,.txt" multiple style="display:none"><b>📂 把食譜檔拉到這裡</b><span class="ap-muted">或點一下選檔案（.doc／.docx，可一次多個）</span></label>'   /* 2026-11-19 經營者：選擇檔案改成拖拉 */
+   +'<div class="ap-bk"><input type="search" id="apBkQ" placeholder="🔎 或輸入食譜後台的食譜名稱，直接匯入（例：草莓蛋糕）" value="'+esc(BKQ)+'" autocomplete="off"><div id="apBkRes"></div></div>'   /* 2026-11-19 打名稱從後台匯入 */
    +'<details class="xhelp"><summary>ⓘ 哪些檔案可以匯入</summary><div>'
    +'食譜後台每道食譜「匯出 Export」下載的 .doc，或請 Claude「依公司格式產出食譜」得到的 .doc；用 Word 打開另存成 .docx 也可以。<br>'
    +'食譜的分區會對到申請單的「區域」：冰箱區→冰箱、凍庫區→冷凍庫、洞洞牆區→洞洞牆區，其他的留空，請自己選。<br>'
@@ -5932,6 +5981,7 @@ function wire(){var root=document.getElementById('apRoot');
   var an=document.getElementById('apAddNew');if(an)an.onclick=addNewItem;
   var f=document.getElementById('apFile');if(f)f.onchange=function(e){importFiles(e.target.files);f.value=''};   /* 清空：同一個檔再選一次也會匯入 */
   /* 2026-11-19 經營者：匯入食譜檔改成可把檔案拉進來（點一下仍可選檔）；只收 .doc／.docx／.html／.htm／.txt */
+  bkWire(root);   /* 2026-11-19 打後台食譜名稱匯入 */
   var dz=document.getElementById('apDrop');if(dz){
     var dzOn=function(e){e.preventDefault();e.stopPropagation();if(e.dataTransfer)e.dataTransfer.dropEffect='copy';dz.classList.add('on')},dzOff=function(e){e.preventDefault();e.stopPropagation();if(!e.relatedTarget||!dz.contains(e.relatedTarget))dz.classList.remove('on')};
     dz.ondragenter=dzOn;dz.ondragover=dzOn;dz.ondragleave=dzOff;
