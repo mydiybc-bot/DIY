@@ -102,6 +102,16 @@ window.__ime=(function(){
   .edhint{font-size:13px;color:#8A5A00;background:#FFF4D6;border-radius:8px;padding:6px 10px;margin-bottom:8px}
   .edlog{font-size:12px;color:#6F4E45;background:#F6EFEA;border-radius:8px;padding:6px 10px;margin-bottom:8px}
   .edlog div+div{margin-top:3px}
+  /* 2026-11-19：調撥單分頁上面的「交了沒」看板 */
+  .board{border:1px solid #E6D8CF;border-radius:10px;padding:10px 12px;margin-bottom:12px;background:#FFFBF7}
+  .board h4{margin:0 0 8px;font-size:15px;color:#5B3A2E}
+  .board .units{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}
+  .board .u{border:1px solid #E3E3E3;border-radius:8px;padding:6px 8px;background:#fff;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:6px}
+  .board .u.ok{border-color:#B9DCC8;background:#F3FAF6}.board .u.no{color:#A3321F;background:#FFF6F4;border-color:#F2C9C2}
+  .board .u button{border:1px solid #CFC6BF;background:#fff;border-radius:6px;padding:2px 8px;font-family:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+  .fileblk{border:1px solid #E3E3E3;border-radius:8px;padding:10px 12px;margin-bottom:10px;background:#fff}
+  .fileblk .old{margin-top:6px;font-size:13px;color:#6B5B53}
+  .fileblk button{border:1px solid #CFC6BF;background:#fff;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:13px;cursor:pointer;margin-left:6px}
   .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
   .thumbs button{border:1px solid #DDD;background:#fff;border-radius:8px;padding:6px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .thumbs img{max-width:100%;max-height:70vh;border:1px solid #DDD;border-radius:8px;display:block;margin-top:6px}
@@ -414,6 +424,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
         <li>「⬇ Excel」下載這一筆的申請表；「📊 匯出一期總表」把某項目某一期所有通過的申請合成一份給會計。</li>
         <li>「👥 名單」：各單位申請人姓名（店長在表單上自己加的）。打錯名字用「改名」（申請紀錄會一起改，額度才算得準），離職用「停用」。</li>
         <li>「⚙️ 額度」：每期次數規則在試算表 dim_limit 分頁，改了 2 分鐘內生效。零用金不用審核，只看得到紀錄。</li>
+        <li>「🔄 調撥單」：各店每月 25 日 23:59 前上傳的調撥單 Excel（不用審核）。上面看哪些單位交了、哪些還沒交，可以一份一份下載或整期全部下載；檔案也在雲端「儀表板費用申請資料留存／調撥單／期別」。</li>
       </ol>
     </div>
   </div>
@@ -435,6 +446,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
       <button type="button" data-tab="approved">✅ 已完成<span class="n" id="nApproved">–</span></button>
       <button type="button" data-tab="rejected">↩ 已退回<span class="n" id="nRejected">–</span></button>
       <button type="button" data-tab="done">🧾 零用金<span class="n" id="nPetty">–</span></button>
+      <button type="button" data-tab="transfer" title="這一期交了幾份">🔄 調撥單<span class="n" id="nTransfer">–</span></button>
       <button type="button" data-tab="staff">👥 名單</button>
       <button type="button" data-tab="limits">⚙️ 額度</button>
     </div>
@@ -446,6 +458,7 @@ body:not(.uhelp-on) .tabhelp{display:none!important}
         <button class="btn ghost sm" id="reloadBtn" type="button">🔄 重新整理</button>
         <button class="btn ghost sm" id="exportBtn" type="button">📊 匯出一期總表</button>
       </div>
+      <div id="board"></div>
       <div class="tbl-wrap"><table class="list" id="list"><thead><tr><th>送出</th><th>單位</th><th>項目</th><th>期別</th><th>申請人</th><th style="text-align:right">金額</th><th>狀態</th></tr></thead><tbody></tbody></table></div>
       <div class="empty" id="listEmpty">沒有資料。</div>
       <div id="detail"></div>
@@ -554,30 +567,77 @@ function enter() {
   setTab('pending');
 }
 function setTab(tab) {
+  var was = S.tab;
   S.tab = tab; S.sel = ''; S.edit = false; $('detail').innerHTML = '';
   $('tabs').querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === tab); });
   $('listCard').hidden = tab === 'staff' || tab === 'limits'; $('staffCard').hidden = tab !== 'staff'; $('limitsCard').hidden = tab !== 'limits';
-  $('fType').hidden = tab === 'done';   /* 零用金分頁只有零用金，項目篩選用不到 */
+  $('fType').hidden = tab === 'done' || tab === 'transfer';   /* 零用金分頁只有零用金、調撥單分頁只有調撥，項目篩選用不到 */
+  $('exportBtn').textContent = tab === 'transfer' ? '⬇ 這期全部下載' : '📊 匯出一期總表';
+  /* 2026-11-19：進調撥單分頁預設看「這一期」（25 日以前＝這個月，26 日起＝下個月）；離開時期別篩選清掉（別的項目期別代碼不一樣） */
+  if (tab === 'transfer') { var k = curTransferKey(); $('fPeriod').innerHTML = '<option value="">全部期別</option><option value="' + k + '" selected>' + esc(monthLabel(k)) + '</option>'; }
+  else if (was === 'transfer') $('fPeriod').value = '';
   if (tab === 'staff') loadStaff(); else if (tab === 'limits') loadLimits(); else loadList();
 }
-/* 2026-11-13 經營者：拿掉「全部（含零用金）」，改「🧾 零用金」只列零用金（狀態 done＝零用金，不用審核）；其他三個分頁本來就沒有零用金 */
-function curType() { return S.tab === 'done' ? 'petty' : $('fType').value; }
+/* 2026-11-13 經營者：拿掉「全部（含零用金）」，改「🧾 零用金」只列零用金（狀態 done＝零用金，不用審核）；其他三個分頁本來就沒有零用金。
+   2026-11-19：調撥改成上傳 Excel、不用審核 → 自己一個「🔄 調撥單」分頁（不分狀態） */
+function curType() { return S.tab === 'done' ? 'petty' : S.tab === 'transfer' ? 'transfer' : $('fType').value; }
+function curTransferKey() { var d = new Date(), y = d.getFullYear(), m = d.getMonth() + 1; if (d.getDate() > 25) { m++; if (m > 12) { m = 1; y++; } } return y + '-' + String(m).padStart(2, '0'); }
+function monthLabel(k) { var p = String(k).split('-'); return p[0] + ' 年 ' + Number(p[1]) + ' 月'; }
 function loadList() {
   var tb = $('list').querySelector('tbody'); tb.innerHTML = '<tr><td colspan="7" class="muted">讀取中…</td></tr>'; $('listEmpty').style.display = 'none';
-  return api({ action: 'rv_list', status: S.tab, type: curType(), unit: $('fUnit').value, period: $('fPeriod').value }).then(function (r) {
+  return api({ action: 'rv_list', status: S.tab === 'transfer' ? 'all' : S.tab, type: curType(), unit: $('fUnit').value, period: $('fPeriod').value }).then(function (r) {
     S.rows = r.rows; S.counts = r.counts; S.periods = r.periods;
-    $('nPending').textContent = r.counts.pending; $('nApproved').textContent = r.counts.approved; $('nRejected').textContent = r.counts.rejected; $('nPetty').textContent = r.counts.done;
-    var cur = $('fPeriod').value, keys = Object.keys(r.periods).sort().reverse();
-    $('fPeriod').innerHTML = '<option value="">全部期別</option>' + keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(r.periods[k]) + '</option>'; }).join('');
+    $('nPending').textContent = r.counts.pending; $('nApproved').textContent = r.counts.approved; $('nRejected').textContent = r.counts.rejected;
+    $('nPetty').textContent = r.counts.petty != null ? r.counts.petty : r.counts.done; $('nTransfer').textContent = r.counts.transfer != null ? r.counts.transfer : '–';
+    var cur = $('fPeriod').value, keys = Object.keys(r.periods);
+    if (S.tab === 'transfer') { keys = keys.filter(function (k) { return /^\d{4}-\d{2}$/.test(k); }); [curTransferKey(), cur].forEach(function (k) { if (k && keys.indexOf(k) < 0) keys.push(k); }); }
+    keys.sort().reverse();
+    $('fPeriod').innerHTML = '<option value="">全部期別</option>' + keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === cur ? ' selected' : '') + '>' + esc(r.periods[k] || monthLabel(k)) + '</option>'; }).join('');
     renderList();
-  }).catch(function (e) { tb.innerHTML = ''; $('listEmpty').textContent = '讀不到：' + (e.message || e); $('listEmpty').style.display = ''; });
+  }).catch(function (e) { tb.innerHTML = ''; $('board').innerHTML = ''; $('listEmpty').textContent = '讀不到：' + (e.message || e); $('listEmpty').style.display = ''; });
 }
 function renderList() {
   var tb = $('list').querySelector('tbody');
   tb.innerHTML = S.rows.map(function (a) {
-    return '<tr class="row' + (a.id === S.sel ? ' sel' : '') + '" data-id="' + esc(a.id) + '"><td>' + esc(a.created) + '</td><td>' + esc(a.unit) + '</td><td>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '</td><td>' + esc(a.who) + '</td><td class="r">$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆' + (a.nPhotos ? '・📷' + a.nPhotos : '') + '</span></td><td><span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="muted">' + esc(a.reviewNote) + '</div>' : '') + '</td></tr>';
+    var amt = a.file ? '📎 ' + esc(a.file.name) + '<br><span class="muted">' + (a.n ? a.n + ' 筆 $' + money(a.amount) : '已上傳') + (a.file.nOld ? '・換過 ' + a.file.nOld + ' 次' : '') + '</span>' : '$' + money(a.amount) + '<br><span class="muted">' + a.n + ' 筆' + (a.nPhotos ? '・📷' + a.nPhotos : '') + '</span>';
+    return '<tr class="row' + (a.id === S.sel ? ' sel' : '') + '" data-id="' + esc(a.id) + '"><td>' + esc(a.created) + '</td><td>' + esc(a.unit) + '</td><td>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + (a.sub ? '<br><span class="muted">' + esc(a.sub) + '</span>' : '') + '</td><td>' + esc(a.periodLabel) + '</td><td>' + esc(a.who) + '</td><td class="r">' + amt + '</td><td><span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span>' + (a.reviewNote ? '<div class="muted">' + esc(a.reviewNote) + '</div>' : '') + '</td></tr>';
   }).join('');
   $('listEmpty').textContent = '沒有資料。'; $('listEmpty').style.display = S.rows.length ? 'none' : '';
+  renderBoard();
+}
+/* 2026-11-19：調撥單分頁上面的看板：這一期每個單位交了沒（測試用只有在單位篩選選「測試用」時出現） */
+function boardUnits() { var u = $('fUnit').value; return u ? [u] : UNITS.filter(function (x) { return x !== '測試用'; }); }
+function boardApps() { var pe = $('fPeriod').value, by = {}; S.rows.forEach(function (a) { if (a.type === 'transfer' && a.period === pe && !by[a.unit]) by[a.unit] = a; }); return by; }
+function renderBoard() {
+  var box = $('board');
+  if (S.tab !== 'transfer') { box.innerHTML = ''; return; }
+  var pe = $('fPeriod').value;
+  if (!pe) { box.innerHTML = '<div class="board muted">選一個期別，就會列出哪些單位交了調撥單。</div>'; return; }
+  var units = boardUnits(), by = boardApps(), got = units.filter(function (u) { return by[u]; }).length;
+  box.innerHTML = '<div class="board"><h4>📅 ' + esc(monthLabel(pe)) + '調撥單（截止 ' + esc(pe) + '-25 23:59）：已交 ' + got + '／' + units.length + '</h4><div class="units">' +
+    units.map(function (u) {
+      var a = by[u];
+      if (!a) return '<div class="u no"><span>⬜ ' + esc(unitShort(u)) + '　還沒交</span></div>';
+      return '<div class="u ok"><span title="' + esc(a.file ? a.file.name : '') + '">✅ ' + esc(unitShort(u)) + '　' + esc(a.who) + ' ' + esc(a.created.slice(5)) + '</span>' + (a.file ? '<button type="button" data-dlf="' + esc(a.id) + '">⬇ 下載</button>' : '<button type="button" data-id="' + esc(a.id) + '">看明細</button>') + '</div>';
+    }).join('') + '</div></div>';
+}
+function b64Blob(data, mt) { var s = atob(data), u = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Blob([u], { type: mt || 'application/octet-stream' }); }
+function fileSize(n) { n = Number(n) || 0; return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+function dlFile(id, k, btn) {   /* k＜0＝目前那一份；0,1,…＝換檔前的舊檔 */
+  if (btn) btn.disabled = true;
+  return api({ action: 'rv_file', id: id, k: k < 0 ? '' : k }, 120000).then(function (r) { saveBlob(b64Blob(r.data, r.mt), r.name); return true; })
+    .catch(function (e) { toast('下載失敗：' + (e.message || e)); return false; }).finally(function () { if (btn) btn.disabled = false; });
+}
+function dlAllTransfer(btn) {
+  var by = boardApps(), list = boardUnits().map(function (u) { return by[u]; }).filter(function (a) { return a && a.file; });
+  if (!$('fPeriod').value) { toast('請先在上面選「期別」'); return; }
+  if (!list.length) { toast('這一期還沒有人上傳調撥單'); return; }
+  btn.disabled = true; var i = 0, ok = 0;
+  (function next() {
+    if (i >= list.length) { btn.disabled = false; btn.textContent = '⬇ 這期全部下載'; toast('下載完成 ' + ok + '／' + list.length + ' 份（瀏覽器問要不要允許下載多個檔案時，請按允許）'); return; }
+    btn.textContent = '下載中 ' + (i + 1) + '／' + list.length + '…';
+    dlFile(list[i++].id, -1).then(function (good) { if (good) ok++; setTimeout(next, 700); });
+  })();
 }
 function openDetail(id) {
   S.sel = id; S.edit = false; renderList(); var box = $('detail'); box.innerHTML = '<div class="detail muted">讀取中…</div>';
@@ -637,7 +697,19 @@ function saveEdit(btn) {
     return loadList();
   }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
 }
+/* 2026-11-19：上傳 Excel 的調撥單 → 明細顯示檔案（目前那一份＋換檔前的舊檔），不審核、不改內容 */
+function renderFileDetail() {
+  var a = S.app, pl = a.payload || {}, f = pl.file || {}, old = pl.oldFiles || [];
+  $('detail').innerHTML = '<div class="detail"><h3>' + TYPES[a.type].emoji + ' ' + esc(typeName(a.type, a.periodLabel) || a.typeLabel) + '｜' + esc(a.unit) + '｜' + esc(a.who) + '　<span class="chip ' + a.status + '">' + esc(a.statusLabel) + '</span></h3>' +
+    '<div class="meta"><span>編號 ' + esc(a.id) + '</span><span>送出 ' + esc(a.created) + '</span><span>算 <b>' + esc(a.periodLabel) + '</b>（截止 ' + esc(a.deadline) + ' 23:59）</span>' + (pl.n ? '<span>讀到 ' + pl.n + ' 筆、小計合計 $' + money(pl.sum) + '（參考）</span>' : '') + '</div>' +
+    (pl.note ? '<div style="margin-bottom:8px">💬 申請人：' + esc(pl.note) + '</div>' : '') +
+    '<div class="fileblk">📎 <b>' + esc(f.name || '') + '</b><button type="button" data-dlf="' + esc(a.id) + '" data-k="-1">⬇ 下載</button>' +
+    '<div class="muted" style="margin-top:4px">' + (f.orig && f.orig !== f.name ? '原檔名 ' + esc(f.orig) + '・' : '') + '上傳 ' + esc(String(f.at || '').slice(0, 16)) + (f.size ? '・' + fileSize(f.size) : '') + (f.path ? '・雲端「儀表板費用申請資料留存／' + esc(f.path) + '」' : '') + '</div>' +
+    (old.length ? '<div class="old">之前換掉的檔：' + old.map(function (o, k) { return '<div>' + esc(String(o.at || '').slice(0, 16)) + ' 上傳、' + esc(String(o.replaced || '').slice(0, 16)) + ' 換掉（原檔名 ' + esc(o.orig || o.name) + '）<button type="button" data-dlf="' + esc(a.id) + '" data-k="' + k + '">⬇</button></div>'; }).join('') + '</div>' : '') + '</div>' +
+    '<div class="actions"><span class="muted">調撥單不用審核；店家截止前可以換檔。</span><span class="muted" id="detMsg"></span></div></div>';
+}
 function renderDetail() {
+  if (S.app && S.app.type === 'transfer' && (S.app.payload || {}).file) return renderFileDetail();
   var a = S.app, pl = a.payload || {}, rows = pl.rows || [], ed = !!S.edit, pet = a.type === 'petty', cols = (ed && EDCOLS[a.type]) || COLS[a.type] || [];
   var gn = pet ? grpNo(rows) : null;   /* 零用金：編碼＝申請表的編碼（同一張單據幾列共用一個） */
   var th = '<tr><th>' + (pet ? '編碼' : '#') + '</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + (ed ? '<th></th>' : '') + '</tr>';
@@ -673,7 +745,8 @@ function setStatus(st, btn) {
   }).then(function () { openDetail(a.id); }).catch(function (e) { toast('儲存失敗：' + (e.message || e)); btn.disabled = false; $('detMsg').textContent = ''; });
 }
 document.addEventListener('click', function (e) {
-  var t = e.target.closest ? e.target.closest('[data-tab],[data-id],[data-photo],[data-set],[data-rm],#dlBtn,#edBtn,#edSave,#edCancel') : null; if (!t) return;
+  var t = e.target.closest ? e.target.closest('[data-tab],[data-dlf],[data-id],[data-photo],[data-set],[data-rm],#dlBtn,#edBtn,#edSave,#edCancel') : null; if (!t) return;
+  if (t.dataset.dlf) { dlFile(t.dataset.dlf, t.dataset.k == null ? -1 : +t.dataset.k, t); return; }   /* 2026-11-19：下載調撥單 */
   if ((t.dataset.tab || t.dataset.id) && S.edit && edDirty() && !confirm('改的內容還沒儲存，確定離開？')) return;
   if (t.dataset.tab) setTab(t.dataset.tab);
   else if (t.dataset.id) openDetail(t.dataset.id);
@@ -699,6 +772,7 @@ function dlOne(btn) {
 $('reloadBtn').addEventListener('click', loadList);
 ['fType', 'fUnit', 'fPeriod'].forEach(function (id) { $(id).addEventListener('change', loadList); });
 $('exportBtn').addEventListener('click', function () {
+  if (S.tab === 'transfer') return dlAllTransfer(this);   /* 2026-11-19：調撥單分頁＝整期檔案全部下載 */
   var type = curType(), pe = $('fPeriod').value;
   if (!type || !pe) { toast(S.tab === 'done' ? '請先在上面選「期別」再匯出' : '請先在上面選「項目」和「期別」再匯出'); return; }
   var btn = this; btn.disabled = true;
