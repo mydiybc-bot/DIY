@@ -302,6 +302,7 @@ main{max-width:1400px;margin:0 auto;padding:12px 16px 60px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0}
 .card h2{font-size:16px;margin:0 0 8px}
 .mute{color:var(--mute);font-size:13px}
+tr.skiprow td{background:#f3f1ee;color:#9a948c}tr.skiprow input{opacity:.45}tr.skiprow .echo{display:none}tr.skiptog td{background:#faf7f1;cursor:pointer;color:var(--mute);font-size:12px;text-align:left;padding:4px 8px}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:900px){.grid2{grid-template-columns:1fr}}
@@ -647,6 +648,13 @@ function renderFiles(){
 }
 var NOFLOOR_DAY=/特休(?!取消)|補休/,NOFLOOR_SEG=['事務班','會議','上課','交流會議','區會','台北內訓課','經管會','特休','補休'];   /* 2026-11-13：104 新標籤「會議」「上課」；「特休取消」＝照常上班 */   /* 同後端 NOFLOOR_DAY_TAGS／NOFLOOR_SEG_TAGS */
 function floorSegs(c){if(NOFLOOR_DAY.test(c.dtag||''))return [];return (c.segs||[]).filter(function(s){return inStore(s[3])&&!String(s[2]||'').split(/[、,，]/).some(function(t){return NOFLOOR_SEG.indexOf(t.trim())>=0})})}
+/* 2026-11-19 經營者（12 號店 Lisa）：104 名單裡的外店夥伴，店長在「正職／兼職」選「不排」→ AI 不排、班表與休假表收到最下面 */
+var SKIP='不排',showSkip=false;
+function isSkip(id){return (((S&&S.mset&&S.mset.emps)||{})[id]||{}).type===SKIP}
+function hasWork(id){var r=(S&&S.cells&&S.cells[id])||{};for(var d in r)if((r[d].segs||[]).length)return true;return false}
+function empRows(){var a=[],b=[];S.template.info.emps.forEach(function(e){(isSkip(e.id)?b:a).push(e)});return {main:a,skip:b,shown:showSkip?b:b.filter(function(e){return hasWork(e.id)})}}
+function skipTog(n,cols,hid){return n?'<tr class="skiptog"><td colspan="'+cols+'" data-skiptog="1">🚫 不排的外店夥伴 '+n+' 位'+(hid?'（'+hid+' 位這個月沒有班，已收起）':'')+'　'+(showSkip?'▴ 收起':'▾ 顯示')+'</td></tr>':''}
+document.addEventListener('click',function(ev){var t=ev.target.closest&&ev.target.closest('[data-skiptog]');if(!t)return;showSkip=!showSkip;renderTable();renderMarks();renderBonus()});
 function inStore(pos){pos=(pos||'').trim();if(!pos)return true;return (S.template.info.title||'').indexOf(pos.replace(/店$/,''))>=0}
 
 /* ── 設定表單（2026-10-28）：只在第一次載入、換店月、存檔成功後重建；輪詢不碰（中文輸入規則） ── */
@@ -722,8 +730,9 @@ function renderMsetForm(ms){
   var h='<div class="sub">正職基準</div><label class="fld">標準時數 <input type="number" id="mStd" min="0" value="'+esc(b.std_hours==null?'':b.std_hours)+'"> h'+tag('std_hours',est.base_src)+'</label><label class="fld">休假 <input type="number" id="mOff" min="0" max="31" value="'+esc(b.off_days==null?'':b.off_days)+'"> 天'+tag('off_days',est.base_src)+'</label><label class="fld">國定假日 <input type="number" id="mHol" min="0" max="31" value="'+esc(b.holidays==null?'':b.holidays)+'"> 天'+tag('holidays',est.base_src)+'</label>';
   h+='<div class="sub">營收預估</div><label class="fld">平日每天 $<input type="number" id="mWd" min="0" value="'+esc(rv.weekday==null?'':rv.weekday)+'">'+tag('rev_weekday',est.rev_src)+'</label><label class="fld">假日每天 $<input type="number" id="mWe" min="0" value="'+esc(rv.weekend==null?'':rv.weekend)+'">'+tag('rev_weekend',est.rev_src)+'</label>';
   h+='<div class="sub">夥伴</div>'+chipBar()+'<div class="tblwrap"><table class="frm" id="empTbl"><thead><tr><th>工號</th><th>姓名</th><th>正職／兼職</th><th>目標時數</th><th>兼職最低時數</th><th>指休</th><th>特休</th><th>兼職可上日與時段</th><th>個人特殊班別／備註</th></tr></thead><tbody>';
-  info.emps.forEach(function(e){var v=(ms.emps||{})[e.id]||{};
-    h+='<tr data-e="'+esc(e.id)+'"><td>'+esc(e.id)+'</td><td>'+esc(e.name)+'</td><td><select><option'+(v.type!=='兼職'?' selected':'')+'>正職</option><option'+(v.type==='兼職'?' selected':'')+'>兼職</option></select></td>'+
+  var ordE=info.emps.filter(function(e){return ((ms.emps||{})[e.id]||{}).type!==SKIP}).concat(info.emps.filter(function(e){return ((ms.emps||{})[e.id]||{}).type===SKIP}));
+  ordE.forEach(function(e){var v=(ms.emps||{})[e.id]||{},sk=v.type===SKIP;
+    h+='<tr data-e="'+esc(e.id)+'"'+(sk?' class="skiprow"':'')+'><td>'+esc(e.id)+'</td><td>'+esc(e.name)+'</td><td><select title="不排＝104 名單上的外店夥伴，AI 不排他（整列留空白），有來支援時可在班表手動排"><option'+(v.type!=='兼職'&&!sk?' selected':'')+'>正職</option><option'+(v.type==='兼職'?' selected':'')+'>兼職</option><option value="不排"'+(sk?' selected':'')+'>不排（外店）</option></select></td>'+
       '<td><input type="number" class="n tgt" min="0" value="'+esc(v.target==null?'':v.target)+'" placeholder="'+esc(v.target_hint||'')+'"'+(v.target_est?' data-est="1" title="套本月標準時數（可改）"':'')+'></td><td><input type="number" class="n" min="0" value="'+esc(v.min_hours==null?'':v.min_hours)+'"></td>'+
       '<td><input type="text" class="mk-off mk" data-k="指休" style="width:110px" value="'+esc(v.off_txt||'')+'" placeholder="例：4、9、17"><div class="echo"></div></td><td><input type="text" class="mk-pto mk" data-k="特休" style="width:90px" value="'+esc(v.pto_txt||'')+'" placeholder="例：12-14"><div class="echo"></div></td>'+
       '<td><input type="text" class="mk-av mk wide" data-k="可上" value="'+esc(v.avail_txt||'')+'" placeholder="例：每週一到週三 晚班；20、21 早班"><div class="echo"></div></td>'+
@@ -739,7 +748,9 @@ function renderMsetForm(ms){
   Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var sel=tr.querySelector('select'),t=tr.querySelector('input.tgt');
     t.addEventListener('input',function(){t.removeAttribute('data-est')});
     /* 2026-11-11 經營者：調店不再讓店長選，後台固定全部夥伴都可調店（區域排班用） */
-    sel.addEventListener('change',function(){if(sel.value==='正職'&&!t.value){t.value=stdNow();t.setAttribute('data-est','1')}else if(sel.value==='兼職'&&t.hasAttribute('data-est')){t.value='';t.removeAttribute('data-est')}})});
+    function skipUi(){var sk=sel.value===SKIP;tr.classList.toggle('skiprow',sk);Array.prototype.forEach.call(tr.querySelectorAll('input'),function(x){x.disabled=sk})}
+    skipUi();
+    sel.addEventListener('change',function(){if(sel.value==='正職'&&!t.value){t.value=stdNow();t.setAttribute('data-est','1')}else if(sel.value!=='正職'&&t.hasAttribute('data-est')){t.value='';t.removeAttribute('data-est')}skipUi()})});
   $('msetSave').onclick=saveMset;
   bindEcho();
 }
@@ -816,9 +827,11 @@ function renderMarks(){
   if(!S.template||!S.mset){$('markWrap').innerHTML='';return}
   var info=S.template.info,marks=S.mset.marks||{},emps=S.mset.emps||{},av=S.mset.avail_shift||{};
   /* 2026-11-11 經營者：同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開（兼職不算） */
-  var dup={};info.emps.forEach(function(e){if(((emps[e.id]||{}).type||'正職')==='兼職')return;var mk=marks[e.id]||{};for(var d in mk)if(mk[d]==='指休')(dup[d]=dup[d]||[]).push(e.name)});
+  var dup={};info.emps.forEach(function(e){if(((emps[e.id]||{}).type||'正職')!=='正職')return;var mk=marks[e.id]||{};for(var d in mk)if(mk[d]==='指休')(dup[d]=dup[d]||[]).push(e.name)});
   var h='<table class="sch mk"><thead><tr><th class="nm">夥伴</th>';info.days.forEach(function(d){var two=(dup[d.d]||[]).length>1;h+='<th class="'+(isWk(d.d)?'wk':'')+(two?' dup':'')+'"'+(two?' title="'+esc(dup[d.d].join('、'))+' 同一天指休"':'')+'>'+d.d+'<br>'+d.wd+'</th>'});h+=(S.schedule?'<th style="white-space:nowrap">休假小計</th>':'')+'</tr></thead><tbody>';
-  info.emps.forEach(function(e){var t=(emps[e.id]||{}).type||'正職';h+='<tr><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
+  var R=empRows(),nCol=info.days.length+1+(S.schedule?1:0);
+  R.main.concat(['TOG'],R.shown).forEach(function(e){if(e==='TOG'){h+=skipTog(R.skip.length,nCol,R.skip.length-R.shown.length);return}
+    var t=(emps[e.id]||{}).type||'正職';h+='<tr'+(t===SKIP?' class="skiprow"':'')+'><td class="nm">'+esc(e.name)+' <span class="mute">'+esc(t)+'</span></td>';
     var cn={li:0,xi:0,gd:0,sp:0,tx:0};   /* 2026-11-13 經營者：例休 8＋國定 1 卻看起來休 12 天 → 「可支援」（多出來的假）、特休分開標，右邊加小計 */
     info.days.forEach(function(d){var v=(marks[e.id]||{})[d.d]||'',sh=v==='可上'?(av[e.id]||{})[d.d]:'';
       /* 2026-11-11 經營者：班表上的例假／休息／國定也同步顯示（照目前班表，改班後跟著變） */
@@ -826,7 +839,7 @@ function renderMarks(){
       var off=!(c.segs||[]).length,tx=/特休(?!取消)|補休/.test(c.dtag||'')||v==='特休',sp=off&&c.dtag==='彈性挪假';
       if(tx)cn.tx++;else if(sp){cn.sp++;r='<span style="color:#b26a00;font-weight:700">可支援</span>'}else if(off&&c.type==='例假日')cn.li++;else if(off&&c.type==='休息日')cn.xi++;else if(off&&c.type==='國定假日')cn.gd++;
       h+='<td class="m '+(MK[v]||(r?'rs':''))+(isWk(d.d)?' wk':'')+'"'+(sh||r?' title="'+esc([sh,r?'班表：'+(sp?'可支援其他店（本店這天不缺人，多出來的假，不算例假／休息天數）':c.type):''].filter(Boolean).join('；'))+'"':'')+'>'+esc(sh?sh.replace(/班$/,''):v)+(r?(v?'<span class="rs2">'+r+'</span>':r):'')+'</td>'});
-    if(S.schedule)h+='<td style="white-space:nowrap;font-size:12px;text-align:left;padding:2px 6px">'+(t==='兼職'?'<span class="mute">—</span>':'例休 <b>'+(cn.li+cn.xi)+'</b>・國定 <b>'+cn.gd+'</b>'+(cn.sp?'<br><span style="color:#b26a00">可支援 <b>'+cn.sp+'</b></span>':'')+(cn.tx?(cn.sp?'・':'<br>')+'特休 <b>'+cn.tx+'</b>':''))+'</td>';
+    if(S.schedule)h+='<td style="white-space:nowrap;font-size:12px;text-align:left;padding:2px 6px">'+(t!=='正職'?'<span class="mute">—</span>':'例休 <b>'+(cn.li+cn.xi)+'</b>・國定 <b>'+cn.gd+'</b>'+(cn.sp?'<br><span style="color:#b26a00">可支援 <b>'+cn.sp+'</b></span>':'')+(cn.tx?(cn.sp?'・':'<br>')+'特休 <b>'+cn.tx+'</b>':''))+'</td>';
     h+='</tr>'});
   var dl=info.days.filter(function(d){return (dup[d.d]||[]).length>1}).map(function(d){return d.d+' 號（'+d.wd+'）'+dup[d.d].join('、')});
   $('markWrap').innerHTML=h+'</tbody></table>'+(dl.length?'<div class="dupnote">⚠ 同一天有兩人以上指休，請店長協調夥伴錯開休假日：'+esc(dl.join('；'))+'</div>':'');
@@ -846,7 +859,7 @@ function renderBonus(){
   var b=S.bonus,el=$('bonusBox');if(!b){el.className='mute';el.textContent='還沒有班表';return}
   el.className='';var m=b.month,info=S.template.info;
   var h='<div class="bsum">'+(b.rev_days?'🎁 <b>本月日獎金合計 '+money(m.total)+'</b>　達標 '+m.hit_days+'／'+m.biz_days+' 天（跨級 '+m.cross_days+' 天）　<span class="mute">'+fmtTs(b.rev_fetched*1000)+(b.voucher_ok?'':'　⚠ 甜點券$100 沒抓到')+'</span>':(b.rev_fetched?'本月還沒有 POS 營收':'⚠ 還沒抓到營業額'+(b.rev_error?'（'+esc(b.rev_error)+'）':'（抓取中）')))+'</div>';
-  h+='<table class="hrs"><tr><th>夥伴</th><th>上班天數</th><th>計獎工時</th><th>日獎金合計</th></tr>'+info.emps.map(function(e){var days=0,work=0;for(var k in b.days){var x=b.days[k].staff[e.id];if(x&&x.work>0){days++;work+=x.work}}
+  h+='<table class="hrs"><tr><th>夥伴</th><th>上班天數</th><th>計獎工時</th><th>日獎金合計</th></tr>'+(function(){var R=empRows();return R.main.concat(R.shown)})().map(function(e){var days=0,work=0;for(var k in b.days){var x=b.days[k].staff[e.id];if(x&&x.work>0){days++;work+=x.work}}
     var away=0;for(var k in b.days){var y=b.days[k].staff[e.id];if(y&&y.away)y.away.forEach(function(a){away+=a.hours})}
     return '<tr><td>'+esc(e.name)+(away?'<br><span class="mute">支援別店 '+(Math.round(away*10)/10)+'h</span>':'')+'</td><td>'+days+'</td><td>'+(Math.round(work*10)/10)+'h</td><td><b>'+money(m.by_emp[e.id]||0)+'</b></td></tr>'}).join('')
     +(m.guests||[]).map(function(g){return '<tr><td>'+esc(g.name)+'<br><span class="mute">'+esc(storeNm(g.from))+'店來支援</span></td><td>'+g.days+'</td><td>'+(Math.round(g.work*10)/10)+'h</td><td><b>'+money(g.bonus)+'</b></td></tr>'}).join('')+'</table>';
@@ -922,9 +935,11 @@ function renderTable(){
   var B=S.bonus,names={};info.emps.forEach(function(e){names[e.id]=e.name});
   h+='<th>時數</th>'+(B?'<th>日獎金</th>':'')+'</tr></thead><tbody>';
   var hrs={};((S.check&&S.check.hours)||[]).forEach(function(x){hrs[x.id]=x});
-  var dayHrs={},dayN={};
-  info.emps.forEach(function(e){
-    h+='<tr><td class="nm">'+esc(e.name)+'<br><span class="mute">'+esc(e.id)+'</span></td>';
+  var dayHrs={},dayN={},R=empRows(),nCol=info.days.length+2+(B?1:0);
+  R.main.concat(['TOG'],R.skip).forEach(function(e){
+    if(e==='TOG'){h+=skipTog(R.skip.length,nCol,R.skip.length-R.shown.length);return}
+    var sk=isSkip(e.id),hide=sk&&R.shown.indexOf(e)<0;   /* 收起來的不排夥伴沒有班，不畫（在店人數、現場工時照樣算） */
+    if(!hide)h+='<tr'+(sk?' class="skiprow"':'')+'><td class="nm">'+esc(e.name)+'<br><span class="mute">'+esc(e.id)+(sk?'・不排':'')+'</span></td>';
     info.days.forEach(function(d){
       var raw=((S.schedule[e.id]||{})[d.d])||'',c=((S.cells[e.id]||{})[d.d])||{segs:[]},sh=short(raw),cls='c';
       if(isWk(d.d))cls+=' wk';
@@ -936,9 +951,9 @@ function renderTable(){
       if(onsite.length){dayN[d.d]=(dayN[d.d]||0)+1;dayHrs[d.d]=(dayHrs[d.d]||0)+onsite.reduce(function(a,s){return a+(mm(s[1])-mm(s[0]))/60},0)}
       var tags=(c.segs||[]).map(function(s){return s[2]}).filter(function(t,i,a){return t&&a.indexOf(t)===i});if(c.dtag)tags.unshift((c.dtag==='彈性挪假'&&!(c.segs||[]).length)?'可支援':c.dtag);   /* 沒排班的彈性挪假日＝本店排不滿，可支援其他店 */
       var nt=((S.notes||{})[e.id]||{})[d.d]||'';   /* 2026-11-13 格子備註 */
-      h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw+(nt?'\n📝 '+nt:''))+'">'+(nt?'<span class="nt">📝</span>':'')+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
+      if(!hide)h+='<td class="'+cls+'" data-e="'+esc(e.id)+'" data-d="'+d.d+'" title="'+esc(raw+(nt?'\n📝 '+nt:''))+'">'+(nt?'<span class="nt">📝</span>':'')+esc(sh.main||'—')+(c.hours?'<span class="h">'+(+c.hours).toFixed(c.hours%1?1:0)+'h</span>':'')+(tags.length?'<span class="t">'+esc(tags.join('、'))+'</span>':'')+'</td>';
     });
-    var hx=hrs[e.id];h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td>'+(B?'<td><b>'+money((B.month.by_emp||{})[e.id]||0)+'</b></td>':'')+'</tr>';
+    var hx=hrs[e.id];if(!hide)h+='<td>'+(hx?hx.hours+'h<br><span class="mute">'+hx.days+' 天</span>':'')+'</td>'+(B?'<td><b>'+money((B.month.by_emp||{})[e.id]||0)+'</b></td>':'')+'</tr>';
   });
   var tail=B?'<td></td><td></td>':'<td></td>';
   /* 在店人數優先用後端檢查算的（含外店調來的人）；現場工時加上外店來支援的時數（日獎金那份算好的） */

@@ -793,6 +793,9 @@ def mset_view(st):
                 cur["target_est"] = True
     ms["emps"] = {k: v for k, v in ms["emps"].items() if any(e["id"] == k for e in info.get("emps") or [])}
     ms["marks"] = {k: v for k, v in ms["marks"].items() if any(e["id"] == k for e in info.get("emps") or [])}
+    for k in skip_ids(ms):
+        ms["marks"].pop(k, None)
+        (ms.get("avail_shift") or {}).pop(k, None)
     av = ms.get("avail_shift") or {}
     for eid, cur in ms["emps"].items():   # 還沒用文字存過的（以前點格子的）→ 換成文字顯示
         mk = ms["marks"].get(eid) or {}
@@ -828,8 +831,10 @@ def mset_clean(st, body):
         if eid not in ids:
             continue
         v = v or {}
-        emps[eid] = {"type": ("兼職" if str(v.get("type") or "") == "兼職" else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
+        emps[eid] = {"type": (str(v.get("type")) if str(v.get("type") or "") in EMP_TYPES else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
                      "min_hours": _num(v.get("min_hours"), None, 0, 400, "最低時數"), "note": str(v.get("note") or "").strip()[:300]}
+        if emps[eid]["type"] == SKIP_TYPE:   # 不排：不留目標／最低時數（區域排班的時數表才不會標紅）
+            emps[eid]["target"] = emps[eid]["min_hours"] = None
         mv = str(v.get("move") or "")
         emps[eid]["move"] = mv if mv in ("可", "否") else ("否" if emps[eid]["type"] == "兼職" else "可")
         for f in MARK_TXT.values():
@@ -858,6 +863,16 @@ def mset_clean(st, body):
 
 
 MARKS = ("指休", "特休", "可上")
+# 2026-11-19 經營者（12 號店 Lisa 反映 AI 排班名單有外店夥伴）：104 群組裡掛著的外店夥伴（常來支援才加進本店名單），
+# 店長在「正職／兼職」選「不排」→ AI 初稿、區域排班都不排他（整列留空白），時數、指休、跨月休假等提醒也不算他；
+# 店長手動排的班照常保留、照常檢查。下個月跟著正職／兼職一起沿用。
+SKIP_TYPE = "不排"
+EMP_TYPES = ("正職", "兼職", SKIP_TYPE)
+
+
+def skip_ids(ms):
+    """本月設定裡選「不排」的工號"""
+    return {k for k, v in ((ms or {}).get("emps") or {}).items() if (v or {}).get("type") == SKIP_TYPE}
 # 2026-11-05 經營者：日曆一格一格點太慢 → 改成每人打字（指休／特休填日期，兼職填可上日＋時段），存檔時程式換成格子
 MARK_TXT = {"指休": "off_txt", "特休": "pto_txt", "可上": "avail_txt"}
 _WD = {"一": "一", "二": "二", "三": "三", "四": "四", "五": "五", "六": "六", "日": "日", "天": "日"}
@@ -1121,6 +1136,8 @@ def marks_from_text(st, emps, cfg):
     shift_names = [r["name"] for r in (cfg.get("shifts") or [])]
     marks, avail, clash = {}, {}, []
     for eid, v in emps.items():
+        if v.get("type") == SKIP_TYPE:   # 不排的人：指休／特休／可上的字留著（改回正職／兼職時還在），不變成日期
+            continue
         mk = {}
         for k, f in MARK_TXT.items():
             days, _, _ = parse_days_smart(st, v.get(f), info["days"], shift_names if k == "可上" else None, f"{names.get(eid, eid)} {k}：", k)
@@ -1309,6 +1326,9 @@ def form_text(st, cfg):
     L.append("【夥伴】工號\t姓名\t正職/兼職\t目標時數\t兼職最低時數\t個人特殊班別／備註")
     for e in info["emps"]:
         v = ms["emps"].get(e["id"]) or {}
+        if v.get("type") == SKIP_TYPE:
+            L.append(f"{e['id']}\t{e['name']}\t不排（外店夥伴：本月不要排班，整列留空白）\t\t\t")
+            continue
         tgt = v.get("target") or v.get("target_hint") or ""
         L.append(f"{e['id']}\t{e['name']}\t{v.get('type', '正職')}\t{tgt}\t{v.get('min_hours') or ''}\t{v.get('note') or ''}")
     L.append("【指休／特休／兼職可上日】（指休＝那天一定要休；可上＝兼職只有這些天能排，括號是只能上的班別）")
@@ -1369,7 +1389,7 @@ def _ext_from_form(st, cfg):
     for e in info.get("emps") or []:
         v = ms["emps"].get(e["id"]) or {}
         emps.append({"id": e["id"], "name": e["name"], "type": v.get("type", "正職"),
-                     "target_hours": v.get("target") or (v.get("target_hint") if v.get("type", "正職") == "正職" else None),
+                     "target_hours": None if v.get("type") == SKIP_TYPE else (v.get("target") or (v.get("target_hint") if v.get("type", "正職") == "正職" else None)),
                      "min_hours": v.get("min_hours") if v.get("type") == "兼職" else None})
     return {"shifts": shifts, "demand": demand, "employees": emps, "max_consec": cfg.get("max_consec", 5),
             "late_early_limit": cfg.get("late_early_limit", 0),
@@ -1397,7 +1417,7 @@ def _pick_off_warns(st, names, etype):
     wk = {d["d"] for d in info["days"] if d["wd"] in ("六", "日")} | set(_gov_hol(st)) | _hol_days(ms)
     out = []
     for eid, mk in (ms.get("marks") or {}).items():
-        if eid not in names or etype.get(eid) == "兼職":
+        if eid not in names or etype.get(eid) in ("兼職", SKIP_TYPE):
             continue
         ds = [int(d) for d, v in mk.items() if v == "指休"]
         h = sum(1 for d in ds if d in wk)
@@ -1407,7 +1427,7 @@ def _pick_off_warns(st, names, etype):
     # 2026-11-11 經營者：同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開
     by = {}
     for eid, mk in (ms.get("marks") or {}).items():
-        if eid in names and etype.get(eid) != "兼職":
+        if eid in names and etype.get(eid) not in ("兼職", SKIP_TYPE):
             for d, v in mk.items():
                 if v == "指休":
                     by.setdefault(int(d), []).append(names[eid])
@@ -1900,7 +1920,7 @@ def run_check(st, schedule=None, guests=None, sibs=None):
                 span = (f"上個月最後 {p0.get('n')} 天～" if head and p0 else "") + f"{wk[0]['label']}–{wk[-1]['label']}"
                 if mins > 40 * 60 and (not head or p0):
                     warns.append(f"{names[eid]} {span}：這週上班 {mins / 60:g} 小時，超過 40 小時（104 一般工時，超過的部分要付加班費）")
-                if head and p0 and etype.get(eid) != "兼職":
+                if head and p0 and etype.get(eid) not in ("兼職", SKIP_TYPE):
                     off = int(p0.get("off") or 0) + sum(1 for d in wk if not parsed[eid][d["d"]]["segs"] and d["d"] not in od
                                                         and parsed[eid][d["d"]]["type"] != "國定假日")
                     lis = int(bool(p0.get("li"))) + sum(1 for d in wk if parsed[eid][d["d"]]["type"] == "例假日")
@@ -1914,13 +1934,13 @@ def run_check(st, schedule=None, guests=None, sibs=None):
         pass
     # 2026-11-13：這家店 104 班表沒啟用「彈性挪假」標籤 → 正職少排的天數沒辦法貼標籤，提醒到 104 啟用
     if "彈性挪假" not in set(info.get("tags") or ()) and any(
-            h.get("target") and h["regular"] < float(h["target"]) - 0.01 for h in hours if etype.get(h["id"]) != "兼職"):
+            h.get("target") and h["regular"] < float(h["target"]) - 0.01 for h in hours if etype.get(h["id"]) not in ("兼職", SKIP_TYPE)):
         warns.append("這家店的 104 班表沒啟用「彈性挪假」標籤：正職少排的天數先只標休息日、沒貼標籤（貼了會匯入失敗）。"
                      "請到 104 班別管理把「彈性挪假」「挪假補班」加進這家店的班表，再重新取得範本、排一次")
     # 2026-11-10：每天需要／排到幾人、正職「可支援其他店」的日子（標彈性挪假又沒排班）也放進檢查結果，
     # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
     support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]]
-               for eid in parsed if etype.get(eid) != "兼職"}
+               for eid in parsed if etype.get(eid) not in ("兼職", SKIP_TYPE)}
     return {"ok": not errors, "errors": errors, "warns": warns, "hours": hours, "cover": cover,
             "support": {k: v for k, v in support.items() if v}}
 
@@ -2110,6 +2130,8 @@ def _note_texts(st, cfg, ms):
     L = []
     for e in info["emps"]:
         v = ms["emps"].get(e["id"]) or {}
+        if v.get("type") == SKIP_TYPE:
+            continue
         if (v.get("note") or "").strip():
             L.append(f"{e['id']} {e['name']}（{v.get('type', '正職')}）的個人備註：{v['note'].strip()}")
     if (cfg.get("rules") or "").strip():
@@ -2168,7 +2190,7 @@ def _note_rules(st, cfg, ms):
     user = "\n".join([
         f"月份：{st['ym'][:4]} 年 {int(st['ym'][4:])} 月；日期（星期）：" + "、".join(f"{d['d']}({d['wd']}{'・當假日' if d['d'] in holi else ''})" for d in info["days"]),
         "（標「當假日」的平日，人力照假日班排，要加人就加假日的班）" if holi else "",
-        "員工：" + "；".join(f"{e['id']} {e['name']}" for e in info["emps"]),
+        "員工：" + "；".join(f"{e['id']} {e['name']}" for e in info["emps"] if e["id"] not in skip_ids(ms)),
         "班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + ("；人數 0＝特殊班別，只有店長指定才排" if not (r.get("wd") or r.get("we")) else "") + "）" for r in cfg.get("shifts") or []),
         "可用標籤：" + "、".join(info["tags"]), "可用崗位：" + "、".join(info["positions"]),
         "本店是：" + info["title"], "", "店長寫的："] + texts)
@@ -2184,7 +2206,7 @@ def _note_rules(st, cfg, ms):
         d = json.loads(m.group(0)) if m else {}
     except json.JSONDecodeError:
         d = {}
-    ids = {e["id"] for e in info["emps"]}
+    ids = {e["id"] for e in info["emps"]} - skip_ids(ms)   # 「不排」的外店夥伴不套任何規則
     days = {x["d"] for x in info["days"]}
     dtypes = set(info["dayTypes"])
     shmap = {r["name"]: [list(x) for x in r["segs"]] for r in cfg.get("shifts") or []}
@@ -2356,7 +2378,8 @@ def live_summary(st, chk=None):
     typ = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
     sup = chk.get("support") or {}
     rows = [{"id": h["id"], "name": h["name"], "type": typ.get(h["id"], ""), "hours": h["hours"], "days": h["days"],
-             "target": h.get("target"), "min": h.get("min"), "support": sup.get(h["id"]) or []} for h in chk.get("hours") or []]
+             "target": h.get("target"), "min": h.get("min"), "support": sup.get(h["id"]) or []} for h in chk.get("hours") or []
+            if not (typ.get(h["id"]) == SKIP_TYPE and not h.get("hours"))]   # 「不排」又沒排班的外店夥伴不列
     cover = chk.get("cover") or []
     return {"rows": rows, "has_demand": bool(cover),
             "gaps": [c for c in cover if c["got"] < c["need"]], "extras": [c for c in cover if c["got"] > c["need"]],
@@ -3018,7 +3041,8 @@ def _region_public(rg, ym):
                        "stores": {k: {"schedule": v["schedule"], "need": v["need"], "got": v["got"], "summary": v["summary"],
                                       "names": v["names"], "ok": v["check"]["ok"], "errors": v["check"]["errors"][:20],
                                       "warns": len(v["check"]["warns"]),
-                                      "hours": [dict(h, **((meta.get(k) or {}).get(h.get("id")) or {})) for h in v["check"].get("hours") or []]}
+                                      "hours": [dict(h, **((meta.get(k) or {}).get(h.get("id")) or {})) for h in v["check"].get("hours") or []
+                                                if not (((meta.get(k) or {}).get(h.get("id")) or {}).get("type") == SKIP_TYPE and not h.get("hours"))]}
                                   for k, v in P["stores"].items()}}
     return {"ok": True, "region": rg, "ym": ym, "regions": REGIONS, "stores": _region_ready(rg, ym), "days": days, "job": job,
             "plans": plans, "at": (data or {}).get("at"), "picked": (data or {}).get("picked"),

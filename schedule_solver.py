@@ -160,14 +160,15 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         for e in u["info"]["emps"]:
             v = (ms.get("emps") or {}).get(e["id"]) or {}
             typ = v.get("type") or "正職"
+            skip = typ == "不排"   # 2026-11-19 經營者：店長選「不排」的外店夥伴，這份名單完全不排（整列留空白、不追時數）
             tgt = v.get("target") or (v.get("target_hint") if typ == "正職" else None)
             tgt = float(tgt) if tgt not in (None, "") else (u["std_min"] / 60 if typ == "正職" and u["std_min"] else None)
             mn = v.get("min_hours")
             emps.append({"k": (u["store"], e["id"]), "id": e["id"], "name": e["name"], "u": u, "ft": typ == "正職",
                          "move": True,   # 2026-11-11 經營者：全部夥伴都可調店（後台固定）
-                         "dflt": bool(v.get("_default")),
-                         "target": int(round(tgt * 60)) if tgt else None,
-                         "min": int(round(float(mn) * 60)) if mn not in (None, "") else None})
+                         "dflt": bool(v.get("_default")), "skip": skip,
+                         "target": int(round(tgt * 60)) if tgt and not skip else None,
+                         "min": int(round(float(mn) * 60)) if mn not in (None, "") and not skip else None})
     E = {e["k"]: e for e in emps}
 
     # 每人每天能上哪些（店, 班別）
@@ -191,6 +192,9 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         can = {int(d) for d, v in mk.items() if v == "可上"}
         for d in days:
             v = mk.get(str(d), "")
+            if e["skip"]:
+                allowed[k + (d,)] = []
+                continue
             if (eid, d) in u["fixed_minutes"]:
                 fixed[k + (d,)] = u["fixed_minutes"][(eid, d)]
                 allowed[k + (d,)] = []
@@ -264,11 +268,13 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
     home = {}
     for eid_, grp in same.items():
         if len(grp) > 1:
-            setd = [g for g in grp if not g["dflt"]]
+            # 「不排」那份名單不算店長設定、也不當自己店（2026-11-19：不然自己店沒存過時，時數目標反而不追了）
+            real = [g for g in grp if not g["skip"]] or grp
+            setd = [g for g in real if not g["dflt"]]
             for g in grp:
-                g["alias"] = (g["dflt"] if setd else g is not grp[0])
+                g["alias"] = True if g["skip"] else (g["dflt"] if setd else g is not real[0])
             if not setd:
-                home[eid_] = grp[0]
+                home[eid_] = real[0]
     # 2026-11-13 經營者「混合做法」：同一人掛好幾家店名單時，例假／休息日／國定假日只標在「自己店」那一筆（店長存過、設正職的那筆；
     # 都沒存過就第一筆），而且要看他整天在各店有沒有上班——原本每筆各算各的，別店名單那筆排了班、自己店照樣標休息日，104 匯入會擋
     rest_owner = {}
