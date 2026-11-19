@@ -253,6 +253,10 @@ window.SpoonHint=(function(){
   #tab-apply .ap-t1 tr.ap-t1gh .ap-muted{font-weight:400;margin-left:8px}
   #tab-apply .ap-t1 tr.ap-t1gh.ap-t1new td{cursor:default;background:#F7F4EF;color:#6F4E45}
   #tab-apply .ap-t1 tbody.ap-fold tr[data-ln]{display:none}
+  /* 2026-11-19 經營者：整個「用料（全部，成本計算用）」預設收合，點標題才打開 */
+  #tab-apply .ap-t1h{cursor:pointer;user-select:none}
+  #tab-apply .ap-t1h:hover{background:#00796B}
+  #tab-apply .ap-t1sheet.ap-fold .ap-t1body{display:none}
   #tab-apply .ap-goto{border:1px solid #F0DFC0;background:#FFF2CC;color:#8A5A00;border-radius:9px;padding:1px 6px;font-size:12px;cursor:pointer;font-family:inherit}
   #tab-apply .ap-items td.ap-t2name{font-weight:700;color:#00695C}
   #tab-apply .ap-pin{padding:3px 8px;font-size:12px;white-space:nowrap}
@@ -3766,7 +3770,12 @@ try{T1FOLD=JSON.parse(localStorage.getItem('rcp:t1fold')||'{}')||{}}catch(e){T1F
 function t1Grp(l){if(!String(l.m||'').trim())return '';var c=lineCat(l);return (c==='器具'||c==='模具')?'器模具':(c==='耗材'?'耗材':'食材')}
 function t1FoldSave(g,on){T1FOLD[g]=!!on;try{localStorage.setItem('rcp:t1fold',JSON.stringify(T1FOLD))}catch(e){}}
 function t1Fold(g,on){t1FoldSave(g,on);var tb=document.querySelector('#apRoot tbody[data-t1g="'+g+'"]');if(!tb)return;tb.classList.toggle('ap-fold',!!on);var a=tb.querySelector('.ap-t1arr');if(a)a.textContent=on?'▸':'▾'}
-function t1Show(i){var tr=document.querySelector('#apRoot tr[data-ln="'+i+'"]'),tb=tr&&tr.closest('tbody[data-t1g]');if(tb&&tb.classList.contains('ap-fold'))t1Fold(tb.dataset.t1g,false);return tr}
+/* 2026-11-19 經營者：整個用料表預設收合（每次開頁都收著，不記在電腦），點標題才打開；打開後在這次使用中保持打開（重畫不會又收起來）。
+   收合只切 class、不重畫輸入框；跳到某一列（t1Show）會先打開整張表。 */
+var T1OPEN=false;
+function t1Sheet(on){T1OPEN=!!on;var sh=document.querySelector('#apRoot .ap-t1sheet');if(!sh)return;sh.classList.toggle('ap-fold',!T1OPEN);
+  var a=sh.querySelector('.ap-t1sarr');if(a)a.textContent=T1OPEN?'▾':'▸';var t=sh.querySelector('.ap-t1hint');if(t)t.textContent=T1OPEN?'':'・點一下展開'}
+function t1Show(i){if(!T1OPEN)t1Sheet(true);var tr=document.querySelector('#apRoot tr[data-ln="'+i+'"]'),tb=tr&&tr.closest('tbody[data-t1g]');if(tb&&tb.classList.contains('ap-fold'))t1Fold(tb.dataset.t1g,false);return tr}
 function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=unitOK(l),key='l'+i,row=rowOf(c,l);
   var h='<tr data-ln="'+i+'">';
   h+='<td><div class="ap-sc"><input type="text" data-lf="m" data-key="'+key+'" placeholder="輸入品名／別名／編號搜尋" value="'+esc(l.m)+'" autocomplete="off"><div class="ap-sug" data-sug="'+key+'" style="display:none"></div></div>'
@@ -3779,8 +3788,9 @@ function t1RowHTML(l,i,c){var s=skuOf(l.m),nw=isNewItem(l),stale=staleOf(l),uok=
   h+='<td><button class="ap-x" data-del="'+i+'" title="刪除此列">✕</button></td></tr>';
   return h}
 function table1HTML(c){
-  var h='<div class="ap-sheet"><div class="ap-sheet-title">🧾 用料（全部，成本計算用）</div>'
-   +'<div style="padding:4px 10px 10px"><div class="ap-t1"><table><colgroup><col style="width:38%"><col style="width:12%"><col style="width:10%"><col style="width:16%"><col style="width:19%"><col style="width:5%"></colgroup>'
+  var nT1=AP.lines.filter(function(l){return String(l.m||'').trim()}).length;
+  var h='<div class="ap-sheet ap-t1sheet'+(T1OPEN?'':' ap-fold')+'"><div class="ap-sheet-title ap-t1h" data-t1h="1" title="點一下收合／展開"><span class="ap-t1sarr">'+(T1OPEN?'▾':'▸')+'</span>🧾 用料（全部，成本計算用）<span class="ap-muted">（'+nT1+' 項<span class="ap-t1hint">'+(T1OPEN?'':'・點一下展開')+'</span>）</span></div>'
+   +'<div class="ap-t1body" style="padding:4px 10px 10px"><div class="ap-t1"><table><colgroup><col style="width:38%"><col style="width:12%"><col style="width:10%"><col style="width:16%"><col style="width:19%"><col style="width:5%"></colgroup>'
    +'<thead><tr><th>品項</th><th>數量</th><th>單位</th><th class="ap-r">每份成本</th><th style="text-align:center">新增表</th><th></th></tr></thead>';
   var G={'食材':[],'器模具':[],'耗材':[],'':[]};AP.lines.forEach(function(l,i){G[t1Grp(l)].push(i)});
   var ae=document.activeElement,atr=ae&&ae.closest?ae.closest('#apRoot tr[data-ln]'):null;   /* 正在填的那一列（或剛選好品名的列）所在的類別收著 → 自動打開 */
@@ -5869,6 +5879,7 @@ function wire(){var root=document.getElementById('apRoot');
   /* 表一：品項／數量／單位／刪除；改品項 blur 後整頁重繪（表二依 isNewItem 自動出現／消失，l.* 欄位保留） */
   t2BarWire(root);   /* 2026-11-03 新增食材/器模具表上方拉條 */
   root.querySelectorAll('[data-smh]').forEach(function(h){h.onclick=function(e){if(e.target.closest('button'))return;var si=+h.dataset.smh,sm=AP.semis[si];if(!sm)return;smFold(si,!SMFOLD[smKey(sm,si)])}});   /* 2026-11-03 半成品伸縮 */
+  root.querySelectorAll('[data-t1h]').forEach(function(h){h.onclick=function(){t1Sheet(!T1OPEN)}});   /* 2026-11-19 整個用料表伸縮（預設收合） */
   root.querySelectorAll('[data-t1gh]').forEach(function(tr){tr.onclick=function(){var g=tr.dataset.t1gh;t1Fold(g,!T1FOLD[g])}});   /* 2026-11-03 用料表分類伸縮 */
   root.querySelectorAll('tr[data-ln]').forEach(function(tr){var i=+tr.dataset.ln;
     tr.querySelectorAll('[data-lf]').forEach(function(el){var f=el.dataset.lf;
