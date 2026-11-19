@@ -5236,6 +5236,19 @@ function hctIndex(rows){var m={};(rows||[]).forEach(function(r){if(hctAct(r))(m[
 function hctCsList(){return (HCT.cfg&&HCT.cfg.cs&&HCT.cfg.cs.length)?HCT.cfg.cs:[{code:"",mode:"W",name:"一般件",kind:"001"}];}
 function hctCsOf(code){var L=hctCsList();for(var i=0;i<L.length;i++)if(L[i].code===String(code||""))return L[i];return L[0];}
 function hctQty(l){return (l.mode==="S")?(l.weight+" 公分"):(l.weight+" 公斤");}
+/* 2026-11-19 溫層（出貨中心 LINE：新竹來電說 11/18 那 20 件都被當低溫冷凍；兩個客代其實是溫層不同）：
+   05974350011＝常溫（按重量）、05974350002＝低溫（按尺寸，比較貴）。名稱、商品種類由後端指令碼屬性 HCT_CS 給。
+   預設常溫；訂單裡有品項的出貨中心「位置」寫了冷藏／冷凍／冰，才預設低溫。選低溫但沒有這類品項、或有這類品項卻選常溫，都會提醒。 */
+function hctIsCold(c){return !!c&&(/低溫|冷藏|冷凍/.test(c.name||"")||c.kind==="003"||c.kind==="008");}
+function hctHasTemp(){return hctCsList().some(hctIsCold);}
+function hctCsLabel(c){var n=String(c.name||"");return n+(c.code&&n.indexOf(c.code)<0?"（"+c.code+"）":"");}
+function hctColdItems(o){var seen={},out=[];((o&&o.lines)||[]).forEach(function(l){if(!/冷藏|冷凍|冰/.test(dcoLocOf(l.sku_id)))return;var n=String(l.name||l.sku_id);if(!seen[n]){seen[n]=1;out.push(n);}});return out;}
+function hctDefCs(o){var cl=hctCsList(),i;if(hctHasTemp()){var want=hctColdItems(o).length>0;for(i=0;i<cl.length;i++)if(hctIsCold(cl[i])===want)return cl[i].code;}return cl[0].code;}
+/* 選的溫層跟品項對不上時的提醒文字（沒有溫層選項＝空字串） */
+function hctTempWarn(o,cs){if(!hctHasTemp())return "";var ci=hctColdItems(o),nm=ci.slice(0,3).join("、")+(ci.length>3?" 等 "+ci.length+" 項":"");
+  if(hctIsCold(cs)&&!ci.length)return "低溫運費比較貴，這張訂單沒有冷藏／冷凍品項";
+  if(!hctIsCold(cs)&&ci.length)return "這張有冷藏／冷凍品項（"+nm+"），要寄低溫請改選";
+  return "";}
 function hctLoad(){HCT.ld=true;
   return dcoJsonp({action:"hct",days:30}).then(function(d){HCT.err="";if(d&&d.ok){HCT.rows=d.labels||[];HCT.env=d.env||"";HCT.cfg=d.cfg||null;HCT.byId=hctIndex(HCT.rows);}else{HCT.rows=[];HCT.env="old";}})   /* 後端還沒更新到 v1.3 → 回「未知的 action」 */
     .catch(function(e){HCT.rows=HCT.rows||[];HCT.err=(e&&e.message)||"連線失敗";}).then(function(){HCT.ld=false;if(ST.tab==="訂單")render();});}   /* 2026-11-11：失敗要講（原本整個新竹功能默默消失） */
@@ -5256,9 +5269,11 @@ function hctSumB(L){var n=0;(L||[]).forEach(function(l){n+=Math.max(1,num(l.boxe
 function hctSumW(L){var n=0;(L||[]).forEach(function(l){n+=num(l.weight);});return n||"";}
 /* 填寫區：客代（多個才給選）＋件數＋（按重量）總重量／（按尺寸）每箱尺寸。L＝要更正的那組托運單（帶預設值） */
 function hctForm(o,L,lab){var k=escA(o.id),E=hctIn(o.id),dis=DCO.busy?' disabled':'',cl=hctCsList();
-  var cs=hctCsOf(E.cs!=null?E.cs:(L&&L[0]?L[0].cs:cl[0].code)),S=cs.mode==="S";
+  var cs=hctCsOf(E.cs!=null?E.cs:(L&&L[0]?L[0].cs:hctDefCs(o))),S=cs.mode==="S",tw=hctTempWarn(o,cs),ci=hctHasTemp()&&hctIsCold(cs)?hctColdItems(o):[];
   var nb=E.b!=null?E.b:(L&&L.length?(S?L.length:hctSumB(L)):1);
-  var h=cl.length>1?'<label style="font-size:13px">計費 <select class="sm" data-hctcs="'+k+'">'+cl.map(function(c){return '<option value="'+escA(c.code)+'"'+(c.code===cs.code?' selected':'')+'>'+escH(c.name)+'</option>';}).join('')+'</select></label>':'';
+  var h=cl.length>1?'<label style="font-size:13px">'+(hctHasTemp()?'溫層':'計費')+' <select class="sm" data-hctcs="'+k+'"'+(hctIsCold(cs)?' style="background:#E0F2F1;border-color:#00695C;color:#00695C;font-weight:700"':'')+'>'+cl.map(function(c){return '<option value="'+escA(c.code)+'"'+(c.code===cs.code?' selected':'')+'>'+escH(hctCsLabel(c))+'</option>';}).join('')+'</select></label>':'';
+  if(tw)h+='<span style="font-size:12px;color:#B3261E;font-weight:600">⚠️ '+escH(tw)+'</span>';
+  else if(ci.length)h+='<span style="font-size:12px;color:#00695C">❄️ 含冷藏／冷凍：'+escH(ci.slice(0,3).join("、")+(ci.length>3?" 等 "+ci.length+" 項":""))+'</span>';
   h+='<label style="font-size:13px">件數（箱） <input class="sm" type="number" min="1" max="20" step="1" style="width:60px" data-hctb="'+k+'" value="'+escA(nb)+'"></label>';
   if(!S)h+='<label style="font-size:13px">總重量 <input class="sm" type="number" min="1" step="0.1" style="width:70px" data-hctw="'+k+'" value="'+escA(E.w!=null?E.w:(L&&L[0]&&L[0].mode!=="S"?hctSumW(L):""))+'" placeholder="公斤"> 公斤</label>';
   else{var n=Math.max(1,Math.min(20,Math.floor(num(nb))||1));h+='<span style="font-size:13px">每箱尺寸（長＋寬＋高）</span>';
@@ -5280,7 +5295,7 @@ function hctBox(o){if(!dcoOn()||o.status==="已取消"||(HCT.rows!==null&&!hctOn
   if(disp)h+='<button class="btn sm ghost" style="color:#C0392B;border-color:#C0392B" data-hctdcx="'+k+'"'+dis+' title="司機還沒來收件前才能取消；取消後這個貨號不能再叫一次">取消叫收件</button>';
   h+='<div style="flex-basis:100%;display:flex;gap:6px 14px;flex-wrap:wrap;font-size:13px">'+L.map(function(l){return '<span>'+(L.length>1?'第'+(l.box||1)+'箱 ':'')+'貨號 <b style="font-size:15px">'+escH(hctDash(l.edelno))+'</b> <span class="muted">'+(l.mode==="S"?hctQty(l):l.boxes+' 件・'+hctQty(l))+'</span></span>';}).join('')+'</div>';
   if(open&&!today)h+='<div style="flex-basis:100%;font-size:12px;color:#8A5A00;display:flex;gap:8px;flex-wrap:wrap;align-items:center">⚠️ 這組托運單是 '+escH(L0.date.slice(4,6)+"/"+L0.date.slice(6))+' 開的、還沒交寄。今天要寄請重開（舊的會自動作廢）：'+hctForm(o,L,"🚚 重開今天的托運單")+'</div>';
-  if(E.fix&&open&&today)h+='<div style="flex-basis:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+hctForm(o,L,"💾 更正並重印")+'<span class="muted" style="font-size:12px">同計費方式貨號不變（多的箱子另開、少的作廢）；舊標籤丟掉、改貼新印的</span></div>';
+  if(E.fix&&open&&today)h+='<div style="flex-basis:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+hctForm(o,L,"💾 更正並重印")+'<span class="muted" style="font-size:12px">同'+(hctHasTemp()?'溫層':'計費方式')+'貨號不變（多的箱子另開、少的作廢）；舊標籤丟掉、改貼新印的</span></div>';
   return h+'</div>';}
 /* 2026-10-30：全部列印改在本頁的隱形框裡印（原本開新分頁、由本頁叫它列印 → 列印視窗開著時採購系統整個卡住，切回來像當機）。
    列印視窗直接蓋在採購系統上，印完或取消就回到原畫面；也不會被瀏覽器擋彈出視窗。
@@ -5358,7 +5373,7 @@ function hctPrintIds(ids,only){ids=ids.filter(Boolean);if(!ids.length){toast("�
 /* 產生（或同日更正）托運單 → 直接開標籤列印 */
 /* 組一張訂單的托運單資料（單張「產生」與勾選批次共用）；錯誤回 {err}。2026-11-02 拆出 */
 function hctBody(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[0];if(!o)return {err:"找不到訂單"};
-  var L=HCT.byId[id]||[],E=hctIn(id),cs=hctCsOf(E.cs!=null?E.cs:(L[0]?L[0].cs:hctCsList()[0].code)),S=cs.mode==="S";
+  var L=HCT.byId[id]||[],E=hctIn(id),cs=hctCsOf(E.cs!=null?E.cs:(L[0]?L[0].cs:hctDefCs(o))),S=cs.mode==="S";
   var b=Math.floor(num(E.b!=null?E.b:(L.length?(S?L.length:hctSumB(L)):1))),body={action:"hctCreate",id:id,cs:cs.code},desc;
   if(S){if(!(b>=1&&b<=20))return {err:"按尺寸計費一次 1～20 箱"};
     var sz=[];for(var i=0;i<b;i++){var v=num((E.sz&&E.sz[i]!=null)?E.sz[i]:(L[i]&&L[i].mode==="S"?L[i].weight:60));
@@ -5369,11 +5384,11 @@ function hctBody(id){var o=(DCO.all||[]).filter(function(x){return x.id===id;})[
     if(!(wt>0))return {err:"請填總重量（公斤）"};
     body.boxes=b;body.weight=wt;desc=b+" 箱，每箱一張托運單（一個貨號）　總重量 "+Math.ceil(wt)+" 公斤平均分到每箱";}
   var rcv=hctRcv(o.store);if(!rcv)return {err:"這家店沒有收件地址"};body.rcv=rcv;
-  return {o:o,L:L,cs:cs,body:body,desc:desc,rcv:rcv};}
+  return {o:o,L:L,cs:cs,body:body,desc:desc,rcv:rcv,warn:hctTempWarn(o,cs)};}
 function hctCreate(id){if(DCO.busy)return;var B=hctBody(id);if(B.err){toast(B.err);return;}
   var L=B.L,cs=B.cs,body=B.body,desc=B.desc,rcv=B.rcv;
   var fix=L.length&&L.every(function(l){return l.status==="已建單"&&l.date===hctToday()&&l.cs===cs.code;});
-  if(typeof confirm==="function"&&!confirm((fix?"更正":"產生")+"新竹托運單？\n\n收件："+rcv.name+"\n電話："+rcv.tel+"\n地址："+rcv.addr+"\n計費："+cs.name+"\n"+desc+"\n訂單："+id
+  if(typeof confirm==="function"&&!confirm((fix?"更正":"產生")+"新竹托運單？\n\n收件："+rcv.name+"\n電話："+rcv.tel+"\n地址："+rcv.addr+"\n"+(hctHasTemp()?"溫層：":"計費：")+hctCsLabel(cs)+"\n"+desc+"\n訂單："+id+(B.warn?"\n\n⚠️ "+B.warn+"。確定要寄"+cs.name+"？":"")
     +(fix?"\n\n原來的貨號不變，請丟掉舊標籤、改貼新印的。":(L.length?"\n\n舊的托運單（"+L[0].date+"）會作廢。":""))+(HCT.env==="test"?"\n\n🧪 目前是測試帳號，標籤不能真的寄。":"")))return;
   DCO.busy=true;render();var t0=Date.now();toast("⏳ 向新竹物流取貨號中…約 5～10 秒，好了會自動跳出列印",12000);
   dcoWrite(body,function(){   /* 讀不到回應時回讀：這張單有托運單、且是剛剛之後寫的 → 算成功 */
@@ -5391,7 +5406,7 @@ function hctSelIds(){ST.dcoSel=ST.dcoSel||{};var ok={};(DCO.all||[]).forEach(fun
 function hctBatch(){if(DCO.busy||HCT.rows===null)return;var ids=hctSelIds();if(!ids.length){toast("請先在訂單前面勾選要寄新竹的");return;}
   var go=[],bad=[];ids.forEach(function(id){var B=hctBody(id);if(B.err)bad.push(id+"："+B.err);else go.push(B);});
   if(!go.length){alert("勾選的訂單都不能產生托運單：\n"+bad.join("\n"));return;}
-  if(typeof confirm==="function"&&!confirm("一次產生 "+go.length+" 張訂單的新竹托運單？\n\n"+go.map(function(B){return "・"+storeName(B.o.store)+" "+B.o.id+"："+B.cs.name+" "+B.desc;}).join("\n")
+  if(typeof confirm==="function"&&!confirm("一次產生 "+go.length+" 張訂單的新竹托運單？\n\n"+go.map(function(B){return "・"+storeName(B.o.store)+" "+B.o.id+"："+(hctIsCold(B.cs)?"❄️":"")+B.cs.name+" "+B.desc+(B.warn?"\n　⚠️ "+B.warn:"");}).join("\n")
     +(bad.length?"\n\n⚠️ 這幾張不會產生：\n"+bad.join("\n"):"")+"\n\n件數或尺寸不對的，先按取消、到訂單卡片的「🚚 新竹托運單」改好再勾。"+(HCT.env==="test"?"\n\n🧪 目前是測試帳號，標籤不能真的寄。":"")))return;
   DCO.busy=true;render();var all=[],fail=[],done=[],i=0;
   (function next(){if(i>=go.length){DCO.busy=false;done.forEach(function(id){delete ST.dcoSel[id];if(ST.hctIn)delete ST.hctIn[id];});
@@ -5437,7 +5452,7 @@ function hctTotCopies(){return lsGet("hctTotCopies")==="1"?1:2;}
 function hctView(){var dIn=ST.hctDay||ymd(new Date()),day=dIn.replace(/-/g,""),isToday=day===hctToday(),dsp=!!(HCT.cfg&&HCT.cfg.dispatch);
   var dErr=HCT.dayErr&&HCT.dayErr[day];
   if(HCT.day[day]===undefined&&!HCT.dayLd[day]&&!dErr)hctLoadDay(day);
-  var h='<div class="note tabhelp"><b>這頁做什麼：</b>看每天開了哪些新竹托運單、一次補印標籤、印「託運總表」交給司機'+(dsp?'、通知新竹來收件':'')+'。<br><b>怎麼做：</b>① 在每張訂單卡片下方填件數、'+(hctCsList().some(function(c){return c.mode==="S";})?'重量或每箱尺寸':'總重量')+' → 按「🚚 產生並列印托運單」，標籤一箱貼一張　② <b>每天 18:00 前</b>回這頁按「📋 確認今日出貨＋印託運總表」，總表照客代各印一份、一式兩份，司機來收貨時簽名交接'+(dsp?'（同時會通知新竹來收件：15:00 前按當天收，之後排下一個工作天，週六日不派車）':'')+'。<br>③ 要另外補印：在下面表格<b>勾選托運單</b> → 按「🖨 補印標籤」或「📋 印託運總表」（沒勾＝這天全部；總表只印已確認出貨的）。<br>確認出貨後的托運單就不能作廢或更正了；還沒確認的，當天都可以在訂單卡片改或作廢。</div>'
+  var h='<div class="note tabhelp"><b>這頁做什麼：</b>看每天開了哪些新竹托運單、一次補印標籤、印「託運總表」交給司機'+(dsp?'、通知新竹來收件':'')+'。<br><b>怎麼做：</b>① 在每張訂單卡片下方'+(hctHasTemp()?'選溫層（常溫填件數＋總重量；低溫比較貴，填件數＋每箱尺寸）':'填件數、'+(hctCsList().some(function(c){return c.mode==="S";})?'重量或每箱尺寸':'總重量'))+' → 按「🚚 產生並列印托運單」，標籤一箱貼一張　② <b>每天 18:00 前</b>回這頁按「📋 確認今日出貨＋印託運總表」，總表照客代（常溫、低溫分開）各印一份、一式兩份，司機來收貨時簽名交接'+(dsp?'（同時會通知新竹來收件：15:00 前按當天收，之後排下一個工作天，週六日不派車）':'')+'。<br>③ 要另外補印：在下面表格<b>勾選托運單</b> → 按「🖨 補印標籤」或「📋 印託運總表」（沒勾＝這天全部；總表只印已確認出貨的）。<br>確認出貨後的托運單就不能作廢或更正了；還沒確認的，當天都可以在訂單卡片改或作廢。</div>'
     +'<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>出貨日</b><input type="date" id="hctDay" value="'+escA(dIn)+'"><span style="flex:1"></span><button class="btn sm ghost" data-hctday="1">🔄 重新整理</button></div>';
   if(dErr&&HCT.day[day]===undefined)return h+alertBig("stop","⛔ 讀不到這天的托運單","不是沒有托運單，是這次沒讀到（"+escH(dErr)+"）。按上面「🔄 重新整理」再試一次。")+'</div>';
   var list=HCT.day[day];if(list===undefined)return h+'<div class="loading">讀取中…</div></div>';
@@ -5445,8 +5460,8 @@ function hctView(){var dIn=ST.hctDay||ymd(new Date()),day=dIn.replace(/-/g,""),i
   act.forEach(function(l){boxes+=num(l.boxes);});
   var sel=hctSelOf(day),pk=hctPick(day),pkSent=pk.rows.filter(function(l){return l.status==="已交寄";}).length,allOn=act.length&&act.every(function(l){return sel[l.edelno];});
   h+='<div class="sub" style="margin:6px 0">共 <b>'+act.length+'</b> 張托運單、<b>'+boxes+'</b> 件'+(wait.length?'，其中 <b style="color:#d97706">'+wait.length+' 張還沒確認出貨</b>':(act.length?'，<b style="color:#16a34a">全部已確認出貨</b>':''))+'</div>';
-  if(act.length){h+='<div style="overflow-x:auto"><table class="dcot"><tr><th style="width:28px"><input type="checkbox" title="全選／全不選" data-hctselall="'+escA(day)+'"'+(allOn?' checked':'')+'></th><th>貨號</th><th>計費</th><th>到著站</th><th>收件門市</th><th class="right">件數</th><th class="right">重量／尺寸</th><th>訂單</th><th>狀態</th>'+(dsp?'<th>叫收件</th>':'')+'</tr>'
-    +act.map(function(l){return '<tr'+(sel[l.edelno]?' style="background:#EAF4FB"':'')+'><td><input type="checkbox" data-hctsel="'+escA(day+"|"+l.edelno)+'"'+(sel[l.edelno]?' checked':'')+'></td><td><b>'+escH(hctDash(l.edelno))+'</b></td><td>'+escH(hctCsOf(l.cs).name)+'</td><td>'+escH(l.erstno)+'</td><td>'+escH(storeName(l.store))+'</td><td class="right">'+l.boxes+'</td><td class="right">'+escH(hctQty(l))+'</td><td>'+escH(l.id)+'</td><td>'+(l.status==="已建單"?'<span style="color:#d97706">未交寄</span>':'<span style="color:#16a34a">已交寄</span>')+(l.env==="test"?' <span class="muted">（測試）</span>':'')+'</td>'
+  if(act.length){h+='<div style="overflow-x:auto"><table class="dcot"><tr><th style="width:28px"><input type="checkbox" title="全選／全不選" data-hctselall="'+escA(day)+'"'+(allOn?' checked':'')+'></th><th>貨號</th><th>'+(hctHasTemp()?'溫層':'計費')+'</th><th>到著站</th><th>收件門市</th><th class="right">件數</th><th class="right">重量／尺寸</th><th>訂單</th><th>狀態</th>'+(dsp?'<th>叫收件</th>':'')+'</tr>'
+    +act.map(function(l){return '<tr'+(sel[l.edelno]?' style="background:#EAF4FB"':'')+'><td><input type="checkbox" data-hctsel="'+escA(day+"|"+l.edelno)+'"'+(sel[l.edelno]?' checked':'')+'></td><td><b>'+escH(hctDash(l.edelno))+'</b></td><td'+(hctIsCold(hctCsOf(l.cs))?' style="color:#00695C;font-weight:700"':'')+'>'+escH(hctCsOf(l.cs).name)+'</td><td>'+escH(l.erstno)+'</td><td>'+escH(storeName(l.store))+'</td><td class="right">'+l.boxes+'</td><td class="right">'+escH(hctQty(l))+'</td><td>'+escH(l.id)+'</td><td>'+(l.status==="已建單"?'<span style="color:#d97706">未交寄</span>':'<span style="color:#16a34a">已交寄</span>')+(l.env==="test"?' <span class="muted">（測試）</span>':'')+'</td>'
       +(dsp?'<td>'+(l.dispatch==="Y"?'<span style="color:#0369a1">已通知</span>':(l.dispatch==="取消"?'<span class="muted">已取消</span>':(/^N/.test(l.dispatch||"")?'<span style="color:#B3261E" title="'+escA(l.dispatch)+'">沒叫到</span>':'—')))+'</td>':'')+'</tr>';}).join('')+'</table></div>';
     h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm ghost" data-hctprintday="'+escA(day)+'"'+(DCO.busy||HCTP.on?' disabled':'')+'>'+(HCTP.on==="*"?'⏳ 讀取標籤中…':(pk.n?'🖨 補印勾選的標籤（'+pk.n+' 張）':'🖨 補印這天全部標籤'))+'</button>'
       +(isToday&&wait.length?'<button class="btn sm" data-hctreport="1"'+(DCO.busy?' disabled':'')+'>📋 確認今日出貨＋印託運總表'+(dsp?'＋叫新竹收件':'')+'（'+wait.length+' 張）</button>':'')
@@ -5537,7 +5552,7 @@ document.addEventListener("change",function(ev){var t=ev.target,a;if(!t||!t.getA
   if(t.getAttribute("data-dcsselall")!=null){ST.dcoShipSel=ST.dcoShipSel||{};var on3=t.checked;(DCO.all||[]).forEach(function(o){if(o.status==="備貨中"){if(on3)ST.dcoShipSel[o.id]=true;else delete ST.dcoShipSel[o.id];}});render();return;}
   if(t.getAttribute("data-dccselall")!=null){ST.dcoSel=ST.dcoSel||{};var sg2=ST.dcoSeg||"待處理",on2=t.checked;(DCO.all||[]).forEach(function(o){if(o.status===sg2&&hctSelOK(o)){if(on2)ST.dcoSel[o.id]=true;else delete ST.dcoSel[o.id];}});render();return;}
   if(t.getAttribute("data-hctcopies")!=null){lsSet("hctTotCopies",t.value);render();return;}
-  if((a=t.getAttribute("data-hctcs"))!=null){var E=hctIn(a);E.cs=t.value;E.sz=null;render();return;}   /* 換計費方式：重畫填寫區（下拉選單，不影響打字） */
+  if((a=t.getAttribute("data-hctcs"))!=null){var E=hctIn(a);E.cs=t.value;E.sz=null;render();return;}   /* 換溫層（計費方式）：重畫填寫區（下拉選單，不影響打字） */
   if((a=t.getAttribute("data-hctsz"))!=null){var p=a.split("|"),E2=hctIn(p[0]);E2.sz=E2.sz||[];E2.sz[+p[1]]=t.value==="x"?151:num(t.value);render();return;}
   if((a=t.getAttribute("data-hctb"))!=null&&hctCsOf(hctIn(a).cs!=null?hctIn(a).cs:((HCT.byId[a]||[])[0]||{}).cs).mode==="S"){render();return;}});   /* 按尺寸：改完箱數（離開欄位）才重畫每箱的尺寸選單 */
 /* ── 出貨中心庫存：多數品項＝無限量；少數記數量（同 Shopline 做法） ── */
@@ -5547,7 +5562,7 @@ function viewDcStock(){if(!dcoOn())return dcoSetupNote();
   var f=ST.dcoStkF||"全部",qq=String(ST.dcoStkQ||"").trim(),edit=ST.dcoStkEdit||{};
   var h='<div class="toolbar"><span class="own">📦 出貨中心庫存</span><span style="flex:1"></span><button class="btn sm ghost" data-dcoreload="1">🔄 重新整理</button></div>'
     +'<div class="note tabhelp"><b>這頁做什麼：</b>設定出貨中心哪些東西要控管數量、放在哪裡。<br><b>管理方式：</b>大多數品項選「<b>無限量</b>」（不記數量，門市照樣可以訂）。要控管的選「<b>記數量</b>」並填現有庫存：出貨完成會自動扣；進貨或盤點後，回來改成實際數量再按「存」。門市訂貨單會看到「出貨中心剩 N／缺貨」。<br>'
-    +'<b>位置：</b>填這個品項放在出貨中心哪裡（例：A-3、冷藏櫃 2），撿貨單會照位置排順序、訂單卡片上會顯示，方便找貨。可以一次填很多項，再按「💾 儲存全部位置」（按 Enter 跳下一格）。</div>';   /* 2026-10-05 經營者 1005 #1 */
+    +'<b>位置：</b>填這個品項放在出貨中心哪裡（例：A-3、冷藏櫃 2），撿貨單會照位置排順序、訂單卡片上會顯示，方便找貨。位置寫了「冷藏」「冷凍」或「冰」的品項（例：冷凍櫃 2），新竹托運單會自動預設<b>低溫</b>。可以一次填很多項，再按「💾 儲存全部位置」（按 Enter 跳下一格）。</div>';   /* 2026-10-05 經營者 1005 #1 */
   if(DCO.stock===null)return h+'<div class="loading">讀取中…</div>';
   if(!DCO.locOK)h+='<div class="banner" style="background:#FFF4E5;border-color:#F0B35A;color:#8A5A00">⚠️ 出貨中心後端還沒更新到有「位置」的版本，位置暫時存不進去。</div>';
   var locE=ST.dcoLocEdit||{},nLocMiss=0;
