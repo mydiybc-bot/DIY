@@ -172,7 +172,7 @@ window.__ime=(function(){
   /* 執行進度（2026-10-28） */
   .pg-c{display:inline-block;margin:2px 4px 2px 0;padding:1px 8px;border-radius:999px;font-size:12.5px;border:1px solid;white-space:nowrap}
   .pg-ok{color:#2E6B43;border-color:#A9D3B6;background:#EEF7F1}.pg-keep{color:#A3321F;border-color:#E8B6AC;background:#FBEFEC}
-  .pg-todo{color:#5E5852;border-color:#D8D1CB;background:#F6F3F0}.pg-new{color:#8A5A00;border-color:#EBCF8F;background:#FFF6DF}
+  .pg-todo{color:#5E5852;border-color:#D8D1CB;background:#F6F3F0}.pg-new{color:#8A5A00;border-color:#EBCF8F;background:#FFF6DF}.pg-pend{color:#6B3A8C;border-color:#CDB2E0;background:#F5EEFA}
   .pg-man{display:inline-block;margin-left:4px;padding:0 6px;border-radius:999px;font-size:11.5px;font-weight:700;color:#7A3E9D;background:#F4ECF9;border:1px solid #D9C2EA;white-space:nowrap}
   .pg-ed{margin-left:4px;padding:1px 6px;font-size:12px;border:1px solid #D8D1CB;border-radius:6px;background:#fff;cursor:pointer}.pg-ed:hover{background:#FAF8F6}
   .pg-app{color:#23436E;border-color:#B7C7DE;background:#EEF3FA}.fe-warn{color:#A3321F;font-weight:700}
@@ -1095,9 +1095,12 @@ var SP_MAX = [['0','不限'],['4','4'],['5','5'],['6','6'],['8','8'],['10','10']
 var SP_TOL = [['0','0%（要剛好）'],['5','±5%'],['10','±10%'],['15','±15%'],['20','±20%']];
 function optsHtml(list, v){ return list.map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === String(v) ? ' selected' : '') + '>' + o[1] + '</option>'; }).join(''); }
 /* 2026-10-30 經營者：食材選單標出已處理的。fin＝定案明細有這食材（確認轉換過）；saved＝在換算頁按過「💾 存成設定」（規格紀錄有「換算頁存檔」）；其餘 todo */
-var ING_MARK = { fin: '✅', saved: '💾', todo: '⬜' };
+/* 2026-11-19 經營者：「低筋麵粉在第一版後需要再修正，必須當做待處理、未完成平匙轉換的品項」→ 最近一次確認轉換的量匙（spoon_ml）沒填＝pend 待處理（再修正）；
+   規則跟新品申請表平匙提醒（SPOON-HINT）一樣。量匙填好、再按一次「✅ 確認轉換」就自動回到已處理。資料不刪不改。 */
+var ING_MARK = { fin: '✅', saved: '💾', todo: '⬜', pend: '🔁' };
+function mlBlank(v){ return String(v == null ? '' : v).trim() === ''; }
 function ingState(ing){
-  if ((S.spoon.final || []).some(function(x){ return x.ingredient === ing && x.deleted !== 'Y'; })) return 'fin';
+  if ((S.spoon.final || []).some(function(x){ return x.ingredient === ing && x.deleted !== 'Y'; })) { var lf = finLast(ing); return lf && mlBlank(lf.spoon_ml) ? 'pend' : 'fin'; }
   if ((S.spoon.spec_log || []).some(function(x){ return x.ingredient === ing && x.version === '換算頁存檔' && x.deleted !== 'Y'; })) return 'saved';
   return 'todo';
 }
@@ -1186,7 +1189,7 @@ function tabSpoon(p){
     + '<button class="btn ghost" type="button" id="spMulti" title="勾選多個食材，一次存設定或一次確認轉換到執行進度">☑ 一次處理多個食材</button>'
     + '</div>'
     + '<div class="muted" style="margin-top:6px" title="' + esc(S.spoon.source || '') + '；每天早上 6 點自動更新">食譜用量 ' + esc(S.spoon.snap_date || '') + '｜' + S.spoon.lines.length + ' 項</div>'
-    + (function(){ var n = { fin: 0, saved: 0, todo: 0 }; ings.forEach(function(i){ n[ingState(i)]++; }); return '<div class="muted" style="margin-top:4px"><span title="已確認轉換">' + ING_MARK.fin + ' ' + n.fin + '</span>｜<span title="已存設定（還沒確認轉換）">' + ING_MARK.saved + ' ' + n.saved + '</span>｜<span title="還沒處理">' + ING_MARK.todo + ' ' + n.todo + '</span> 種</div>'; })()
+    + (function(){ var n = { fin: 0, saved: 0, todo: 0, pend: 0 }; ings.forEach(function(i){ n[ingState(i)]++; }); return '<div class="muted" style="margin-top:4px"><span title="已確認轉換">' + ING_MARK.fin + ' ' + n.fin + '</span>｜' + (n.pend ? '<span title="確認過第一版、量匙未定，還在再修正">' + ING_MARK.pend + ' ' + n.pend + '</span>｜' : '') + '<span title="已存設定（還沒確認轉換）">' + ING_MARK.saved + ' ' + n.saved + '</span>｜<span title="還沒處理">' + ING_MARK.todo + ' ' + n.todo + '</span> 種</div>'; })()
     + (lastFin ? '<div class="muted" style="margin-top:8px" title="畫面一打開就帶這組">✅ 上次定案 ' + esc(String(lastFin.confirmed_at).slice(0, 16)) + '｜' + esc(lastFin.g_per_spoon) + ' g｜最多 ' + (Number(lastFin.max_spoons) ? esc(lastFin.max_spoons) + ' 平匙' : '不限') + '｜誤差 ' + esc(lastFin.tol_pct || 0) + '%</div>' : '')
     + '<div class="muted" style="margin-top:4px"' + (set ? ' title="' + esc(set.note || '') + '，' + esc(set.saved_at || '') + '"' : '') + '>' + (set ? '💾 目前設定｜' + esc(set.g_per_spoon) + ' g｜' + (set.spoon_ml ? esc(set.spoon_ml) + ' ml' : '量匙未填') + '｜最多 ' + (Number(set.max_spoons) ? esc(set.max_spoons) + ' 平匙' : '不限') + '｜誤差 ' + esc(set.tol_pct || 0) + '%' : '還沒存設定') + '</div></div>';
   if (g > 0) {
@@ -1285,7 +1288,7 @@ function tabSpoonMulti(p, by, ings){
   var f = S.mbF || '', show = ings.filter(function(i){ return !f || ingState(i) === f; });
   var h = '<div class="card"><div class="sp-ctl">'
     + '<button class="btn ghost" type="button" id="mbBack">← 回單一食材</button>'
-    + '<label>只看<select id="mbF">' + optsHtml([['', '全部 ' + ings.length + ' 種'], ['todo', ING_MARK.todo + ' 還沒處理'], ['saved', ING_MARK.saved + ' 已存設定（還沒確認轉換）'], ['fin', ING_MARK.fin + ' 已確認轉換']], f) + '</select></label>'
+    + '<label>只看<select id="mbF">' + optsHtml([['', '全部 ' + ings.length + ' 種'], ['todo', ING_MARK.todo + ' 還沒處理'], ['saved', ING_MARK.saved + ' 已存設定（還沒確認轉換）'], ['pend', ING_MARK.pend + ' 待處理（再修正）'], ['fin', ING_MARK.fin + ' 已確認轉換']], f) + '</select></label>'
     + '<button class="btn ghost" type="button" id="mbAll">全選列表</button>'
     + '<button class="btn ghost" type="button" id="mbNone">全部取消</button>'
     + '</div><div class="sp-ctl" style="margin-top:10px">'
@@ -1302,7 +1305,7 @@ function tabSpoonMulti(p, by, ings){
         + '<td><select class="mbMax">' + optsHtml(SP_MAX, m.maxn) + '</select></td>'
         + '<td><select class="mbTol">' + optsHtml(SP_TOL, m.tol) + '</select></td>'
         + '<td class="n mbR">' + mbRate(i, by[i]) + '</td>'
-        + '<td class="muted" style="font-size:12.5px">' + (lf ? '定案 ' + esc(String(lf.confirmed_at).slice(5, 16)) : st === 'saved' ? '已存設定' : '還沒處理') + '</td></tr>';
+        + '<td class="muted" style="font-size:12.5px">' + (st === 'pend' ? '待處理（第一版 ' + esc(String(lf.confirmed_at).slice(5, 10)) + ' 確認，量匙未定）' : lf ? '定案 ' + esc(String(lf.confirmed_at).slice(5, 16)) : st === 'saved' ? '已存設定' : '還沒處理') + '</td></tr>';
     }).join('') + '</tbody></table>' + (show.length ? '' : '<div class="empty">沒有符合的食材。</div>') + '</div>'
     + '<div class="sp-ctl" style="margin-top:12px"><span id="mbN" style="font-weight:700"></span>'
     + (editing() ? '<button class="btn" type="button" id="mbSave">💾 勾選的存成設定</button>' : '')
@@ -1563,7 +1566,7 @@ function pgProg(){
   (S.spoon.final || []).forEach(function(x){ (by[x.ingredient] = by[x.ingredient] || []).push(x); });
   Object.keys(by).forEach(function(ing){
     var xs = by[ing], top = xs.reduce(function(a, x){ return !a || x.confirmed_at > a.confirmed_at ? x : a; }, null);
-    out.push({ ing: ing, date: String(top.confirmed_at || '').slice(0, 10), g: Number(top.g_per_spoon), max: top.max_spoons, tol: top.tol_pct, ml: top.spoon_ml, batch: top.batch,
+    out.push({ ing: ing, pend: mlBlank(top.spoon_ml), date: String(top.confirmed_at || '').slice(0, 10), g: Number(top.g_per_spoon), max: top.max_spoons, tol: top.tol_pct, ml: top.spoon_ml, batch: top.batch,
       rows: xs.map(function(x){
         var ok = x.final_spoons !== '', man = x.manual_spoons !== '', g = Number(x.g_per_spoon), gr = Number(x.grams), sp = Number(x.final_spoons);
         var why = ok ? '' : (x.manual_spoons === '秤重' ? '手動改成維持秤重' : (x.calc_why || '維持秤重'));
@@ -1614,6 +1617,7 @@ function pgMl(ml){ return ml !== '' && ml != null ? esc(mlTxt(ml)) : '<span styl
 function pgChip(x){
   var g = num(x.grams, 2) + ' g';
   if (x.st === 'todo') return '<span class="pg-c pg-todo" title="還沒處理">⬜ ' + esc(x.ing) + ' ' + g + '</span>';
+  if (x.f && x.f.pend) return '<span class="pg-c pg-pend" title="這個食材的平匙轉換待再修正（第一版試算 ' + (x.r ? esc(x.r.ok ? num(Number(x.r.spoons), 2) + ' 平匙' : '維持秤重') : '定案後才出現、還沒算') + '），先照克數">🔁 ' + esc(x.ing) + ' ' + g + ' 待再修正</span>';
   if (x.st === 'new') return '<span class="pg-c pg-new" title="這個食材定案後，後台才出現的；還沒定">⚠ ' + esc(x.ing) + ' ' + g + '</span>';
   if (!x.r.ok) return '<span class="pg-c pg-keep" title="' + esc(x.r.why || x.r.note) + '">✖ ' + esc(x.ing) + ' ' + g + ' 維持秤重</span>';
   return '<span class="pg-c pg-ok" title="' + esc(x.st === 'g' ? '後台還寫 g' : x.st === 'applied' ? '已套用到後台' : '後台已不是 g') + (x.r.manual ? '；手動調過：' + esc(x.r.fin.manual_reason) : '') + '">✅ ' + esc(x.ing) + ' ' + g + ' → ' + num(Number(x.r.spoons), 2) + ' 平匙' + (x.r.manual ? ' ✋' : '') + '</span>';
@@ -1631,14 +1635,15 @@ function tabSpoonProg(p){
   }
   var D = pgData(), rows = D.rows, nd = Object.keys(D.done).length;
   var st = { ok: 0, keep: 0, g: 0, gone: 0, todo: 0, nw: 0, app: 0, man: 0 };
-  rows.forEach(function(x){ if (x.r) { if (x.r.ok) st.ok++; else st.keep++; if (x.st === 'g') st.g++; else st.gone++; if (x.st === 'applied') st.app++; if (x.r.manual) st.man++; } else if (x.st === 'new') st.nw++; else st.todo++; });
-  var last = (S.prog.ings || []).reduce(function(a, f){ return f.date > a ? f.date : a; }, '');
+  var pendIngs = Object.keys(D.done).filter(function(i){ return D.done[i].pend; }); nd -= pendIngs.length; st.pend = 0;
+  rows.forEach(function(x){ if (x.f && x.f.pend) { st.pend++; return; } if (x.r) { if (x.r.ok) st.ok++; else st.keep++; if (x.st === 'g') st.g++; else st.gone++; if (x.st === 'applied') st.app++; if (x.r.manual) st.man++; } else if (x.st === 'new') st.nw++; else st.todo++; });
+  var last = (S.prog.ings || []).reduce(function(a, f){ return !f.pend && f.date > a ? f.date : a; }, '');
   S.pgSub = S.pgSub || 'ing'; S.pgf = S.pgf || { ing: '', ok: '', q: '', rec: 'left' };
   var h = '<div class="sp-big">'
-    + '<div class="ok"><span class="muted">已處理的食材</span><b>' + nd + ' ／ ' + D.ings.length + ' 種</b><span class="muted">最近一次 ' + esc(mdw(last) || last) + '</span></div>'
+    + '<div class="ok"><span class="muted">已處理的食材</span><b>' + nd + ' ／ ' + D.ings.length + ' 種</b><span class="muted">最近一次 ' + esc(mdw(last) || last) + (pendIngs.length ? '；' + ING_MARK.pend + ' 待處理 ' + esc(pendIngs.join('、')) : '') + '</span></div>'
     + '<div class="ok"><span class="muted">已定案</span><b>' + (st.ok + st.keep) + ' 處</b><span class="muted">換平匙 ' + st.ok + '、維持秤重 ' + st.keep + (st.man ? '；手動調過 ' + st.man : '') + '</span></div>'
     + '<div><span class="muted">已定案裡，後台已不是 g</span><b>' + st.gone + ' 處</b><span class="muted">還寫 g ' + st.g + ' 處' + (st.app ? '；記了已套用 ' + st.app + ' 處' : '') + '</span></div>'
-    + '<div class="no"><span class="muted">還沒處理</span><b>' + (st.todo + st.nw) + ' 處</b><span class="muted">' + (st.nw ? '含定案後才出現的 ' + st.nw + ' 處' : '未處理的食材') + '</span></div></div>'
+    + '<div class="no"><span class="muted">還沒處理</span><b>' + (st.todo + st.nw + st.pend) + ' 處</b><span class="muted">' + ([st.nw ? '含定案後才出現的 ' + st.nw + ' 處' : '', st.pend ? '待再修正 ' + st.pend + ' 處（' + esc(pendIngs.join('、')) + '）' : ''].filter(Boolean).join('；') || '未處理的食材') + '</span></div></div>'
     + '<div class="sl-sub"><button class="chip' + (S.pgSub === 'ing' ? ' on' : '') + '" type="button" data-pg="ing">🧂 依食材</button><button class="chip' + (S.pgSub === 'rec' ? ' on' : '') + '" type="button" data-pg="rec">🍰 依甜點</button><button class="chip' + (S.pgSub === 'all' ? ' on' : '') + '" type="button" data-pg="all">📋 已定案明細</button></div><div id="pgBody"></div>'
     + '<div class="muted" style="margin:8px 2px">正式食譜改平匙一律照「📋 已定案明細」的平匙數。<details><summary>ⓘ 資料來源</summary>定案明細（在「🥄 平匙換算」選好食材與規格，按「✅ 確認轉換到執行進度」寫入；10/27～28 用 Excel 定案的 6 種已搬進來），跟食譜用量 ' + esc(S.spoon.snap_date || '') + ' 讀取的資料比對「後台還寫 g／已不是 g」。</details></div>';
   $('tabBody').innerHTML = h;
@@ -1649,20 +1654,20 @@ function tabSpoonProg(p){
 function pgIng(p){
   var D = pgData(), by = {};
   D.rows.forEach(function(x){ var o = by[x.ing] || (by[x.ing] = { ok: 0, keep: 0, g: 0, gone: 0, todo: 0, nw: 0 }); if (x.r) { if (x.r.ok) o.ok++; else o.keep++; if (x.st === 'g') o.g++; else o.gone++; } else if (x.st === 'new') o.nw++; else o.todo++; });
-  var ings = D.ings.slice().sort(function(a, b){ var fa = D.done[a], fb = D.done[b]; if (!!fa !== !!fb) return fa ? -1 : 1; if (fa) return fa.date < fb.date ? 1 : fa.date > fb.date ? -1 : 0; return (D.cnt[b] || 0) - (D.cnt[a] || 0); });
+  var ings = D.ings.slice().sort(function(a, b){ var fa = D.done[a], fb = D.done[b]; var ka = fa ? (fa.pend ? 1 : 0) : 2, kb = fb ? (fb.pend ? 1 : 0) : 2; if (ka !== kb) return ka - kb; if (fa) return fa.date < fb.date ? 1 : fa.date > fb.date ? -1 : 0; return (D.cnt[b] || 0) - (D.cnt[a] || 0); });
   $('pgBody').innerHTML = '<div class="card"><div class="tw"><table class="t pg"><thead><tr><th>食材</th><th>狀態</th><th title="9 月台灣匙版">第一版量匙</th><th>定案的量匙與規格</th><th style="text-align:right">最多</th><th style="text-align:right">容許誤差</th><th style="text-align:right">換平匙</th><th style="text-align:right">維持秤重</th><th>後台現況</th><th style="text-align:right">還沒處理</th></tr></thead><tbody>'
     + ings.map(function(i){
       var f = D.done[i], o = by[i] || {}, s = spoonSetOf(i), diff = f && s && Number(s.g_per_spoon) !== Number(f.g);
       var sp = pgSpec(i), mlChg = f && sp.v1 && sp.ml !== '' && sp.v1.ml !== '' && Number(sp.v1.ml) !== Number(sp.ml);
       return '<tr' + (f ? ' class="click" data-pgi="' + esc(i) + '"' : '') + '><td><b>' + esc(i) + '</b>' + (f ? '<span class="sm">▸ 看明細</span>' : '') + '</td>'
-        + '<td>' + (f ? '<span class="pg-c pg-ok">✅ 已處理</span><span class="sm">' + esc(f.date) + '</span>' : '<span class="pg-c pg-todo">⬜ 未處理</span>') + '</td>'
+        + '<td>' + (f && f.pend ? '<span class="pg-c pg-pend">🔁 待處理</span><span class="sm" style="white-space:normal">' + esc(f.date) + ' 第一版確認；量匙未定、還在再修正</span>' : f ? '<span class="pg-c pg-ok">✅ 已處理</span><span class="sm">' + esc(f.date) + '</span>' : '<span class="pg-c pg-todo">⬜ 未處理</span>') + '</td>'
         + '<td>' + (sp.v1 ? esc(mlTxt(sp.v1.ml)) + '<span class="sm">1 平匙 ' + num(Number(sp.v1.g), 2) + ' g</span>' : '<span class="muted">沒有用</span>') + '</td>'
         + '<td>' + (f ? pgMl(sp.ml) + (mlChg ? ' <span class="chg">量匙換了</span>' : '') + '<span class="sm">1 平匙 <b>' + num(Number(f.g), 2) + ' g</b></span>'
           + (diff ? '<span class="sm" style="color:#8A5A00;white-space:normal">規格表存的是 ' + num(Number(s.g_per_spoon), 2) + ' g（還沒存成這次的值）</span>' : '') : '<span class="muted">—</span>') + '</td>'
         + '<td class="n">' + (f ? esc(f.max) + (Number(f.max) > 0 ? ' 平匙' : '') : '') + '</td><td class="n">' + (f ? pgTol(f.tol) : '') + '</td>'
         + '<td class="n">' + (f ? o.ok : '') + '</td><td class="n">' + (f ? o.keep : '') + '</td>'
         + '<td>' + (f ? (o.gone ? '<span style="color:#2E6B43;font-weight:700">已不是 g ' + o.gone + ' 處</span>' : '') + (o.gone && o.g ? '<br>' : '') + (o.g ? '還寫 g ' + o.g + ' 處' : '') : '<span class="muted">—</span>') + '</td>'
-        + '<td class="n">' + (f ? (o.nw ? '<span class="pg-c pg-new" title="這個食材定案之後，後台才多出來的食譜用量，還要再處理一次">⚠ ' + o.nw + ' 處新出現</span>' : '0') : '<b>' + (o.todo || 0) + '</b> 處') + '</td></tr>';
+        + '<td class="n">' + (f && f.pend ? '<b>' + (o.ok + o.keep + o.nw) + '</b> 處<span class="sm">待再修正</span>' : f ? (o.nw ? '<span class="pg-c pg-new" title="這個食材定案之後，後台才多出來的食譜用量，還要再處理一次">⚠ ' + o.nw + ' 處新出現</span>' : '0') : '<b>' + (o.todo || 0) + '</b> 處') + '</td></tr>';
     }).join('') + '</tbody></table></div>'
     + '<details class="muted" style="margin-top:8px"><summary>ⓘ 欄位說明</summary>「定案的量匙與規格」是匯出 Excel 當下畫面上的數字（舊檔沒有量匙，改用「📒 平匙規格與演進」存的量匙；顯示「量匙未填」就到那頁填）。量匙換了，1 平匙的克數也跟著不同。跟「📒 平匙規格與演進」存的不一樣時會提醒。點已處理的食材看每支甜點的明細。</details></div>';
   Array.prototype.forEach.call(document.querySelectorAll('[data-pgi]'), function(el){ el.onclick = function(){ S.pgf = { ing: el.getAttribute('data-pgi'), ok: '', q: '', rec: S.pgf.rec }; S.pgSub = 'all'; tabSpoonProg(p); window.scrollTo(0, 0); }; });
@@ -1682,14 +1687,14 @@ function pgRec(p){
     var by = {}, order = [];
     pgData().rows.forEach(function(x){ if (!by[x.recipe]) { by[x.recipe] = []; order.push(x.recipe); } by[x.recipe].push(x); });
     var list = order.filter(function(r){
-      var xs = by[r], left = xs.some(function(x){ return !x.r; });
+      var xs = by[r], left = xs.some(function(x){ return !x.r || (x.f && x.f.pend); });
       if (S.pgf.rec === 'left' && !left) return false;
       if (S.pgf.rec === 'done' && left) return false;
       return xs.some(pgHit);
     });
-    $('pgRes').innerHTML = '<div class="card"><div class="muted" style="margin-bottom:6px">符合 ' + list.length + ' 支甜點（✅ 換平匙　✖ 維持秤重　⬜ 還沒處理　⚠ 定案後才出現）</div><div class="tw"><table class="t pg"><thead><tr><th>甜點</th><th>已定案</th><th>還沒處理</th></tr></thead><tbody>'
+    $('pgRes').innerHTML = '<div class="card"><div class="muted" style="margin-bottom:6px">符合 ' + list.length + ' 支甜點（✅ 換平匙　✖ 維持秤重　⬜ 還沒處理　⚠ 定案後才出現　🔁 待再修正）</div><div class="tw"><table class="t pg"><thead><tr><th>甜點</th><th>已定案</th><th>還沒處理</th></tr></thead><tbody>'
       + (list.length ? list.map(function(r){
-        var xs = by[r], d = xs.filter(function(x){ return x.r; }), l = xs.filter(function(x){ return !x.r; });
+        var xs = by[r], d = xs.filter(function(x){ return x.r && !(x.f && x.f.pend); }), l = xs.filter(function(x){ return !x.r || (x.f && x.f.pend); });
         return '<tr><td><b>' + esc(r) + '</b><span class="sm">' + d.length + ' ／ ' + xs.length + ' 處</span></td><td>' + (d.map(pgChip).join('') || '<span class="muted">—</span>') + '</td><td>' + (l.map(pgChip).join('') || '<span style="color:#2E6B43;font-weight:700">全部處理完</span>') + '</td></tr>';
       }).join('') : '<tr><td colspan="3" class="muted">沒有符合的甜點</td></tr>') + '</tbody></table></div></div>';
   };
@@ -1702,7 +1707,7 @@ function pgAll(p){
   var D = pgData(), done = Object.keys(D.done);
   if (S.pgf.ing && !D.done[S.pgf.ing]) S.pgf.ing = '';
   $('pgBody').innerHTML = '<div class="card"><div class="sp-ctl"><label>食材<select id="pgI"><option value="">已處理的全部食材（' + done.length + ' 種）</option>'
-    + done.map(function(i){ return '<option value="' + esc(i) + '"' + (i === S.pgf.ing ? ' selected' : '') + '>' + esc(i) + '（' + esc(D.done[i].date.slice(5).replace('-', '/')) + '）</option>'; }).join('') + '</select></label>'
+    + done.map(function(i){ return '<option value="' + esc(i) + '"' + (i === S.pgf.ing ? ' selected' : '') + '>' + (D.done[i].pend ? ING_MARK.pend + ' ' : '') + esc(i) + '（' + esc(D.done[i].date.slice(5).replace('-', '/')) + (D.done[i].pend ? '，待處理' : '') + '）</option>'; }).join('') + '</select></label>'
     + '<label>可否更換<select id="pgO"><option value="">全部</option><option value="ok"' + (S.pgf.ok === 'ok' ? ' selected' : '') + '>可更換</option><option value="no"' + (S.pgf.ok === 'no' ? ' selected' : '') + '>維持秤重</option><option value="new"' + (S.pgf.ok === 'new' ? ' selected' : '') + '>定案後才出現（還沒定）</option></select></label>'
     + '<label>找甜點<input id="pgQ" type="search" placeholder="例：雪人" value="' + esc(S.pgf.q) + '"></label></div></div><div id="pgRes"></div>';
   var res = function(){
@@ -1726,7 +1731,7 @@ function pgAll(p){
           + (r.manual ? '<span class="pg-man" title="系統算的：' + esc(calcTxt) + '｜原因：' + esc(fx.manual_reason) + '｜' + esc(fx.manual_at) + '">✋ 手動</span>' : '')
           + (editing() && !r.applied ? '<button class="pg-ed" type="button" data-fin="' + esc(fx.fin_id) + '" title="手動調整這一處的平匙數">✏️</button>' : '')
           + (r.manual ? '<span class="sm">系統算 ' + esc(fx.calc_ok === 'Y' ? num(Number(fx.calc_spoons), 2) : '秤重') + '</span>' : '') + '</td><td class="n">' + pgTol(fx.tol_pct) + '</td>'
-          + '<td>' + (r.ok ? '<span class="pg-c pg-ok">✅ 可更換</span>' : '<span class="pg-c pg-keep">✖ ' + esc(r.why || '維持秤重') + '</span>') + '</td>'
+          + '<td>' + (x.f && x.f.pend ? '<span class="pg-c pg-pend">🔁 待再修正</span><span class="sm">第一版試算：' + (r.ok ? '可更換' : esc(r.why || '維持秤重')) + '</span>' : r.ok ? '<span class="pg-c pg-ok">✅ 可更換</span>' : '<span class="pg-c pg-keep">✖ ' + esc(r.why || '維持秤重') + '</span>') + '</td>'
           + '<td class="muted" style="min-width:170px">' + esc(r.note) + '</td><td>' + esc(r.purpose || '—') + '<span class="sm">' + (r.stepNo ? '第 ' + esc(r.stepNo) + ' 步「' + esc(r.step) + '」' : esc(r.step)) + '</span></td>'
           + '<td class="n">' + (r.uses === '' ? '—' : esc(r.uses)) + '</td><td>' + pgStTxt(x) + '</td></tr>';
       }).join('') : '<tr><td colspan="12" class="muted">沒有符合的資料</td></tr>') + '</tbody></table></div>'
