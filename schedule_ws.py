@@ -783,6 +783,8 @@ def mset_view(st):
             if cur.get("type") == "正職" and prev_std is not None and cur.get("target") not in (None, "") and float(cur["target"]) == float(prev_std):
                 cur["target"] = None
             cur["_default"] = True
+            if cur.get("type") == SKIP_TYPE:   # 上個月設本月不排班 → 沿用，畫面提醒店長確認
+                cur["skip_carried"] = True
             ms["emps"][e["id"]] = cur
         cur["move"] = "可"   # 2026-11-11 經營者：調店不再讓店長選，後台固定全部夥伴都可調店（舊存檔的「否」也不算）
         if cur.get("type") == "正職" and not cur.get("target"):
@@ -833,8 +835,13 @@ def mset_clean(st, body):
         v = v or {}
         emps[eid] = {"type": (str(v.get("type")) if str(v.get("type") or "") in EMP_TYPES else "正職"), "target": _num(v.get("target"), None, 0, 400, "目標時數"),
                      "min_hours": _num(v.get("min_hours"), None, 0, 400, "最低時數"), "note": str(v.get("note") or "").strip()[:300]}
-        if emps[eid]["type"] == SKIP_TYPE:   # 不排：不留目標／最低時數（區域排班的時數表才不會標紅）
+        if emps[eid]["type"] == SKIP_TYPE:   # 本月不排班：不留目標／最低時數（區域排班的時數表才不會標紅），一定要選原因
             emps[eid]["target"] = emps[eid]["min_hours"] = None
+            why = str(v.get("skip_why") or "").strip()
+            if why not in SKIP_WHY:
+                nm = next((e["name"] for e in st["template"]["info"]["emps"] if e["id"] == eid), eid)
+                raise ValueError(f"{nm} 選了「{SKIP_LABEL}」，請選原因（{'／'.join(SKIP_WHY)}）")
+            emps[eid]["skip_why"] = why
         mv = str(v.get("move") or "")
         emps[eid]["move"] = mv if mv in ("可", "否") else ("否" if emps[eid]["type"] == "兼職" else "可")
         for f in MARK_TXT.values():
@@ -863,11 +870,18 @@ def mset_clean(st, body):
 
 
 MARKS = ("指休", "特休", "可上")
-# 2026-11-19 經營者（12 號店 Lisa 反映 AI 排班名單有外店夥伴）：104 群組裡掛著的外店夥伴（常來支援才加進本店名單），
-# 店長在「正職／兼職」選「不排」→ AI 初稿、區域排班都不排他（整列留空白），時數、指休、跨月休假等提醒也不算他；
-# 店長手動排的班照常保留、照常檢查。下個月跟著正職／兼職一起沿用。
+# 2026-11-19／20 經營者（12 號店 Lisa 反映 AI 排班名單有不是本店的夥伴）：店長在「正職／兼職」選「本月不排班」（存檔值「不排」）＋原因 →
+# 本店排初稿不排他（整列留空白），時數、指休、跨月休假等提醒也不算他；店長手動排的班照常保留、照常檢查。
+# 員工不能拒絕支援：區域排班時原因是「非本店夥伴／其他」的，本店缺人時照樣可以排他（solver guest_ok）；請長假、已離職的不排。
+# 下個月自動沿用，畫面提醒店長確認（skip_carried）；「已離職待移除」提醒體驗中心到 104 移出群組。
 SKIP_TYPE = "不排"
+SKIP_LABEL = "本月不排班"
+SKIP_WHY = ("非本店夥伴", "本月請長假", "已離職待移除", "其他")
 EMP_TYPES = ("正職", "兼職", SKIP_TYPE)
+
+
+def type_label(t):
+    return SKIP_LABEL if t == SKIP_TYPE else (t or "")
 
 
 def skip_ids(ms):
@@ -1327,7 +1341,7 @@ def form_text(st, cfg):
     for e in info["emps"]:
         v = ms["emps"].get(e["id"]) or {}
         if v.get("type") == SKIP_TYPE:
-            L.append(f"{e['id']}\t{e['name']}\t不排（外店夥伴：本月不要排班，整列留空白）\t\t\t")
+            L.append(f"{e['id']}\t{e['name']}\t{SKIP_LABEL}（原因：{v.get('skip_why') or '—'}；本店排初稿不要排他，整列留空白）\t\t\t")
             continue
         tgt = v.get("target") or v.get("target_hint") or ""
         L.append(f"{e['id']}\t{e['name']}\t{v.get('type', '正職')}\t{tgt}\t{v.get('min_hours') or ''}\t{v.get('note') or ''}")
@@ -2403,7 +2417,7 @@ def live_report(st):
     for r in sm["rows"]:
         tg = f"{float(r['target']):g}h" if r["target"] else "—"
         mn = f"{float(r['min']):g}h" if r["min"] else "—"
-        L.append(f"| {r['name']} | {r['type'] or '—'} | {r['hours']:g}h | {tg} | {mn} | {str(len(r['support'])) + ' 天' if r['support'] else '—'} |")
+        L.append(f"| {r['name']} | {type_label(r['type']) or '—'} | {r['hours']:g}h | {tg} | {mn} | {str(len(r['support'])) + ' 天' if r['support'] else '—'} |")
     if sm["gaps"]:
         L += ["", f"**缺人的日子（共 {sm['gap_n']} 人次）**"]
         L += [f"- {c['label']}（{c['wd']}）：要 {c['need']} 人、排了 {c['got']} 人" for c in sm["gaps"]]
@@ -4260,7 +4274,7 @@ def bonus_xlsx(stores, ym):
                     kk = (int(k), a["store"])
                     away[kk] = round(away.get(kk, 0) + a["hours"], 2)
             note = ("；".join(f"{int(ym[4:])}/{d} 支援{STORES.get(sto, sto)}店 {h:g}h" for (d, sto), h in away.items()) + "（獎金算在被支援店）") if away else ""
-            ws1.append([store, STORES.get(store, ""), e["id"], e["name"], etype.get(e["id"], ""), days_on, work, b["month"]["by_emp"].get(e["id"], 0), note])
+            ws1.append([store, STORES.get(store, ""), e["id"], e["name"], type_label(etype.get(e["id"], "")), days_on, work, b["month"]["by_emp"].get(e["id"], 0), note])
             row = [store, STORES.get(store, ""), e["id"], e["name"]]
             for d in info["days"]:
                 x = (b["days"].get(str(d["d"])) or {}).get("staff", {}).get(e["id"])

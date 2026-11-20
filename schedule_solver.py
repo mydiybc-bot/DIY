@@ -160,13 +160,16 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         for e in u["info"]["emps"]:
             v = (ms.get("emps") or {}).get(e["id"]) or {}
             typ = v.get("type") or "正職"
-            skip = typ == "不排"   # 2026-11-19 經營者：店長選「不排」的外店夥伴，這份名單完全不排（整列留空白、不追時數）
+            # 2026-11-19／20 經營者：店長選「本月不排班」→ 本店排初稿不排（整列留空白、不追時數）；
+            # 但員工不能拒絕支援：區域排班時原因是「非本店夥伴／其他」的，本店缺人時照樣可以排他來（本店的人優先）
+            skip = typ == "不排"
+            guest_ok = skip and (v.get("skip_why") or "非本店夥伴") not in ("本月請長假", "已離職待移除")
             tgt = v.get("target") or (v.get("target_hint") if typ == "正職" else None)
             tgt = float(tgt) if tgt not in (None, "") else (u["std_min"] / 60 if typ == "正職" and u["std_min"] else None)
             mn = v.get("min_hours")
             emps.append({"k": (u["store"], e["id"]), "id": e["id"], "name": e["name"], "u": u, "ft": typ == "正職",
                          "move": True,   # 2026-11-11 經營者：全部夥伴都可調店（後台固定）
-                         "dflt": bool(v.get("_default")), "skip": skip,
+                         "dflt": bool(v.get("_default")), "skip": skip, "guest_ok": guest_ok,
                          "target": int(round(tgt * 60)) if tgt and not skip else None,
                          "min": int(round(float(mn) * 60)) if mn not in (None, "") and not skip else None})
     E = {e["k"]: e for e in emps}
@@ -193,7 +196,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         for d in days:
             v = mk.get(str(d), "")
             if e["skip"]:
-                allowed[k + (d,)] = []
+                allowed[k + (d,)] = [(u["store"], n) for n in u["shifts"] if u["need"][d].get(n)] if (lend and e["guest_ok"]) else []
                 continue
             if (eid, d) in u["fixed_minutes"]:
                 fixed[k + (d,)] = u["fixed_minutes"][(eid, d)]
@@ -231,6 +234,19 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                         opts += [(o["store"], n) for n in o["shifts"] if o["need"][d].get(n) and (
                             not want or (o["shifts"][n]["kind"] == want["kind"] if want["kind"] else n == avail.get(str(d))))]
             allowed[k + (d,)] = opts
+
+    # 本月不排班、可支援的那份名單：同一人在別家店名單上那天指休／特休／不能上班 → 這天也不排他（員工可以休假）
+    by_id = {}
+    for e in emps:
+        by_id.setdefault(e["id"], []).append(e)
+    for e in emps:
+        if not e["skip"]:
+            continue
+        for d in days:
+            if allowed[e["k"] + (d,)] and any(
+                    ((g["u"]["ms"].get("marks") or {}).get(g["id"]) or {}).get(str(d)) in ("指休", "特休") or (g["id"], d) in g["u"]["off_rule"]
+                    for g in by_id[e["id"]] if g is not e):
+                allowed[e["k"] + (d,)] = []
 
     def pto_shift(u, d):
         """特休那天照常排班：取這天時數最接近 8 小時的班（早班優先）"""
@@ -299,7 +315,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             if len(v) > 1:
                 m.Add(sum(v) <= 1)
             for s, n in allowed[e["k"] + (d,)]:
-                if s != e["u"]["store"]:
+                if s != e["u"]["store"] or e["skip"]:   # 本月不排班的人來支援也跟調店一樣算成本，本店的人優先
                     pen.append((x[e["k"] + (d, s, n)], W_LEND))
 
     # 每家店每天人數：總人頭不可少、也不要多（多＝浪費人力）；各班別盡量對上；店長指定的上限一定守
