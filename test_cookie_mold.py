@@ -149,9 +149,8 @@ def test_only_q_style_and_traits_in_prompt(cm):
     assert "traits" in cm.CHECK_PROMPT
 
 
-def test_layout_body_only_for_full_body_pets():
+def test_layout_body_only_for_full_body_pets(cm):
     """寵物照片有拍到全身才畫全身；人物、只拍到頭的寵物照舊畫頭。"""
-    import cookie_mold as cm
     body = {"subject": "pet", "framing": "full_body", "facing": "right", "traits": "long body"}
     assert cm.layout_of(body) == "body"
     p = cm.draw_prompt(body["traits"], body)
