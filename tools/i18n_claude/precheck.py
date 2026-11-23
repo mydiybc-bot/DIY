@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """投遞前的本機預檢（跟伺服器同一套規則的簡化版）：python3 precheck.py <id8_lang>
-檢查：頁數、k 連續、[[IMGn]] 位置、每頁數字、HTML 標籤只留允許的、有沒有留下整句英文。"""
+檢查：頁數、k 連續、[[IMGn]] 位置、每頁數字、HTML 標籤只留允許的、有沒有留下整句英文。
+2026-11-24 中文原文（src.json 的 base＝zh）另查：譯文不可留中文字（日文除外）、保存方式不可照抄中文、品名只寫譯名（不要「｜中文」）。"""
 import json, re, sys
 from common import *
 t = sys.argv[1]
@@ -27,9 +28,18 @@ for s, x in zip(src['slides'], tr['slides']):
         to, tc = co(x['h'], r'<%s[\s>]' % tg), co(x['h'], r'</%s>' % tg)
         if to != tc: bad.append('第%d頁 <%s> 開關不成對（開%d關%d）' % (k + 1, tg, to, tc))
 if src['pres'] and not tr.get('pres', '').strip(): bad.append('保存方式空')
-if src['name'] and not tr.get('name', '').strip(): bad.append('名稱空')   # 名稱沒變（沿用上一版）時 src.json 的 name 是空的
-miss_terms = [m for m in src['missing'] if not any(d['kind'] == m['kind'] and d['en'].lower() == m['en'].lower() for d in tr.get('dict', []))]
-if miss_terms: bad.append('詞典還缺 %d 個：%s' % (len(miss_terms), ', '.join(m['en'] for m in miss_terms[:8])))
+Z = src.get('base') == 'zh'
+han = re.compile(r'[\u3400-\u9fff]')
+if Z and src['lang'] != 'ja':
+    for s, x in zip(src['slides'], tr['slides']):
+        if han.search(re.sub(r'<[^>]+>', ' ', x.get('h', '')) + x.get('t', '')): bad.append('第%d頁 還有中文字' % (s['k'] + 1))
+    if han.search(tr.get('pres', '')): bad.append('保存方式還有中文字')
+    if han.search(tr.get('name', '').split('｜')[0]): bad.append('品名譯名還有中文字')
+if Z and src['pres'] and tr.get('pres', '').strip() == src['pres'].strip(): bad.append('保存方式照抄中文')
+if src['name'] and not tr.get('name', '').strip() and not src.get('local'): bad.append('名稱空')   # 有 local（到店須知品名）時寫空字串即可，伺服器會用 local   # 名稱沒變（沿用上一版）時 src.json 的 name 是空的
+KF = 'zh' if Z else 'en'   # 中文原文的詞典用中文名當索引
+miss_terms = [m for m in src['missing'] if not any(d.get('kind') == m['kind'] and str(d.get(KF, '')).lower() == m[KF].lower() and str(d.get('tr', '')).strip() for d in tr.get('dict', []))]
+if miss_terms: bad.append('詞典還缺 %d 個：%s' % (len(miss_terms), ', '.join(m[KF] for m in miss_terms[:8])))
 print(t, '預檢', '全過' if not bad else '有 %d 個問題' % len(bad))
 for b in bad: print(' -', b)
 sys.exit(1 if bad else 0)

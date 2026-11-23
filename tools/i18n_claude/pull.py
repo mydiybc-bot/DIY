@@ -2,7 +2,8 @@
 """拿原稿：python3 pull.py <食譜id或前8碼> <語言> → 存 WORK/<id8>_<lang>.src.json 與 .brief.txt
 不給參數 → 列出待翻清單；加 --fresh → 今天 06:00 後還沒更新過原文就先更新（早上巡檢用）。
 2026-11-05 只翻改到的頁：上一版放行過、字沒變的頁不放進 src.json（伺服器投遞時自動沿用），
-src.json 的 slides 只剩要翻的頁；同頁碼的舊譯文放在 prev（參考用）；名稱／保存方式沒變就給空字串。"""
+src.json 的 slides 只剩要翻的頁；同頁碼的舊譯文放在 prev（參考用）；名稱／保存方式沒變就給空字串。
+2026-11-24 中文原文（base＝zh）：語言多一個 en；dict／missing 用 zh 當索引（missing 附 backend_en 後台英文名、cand 舊詞典候選、warn）。"""
 import json, sys
 from common import *
 
@@ -16,7 +17,7 @@ if len(sys.argv) < 3:
         print('已更新原文：檢查 %s、重抓 %s、要翻的字有變 %s%s' % (f.get('checked'), f.get('fetched'), f.get('changed'), '；' + '；'.join(f['errors']) if f.get('errors') else ''))
     print('待翻', d.get('pending'), '（原文更新於 %s）' % d.get('refresh_at'))
     for x in d.get('items', []):
-        print(x['id'], x['lang'], x['why'], '平板顯示上一版' if x.get('showing') else '平板沒有', x['name'])
+        print(x['id'], x['lang'], x['why'], '平板顯示上一版' if x.get('showing') else '平板沒有', '【中文原文】' if x.get('base') == 'zh' else '', x['name'])
     sys.exit(0 if r.get('ok') else 1)
 
 idp, lang = sys.argv[1], sys.argv[2]
@@ -44,4 +45,4 @@ else:
     d['prev'] = {}
 json.dump(d, open('%s/%s.src.json' % (WORK, t), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
 open('%s/%s.brief.txt' % (WORK, t), 'w', encoding='utf-8').write(d['brief'])
-print(t, '全部', total, '頁，要翻', len(d['slides']), '頁（沿用', len(keep), '頁）', '名稱沿用' if d.get('partial') and d.get('name_keep') else '', '已有詞', len(d['dict']), '缺詞', len(d['missing']), '現況', d.get('now'))
+print(t, '【中文原文】' if d.get('base') == 'zh' else '【英文原文】', '全部', total, '頁，要翻', len(d['slides']), '頁（沿用', len(keep), '頁）', '名稱沿用' if d.get('partial') and d.get('name_keep') else '', '已有詞', len(d['dict']), '缺詞', len(d['missing']), '現況', d.get('now'))

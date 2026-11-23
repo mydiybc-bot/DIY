@@ -11,15 +11,17 @@ j = call('i18nStatus')
 if not j.get('ok', True) and 'data' not in j:
     raise SystemExit('讀不到 i18nStatus：%s' % j.get('msg'))
 s = j['data']
-langs = s['langs']
+langs = s.get('zlangs') or s['langs']   # 2026-11-24：中文原文多一個 en
 cnt = {l: Counter() for l in langs}
 st = {}
+zn = sum(1 for r in s['matrix'] if r.get('base') == 'zh')
 for r in s['matrix']:
     for l in langs:
-        v = r['st'].get(l, 'none')
+        if l not in r['st']: continue   # 舊英文原文沒有 en（英文直接用後台原文）
+        v = r['st'].get(l) or 'none'
         cnt[l][v] += 1
         st[tag(r['id'], l)] = v
-print('食譜 %d 支' % len(s['matrix']))
+print('食譜 %d 支（中文原文 %d 支、已取代舊英文原文 %d 支；舊英文原文被取代 %d 支）' % (len(s['matrix']), zn, sum(1 for r in s['matrix'] if r.get('replaced')), sum(1 for r in s['matrix'] if r.get('retired'))))
 for l in langs:
     pv = ((s.get('count') or {}).get(l) or {}).get('prev', 0)   # 新譯文還沒好、平板照舊顯示上一版（2026-11-05）
     print('  %s：%s%s' % (l, '、'.join('%s %d' % kv for kv in sorted(cnt[l].items())), '（其中平板顯示上一版 %d）' % pv if pv else ''))
