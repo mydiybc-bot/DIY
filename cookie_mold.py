@@ -1,6 +1,6 @@
 """🍪 AI 專屬餅乾模・第二階段後端（2026-11-18；經營者決定照交辦書放訓練站伺服器）。
 
-做什麼：LINE 登入換一次免費 AI 線稿（寫實版／Q 版）、已付訂金可無限次、客人確認設計送總部審核、
+做什麼：LINE 登入換一次免費 AI 線稿（寫實版／Q 版）、已付訂金後最多再生成 3 次（paid_gen_limit）、客人確認設計送總部審核、
         總部審核後台（通過／退回／下載 STL／每週待印清單）、每次 AI 呼叫記成本、每日預算上限。
 不做什麼：線上付款（另案；「已付訂金」由總部在後台手動開）。不用 Claude API（成本考量）。
 
@@ -54,6 +54,7 @@ DEFAULT_CFG = {
     "daily_budget_twd": 50,
     "usd_twd": 32.5,
     "check_model": "gemini-3.1-flash-lite",
+    "paid_gen_limit": 3,                            # 2026-11-23 經營者：「不能不限次數，最多 3 次」＝付訂金後最多再生成幾次
     "image_model": "gemini-3.1-flash-lite-image",   # 2026-11-18 實測：線條粗、乾淨、約 5 秒；2.5-flash-image 寫實版線太細不能用
     # 單價（美元／每百萬 token，2026-11-18 查官方定價頁）；image_out＝圖片輸出、image_text_out＝圖像模型順帶輸出的文字
     "price": {"check_in": 0.25, "check_out": 1.50, "image_in": 0.25, "image_out": 30.0, "image_text_out": 1.50},
@@ -368,9 +369,17 @@ def _login(b: dict) -> dict:
     return {"token": token, "user": _pub_user(uid, u)}
 
 
+def paid_left(u: dict) -> int:
+    """付訂金後還能再生成幾次（沒付訂金＝0）。"""
+    if not u.get("paid"):
+        return 0
+    return max(0, int(cfg().get("paid_gen_limit") or 0) - int(u.get("paid_gen") or 0))
+
+
 def _pub_user(uid: str, u: dict) -> dict:
     return {"name": u.get("name", ""), "paid": bool(u.get("paid")), "free_used": bool(u.get("free_used")),
-            "can_generate": bool(u.get("paid")) or not u.get("free_used"), "test": uid.startswith("test:")}
+            "paid_left": paid_left(u), "paid_limit": int(cfg().get("paid_gen_limit") or 0),
+            "can_generate": paid_left(u) > 0 or not u.get("free_used"), "test": uid.startswith("test:")}
 
 
 def _who(b: dict, required: bool = True) -> tuple[str, dict]:
@@ -402,8 +411,11 @@ def _generate(b: dict) -> dict:
     style = "q"
     if not ai_open():
         raise Fail("closed", "今天的 AI 生成名額已經用完了，明天再來；免費試玩照常可以玩。", 429)
+    lim = int(cfg().get("paid_gen_limit") or 0)
+    if u.get("free_used") and u.get("paid") and paid_left(u) <= 0:
+        raise Fail("quota", f"付訂金後的 {lim} 次重新生成已經用完了。請用目前這個設計送審；需要協助請洽官方 LINE。", 402)
     if u.get("free_used") and not u.get("paid"):
-        raise Fail("quota", "免費的 AI 生成已經用過了。付訂金預約後，就可以無限次重新生成、慢慢調整到滿意。", 402)
+        raise Fail("quota", f"免費的 AI 生成已經用過了。付訂金預約後，可以再重新生成 {lim} 次，調整到滿意。", 402)
     photo = _b64(b.get("photo"), MAX_PHOTO)
     with _LOCK:
         if time.time() - _LAST_GEN.get(uid, 0) < COOLDOWN:
@@ -449,6 +461,8 @@ def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
     with _LOCK:
         users = _users()
         uu = users.setdefault(uid, u)
+        if uu.get("free_used") and uu.get("paid"):     # 免費那一次不算在付訂金的次數裡
+            uu["paid_gen"] = int(uu.get("paid_gen") or 0) + 1
         uu["free_used"], uu["gen"] = True, int(uu.get("gen") or 0) + 1
         _save("users.json", users)
         atomic_write_json(_design_path(did), {"id": did, "uid": uid, "name": uu.get("name", ""), "style": style, "layout": layout_of(chk), "status": "draft",
@@ -606,13 +620,17 @@ def _admin_paid(b: dict) -> dict:
         u = users.get(str(b.get("uid") or ""))
         if not u:
             raise Fail("id", "找不到這位客人。", 404)
-        u["paid"] = bool(b.get("on"))
+        on = bool(b.get("on"))
+        if on and not u.get("paid"):
+            u["paid_gen"] = 0          # 每次從「未付」打開成「已付」，次數重新算（要多給客人次數：關掉再打開）
+        u["paid"] = on
         _save("users.json", users)
-    return {"paid": u["paid"]}
+    return {"paid": u["paid"], "paid_left": paid_left(u)}
 
 
 def _admin_users(_b: dict) -> dict:
-    return {"users": [dict(uid=k, **v) for k, v in sorted(_users().items(), key=lambda kv: kv[1].get("created", ""), reverse=True)]}
+    return {"paid_limit": int(cfg().get("paid_gen_limit") or 0),
+            "users": [dict(uid=k, paid_left=paid_left(v), **v) for k, v in sorted(_users().items(), key=lambda kv: kv[1].get("created", ""), reverse=True)]}
 
 
 def _admin_stats(b: dict) -> dict:

@@ -38,17 +38,22 @@ def test_login_required_and_bad_code(cm):
     assert call(cm, "login", id_token="x")[1]["code"] == "auth"      # LINE 還沒設
 
 
-def test_free_once_then_blocked_then_paid_unlimited(cm):
+def test_free_once_then_blocked_then_paid_three_times(cm):
     t = login(cm)
     s, r = call(cm, "generate", token=t, photo=PHOTO, style="q")
     assert s == 200 and r["line"] and r["style"] == "q" and r["user"]["free_used"]
     s, r = call(cm, "generate", token=t, photo=PHOTO)
     assert s == 402 and r["code"] == "quota" and "訂金" in r["msg"]            # 驗收 3：第二次被擋並引導付訂金
     assert call(cm, "admin/paid", pwd="adm", uid="test:amy", on=True)[1]["paid"] is True
-    for _ in range(3):                                                           # 驗收 4：已付訂金可重複生成
-        assert call(cm, "generate", token=t, photo=PHOTO)[0] == 200
+    for left in (2, 1, 0):                                                       # 驗收 4：已付訂金最多再生成 3 次（2026-11-23 經營者：不能不限次數）
+        s, r = call(cm, "generate", token=t, photo=PHOTO)
+        assert s == 200 and r["user"]["paid_left"] == left and r["user"]["can_generate"] is (left > 0)
+    s, r = call(cm, "generate", token=t, photo=PHOTO)
+    assert s == 402 and r["code"] == "quota" and "3 次" in r["msg"] and "用完" in r["msg"]
     assert call(cm, "admin/paid", pwd="adm", uid="test:amy", on=False)[1]["paid"] is False
     assert call(cm, "generate", token=t, photo=PHOTO)[0] == 402
+    assert call(cm, "admin/paid", pwd="adm", uid="test:amy", on=True)[1]["paid_left"] == 3   # 關掉再打開＝重新給 3 次
+    assert call(cm, "generate", token=t, photo=PHOTO)[0] == 200
 
 
 def test_rights_block_does_not_use_quota(cm, monkeypatch):
