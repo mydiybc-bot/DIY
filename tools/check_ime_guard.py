@@ -42,6 +42,7 @@ REQUIRED = [
     'hq-apply.html', 'hq-apply-admin.html',   # 總部申請作業＋申請審核（2026-11-03 新建；明細、姓名、退回原因要能打中文）
     'promo.html',   # 活動與優惠辦法（2026-11-04 新建；決策中心 🎁 分頁，搜尋、編輯表單要能打中文）
     'cookie-mold.html', 'cookie-mold-admin.html',   # AI 專屬餅乾模（2026-11-18 第二階段；姓名、退回原因要能打中文）
+    'recipe-proto.html',   # 食譜新版面原型（2026-11-24 新建；只有閘門的密碼框，照規定放著）
 ]
 
 # 不加的頁面與原因
