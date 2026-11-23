@@ -147,3 +147,16 @@ def test_only_q_style_and_traits_in_prompt(cm):
     p = cm.draw_prompt("floppy ears, tongue out")
     assert "HEAD ONLY" in p and "floppy ears, tongue out" in p and "3D-printed" in p
     assert "traits" in cm.CHECK_PROMPT
+
+
+def test_layout_body_only_for_full_body_pets():
+    """寵物照片有拍到全身才畫全身；人物、只拍到頭的寵物照舊畫頭。"""
+    import cookie_mold as cm
+    body = {"subject": "pet", "framing": "full_body", "facing": "right", "traits": "long body"}
+    assert cm.layout_of(body) == "body"
+    p = cm.draw_prompt(body["traits"], body)
+    assert "THE WHOLE ANIMAL" in p and "points to the right" in p and "long body" in p
+    for chk in ({"subject": "pet", "framing": "head"}, {"subject": "person", "framing": "full_body"}, {}, None):
+        assert cm.layout_of(chk or {}) == "head"
+        assert "THE HEAD ONLY" in cm.draw_prompt("x", chk)
+    assert "points to the same side" in cm.draw_prompt("x", {"subject": "pet", "framing": "full_body", "facing": "weird"})

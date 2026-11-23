@@ -222,10 +222,13 @@ CHECK_PROMPT = (
     "clear (true if the subject is in focus and large enough to draw), "
     "traits (one sentence of at most 45 words listing the 4 or 5 most distinctive visible traits needed to recognise this individual in a very simple cartoon: "
     "expression, ear type and how they are carried or hairstyle and hair colour (dark or light), face or muzzle shape, glasses / hat / beard, "
-    "and exactly which parts of the face or head are dark and which are light)."
+    "and exactly which parts of the face or head are dark and which are light, and for a pet also the body build if the body is visible: "
+    "body length, leg length, tail, and how it stands or sits), "
+    "framing ('full_body' if the main subject is a PET whose whole body including legs or paws is visible in the photo; otherwise 'head'), "
+    "facing ('left', 'right' or 'front': the side of the picture the subject's nose points to)."
 )
 # 2026-11-23 經營者：「全部用 Q 版、簡單線條、要掌握表情神韻、一眼看得出是誰、要考慮 3D 列印做得出來」。
-# 反覆試了 7 版提示詞、26 張人物與動物照片後定案（只畫頭；先由照片檢查列出這個人／這隻寵物的特徵 traits，再帶進畫圖提示）：
+# 反覆試了 7 版提示詞、26 張人物與動物照片後定案（原本一律只畫頭，全身版見下方 DRAW_BODY；先由照片檢查列出這個人／這隻寵物的特徵 traits，再帶進畫圖提示）：
 #   DRAW_HEAD＝構圖（只畫頭、不畫脖子身體；帶身體的版本線條會變細、印不出來的比例從 5% 升到 25%）
 #   DRAW_LIKE＝相似度（表情、耳朵或髮型、臉型、眼鏡鬍子帽子、深淺分界）
 #   DRAW_PRINT＝3D 列印限制（純黑白、粗線、最多約 12 筆、深色毛髮才塗黑、灰白金橘不塗）
@@ -235,6 +238,26 @@ DRAW_HEAD = (
     ' to the head and are included. The head fills about 85% of a square image, centred. Draw only the one main subject; ignore hands, other people or '
     'animals, objects and background. The outer outline must be one continuous unbroken line all the way round. Do not draw any circle, ring, frame, badge '
     'or sticker edge around the head, and no necklace or jewellery below the chin. '
+)
+# 2026-11-23 下午 經營者用臘腸狗全身照測試：「還是不太像」。只畫頭會丟掉最好認的體型（長身體、短腿）和照片的姿勢、方向，
+# 所以寵物照片有拍到全身（照片檢查回 framing=full_body）就改畫全身、姿勢與朝向照照片；人物和只拍到頭的寵物照舊畫頭。
+# 3 版提示詞、臘腸狗 11 次＋其他寵物 30 多張實測後定案（BODY3）。
+DRAW_BODY = (
+    'Draw a cute chibi (Q-version) icon of the pet in this photo for a cookie stamp: THE WHOLE ANIMAL, in exactly the pose of the photo. Keep the same '
+    'facing direction as the photo (the nose points to the {FACING} of the picture - do not mirror it), the same stance (standing, sitting or lying) and the same '
+    'turn and tilt of the head. Keep the real body build that makes this animal recognisable - body length, leg length, chest, tail, ear size - and gently '
+    'exaggerate it. The head is drawn larger than life, about 45% of the drawing, with big eyes placed and spaced as in the photo; the body is simplified '
+    'but must stay clearly recognisable. The outer outline is one single continuous unbroken closed line all the way round the whole animal - only one '
+    'outline, never a second line, halo or sticker edge around it. Legs are simple chunky rounded shapes with no toes, no claws and no paw lines; show at '
+    'most four legs, each clearly separated by a wide white gap or else merged into one shape - never thin slits between them. A collar, if there is one, '
+    'is one simple curved band; no tag, heart, bell or leash. The animal fills about 90% of a square image, centred. Draw only the one main subject: no '
+    'ground, grass, leaves, shadow, objects or background, and no circle, frame or badge around it. '
+)
+DRAW_BODY_PRINT = (
+    'Striped, spotted, tabby, tortoiseshell or mottled coats get NO fill and no pattern marks at all - only a coat with large clearly separate solid '
+    'black areas (such as a tuxedo cat or a black-and-white dog) gets those areas filled. Absolutely no colour anywhere: an orange, ginger or brown patch '
+    'stays white. FINAL CHECK before you answer: the picture is black ink on white paper only - if any part is coloured, tinted or grey, redraw it in '
+    'pure black and white. '
 )
 DRAW_LIKE = (
     'LIKENESS comes first. Before drawing, notice what makes THIS individual recognisable and keep it: the expression (smile, open mouth, tongue out, '
@@ -259,9 +282,18 @@ DRAW_PRINT = (
 )
 
 
-def draw_prompt(traits: str) -> str:
-    t = re.sub(r"[\r\n]+", " ", str(traits or ""))[:400]
-    return DRAW_HEAD + DRAW_LIKE + (f"The traits of this individual that MUST be visible in the drawing: {t} " if t else "") + DRAW_PRINT
+def layout_of(chk: dict) -> str:
+    return "body" if chk.get("subject") == "pet" and chk.get("framing") == "full_body" else "head"
+
+
+def draw_prompt(traits: str, chk: dict = None) -> str:
+    chk = chk if isinstance(chk, dict) else {}
+    t = re.sub(r"[\r\n]+", " ", str(traits or ""))[:500]
+    tr = f"The traits of this individual that MUST be visible in the drawing: {t} " if t else ""
+    if layout_of(chk) == "body":
+        facing = chk.get("facing") if chk.get("facing") in ("left", "right", "front") else "same side"
+        return DRAW_BODY.replace("{FACING}", facing) + DRAW_LIKE + tr + DRAW_PRINT + DRAW_BODY_PRINT
+    return DRAW_HEAD + DRAW_LIKE + tr + DRAW_PRINT
 
 
 # ---------------- 登入 ----------------
@@ -363,6 +395,10 @@ def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
         chk = json.loads(re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M))
     except ValueError:
         chk = {}
+    if isinstance(chk, list):      # 偶爾會回一個陣列（照片裡不只一個主角時）
+        chk = chk[0] if len(chk) == 1 and isinstance(chk[0], dict) else {"single_subject": False}
+    if not isinstance(chk, dict):
+        chk = {}
     if chk.get("cartoon_or_brand") or chk.get("celebrity"):
         raise Fail("rights", "這張看起來是卡通角色、品牌圖案或名人照片，有版權或肖像權的疑慮，沒辦法做成餅乾模。請換一張自己拍的寵物或親友照片。")
     if chk.get("single_subject") is False:
@@ -370,7 +406,7 @@ def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
     if chk.get("clear") is False:
         raise Fail("blurry", "這張照片的主角不夠清楚，畫出來會不像。請換一張對焦清楚、主角大一點的照片。")
     # 2. 線稿生成（圖像模型）
-    _, line, usage = _gemini(c["image_model"], [{"text": draw_prompt(chk.get("traits"))}, img_part], True)
+    _, line, usage = _gemini(c["image_model"], [{"text": draw_prompt(chk.get("traits"), chk)}, img_part], True)
     twd = _log_cost("image", c["image_model"], usage, uid)
     if not line:
         raise Fail("ai", "這次沒有畫成功，請再試一次（不會扣掉你的免費次數）。", 502)
@@ -382,9 +418,9 @@ def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
         uu = users.setdefault(uid, u)
         uu["free_used"], uu["gen"] = True, int(uu.get("gen") or 0) + 1
         _save("users.json", users)
-        atomic_write_json(_design_path(did), {"id": did, "uid": uid, "name": uu.get("name", ""), "style": style, "status": "draft",
+        atomic_write_json(_design_path(did), {"id": did, "uid": uid, "name": uu.get("name", ""), "style": style, "layout": layout_of(chk), "status": "draft",
                                                "created": _now().isoformat(timespec="seconds"), "check": chk, "twd": twd})
-    return {"design_id": did, "line": line, "style": style, "user": _pub_user(uid, uu)}
+    return {"design_id": did, "line": line, "style": style, "layout": layout_of(chk), "user": _pub_user(uid, uu)}
 
 
 def _confirm(b: dict) -> dict:
