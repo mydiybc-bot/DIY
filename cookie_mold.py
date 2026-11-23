@@ -49,7 +49,7 @@ AUTH_DASH = "cookiemold"
 STYLES = {"real": "寫實版", "q": "Q 版"}
 STORES = ["1店", "2店", "3店", "4店", "5店", "6店", "7店", "8店", "9店", "10店", "11店", "12店"]
 MAX_PHOTO = 3_000_000      # 照片 base64 上限（頁面會先縮到最長邊 1024）
-MAX_STL = 6_000_000
+MAX_STL = 12_000_000   # base64 長度上限（約 9MB 的列印檔；大塊壓紋的檔比較大）
 DEFAULT_CFG = {
     "daily_budget_twd": 50,
     "usd_twd": 32.5,
@@ -221,19 +221,23 @@ CHECK_PROMPT = (
     "celebrity (true if the image looks like a press photo, poster, screenshot or publicity image of a public figure), "
     "clear (true if the subject is in focus and large enough to draw)."
 )
+# 2026-11-23 經營者：「產出的模具不像，要改」→ 兩種風格都改成把深色毛／深色頭髮塗黑（花色是認出「這一隻」的關鍵）；
+# 寫實版改成「照著照片描」（位置、姿勢、比例完全不動，實測跟照片幾乎疊合）。塗黑區在手機端會轉成斜紋壓紋。
 LINE_PROMPT = {
-    "real": ("Redraw the main subject of this photo as a bold, heavily simplified black-and-white colouring-book line drawing for a 7 cm cookie stamp. "
-             "Keep the subject's real pose, proportions and recognisable outline (not chibi), but draw it as if with a thick black marker: "
-             "fewer than 25 strokes in total, no fur strokes, no clothing patterns, no small details; if the face would be small, reduce it to simple dots and one short line. "),
-    "q": ("Redraw the main subject of this photo as a cute chibi / kawaii style black-and-white line drawing for a 7 cm cookie stamp: "
-          "big head, small body, very simple friendly face, even fewer lines than a realistic drawing. "),
+    "real": ("Trace this photo into a black-and-white drawing for a cookie stamp. It must be a faithful tracing, not a new drawing: keep the animal or person at exactly the same position, "
+             "size, pose and proportions as in the photo, as if drawn on tracing paper laid over it. Do not re-pose, re-centre, crop, zoom or stylise. "
+             "Draw the outer silhouette, the eyes and nose as solid black shapes, the mouth, and the ears. "
+             "Colour pattern is essential for likeness: fill every dark fur or dark hair area with solid black following its real boundary, and leave light areas white. "
+             "Where an eye or the nose lies inside a black area, leave a clear white ring around it so it stays visible. Simplify small details. "),
+    "q": ("Redraw this photo's subject as a cute chibi / kawaii black-and-white drawing for a cookie stamp: bigger head, smaller body, simple friendly face. "
+          "It must still be recognisably THIS individual: keep its real ear shapes and ear positions, its pose, and above all its real colour pattern - "
+          "fill every dark fur or dark hair area with solid black in the same places as in the photo (around the eyes, ears, back), and leave light areas white. "
+          "Where an eye or the nose lies inside a black area, leave a clear white ring around it. Subject centred, filling about 80% of the square image. "),
 }
 LINE_RULES = (
-    "Strict rules: pure white background; solid black lines only; every line the same heavy marker weight (about 25 pixels wide on a 1024-pixel image); "
-    "thin or hairline strokes are forbidden; "
-    "no shading, no gray, no hatching, no fill, no texture, no fur strokes; gaps between neighbouring lines at least as wide as a line; "
-    "one closed outer silhouette; only a few interior lines (eyes, nose, mouth, ears, one or two key markings); "
-    "no text, no border, no background objects; subject centred and filling about 80% of a square 1:1 image."
+    "Strict rules: pure white background; only solid black and pure white, no gray, no shading, no hatching, no texture, no fur strokes; "
+    "every line the same heavy marker weight (about 22 pixels wide on a 1024-pixel image), thin or hairline strokes are forbidden; "
+    "no text, no border, no background objects, no shadow on the floor."
 )
 
 
