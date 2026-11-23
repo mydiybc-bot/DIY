@@ -131,7 +131,7 @@ function _mCore(pos, bom, map, sku, unitconv, months){
       if (!s){ orphans[line.item] = (orphans[line.item] || 0) + 1; return; }
       if (s.cat === '器具' || s.cat === '模具') return;          // 器具/模具無耗用（走標配路徑）
       var base     = _num(line.qty) * _conv(unitconv, line.item, line.unit, s.name); // 查找序：BOM原名 → 主檔品名 → (通用) → 1
-      var consumed = base * qty * (LOSS[s.cat] || 1);
+      var consumed = base * qty * _lossOf(s);   // 2026-11-23：含實耗倍率
       var ku = store + '\u0001' + s.sku_id + '\u0001' + ym;
       usage[ku] = (usage[ku] || 0) + consumed;
     });
@@ -241,7 +241,7 @@ function _mRun(months){
   var pos = P.rows.map(function(r){ return { store: cv_(P,r,'分店代碼'), date: cv_(P,r,'建立日期'), product: cv_(P,r,'商品名稱'), qty: cv_(P,r,'數量') }; });
   var bom = B.rows.map(function(r){ return { dessert: cv_(B,r,'甜點名稱'), item: cv_(B,r,'食材/器具名稱'), qty: cv_(B,r,'數量'), unit: cv_(B,r,'單位') }; });
   var map = M.rows.map(function(r){ return { pos: cv_(M,r,'POS資料產品名稱'), canon: cv_(M,r,'手動對應產品名稱') }; });
-  var sku = S.rows.map(function(r){ return { sku_id: cv_(S,r,'sku_id'), name: cv_(S,r,'品名'), cat: cv_(S,r,'品類別'),
+  var sku = S.rows.map(function(r){ return { sku_id: cv_(S,r,'sku_id'), name: cv_(S,r,'品名'), cat: cv_(S,r,'品類別'), mult: cv_(S,r,'實耗倍率'),
     aliases: String(cv_(S,r,'BOM別名')||'').split(/[;,，、]/).map(function(x){ return x.trim(); }).filter(Boolean) }; });
   var unitconv = U.rows.map(function(r){ return { item: cv_(U,r,'適用品項'), unit: cv_(U,r,'單位'), base: cv_(U,r,'基準單位'), amt: cv_(U,r,'換算量') }; });
 
