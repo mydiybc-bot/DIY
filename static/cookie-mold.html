@@ -640,15 +640,25 @@ function ridgeGeom(r) {
     P.push(...a, ...b, ...c, ...a, ...c, ...d);
   };
   const at = (x, y) => x >= 0 && y >= 0 && x < gw && y < gh && g[y * gw + x];
-  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
-    if (!g[y * gw + x]) continue;
-    const x0 = X(x), x1 = X(x + 1), y0 = Y(y), y1 = Y(y + 1), dx = Math.sign(x1 - x0), dy = Math.sign(y1 - y0);
-    quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1]);
-    quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1]);
-    if (!at(x - 1, y)) quad([x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [-dx, 0, 0]);
-    if (!at(x + 1, y)) quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], [dx, 0, 0]);
-    if (!at(x, y - 1)) quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -dy, 0]);
-    if (!at(x, y + 1)) quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0, dy, 0]);
+  for (let y = 0; y < gh; y++) {
+    const y0 = Y(y), y1 = Y(y + 1), dy = Math.sign(y1 - y0);
+    for (let x = 0; x < gw; x++) {
+      if (!g[y * gw + x]) continue;
+      let e = x; while (e + 1 < gw && g[y * gw + e + 1]) e++;                       /* 這一列連續的一段 x..e：頂面、底面各一片 */
+      const xa = X(x), xb = X(e + 1), dx = Math.sign(xb - xa);
+      quad([xa, y0, z1], [xb, y0, z1], [xb, y1, z1], [xa, y1, z1], [0, 0, 1]);
+      quad([xa, y0, z0], [xb, y0, z0], [xb, y1, z0], [xa, y1, z0], [0, 0, -1]);
+      quad([xa, y0, z0], [xa, y1, z0], [xa, y1, z1], [xa, y0, z1], [-dx, 0, 0]);
+      quad([xb, y0, z0], [xb, y1, z0], [xb, y1, z1], [xb, y0, z1], [dx, 0, 0]);
+      for (let k = x; k <= e; k++) {                                                 /* 上下兩側：只有鄰格是空的才需要牆，連續的併成一片 */
+        for (const [ny, yy, nd] of [[y - 1, y0, -dy], [y + 1, y1, dy]]) {
+          if (at(k, ny) || (k > x && !at(k - 1, ny))) continue;
+          let m = k; while (m + 1 <= e && !at(m + 1, ny)) m++;
+          quad([X(k), yy, z0], [X(m + 1), yy, z0], [X(m + 1), yy, z1], [X(k), yy, z1], [0, nd, 0]);
+        }
+      }
+      x = e;
+    }
   }
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(P), 3)); geo.computeVertexNormals();
   return geo;
@@ -797,28 +807,46 @@ async function fromLineArt(b64) {
     const u = Math.round((xx - margin) / sc + ox), v = Math.round((y - margin) / sc + oy);
     if (u >= 0 && v >= 0 && u < L && v < L && ink[v * L + u]) lines[i] = 1;
   }
-  /* 最外圈那條線就是切模的牆，不用再做壓紋；量出它多粗，連同安全距離一起去掉 */
+  /* 2026-11-23 經營者：「產出的模具不像」→ AI 改成把深色毛塊塗黑（花色才認得出是哪一隻）。
+     這裡把「大塊塗黑」和「線條」分開：線條照舊做可印性檢查；大塊塗黑改成「邊框＋斜紋」壓紋，
+     壓在餅乾上是一片細溝，看起來就是深色區塊（整片實心壓下去在單色餅乾上反而看不出來）。 */
+  const mm = v => v * P, rF = mm(1.5);
+  let fill = grow(shrink(lines, W, H, rF), W, H, rF).map((v, i) => v && lines[i] ? 1 : 0);       /* 寬度 3 公釐以上的實心區域 */
+  let stroke = lines.map((v, i) => v && !fill[i] ? 1 : 0);
+  /* 最外圈那條線就是切模的牆，不用再做壓紋；量出它多粗，連同安全距離一起去掉（只看線條，不看塗黑區） */
   const tot = new Float32Array(20), ic = new Float32Array(20); let silArea = 0;
-  for (let i = 0; i < W * H; i++) { if (field[i] >= 0) continue; silArea++; const b = Math.floor(-field[i] / 0.25); if (b < 20) { tot[b]++; ic[b] += lines[i]; } }
+  for (let i = 0; i < W * H; i++) { if (field[i] >= 0) continue; silArea++; const b = Math.floor(-field[i] / 0.25); if (b < 20) { tot[b]++; ic[b] += stroke[i] || fill[i]; } }
   let est = 2, on = false;                                   /* 從邊緣往內：先遇到外圈線（墨多），再離開它（墨少）→ 離開的深度就是外圈線的內緣 */
   for (let b = 0; b < 20; b++) { const fr = tot[b] ? ic[b] / tot[b] : 0; if (!on && fr >= 0.5) on = true; else if (on && fr < 0.5) { est = b * 0.25; break; } }
   const keep = Math.min(3.5, Math.max(0.8, est)) + CFG.minGapMm;
-  for (let i = 0; i < W * H; i++) if (field[i] > -keep) lines[i] = 0;
-  const rawN = lines.reduce((a, b) => a + b, 0);
-  /* 太細的線加粗到最細線寬 */
-  const rr = CFG.minLineMm / 2 * P - 0.5, thick = grow(shrink(lines, W, H, rr), W, H, rr), thin = lines.map((v, i) => v && !thick[i] ? 1 : 0);
+  for (let i = 0; i < W * H; i++) { if (field[i] > -keep) stroke[i] = 0; if (field[i] > -CFG.minGapMm) fill[i] = 0; }
+  const rawN = stroke.reduce((a, b) => a + b, 0), fillN = fill.reduce((a, b) => a + b, 0);
+  /* 線條：太細的加粗到最細線寬 */
+  const rr = CFG.minLineMm / 2 * P - 0.5, thick = grow(shrink(stroke, W, H, rr), W, H, rr), thin = stroke.map((v, i) => v && !thick[i] ? 1 : 0);
   const thinN = thin.reduce((a, b) => a + b, 0), fat = thinN ? grow(thin, W, H, CFG.minLineMm / 2 * P * 0.55) : thin;
-  lines = lines.map((v, i) => (v && thick[i]) || fat[i] ? 1 : 0);
+  stroke = stroke.map((v, i) => ((v && thick[i]) || fat[i]) && !fill[i] ? 1 : 0);
+  /* 線跟線太近（小於最小間距）會黏在一起 → 直接併成一條 */
+  const g = CFG.minGapMm / 2 * P; stroke = shrink(grow(stroke, W, H, g), W, H, g);
+  /* 大塊塗黑 → 邊框（最細線寬）＋留一圈空隙＋裡面斜紋；太小做不出斜紋的（眼睛、鼻子）維持實心 */
+  const fc = components(fill, W, H), inner = shrink(fill, W, H, mm(CFG.minLineMm)), core = shrink(fill, W, H, mm(CFG.minLineMm + CFG.minGapMm));
+  const kc = components(core, W, H), bigCore = new Set(kc.list.filter(q => q.n >= mm(3) * mm(3)).map(q => q.id)), hatched = new Set();
+  for (let i = 0; i < W * H; i++) if (core[i] && bigCore.has(kc.lab[i])) hatched.add(fc.lab[i]);
+  const period = (CFG.minLineMm + CFG.minGapMm + 0.2) * P * Math.SQRT2, ridge = CFG.minLineMm * P * Math.SQRT2;
+  lines = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) {
+    const i = y * W + xx;
+    if (stroke[i]) { lines[i] = 1; continue; }
+    if (!fill[i]) continue;
+    if (!hatched.has(fc.lab[i]) || !inner[i]) lines[i] = 1;                                   /* 小塊實心／大塊的邊框 */
+    else if (core[i] && bigCore.has(kc.lab[i]) && (xx + y) % period < ridge) lines[i] = 1;    /* 斜紋 */
+  }
   /* 碎點刪除 */
   const minArea = (CFG.minLineMm * P) ** 2 * 1.5, cl = components(lines, W, H), small = new Set(cl.list.filter(q => q.n < minArea).map(q => q.id));
-  for (let i = 0; i < W * H; i++) if (small.has(cl.lab[i])) lines[i] = 0;
-  /* 線跟線太近（小於最小間距）會黏在一起 → 直接併成一條 */
-  const g = CFG.minGapMm / 2 * P; lines = shrink(grow(lines, W, H, g), W, H, g);
-  for (let i = 0; i < W * H; i++) if (field[i] > -CFG.minGapMm) lines[i] = 0;
-  const n = lines.reduce((a, b) => a + b, 0), comps = components(lines, W, H).list.length;
+  for (let i = 0; i < W * H; i++) if (small.has(cl.lab[i]) || field[i] > -CFG.minGapMm) lines[i] = 0;
+  const n = lines.reduce((a, b) => a + b, 0), strokeN = stroke.reduce((a, b) => a + b, 0), comps = components(stroke, W, H).list.length;
   r.lines = lines; r.lineSoft = gauss(Float32Array.from(lines), W, H, 1.6); r.src = c;
-  r.ai = {fill: +(n / silArea).toFixed(3), comps, thickened: +(thinN / Math.max(1, rawN)).toFixed(3), specks: small.size, outerMm: est,
-          complex: n / silArea > 0.42 || comps > 45, sparse: n < silArea * 0.01};
+  r.ai = {fill: +(strokeN / silArea).toFixed(3), patch: +(fillN / silArea).toFixed(3), hatched: hatched.size, comps, thickened: +(thinN / Math.max(1, rawN)).toFixed(3), specks: small.size, outerMm: est,
+          complex: strokeN / silArea > 0.42 || comps > 45, sparse: n < silArea * 0.01};
   return r;
 }
 function drawAI(r) {
@@ -855,7 +883,10 @@ async function generate() {
   ai.busy = true; aiMsg(''); show('aiPick', false); show('aiWork', true); show('aiResult', false); show('confirmCard', false);
   $('aiBar').style.width = '5%'; setTimeout(() => { $('aiBar').style.width = '92%'; }, 50);
   try {
-    const res = await api('generate', {token: ai.token, style: ai.style, photo: state.im.cv.toDataURL('image/jpeg', 0.85)});
+    /* 送給 AI 的照片補成正方形白底（AI 回傳的是正方形；先補好，「照著描」才不會被拉長或裁掉） */
+    const src = state.im.cv, side = Math.max(src.width, src.height), sq = document.createElement('canvas'); sq.width = sq.height = side;
+    const sx2 = sq.getContext('2d'); sx2.fillStyle = '#fff'; sx2.fillRect(0, 0, side, side); sx2.drawImage(src, (side - src.width) / 2, (side - src.height) / 2);
+    const res = await api('generate', {token: ai.token, style: ai.style, photo: sq.toDataURL('image/jpeg', 0.85)});
     if (!res.ok) { if (res.code === 'login') { ai.token = ''; localStorage.removeItem('cm:token'); } aiMsg(res.msg); return; }
     if (res.user && ai.st) ai.st.user = res.user;
     ai.design = res.design_id;
