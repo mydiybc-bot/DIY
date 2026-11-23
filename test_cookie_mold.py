@@ -139,3 +139,11 @@ def test_admin_delete(cm):
     assert call(cm, "admin/file", pwd="adm", id=did, kind="stl")[0] == 404          # 檔案也刪了
     assert call(cm, "my", token=t)[1]["designs"] == []
     assert call(cm, "admin/delete", pwd="adm", id=did)[0] == 404
+
+
+def test_only_q_style_and_traits_in_prompt(cm):
+    t = login(cm)
+    assert call(cm, "generate", token=t, photo=PHOTO, style="real")[1]["style"] == "q"     # 2026-11-23 起只有 Q 版
+    p = cm.draw_prompt("floppy ears, tongue out")
+    assert "HEAD ONLY" in p and "floppy ears, tongue out" in p and "3D-printed" in p
+    assert "traits" in cm.CHECK_PROMPT

@@ -46,7 +46,7 @@ from storage_paths import atomic_write_json, data_dir
 TZ = timezone(timedelta(hours=8))
 AUTH_API = "https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec"
 AUTH_DASH = "cookiemold"
-STYLES = {"real": "寫實版", "q": "Q 版"}
+STYLES = {"q": "Q 版"}   # 2026-11-23 起只有 Q 版（經營者決定）
 STORES = ["1店", "2店", "3店", "4店", "5店", "6店", "7店", "8店", "9店", "10店", "11店", "12店"]
 MAX_PHOTO = 3_000_000      # 照片 base64 上限（頁面會先縮到最長邊 1024）
 MAX_STL = 12_000_000   # base64 長度上限（約 9MB 的列印檔；大塊壓紋的檔比較大）
@@ -219,26 +219,49 @@ CHECK_PROMPT = (
     "subject ('pet', 'person' or 'other'), "
     "cartoon_or_brand (true if the main subject is a cartoon/anime/game character, mascot, logo, branded artwork or product packaging), "
     "celebrity (true if the image looks like a press photo, poster, screenshot or publicity image of a public figure), "
-    "clear (true if the subject is in focus and large enough to draw)."
+    "clear (true if the subject is in focus and large enough to draw), "
+    "traits (one sentence of at most 45 words listing the 4 or 5 most distinctive visible traits needed to recognise this individual in a very simple cartoon: "
+    "expression, ear type and how they are carried or hairstyle and hair colour (dark or light), face or muzzle shape, glasses / hat / beard, "
+    "and exactly which parts of the face or head are dark and which are light)."
 )
-# 2026-11-23 經營者：「產出的模具不像，要改」→ 兩種風格都改成把深色毛／深色頭髮塗黑（花色是認出「這一隻」的關鍵）；
-# 寫實版改成「照著照片描」（位置、姿勢、比例完全不動，實測跟照片幾乎疊合）。塗黑區在手機端會轉成斜紋壓紋。
-LINE_PROMPT = {
-    "real": ("Trace this photo into a black-and-white drawing for a cookie stamp. It must be a faithful tracing, not a new drawing: keep the animal or person at exactly the same position, "
-             "size, pose and proportions as in the photo, as if drawn on tracing paper laid over it. Do not re-pose, re-centre, crop, zoom or stylise. "
-             "Draw the outer silhouette, the eyes and nose as solid black shapes, the mouth, and the ears. "
-             "Colour pattern is essential for likeness: fill every dark fur or dark hair area with solid black following its real boundary, and leave light areas white. "
-             "Where an eye or the nose lies inside a black area, leave a clear white ring around it so it stays visible. Simplify small details. "),
-    "q": ("Redraw this photo's subject as a cute chibi / kawaii black-and-white drawing for a cookie stamp: bigger head, smaller body, simple friendly face. "
-          "It must still be recognisably THIS individual: keep its real ear shapes and ear positions, its pose, and above all its real colour pattern - "
-          "fill every dark fur or dark hair area with solid black in the same places as in the photo (around the eyes, ears, back), and leave light areas white. "
-          "Where an eye or the nose lies inside a black area, leave a clear white ring around it. Subject centred, filling about 80% of the square image. "),
-}
-LINE_RULES = (
-    "Strict rules: pure white background; only solid black and pure white, no gray, no shading, no hatching, no texture, no fur strokes; "
-    "every line the same heavy marker weight (about 22 pixels wide on a 1024-pixel image), thin or hairline strokes are forbidden; "
-    "no text, no border, no background objects, no shadow on the floor."
+# 2026-11-23 經營者：「全部用 Q 版、簡單線條、要掌握表情神韻、一眼看得出是誰、要考慮 3D 列印做得出來」。
+# 反覆試了 7 版提示詞、26 張人物與動物照片後定案（只畫頭；先由照片檢查列出這個人／這隻寵物的特徵 traits，再帶進畫圖提示）：
+#   DRAW_HEAD＝構圖（只畫頭、不畫脖子身體；帶身體的版本線條會變細、印不出來的比例從 5% 升到 25%）
+#   DRAW_LIKE＝相似度（表情、耳朵或髮型、臉型、眼鏡鬍子帽子、深淺分界）
+#   DRAW_PRINT＝3D 列印限制（純黑白、粗線、最多約 12 筆、深色毛髮才塗黑、灰白金橘不塗）
+DRAW_HEAD = (
+    'Draw a cute chibi (Q-version) icon of the main subject of this photo for a cookie stamp: THE HEAD ONLY, as one closed rounded shape seen from the '
+    'front or three-quarter view. Nothing below the chin: no neck, no collar, no shoulders, no body, no paws, no scarf. Hair, ears, a hat or glasses belong'
+    ' to the head and are included. The head fills about 85% of a square image, centred. Draw only the one main subject; ignore hands, other people or '
+    'animals, objects and background. The outer outline must be one continuous unbroken line all the way round. Do not draw any circle, ring, frame, badge '
+    'or sticker edge around the head, and no necklace or jewellery below the chin. '
 )
+DRAW_LIKE = (
+    'LIKENESS comes first. Before drawing, notice what makes THIS individual recognisable and keep it: the expression (smile, open mouth, tongue out, '
+    'sleepy or closed eyes, wide eyes, head tilt), eye shape and spacing, face shape, and for animals the real ear type exactly as it is (upright, pointed,'
+    ' bat-like, folded tip or hanging - never change it), muzzle shape and where dark and light fur meet on the face; for people the real hairstyle '
+    '(length, parting, fringe, curls, bun, ponytail, bald), glasses, hat, beard or moustache. Gently exaggerate the three most distinctive traits like a '
+    'friendly caricature. Someone who knows the subject must recognise them at a glance. Keep the subject looking their real age and gender. '
+)
+DRAW_PRINT = (
+    'PRINTING LIMITS (this will be 3D-printed as a 6 cm cookie stamp, so obey strictly): pure white background; ONLY pure black and pure white - no gray, '
+    'no colours, no shading, no dots, no hatching, no texture; draw with ONE very thick round marker: every line the same width, about 40 pixels on a '
+    '1024-pixel image (never thinner than 30); leave white gaps at least as wide as a line between any two lines; at most about 12 strokes in total; no '
+    'thin strokes, no individual hairs, whiskers, eyelashes, teeth, wrinkles, fur texture or clothing patterns; no text, no border, no background, no '
+    'shadow. Eyes are solid black dots or ovals at least 50 pixels across (or one thick arc each if closed or smiling). For an animal the nose is one solid'
+    ' black shape; for a PERSON the nose is only one small curved line, never a black blob, and the mouth is one simple line or a simple open smile. Solid '
+    'black fill is allowed only for areas that are really BLACK or very dark brown in the photo: black fur patches, black or dark-brown hair, a dark beard '
+    'or moustache, dark sunglasses, a dark hat. Never fill light, grey, white, blond, ginger, tan or red areas: grey or white hair, blond hair, tan or '
+    'ginger fur and rosy cheeks all stay white with just an outline. Fill those completely with flat black following their real shape, and keep a clear '
+    'white gap (at least a line width) between a black area and any eye, nose or other line inside or beside it. Light fur, light hair, skin and everything'
+    ' else stays white with an outline. Fluffy or curly outlines become a few big rounded bumps. If the animal is ginger, cream, tan, grey or white, use no'
+    ' black fill at all except eyes and nose. '
+)
+
+
+def draw_prompt(traits: str) -> str:
+    t = re.sub(r"[\r\n]+", " ", str(traits or ""))[:400]
+    return DRAW_HEAD + DRAW_LIKE + (f"The traits of this individual that MUST be visible in the drawing: {t} " if t else "") + DRAW_PRINT
 
 
 # ---------------- 登入 ----------------
@@ -311,7 +334,7 @@ def _design_path(did: str) -> Path:
 
 def _generate(b: dict) -> dict:
     uid, u = _who(b)
-    style = b.get("style") if b.get("style") in STYLES else "real"
+    style = "q"
     if not ai_open():
         raise Fail("closed", "今天的 AI 生成名額已經用完了，明天再來；免費試玩照常可以玩。", 429)
     if u.get("free_used") and not u.get("paid"):
@@ -347,7 +370,7 @@ def _generate_locked(uid: str, u: dict, style: str, photo: bytes) -> dict:
     if chk.get("clear") is False:
         raise Fail("blurry", "這張照片的主角不夠清楚，畫出來會不像。請換一張對焦清楚、主角大一點的照片。")
     # 2. 線稿生成（圖像模型）
-    _, line, usage = _gemini(c["image_model"], [{"text": LINE_PROMPT[style] + LINE_RULES}, img_part], True)
+    _, line, usage = _gemini(c["image_model"], [{"text": draw_prompt(chk.get("traits"))}, img_part], True)
     twd = _log_cost("image", c["image_model"], usage, uid)
     if not line:
         raise Fail("ai", "這次沒有畫成功，請再試一次（不會扣掉你的免費次數）。", 502)
