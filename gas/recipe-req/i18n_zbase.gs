@@ -18,6 +18,7 @@
 var I18N_ZSRC_HEAD = ['id', 'name', 'old', 'on', 'steps', 'pair', 'at'];
 var I18N_ZITEM_HEAD = ['kind', 'zh', 'en', 'ja', 'ko', 'vi', 'id', 'th', 'how', 'at'];
 var I18N_ZSKIP = /訓練&材料|English Menu|台灣.*備份|備用/;   /* 只掛這些類別的不是客人用的 */
+var I18N_ZINCLUDE = { '12de8b02-128f-410c-90fd-4ca0e04f6d8c': '鳳梨酥' };   /* 類別不符也要收的（2026-11-24 經營者：「這個鳳梨酥要收進來」——中文版只掛「訓練&材料」，但平板一直有英文版 Pineapple Cake） */
 var I18N_ZCHEF = 'https://cdn.jsdelivr.net/gh/mydiybc-bot/DIY@f9e57f9cf05bd011524e2b4f21c6b40f284cfab4/media/tablet-intro/chef-bear-';
 var I18N_EN_TUT = 'https://diybcstorage.blob.core.windows.net/stepmedias/248973a1-3163-434a-83f0-1ced05c9d8fd/9866e7c2-138a-437e-88ec-67bfca5e0c8c.mp4?v=251031030624';   /* 英文共用教學影片（recipe-english-copy skill「二、圖片影片」） */
 var I18N_ZMD5 = {   /* 主圖／主影片（認檔案指紋 Content-MD5；每支食譜網址不同、檔案同一個） */
@@ -57,6 +58,7 @@ function i18nZCands_() {
     return { id: String(r[ix.recipe_id] || '').trim().toLowerCase(), name: rbTrim_(r[ix.name]), lang: r[ix.lang], region: r[ix.region], status: r[ix.status], cats: i18nCatSplit_(r[ix.cat]), upd: r[ix.upd], steps: Number(r[ix.steps]) || 0 };
   }).filter(function (r) { return r.id; });
   var zh = rows.filter(function (r) {
+    if (I18N_ZINCLUDE[r.id] && r.status === 'Active') return true;
     return r.region === '台灣' && r.lang === '繁體中文' && r.status === 'Active' && r.cats.length
       && !r.cats.every(function (c) { return I18N_ZSKIP.test(c); })
       && !(r.cats.some(function (c) { return /裝飾蛋糕/.test(c); }) || /裝飾蛋糕/.test(r.name));
@@ -177,6 +179,18 @@ function i18nZPrep_(src, md5) {
   });
   src.zwarn = warn;
   return warn;
+}
+/* 台灣限定頁的海報（整張中文）→ 各語言版（2026-11-24 經營者：「改成外語版海報」）：保留原圖照片插畫、只換字，
+   做法與文字在 DIY tools/i18n_poster/（make.py＋text.json，改字重跑後放 static/img/i18n-poster/、改這裡的 v）；平板組內容時依語言換 */
+var I18N_ZPOSTER = { base: 'https://diybc-dash.onrender.com/static/img/i18n-poster/', v: '20261124', list: [
+  ['20240903150925裝飾物加購_食譜系統', 'addon'],   /* 裝飾物加購（價目表） */
+  ['BcRMCCKYfxbRqBUEwernOZcosxfl3y3Kot3l9MduvN7CnDYcEZIcp4', 'member']   /* 自己人募集中（lh3 圖） */
+] };
+function i18nZPoster_(u, lang) {
+  if (i18nZLangs_().indexOf(lang) < 0) return u;
+  var d = u; try { d = decodeURIComponent(u); } catch (e) { }
+  for (var i = 0; i < I18N_ZPOSTER.list.length; i++) if (d.indexOf(I18N_ZPOSTER.list[i][0]) >= 0) return I18N_ZPOSTER.base + I18N_ZPOSTER.list[i][1] + '_' + lang + '.jpg?v=' + I18N_ZPOSTER.v;
+  return u;
 }
 function i18nZTut_(lang, orig) { return lang === 'zh' ? orig : lang === 'en' ? I18N_EN_TUT : I18N_ZCHEF + lang + '.mp4'; }
 

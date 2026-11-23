@@ -1118,7 +1118,7 @@ function i18nBuild_(src, tr, D, lang, row, NM0) {
   var cut = function (n) { return rbTrim_(String(n || '').replace(/^【[^】]*】\s*/, '')); };
   var slides = src.slides.map(function (s, i) {
     var t = (tr.slides || [])[i] || {}, h = String(t.h || ''), im = lang === 'zh' && s.imgs_zh ? s.imgs_zh : (s.imgs || []);   /* 中文試看看中文原圖 */
-    im.forEach(function (u, j) { h = h.split('[[IMG' + (j + 1) + ']]').join('<img src="' + String(u).replace(/"/g, '&quot;') + '">'); });
+    im.forEach(function (u, j) { if (Z) u = i18nZPoster_(u, lang); h = h.split('[[IMG' + (j + 1) + ']]').join('<img src="' + String(u).replace(/"/g, '&quot;') + '">'); });   /* 中文原文：台灣限定頁海報換各語言版 */
     h = h.replace(/\[\[IMG\d+\]\]/g, '');   /* 上一版譯文的圖片位置比現在原文多（保底顯示時）→ 拿掉，不顯示怪字 */
     var ings = s.ings.map(function (g) {
       if (g.a && !areas[g.a]) areas[g.a] = { name: i18nLook_(D, 'area', g.an, lang) || g.an, en: Z ? (lang === 'en' ? '' : i18nLook_(D, 'area', g.an, 'en')) : g.an, img: src.areaPre && src.areaHas.indexOf(g.a) >= 0 ? '/img/MenuCateGroups/' + src.areaPre + '-' + g.a + '.jpg' : '' };
