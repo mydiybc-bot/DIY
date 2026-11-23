@@ -2631,6 +2631,9 @@ function useEqTxt(st,s,v){
    所以門檻用「與其他店比」而不是絕對值，避免把全公司一致的設定也標成錯。 */
 /* 2026-11-23 店長用權數調「多拿／耗損」：上限 W_MAX，超過不給存；舊資料超過的照算但標紅（經營者裁示不做各店排行）。 */
 var W_MAX=10;   /* 經營者 2026-11-23：上限 10 倍 */
+/* 2026-11-23 本店「多拿／耗損」倍率用在「估實際用量」的地方（檔期頁店裡大約還有、出貨中心判讀、📦 已訂倍數）：
+   主檔實耗倍率已由後台乘進用量；這裡再乘本店倍率。標配模式不乘（權數本來就不生效）；超過上限以上限計。 */
+function wUseOf(st,s){if(!s||isDur(s)||parMode(st,s))return 1;var p=(PARAM[st]||{})[s.id]||{},w=(p.weight==null||p.weight==="")?1:num(p.weight);return (w>0)?Math.min(w,W_MAX):1;}
 var WMED=null;
 function wMedOf(id){
   if(!WMED){WMED={};var acc={};
@@ -2760,7 +2763,7 @@ function supplyOf(st,s){
   rows.forEach(function(r){if(!r.date||r.date<from||r.date>today)return;if(!ordMatch(r,s))return;
     var u=ordUnit(st,s,r);g+=num(r.qty)*u.g;packs+=num(r.qty);});
   if(!(packs>0)){c[s.id]=null;return null;}
-  var a=aggOf(st,s),wk=num(a.avg4)||num(a.week)||0,use=wk*SUP_DAYS/7;
+  var a=aggOf(st,s),wk=num(a.avg4)||num(a.week)||0,use=wk*SUP_DAYS/7*wUseOf(st,s);   /* 2026-11-23：乘本店多拿／耗損倍率 */
   var ratio=use>0?g/use:null;
   var lv=(use<=0)?"nouse":(ratio<=1.5?"ok":(packs<=1?"minpack":(ratio>3?"over":"warn")));
   c[s.id]={g:g,packs:packs,use:use,ratio:ratio,lv:lv};return c[s.id];}
@@ -3058,7 +3061,7 @@ function viewCampHQOne(sub){
   var hiddenDur=Object.keys(nd).filter(function(id){var s=SKU[id];return s&&isDur(s);});
   var items=Object.keys(nd).map(function(id){var s=SKU[id];if(!s||isDur(s))return null;
     var per={},sumRem=0,sumUsed=0,sumShip=0,sumOn=0,sumNeed=0,sumEst=0,sumSold=0,dc=false,sumPre=0,sumPrePacks=0,preFirst="",nOver=0;
-    Object.keys(nd[id]).forEach(function(st){var x=nd[id][st];var isdc=isDC(st,s);if(isdc)dc=true;
+    Object.keys(nd[id]).forEach(function(st){var x0=nd[id][st],_wu=wUseOf(st,s),x=(_wu===1)?x0:{rem:x0.rem*_wu,used:x0.used*_wu,sold:x0.sold,est:x0.est,who:x0.who};var isdc=isDC(st,s);if(isdc)dc=true;   /* 2026-11-23：乘本店多拿／耗損倍率 */
       var sh=(rowsAll&&isdc)?campHQShipped(ev,s,rowsAll.filter(function(r){return String(r.st)===st;})):null;
       var shipped=sh?sh.g:0,onhand=sh?Math.max(0,shipped-x.used):0,gap=x.rem-onhand;   /* gap 正＝缺、負＝多 */
       per[st]={rem:x.rem,used:x.used,sold:x.sold,est:x.est,shipped:shipped,packs0:sh?sh.packs:0,onhand:onhand,gap:gap,need:Math.max(0,gap),surplus:Math.max(0,-gap),pq:pqEff(st,s),dc:isdc,noShip:!sh,xin:[],xout:[],buy:0,packs:0,
@@ -3724,7 +3727,7 @@ function anStoreUsageAll(m){
     Object.keys(by[st]).forEach(function(dn){
       var per=(dn in cache)?cache[dn]:(cache[dn]=anPerPortion(m,dn,idx));
       if(per>0)u+=by[st][dn]*per;});
-    if(u>0)out[st]=u;});
+    if(u>0)out[st]=u*wUseOf(st,m.sku);});   /* 2026-11-23：乘本店多拿／耗損倍率 */
   return out;}
 function anStoreUsage(m){ /* 各店期間用量（使用單位）＝Σ 該店各甜點銷量 × 單份用量；m.dess 已是篩選後集合 ⇒ 本函式＝篩選內口徑 */
   var by=ANRES.byStore||{},out={};
