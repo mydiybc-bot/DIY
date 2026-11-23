@@ -432,12 +432,19 @@ def _cfg_path(store):
 # 七休一＝連續上班最多 6 天；晚班接早班不限次數，只要下班到隔天上班有 11 小時（不到 11 小時照舊提醒）
 # 2026-11-12 經營者：公司規定連續上班最多 5 天（正職、兼職都適用；跨店合併算）。排初稿照 5 天排；
 # 店長手動改成連上 6 天只提醒不擋（6 天仍合法），7 天以上照舊算錯誤（七休一）
+# 2026-11-23 經營者裁定（12 月對話檢討）：預設 5 天，各店可以在店別設定自己改成 6 天（6 天是勞基法七休一上限，不能再多）；
+# 晚班不接隔天早班（中班可以）→ 晚接早上限一律 0 次
 LAW_MAX_CONSEC = 5
+STORE_MAX_CONSEC = (5, 6)
 
 
 def _law(cfg):
-    cfg["max_consec"] = LAW_MAX_CONSEC
-    cfg["late_early_limit"] = None
+    try:
+        mc = int(cfg.get("max_consec") or LAW_MAX_CONSEC)
+    except (TypeError, ValueError):
+        mc = LAW_MAX_CONSEC
+    cfg["max_consec"] = mc if mc in STORE_MAX_CONSEC else LAW_MAX_CONSEC
+    cfg["late_early_limit"] = 0
     # 2026-11-13 經營者：店別基本設定的「跨店支援夥伴」「店規」兩欄刪掉 → 一律當空白（舊存檔有填也不再套用；當時 12 店都沒填）
     cfg["support"] = ""
     cfg["rules"] = ""
@@ -644,8 +651,19 @@ def cfg_clean(body):
         if name in names:
             raise ValueError(f"班別名稱「{name}」重複")
         names.add(name)
-        out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數")})
-    _law(out)   # 連上天數、晚接早照勞基法（不收店長填的值）
+        out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數"),
+                              # 2026-11-23：週六、週日可以各自填（空白＝照假日人數）
+                              "sat": _num(r.get("sat"), None, 0, 20, "週六人數"), "sun": _num(r.get("sun"), None, 0, 20, "週日人數")})
+    # 2026-11-23 經營者裁定：各店自己決定的固定規則（空白＝不限）
+    out["max_consec"] = _num(body.get("max_consec"), LAW_MAX_CONSEC, 5, 6, "連續上班最多幾天")
+    out["wkoff_min"] = _num(body.get("wkoff_min"), None, 0, 10, "週末休假最少幾天")
+    out["wkoff_max"] = _num(body.get("wkoff_max"), None, 0, 10, "週末休假最多幾天")
+    if out["wkoff_min"] is not None and out["wkoff_max"] is not None and out["wkoff_min"] > out["wkoff_max"]:
+        raise ValueError("週末休假「最少」不能比「最多」多")
+    out["ft_off_max"] = _num(body.get("ft_off_max"), None, 1, 10, "同一天最多幾位正職休假")
+    out["rest2_after"] = _num(body.get("rest2_after"), None, 2, 6, "連上幾天後要連休 2 天")
+    out["hol_ft_work"] = bool(body.get("hol_ft_work"))
+    _law(out)   # 連上天數只收 5 或 6、晚接早一律 0 次
     out["support"] = ""   # 2026-11-13：兩欄已刪，不再收
     out["rules"] = ""
     for r in (body.get("carry") or [])[:60]:
@@ -1340,10 +1358,22 @@ def form_text(st, cfg):
     L = ["### 分頁「各店基本設定」", f"店名\t{info['title']}", "班別\t第1段\t第2段\t第3段\t平日每天需要幾人\t假日每天需要幾人"]
     for r in cfg.get("shifts") or []:
         segs = [f"{a}-{b}" for a, b in r["segs"]] + [""] * (3 - len(r["segs"]))
-        L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}")
-    L.append(f"連續上班上限\t{LAW_MAX_CONSEC} 天（公司規定；勞基法七休一是 6 天）")
+        L.append(f"{r['name']}\t" + "\t".join(segs) + f"\t{r.get('wd', 0)}\t{r.get('we', 0)}"
+                 + (f"（週六 {r['sat']} 人）" if r.get("sat") is not None else "") + (f"（週日 {r['sun']} 人）" if r.get("sun") is not None else ""))
+    L.append(f"連續上班上限\t{cfg.get('max_consec') or LAW_MAX_CONSEC} 天（公司預設 5 天，各店可改 6 天；勞基法七休一是 6 天）")
+    if cfg.get("wkoff_min") is not None or cfg.get("wkoff_max") is not None:
+        L.append("正職週末（六日）休假\t每人每月" + (f"最少 {cfg['wkoff_min']} 天" if cfg.get("wkoff_min") is not None else "")
+                 + ("、" if cfg.get("wkoff_min") is not None and cfg.get("wkoff_max") is not None else "")
+                 + (f"最多 {cfg['wkoff_max']} 天" if cfg.get("wkoff_max") is not None else "") + "（指休算、特休不算）")
+    if cfg.get("ft_off_max"):
+        L.append(f"同一天正職休假\t最多 {cfg['ft_off_max']} 位（指休不算）")
+    if cfg.get("rest2_after"):
+        L.append(f"連上後連休\t正職連上 {cfg['rest2_after']} 天以上，後面要連休 2 天")
+    if cfg.get("hol_ft_work"):
+        L.append("國定假日\t正職不休（指休、特休除外），國定假日的假放到別天")
+    L.append("早晚班平均\t正職早班、晚班次數平均；同店正職週末休假天數平均")
     L.append("休假分散\t正職休假要平均散開：連休最多 2 天（店長指休、特休自己連成的不算），避免「休、上 1 天、又休」")
-    L.append("晚班接隔天早班\t可以，不限次數；下班到隔天上班要隔 11 小時以上（勞基法）")
+    L.append("晚班接隔天早班\t不可以（2026-11-23 公司規定）；中班接隔天早班可以，下班到隔天上班要隔 11 小時以上（勞基法）")
     L.append("指休原則\t正職每月可自訂 4 天：平日 3 天、假日（週末、國定假日）1 天；超過的照店長填的排，但要在報告提醒店長")
     L.append("同一天指休\t同一家店兩人以上同一天指休，一定要提醒店長協調夥伴錯開休假日")
     if cfg.get("support"):
@@ -1423,7 +1453,7 @@ def _ext_from_form(st, cfg):
         wk = d["wd"] in ("六", "日") or d["d"] in holi
         need = []
         for r in cfg["shifts"]:
-            need += [r["name"]] * int(r.get("we" if wk else "wd") or 0)
+            need += [r["name"]] * int(_shift_need(r, d["wd"], wk) or 0)
         demand[str(d["d"])] = need
     emps = []
     for e in info.get("emps") or []:
@@ -1481,6 +1511,17 @@ def _pick_off_warns(st, names, etype):
 def _hol_days(ms):
     """特殊日勾了「當假日」的平日（2026-11-05 經營者：店長說 25、31 號視為假日，檢查卻還照平日班在比）"""
     return {int(x["day"]) for x in (ms or {}).get("special") or [] if x.get("as_holiday")}
+
+
+def _shift_need(r, wd, wk):
+    """2026-11-23：這班這天要幾人（週六／週日有各自填就照填的；同 schedule_solver.need_of）"""
+    if not wk:
+        return r.get("wd") or 0
+    if wd == "六" and r.get("sat") not in (None, ""):
+        return r["sat"]
+    if wd == "日" and r.get("sun") not in (None, ""):
+        return r["sun"]
+    return r.get("we") or 0
 
 
 def _ext(st, cfg=None):
@@ -1878,14 +1919,31 @@ def run_check(st, schedule=None, guests=None, sibs=None):
     limit = ext.get("late_early_limit")
     if late_starts and early_starts and limit is not None:
         for eid in parsed:
-            n = 0
+            hit = []
             ds = [d["d"] for d in info["days"]]
             for a, b in zip(ds, ds[1:]):
                 ca, cb = parsed[eid][a], parsed[eid][b]
                 if ca["segs"] and cb["segs"] and ca["segs"][-1][1] in late_starts and cb["segs"][0][0] in early_starts:
-                    n += 1
-            if n > int(limit):
-                warns.append(f"{names[eid]}：晚班接隔天早班 {n} 次，本店上限 {limit} 次")
+                    hit.append(f"{a}→{b}")
+            if len(hit) > int(limit):
+                # 2026-11-23 經營者裁定：晚班不接早班（中班可以）
+                warns.append(f"{names[eid]}：晚班接隔天早班 {'、'.join(hit)} 號（公司規定晚班不接早班，中班可以）")
+    # 2026-11-23 經營者裁定：各店自己設的正職週末休假天數
+    try:
+        cfg_ = cfg_load(st["store"])
+        lo_, hi_ = cfg_.get("wkoff_min"), cfg_.get("wkoff_max")
+        if lo_ is not None or hi_ is not None:
+            wk_ = [d["d"] for d in info["days"] if d["wd"] in ("六", "日")]
+            for eid in parsed:
+                if etype.get(eid) in ("兼職", SKIP_TYPE):
+                    continue
+                n_ = sum(1 for d in wk_ if not parsed[eid][d]["segs"])
+                if lo_ is not None and n_ < lo_:
+                    warns.append(f"{names[eid]}：週末只休 {n_} 天，本店設定最少 {lo_} 天")
+                if hi_ is not None and n_ > hi_:
+                    warns.append(f"{names[eid]}：週末休了 {n_} 天，本店設定最多 {hi_} 天")
+    except (KeyError, TypeError, ValueError):
+        pass
     # 2026-11-11 經營者：同一人掛在別家店名單也有排班 → 連上天數要兩邊合起來算、同一天不可以兩家店都有班；
     # 上個月底連續上班的天數（本店＋別店）也要接上來算
     try:
@@ -2182,6 +2240,7 @@ RULES_SYS = """你把門市店長在排班設定裡寫的文字，翻成排班�
 - {"type":"demand","shift":"班別","days":[…],"count":人數}：這幾天這班要幾人（取代原本人數，例：週三晚班只排 1 人）
 - {"type":"extra","shift":"班別","days":[…],"count":人數}：這幾天這班多加幾人（特殊日加人）
 - {"type":"fixed_cell","emp":"工號","day":日期,"cell":"格子"}：那天固定用這個格子（上課、會議、跨店支援、包館等自訂時段）
+- {"type":"max_consec","emp":"工號","n":天數}：這個人連續上班最多幾天（比本店上限更少才用，例：「小明連續上班不超過 4 天」→ n=4）
 格子寫法：時段用逗號分段，段後可加「@標籤」「#崗位」，當日標籤放最前面中括號，例「10:20-12:00,12:30-15:00@會議」「[支援]11:00-15:00#高雄店,15:30-19:30#高雄店」「休息日:13:00-15:00@會議」。標籤、崗位只能用給你的清單；崗位只在人實際在別家店時才填。自訂上班時間超過 4 小時的，中間要留 30 分鐘休息、拆成兩段（上班滿 4 小時後開始休，例：店長說「10:30 到 19:00」→「10:30-14:30,15:00-19:00」；104 不會自動扣休息，寫成一段會把休息也算進工時）；店長明講不休息或指定休息時間才照他說的。
 店長用語對照（2026-12 起的 104 標籤；給你的標籤清單裡沒有新名稱時，程式匯出會自動換成舊名）：上課／南京上課／內訓／新人課→時段標籤「@上課」＋那段的崗位（例 10:20-12:00,12:30-15:00@上課#南京店）；店長會議／區會／交流會／經管會／店務會議／晨會／朝會→@會議；事務／備品／消毒／SGS→@事務班；帶新人→@帶新人；包館→@包館；到別家店支援→那幾段 #那家店＋@支援；原本排特休後來取消→當日標籤 [特休取消]（照常上班）。會議、上課是時段標籤（@），不是當日標籤（[ ]）；當日標籤只用在整天性質（指休、特休、補休、特休取消、彈性挪假、挪假補班、整天支援）。
 店長只說某天幾點到幾點開會／上課、其他時間照常上班（沒講班別）：用 fixed_cell，拿那天類型的早班時段當底（平日用平日早班、假日或當假日用假日早班），把會議那段切出來標上標籤，其餘照原時段，例：平日早班 10:30-14:30,15:00-19:00、13:00-15:00 開區會 →「10:30-13:00,13:00-15:00@會議,15:00-19:00」。
@@ -2297,7 +2356,12 @@ def _note_rules(st, cfg, ms):
                 parse_cell(r["cell"], shmap, dtypes)
             else:
                 ds = r.get("days")
-                if ds is None and t in ("only_shift", "prefer_shift", "apart"):
+                if t == "max_consec":
+                    r["n"] = int(r.get("n") or 0)
+                    if not 1 <= r["n"] <= 6:
+                        raise ValueError("天數要 1～6")
+                    r["days"] = None
+                elif ds is None and t in ("only_shift", "prefer_shift", "apart"):
                     r["days"] = None
                 else:
                     r["days"] = sorted({int(x) for x in ds or []} & days)
@@ -2353,6 +2417,8 @@ def _rule_text(r, names):
         return f"{ds(r['days'])}{r['shift']}多加 {r['count']} 人"
     if t == "fixed_cell":
         return f"{names.get(r['emp'])} {r['day']} 號固定：{r['cell']}"
+    if t == "max_consec":
+        return f"{names.get(r['emp'])} 連續上班最多 {r['n']} 天"
     return str(r)
 
 
@@ -2457,6 +2523,7 @@ def live_summary(st, chk=None):
 def live_report(st):
     """排班結果說明：數字全部照「目前班表」重算（每次存檔都重寫），排初稿當時 AI 讀備註的結果附在後面"""
     sm = live_summary(st)
+    mc_ = int(cfg_load(st["store"]).get("max_consec") or LAW_MAX_CONSEC)
     if not sm:
         return st.get("report", "")
     dm = st.get("draft") or {}
@@ -2483,11 +2550,11 @@ def live_report(st):
         for r in sup:
             tg = f"／目標 {float(r['target']):g}h" if r["target"] else ""
             sr = r.get("support_run") or {}
-            ds = "、".join(f"{d}" + (f"（去支援會連上 {sr[str(d)]} 天，不要排）" if sr.get(str(d), 0) > LAW_MAX_CONSEC else "") for d in r["support"])
+            ds = "、".join(f"{d}" + (f"（去支援會連上 {sr[str(d)]} 天，不要排）" if sr.get(str(d), 0) > mc_ else "") for d in r["support"])
             L.append(f"- {r['name']}：{ds} 號（共 {len(r['support'])} 天；本月 {r['hours']:g}h{tg}）")
     skip_n = (dm or {}).get("nuo_skip") or {}
     if skip_n:
-        L += ["", "**時數還不足、但沒有標可支援的**（剩下的休息日去支援都會連上超過 5 天，所以沒標）"]
+        L += ["", f"**時數還不足、但沒有標可支援的**（剩下的休息日去支援都會連上超過 {mc_} 天，所以沒標）"]
         L += [f"- {nm}：還少約 {n} 天" for nm, n in skip_n.items()]
     try:   # 調店：去別店的看本店班表（崗位填別店的格子），來本店的看同區各店班表
         info = st["template"]["info"]
@@ -2625,8 +2692,9 @@ def _draft_worker(store, ym):
 # 魔導師在「🗺 區域排班」按排初稿（A 正職優先、B 兼職優先兩個方案，整區一起比）→ 採用一個方案（一次寫進整區每家店的班表）→
 # 店長再看自己店、微調、下載 104 匯入檔。調去別店的那天寫在夥伴自己店的班表（每段 @支援#那家店，104 規則），
 # 被支援店的檢查會把外店調來的人算進現場人力（_guest_cells）。
-REGIONS = {"台中": [1, 2], "台北": [3, 4, 7, 8, 11], "桃園": [9, 10], "測試": [13, 14]}
-REGION_FILE = {"台中": "tc", "台北": "tp", "桃園": "ty", "測試": "ts"}
+# 2026-11-23 經營者裁定「不可以不支援」：南區（5 台南 Focus、12 高雄 SKM）原本不在任何一區，SKM 缺人時 AI 找不到台南店 → 加南區
+REGIONS = {"台中": [1, 2], "台北": [3, 4, 7, 8, 11], "桃園": [9, 10], "南區": [5, 12], "測試": [13, 14]}
+REGION_FILE = {"台中": "tc", "台北": "tp", "桃園": "ty", "南區": "tn", "測試": "ts"}
 STORE_POS = {v: k for k, v in POS_STORE.items()}
 # 測試區：13 號範本名稱是「高雄SKM店」、14 號是「台南測試店」，調店時崗位借用 104 清單裡的「高雄店」「台南店」（只在測試區這樣對應）
 TEST_POS = {13: "高雄店", 14: "台南店"}
@@ -3195,6 +3263,14 @@ CHAT_RULES = """
 - 「本月設定」是店長填的設定表；格子開頭的 [指休]、[包館] 等是 104 班表上的標籤。說「設定表上是指休」只能根據本月設定的【指休】日期，不可以用格子標籤推論。
 - 店長問「別家店能不能派人來補班」「缺的人能不能請 X 號店支援」：一定先用 support_eval 評估（約 1～3 分鐘）。它會把本店和那幾家店的人放在一起重新排一次，看本店補不補得滿、來支援的店會不會反而缺人——**只是評估，不會改任何一家店的班表**。你也**絕對不可以**改別家店的班表（apply_changes 只能改本店的人；別家店的人不在本店名單上，也寫不進本店班表）。回覆時用白話說：本店缺的日子能不能補滿、建議誰哪天來支援、對方店會不會因此缺人、他們的工時會不會超過或不足、有沒有 104 崗位要先加；最後提醒「真的要調，請魔導師在『區域排班』採用，或請兩家店長自己協調後各改各的班表」。店長沒說哪家店：先評估同區的店；本店不在任何一區（或同區沒有別家店），就問店長想找哪幾家店。
 - **排班條件要記下來**（2026-11-23：店長反映在對話裡交代的條件，重排初稿就忘了）：店長交代的是「之後也要照做」的條件——例：某人哪幾天不排、某人只上早班或不上晚班、兩個人不要同一天上班、某天某班要幾個人、某人某天一定上某班、每週幾固定怎樣——除了用 apply_changes 把班表改好，**也要用 save_condition 記下來**（用一句白話寫清楚人名、日期或星期、班別）。店長說「每週、每個月、以後、固定、一直」→ every_month＝true；只講這個月的事 → false。已經在【排班條件】裡的不要重複記；店長說某條不用了 → remove_condition。回覆時順口說一句「已記在排班條件，重排初稿也會照做」。店長只是叫你換一格、試排看看，不用記。
+- **公司規定（2026-11-23 經營者裁定，店長要求不同時照這裡做，並用一兩句話說明是公司規定）**：
+ 1. **兼職先排**：兼職先排到希望時數（沒填用最低時數），正職在本店排不滿的天數是「可支援其他店」。店長要「正職先排滿 176、兼職少排」→ 說明公司規定兼職先排，正職不足的時數會排去支援別店或挪到其他月份補，不要把兼職的班讓給正職。（店長只是單次把某天某班換人，照做）
+ 2. **不可以不支援**：店長說「本店不支援任何店／不外借／不去支援」→ 說明公司規定各店都要互相支援，可支援的日子要保留；可以照店長意思把可支援日挑在不影響本店的平日。不要把「不支援」記成排班條件。
+ 3. **要打標籤**：朝會、晨會、店務會議等會議時段一律標「會議」，消毒、備品、SGS 標「事務班」，上課標「上課」；店長要拿掉這些標籤 → 說明 104 與日獎金要靠標籤算真正工時，標籤要保留（時段可以照店長改）。
+ 4. **晚班不接隔天早班**（公司規定，一律不行）；**中班接隔天早班可以**（下班到隔天上班要隔 11 小時以上）。
+ 5. **連續上班**：公司預設最多 5 天，各店可以在店別設定改成 6 天（本店上限見下方設定「max_consec」）；超過本店上限不排。
+ 6. 國定假日正職要不要休、正職週末休幾天、同一天最多幾位正職休、連上幾天後要連休 2 天、週六／週日各要幾人：**各店自己決定**，寫在「店別設定」。店長在對話講到這些「每個月都一樣」的事，用 save_condition 記下，並提醒他也可以直接在店別設定填，以後就不用再講。
+- 店號對照（店長常用口語店名）：1 精明（精明店）、2 草悟道、3 南京、4 士林、5 Focus（＝台南店、台南 Focus）、6 新竹、7 板橋、8 新店、9 中壢、10 藝文、11 A13、12 SKM（＝高雄店、高雄 SKM）。南區＝5 台南＋12 高雄。店長講口語店名時直接換成店號，不要再問「是幾號店」。
 - 店長說某個平日「視為假日／當假日／照假日排」（或反過來改回平日）：先用 set_day_type 改那天的需求（檢查會改照假日班），再用 apply_changes 排人。不要叫店長去改設定表。
 """
 
@@ -3429,6 +3505,24 @@ def _chat_turn(st, text, model, k, tag=" "):
         _job(k, status="running", step=f"已改 {changed} 格，AI{tag}正在看檢查結果…")
         st["api_messages"].append({"role": "user", "content": results})
     reply = "".join(b.text for b in msg.content if b.type == "text").strip()
+    if not reply:
+        # 2026-11-23（12 月對話檢討：AI 沒回覆 9 次，店長只好整段重打）：改完格子卻沒說話、或想太久沒寫完 → 不給工具再問一次，讓它把結果講出來
+        n0 = len(st["api_messages"])
+        try:
+            if msg.stop_reason == "tool_use":
+                pass   # 最後一輪是工具結果，直接接著問
+            else:
+                st["api_messages"].append({"role": "user", "content": "（請用一兩句話跟店長說你剛剛改了什麼；沒改的話說為什麼、給可以選的做法）"})
+            _job(k, status="running", step=f"AI{tag}正在整理回覆…")
+            msg2 = _client_().messages.create(model=model, max_tokens=4000, system=_chat_system(st), tools=TOOLS,
+                                              tool_choice={"type": "none"}, output_config={"effort": "low"},
+                                              messages=st["api_messages"])
+            _log_usage(st, "chat", _cost(model, msg2.usage))
+            st["api_messages"].append({"role": "assistant", "content": _blocks(msg2.content)})
+            reply = "".join(b.text for b in msg2.content if b.type == "text").strip()
+        except Exception:   # noqa: BLE001 — 補問失敗就照舊回固定句子（對話紀錄退回補問前）
+            del st["api_messages"][n0:]
+            reply = ""
     return reply or "（我剛剛沒有產生回覆，請再說一次。）", changed
 
 

@@ -22,7 +22,13 @@ W_SHIFT = 20000      # 某班沒人（人頭夠但班別對不上；檢查只提
 W_FORCE = 8000       # 備註指定要上班卻沒排（每天）
 W_APART = 60000      # 備註說不能同一天上班卻排在一起（每天）：高於正職時數、低於缺人（2026-11-05 模擬：原本 8000 輸給正職時數，店規 11 天沒守）
 W_REST11 = 6000      # 下班到隔天上班不到 11 小時（每次）
-W_LATE = 6000        # 晚接早超過本店上限（每次）
+W_LATE = 120000      # 晚班接隔天早班（每次）。2026-11-23 經營者裁定「晚班不接早班，但是中班可以」：跟連上上限同級，寧可列缺口也不硬排
+W_WKOFF = 3000       # 正職週末（六日）休假天數低於／高於本店設定（每天；店別設定，2026-11-23）
+W_SAMEOFF = 2000     # 同一天正職休假人數超過本店設定（每多 1 人；指休不算；店別設定，2026-11-23）
+W_REST2 = 3000       # 連上 N 天以上後只休 1 天（店別設定「連上幾天後要連休 2 天」，2026-11-23）
+W_HOLWORK = 5000     # 店別設定「國定假日正職不休」時，正職那天休假（每人；指休、特休、店長排的休假不算）。高於國定假日放公告當天（1500）
+W_KINDBAL = 300      # 第二段：正職早班、晚班次數差超過 2 次（每多 1 次；2026-11-23 公司預設）
+W_WKFAIR = 800       # 第二段：同店正職週末休假天數「最多－最少」（每天；2026-11-23 公司預設，平均分配）
 W_PT_MIN = 60        # 兼職低於最低時數（每分鐘）
 W_FT_HRS = 50        # 正職時數跟目標差（每分鐘）
 W_FT_LEND = 2        # 兼職優先方案：正職時數不足（每分鐘；挪到其他月份補，比多排人便宜）
@@ -70,8 +76,22 @@ def shift_info(cfg):
         mins = sum(_mins(b) - _mins(a) for a, b in segs)
         kind = next((k for k in "早中晚" if k in r["name"]), "")
         out[r["name"]] = {"segs": segs, "minutes": mins, "start": _mins(segs[0][0]), "end": _mins(segs[-1][1]),
-                          "kind": kind, "wd": int(r.get("wd") or 0), "we": int(r.get("we") or 0)}
+                          "kind": kind, "wd": int(r.get("wd") or 0), "we": int(r.get("we") or 0),
+                          # 2026-11-23：週六、週日可以各自填人數（空白＝照假日人數）；例 Focus 週六中班 2 人、週日 1 人
+                          "sat": None if r.get("sat") in (None, "") else int(r["sat"]),
+                          "sun": None if r.get("sun") in (None, "") else int(r["sun"])}
     return out
+
+
+def need_of(s, wd, wk):
+    """這個班這天要幾人：平日照平日；週六／週日有填就照填的，沒填照假日；平日當假日照假日"""
+    if not wk:
+        return s["wd"]
+    if wd == "六" and s.get("sat") is not None:
+        return s["sat"]
+    if wd == "日" and s.get("sun") is not None:
+        return s["sun"]
+    return s["we"]
 
 
 def demand_of(info, shifts, rules, hol=()):
@@ -79,13 +99,20 @@ def demand_of(info, shifts, rules, hol=()):
     need = {}
     for d in info["days"]:
         wk = d["wd"] in WEEKEND or d["d"] in hol
-        need[d["d"]] = {n: (s["we"] if wk else s["wd"]) for n, s in shifts.items() if (s["we"] if wk else s["wd"])}
+        need[d["d"]] = {n: need_of(s, d["wd"], wk) for n, s in shifts.items() if need_of(s, d["wd"], wk)}
     for r in rules:
         if r["type"] in ("demand", "extra") and r.get("shift") in shifts:
             for dd in r["days"]:
                 cur = need[dd].get(r["shift"], 0)
                 need[dd][r["shift"]] = max(0, int(r["count"]) if r["type"] == "demand" else cur + int(r["count"]))
     return need
+
+
+def _int_or_none(v):
+    try:
+        return None if v in (None, "") else int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def solve(info, cfg, ms, rules=None, hol_days=(), prev_tail=None, fixed_minutes=None, time_limit=20.0, mode="std", fixed_cover=None,
@@ -147,7 +174,11 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                   "std_min": int(round(float(base.get("std_hours") or 0) * 60)), "off_days": base.get("off_days"),
                   "holidays": int(base.get("holidays") or 0), "max_consec": int(cfg.get("max_consec") or 5),
                   "prev_week": u.get("prev_week") or {}, "tags": set(info.get("tags") or ()),
-                  "late_limit": int(late_limit) if late_limit not in (None, "") else None})
+                  "late_limit": int(late_limit) if late_limit not in (None, "") else None,
+                  # 2026-11-23 經營者裁定後的店別設定（空白＝不限）
+                  "wkoff_min": _int_or_none(cfg.get("wkoff_min")), "wkoff_max": _int_or_none(cfg.get("wkoff_max")),
+                  "ft_off_max": _int_or_none(cfg.get("ft_off_max")), "rest2_after": _int_or_none(cfg.get("rest2_after")),
+                  "hol_ft_work": bool(cfg.get("hol_ft_work"))})
     days = [d["d"] for d in U[0]["info"]["days"]]
     wd_of = {d["d"]: d["wd"] for d in U[0]["info"]["days"]}
     nd = len(days)
@@ -183,6 +214,8 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
         # 區域排班（魔導師對話框加的條件）：no_lend＝某人（某幾天）不調去別店
         u["no_lend"] = {(r["emp"], dd) for r in rules if r["type"] == "no_lend" for dd in (r.get("days") or days)}
         u["only"] = {}
+        # 2026-11-23：個人連上上限（例「張瀞尹連續上班不超過 4 天」）
+        u["emp_mc"] = {r["emp"]: int(r["n"]) for r in rules if r["type"] == "max_consec" and r.get("n")}
         for r in rules:
             if r["type"] == "only_shift":
                 for dd in (r.get("days") or days):
@@ -363,7 +396,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
             return vs_, min(cs_, 1)
 
         # 七休一＋本店連上上限（跨店的人只算一次，上限取各店最嚴的）
-        mc = min(g["u"]["max_consec"] for g in grp)
+        mc = min(min(g["u"]["max_consec"], g["u"]["emp_mc"].get(g["id"], 99)) for g in grp)
         for L, wgt, lim in (() if e is not grp[0] else ((7, W_REST7, 6), (mc + 1, W_CONSEC, mc))):
             if L > 7 and lim >= 6:
                 continue
@@ -521,6 +554,34 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 m.Add(offv[p_] + offv[n_] - offv[d_] - 1 <= b1)
                 pen_sp.append((b1, W_LONE))
             e["_hol"] = hl
+            # ── 2026-11-23 經營者裁定後的店別設定與公司預設 ──
+            wkd = [d for d in days if wd_of[d] in WEEKEND]
+            wk_off = sum(offv[d] for d in wkd)          # 週末休假天數（指休算、特休不算：特休那天照常排班）
+            e["_wkoff"], e["_offv"], e["_forced"] = wk_off, offv, forced
+            if wkd and u["wkoff_min"] is not None:
+                lack = m.NewIntVar(0, len(wkd), "")
+                m.Add(wk_off + lack >= u["wkoff_min"])
+                pen.append((lack, W_WKOFF))
+            if wkd and u["wkoff_max"] is not None:
+                more = m.NewIntVar(0, len(wkd), "")
+                m.Add(wk_off - more <= u["wkoff_max"])
+                pen.append((more, W_WKOFF))
+            # 連上 N 天以上後要連休 2 天：上滿 N 天、隔天休、再隔天又上 → 扣分
+            n2 = u["rest2_after"]
+            if n2 and n2 >= 2:
+                for i in range(0, nd - n2 - 1):
+                    run, a, b = days[i:i + n2], days[i + n2], days[i + n2 + 1]
+                    if isinstance(offv[a], int):
+                        continue
+                    wsum = sum(1 - offv[d] for d in run)
+                    vio = m.NewBoolVar("")
+                    m.Add(wsum + offv[a] + (1 - offv[b]) - (n2 + 1) <= vio)
+                    pen.append((vio, W_REST2))
+            # 國定假日正職不休（店別設定）：指休、特休、店長排的不能上班不算
+            if u["hol_ft_work"]:
+                for d in days:
+                    if d in u["hol_days"] and wd_of[d] not in WEEKEND and not isinstance(offv[d], int) and d not in forced:
+                        pen.append((offv[d], W_HOLWORK))
 
         # 班別穩定：前後兩天早／晚交換小扣分
         for i in range(nd - 1):
@@ -531,6 +592,31 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                     sw = m.NewBoolVar("")
                     m.Add(sum(a) + sum(b) - 1 <= sw)
                     pen.append((sw, W_SWITCH))
+
+    # 2026-11-23：公司預設（第二段）——正職早晚班次數平均、同店正職週末休假天數平均；店別設定——同一天正職休假上限
+    for u in U:
+        fts = [e for e in emps if e["u"] is u and e["ft"] and not e.get("alias") and "_offv" in e]
+        for e in fts:
+            ea = [x[e["k"] + (d, s, n)] for d in days for s, n in allowed[e["k"] + (d,)] if SH[(s, n)]["kind"] == "早"]
+            la = [x[e["k"] + (d, s, n)] for d in days for s, n in allowed[e["k"] + (d,)] if SH[(s, n)]["kind"] == "晚"]
+            if ea and la:
+                gap = m.NewIntVar(0, nd, "")
+                m.Add(sum(ea) - sum(la) - 2 <= gap)
+                m.Add(sum(la) - sum(ea) - 2 <= gap)
+                pen_sp.append((gap, W_KINDBAL))
+        if len(fts) > 1 and any(wd_of[d] in WEEKEND for d in days):
+            hi, lo = m.NewIntVar(0, nd, ""), m.NewIntVar(0, nd, "")
+            for e in fts:
+                m.Add(hi >= e["_wkoff"])
+                m.Add(lo <= e["_wkoff"])
+            pen_sp.append((hi - lo, W_WKFAIR))
+        if u["ft_off_max"] is not None and len(fts) > u["ft_off_max"]:
+            for d in days:
+                vs = [e["_offv"][d] for e in fts if not isinstance(e["_offv"][d], int) and d not in e["_forced"]]
+                if len(vs) > u["ft_off_max"]:
+                    over = m.NewIntVar(0, len(vs), "")
+                    m.Add(sum(vs) - u["ft_off_max"] <= over)
+                    pen.append((over, W_SAMEOFF))
 
     # 備註規則（工號都是同一家店的人）
     for u in U:
@@ -756,4 +842,5 @@ RULE_TYPES = {
     "fixed_cell": "某人某天固定用這個格子（上課、會議、跨店支援等自訂時段）",
     "no_lend": "（區域排班）某人（某幾天）不調去別店",
     "lend": "（區域排班）某人某幾天一定調去某店",
+    "max_consec": "某人連續上班最多幾天（比本店上限更嚴）",
 }
