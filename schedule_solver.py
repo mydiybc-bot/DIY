@@ -678,7 +678,23 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 if got < c:
                     gaps.append({"day": d, "shift": n, "need": c, "got": got})
         # 兼職優先：正職少排的天數改標「彈性挪假」（多放的假，之後月份補上班；只標在休息日，例假日不能挪）
-        nuo = {}
+        nuo, nuo_skip = {}, {}
+
+        def worked_any(eid, d):
+            return any(pick.get(g["k"] + (d,)) or g["k"] + (d,) in pto or g["k"] + (d,) in fixed for g in same.get(eid) or [])
+
+        def run_if(eid, d, extra):
+            """這天如果去上班（支援），前後接起來會連上幾天（含上個月底、同一人別店名單的班、已標可支援的日子）"""
+            w = lambda x: x in extra or worked_any(eid, x)
+            n, x = 1, d - 1
+            while x >= days[0] and w(x):
+                n, x = n + 1, x - 1
+            if x < days[0]:
+                n += int(u["prev_tail"].get(eid) or 0)
+            x = d + 1
+            while x <= days[-1] and w(x):
+                n, x = n + 1, x + 1
+            return n
         if mode == "pt":
             for e in ue:
                 if not e["ft"] or not e["target"] or e.get("alias"):
@@ -686,14 +702,19 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 other = sum(sv.Value(Hk[g["k"]]) for g in same.get(e["id"], []) if g is not e) if e["id"] in home else 0   # 各店都沒設定時：扣掉別店名單排到的時數
                 lack = e["target"] - int(round(hours[e["id"]]["hours"] * 60)) - other
                 cnt = int(lack / 480 + 0.5) if lack > 0 else 0   # 四捨五入（原本 round() 遇 .5 取偶數：少 12h 標 2 天、少 4h 標 0 天）
+                chosen = set()
                 for d in reversed(days):
                     if cnt <= 0:
                         break
-                    if sched[e["id"]].get(str(d)) == "休息日":
+                    # 2026-11-23 經營者（吳傑店長反映）：可支援那天真的去支援，會連上 7 天以上 → 只挑去上班也不超過連上上限的休息日
+                    if sched[e["id"]].get(str(d)) == "休息日" and run_if(e["id"], d, chosen) <= u["max_consec"]:
+                        chosen.add(d)
                         # 2026-11-13：這家店的 104 班表沒啟用「彈性挪假」標籤時不貼（貼了匯入會失敗），只記在 nuo、報告提醒
                         sched[e["id"]][str(d)] = "[彈性挪假]休息日" if (not u["tags"] or "彈性挪假" in u["tags"]) else "休息日"
                         nuo.setdefault(e["id"], []).append(d)
                         cnt -= 1
+                if cnt > 0:
+                    nuo_skip[e["id"]] = cnt   # 其他休息日去支援都會連上超過上限，不標
         extras = []
         for d in days:
             c = sum(u["need"][d].values())
@@ -718,7 +739,7 @@ def solve_multi(units, mode="std", lend=False, time_limit=20.0, workers=2):
                 miss = [d for d in r["days"] if not worked(r["emp"], d)]
                 if miss:
                     unmet.append({"rule": r, "days": miss})
-        out.append({"store": st_, "schedule": sched, "gaps": gaps, "extras": extras, "nuo": nuo, "mode": mode,
+        out.append({"store": st_, "schedule": sched, "gaps": gaps, "extras": extras, "nuo": nuo, "nuo_skip": nuo_skip, "mode": mode,
                     "hours": hours, "need": u["need_orig"], "unmet": unmet, "guests": guests})
     return {"pos_block": sorted(pos_block), "stores": out, "moves": moves,
             "stats": {"seconds": round(time.time() - t0, 1), "status": sv.StatusName(status), "objective": sv.ObjectiveValue()}}

@@ -745,8 +745,12 @@ function renderMsetForm(ms){
   var left=info.emps.filter(function(e){var v=(ms.emps||{})[e.id]||{};return v.type===SKIP&&v.skip_why==='已離職待移除'}).map(function(e){return e.name});
   if(left.length)h+='<div class="leftnote">⚠ 已離職待移除：'+esc(left.join('、'))+'——請體驗中心到 104 把他移出這家店的排班群組（移除後隔天名單就不會再出現）</div>';
   h+='<div class="sub">特殊日</div><table class="frm" id="spTbl"><thead><tr><th>日期</th><th>營收預估</th><th>人力／班別調整</th><th>備註</th><th title="這天的人力需求、人效照假日算">當假日</th><th></th></tr></thead><tbody>'+(ms.special||[]).map(function(r){return specialRow(r,info.days)}).join('')+'</tbody></table><button class="btn ghost sm" id="spAdd" type="button">＋ 加一天</button>';
+  /* 2026-11-23 經營者（吳傑店長反映）：排班條件——店長寫、或在對話框講（AI 自動記下）；排初稿、區域排班都照做。勾「每個月都套用」存店別設定 */
+  var cl=((S.cfg||{}).conds||[]).map(function(x){return {text:x.text,src:x.src,every:true}}).concat((ms.conds||[]).map(function(x){return {text:x.text,src:x.src,every:false}}));
+  h+='<div class="sub">排班條件 <span class="mute" style="font-weight:400">（排初稿都會照這些排，人手不夠做不到的會列在排班結果；在對話框交代的也會自動記在這裡）</span></div><table class="frm" id="cdTbl"><thead><tr><th>條件（用白話寫）</th><th title="勾了每個月都會套用；沒勾只有這個月">每個月都套用</th><th></th></tr></thead><tbody>'+cl.map(condRow).join('')+'</tbody></table><button class="btn ghost sm" id="cdAdd" type="button">＋ 加一條</button>';
   h+='<div class="row" style="margin-top:10px"><button class="btn" id="msetSave" type="button">💾 存本月設定</button><span id="msetMsg" class="mute"></span></div>';
   $('msetForm').innerHTML=h;
+  $('cdAdd').onclick=function(){$('cdTbl').tBodies[0].insertAdjacentHTML('beforeend',condRow(null));var x=$('cdTbl').tBodies[0].lastElementChild.querySelector('input.cdt');if(x)x.focus()};
   $('spAdd').onclick=function(){$('spTbl').tBodies[0].insertAdjacentHTML('beforeend',specialRow(null,info.days))};
   /* 正職目標時數跟著標準時數走（店長自己改過的那格就不動） */
   function stdNow(){return $('mStd').value}
@@ -820,10 +824,12 @@ function bindEcho(){
     });
   });
 }
+function condRow(r){r=r||{};return '<tr data-src="'+esc(r.src||'')+'"><td style="text-align:left;white-space:nowrap"><input type="text" class="wide cdt" style="width:420px" maxlength="200" value="'+esc(r.text||'')+'" placeholder="例：週二晚班只排 1 人／小明不排晚班／小美、小華不要同一天上班">'+(r.src==='對話'?' <span class="mute" title="在對話框交代、AI 自動記下的">💬</span>':'')+'</td><td style="text-align:center"><input type="checkbox" class="cde"'+(r.every?' checked':'')+'></td><td class="x" title="刪除">✕</td></tr>'}
 function collectMset(){
   var emps={};Array.prototype.forEach.call($('empTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input');emps[tr.dataset.e]={type:tr.querySelector('select').value,skip_why:tr.querySelector('select.why').value,target:ins[0].value,min_hours:ins[1].value,off_txt:tr.querySelector('.mk-off').value,pto_txt:tr.querySelector('.mk-pto').value,avail_txt:tr.querySelector('.mk-av').value,move:'可',note:tr.querySelector('.nt').value}});
   var sp=[];Array.prototype.forEach.call($('spTbl').tBodies[0].rows,function(tr){var ins=tr.querySelectorAll('input:not(.hol)');sp.push({day:tr.querySelector('select').value,revenue:ins[0].value,staff:ins[1].value,note:ins[2].value,as_holiday:tr.querySelector('.hol').checked})});
-  return {base:{std_hours:$('mStd').value,off_days:$('mOff').value,holidays:$('mHol').value},revenue:{weekday:$('mWd').value,weekend:$('mWe').value},emps:emps,special:sp};
+  return {base:{std_hours:$('mStd').value,off_days:$('mOff').value,holidays:$('mHol').value},revenue:{weekday:$('mWd').value,weekend:$('mWe').value},emps:emps,special:sp,
+    conds:Array.prototype.map.call($('cdTbl').tBodies[0].rows,function(tr){return {text:tr.querySelector('input.cdt').value,every:tr.querySelector('input.cde').checked,src:tr.dataset.src||''}}).filter(function(x){return x.text.trim()})};
 }
 function saveMset(){$('msetSave').disabled=true;$('msetMsg').textContent='存檔中…';
   post('mset_save',{mset:collectMset()}).then(function(j){$('msetMsg').textContent='✅ 已存';formKey='keep';saveOnly='mset';apply(j);saveOnly='';setTimeout(function(){var m=$('msetMsg');if(m)m.textContent=''},2500)})
@@ -985,7 +991,7 @@ function renderPlans(){
   var sm=S&&S.summary;if(!sm||!S.template){$('planCard').classList.add('hide');return}
   $('planCard').classList.remove('hide');
   var h='<div class="tblwrap"><table class="frm"><thead><tr><th>夥伴</th><th>排了</th><th>目標</th><th>最低</th><th>可支援其他店</th></tr></thead><tbody>';
-  sm.rows.forEach(function(r){h+='<tr><td>'+esc(r.name)+(r.type?' <span class="mute">'+esc(tLabel(r.type))+'</span>':'')+'</td><td>'+r.hours+'h</td><td>'+(r.target?(+r.target)+'h':'—')+'</td><td>'+(r.min?(+r.min)+'h':'—')+'</td><td>'+(r.support.length?r.support.length+' 天<span class="mute">（'+r.support.join('、')+' 號）</span>':'—')+'</td></tr>'});
+  sm.rows.forEach(function(r){h+='<tr><td>'+esc(r.name)+(r.type?' <span class="mute">'+esc(tLabel(r.type))+'</span>':'')+'</td><td>'+r.hours+'h</td><td>'+(r.target?(+r.target)+'h':'—')+'</td><td>'+(r.min?(+r.min)+'h':'—')+'</td><td>'+(r.support.length?r.support.length+' 天<span class="mute">（'+r.support.map(function(d){var n=(r.support_run||{})[d];return d+' 號'+(n>5?' <b style="color:#c0392b" title="這天去支援的話會連上 '+n+' 天，超過公司上限 5 天，不要排去支援">⚠連上'+n+'天</b>':'')}).join('、')+'）</span>':'—')+'</td></tr>'});
   h+='</tbody></table></div>';
   function days(a){return a.map(function(c){return c.label+'（'+c.wd+'）'}).join('、')}
   if(sm.has_demand){

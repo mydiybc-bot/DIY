@@ -865,6 +865,7 @@ def mset_clean(st, body):
         sp.append(row)
     ms["special"] = sorted(sp, key=lambda x: x["day"])
     ms["marks"], ms["avail_shift"] = marks_from_text(st, emps, cfg_load(st["store"]))
+    ms["conds"] = conds_clean((st.get("mset") or {}).get("conds"))
     ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
     return ms
 
@@ -878,6 +879,27 @@ SKIP_TYPE = "不排"
 SKIP_LABEL = "本月不排班"
 SKIP_WHY = ("非本店夥伴", "本月請長假", "已離職待移除", "其他")
 EMP_TYPES = ("正職", "兼職", SKIP_TYPE)
+
+
+# 2026-11-23 經營者（吳傑店長反映：對話裡交代的條件，重排初稿就忘了）：「排班條件」清單——店長在本月設定寫、或在對話框講，
+# AI 用 save_condition 記下；排初稿、區域排班、對話每次都照這份清單。勾「每個月都套用」的存在店別設定（cfg["conds"]），其他存本月（mset["conds"]）
+COND_MAX = 40
+
+
+def conds_clean(lst):
+    out, seen = [], set()
+    for x in (lst or [])[:COND_MAX]:
+        t = re.sub(r"\s+", " ", str((x or {}).get("text") or "")).strip()[:200]
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append({"text": t, "src": "對話" if (x or {}).get("src") == "對話" else ""})
+    return out
+
+
+def conds_of(st, cfg):
+    """[(條件文字, 是否每個月)]：先每個月的、再本月的"""
+    return [(x["text"], True) for x in (cfg.get("conds") or [])] + [(x["text"], False) for x in ((st.get("mset") or {}).get("conds") or [])]
 
 
 def type_label(t):
@@ -1357,6 +1379,10 @@ def form_text(st, cfg):
                 parts.append(f"{k} " + "、".join(f"{d}（{sh[str(d)]}）" if sh.get(str(d)) else str(d) for d in ds))
         if parts:
             L.append(f"{e['id']} {e['name']}：" + "；".join(parts))
+    cl = conds_of(st, cfg)
+    if cl:
+        L.append("【排班條件（店長交代的，一定要照做；已經記下的不要重複記）】")
+        L += [f"- {t}（{'每個月' if every else '本月'}）" for t, every in cl]
     if ms["special"]:
         L.append("【特殊日】")
         for x in ms["special"]:
@@ -1955,8 +1981,31 @@ def run_check(st, schedule=None, guests=None, sibs=None):
     # 畫面的摘要、報告、檢查都讀這一份（原本方案比較用排班當時的數字、檢查用現在的班表，兩邊對不起來）
     support = {eid: [d["d"] for d in info["days"] if "彈性挪假" in parsed[eid][d["d"]]["dtag"] and not parsed[eid][d["d"]]["segs"]]
                for eid in parsed if etype.get(eid) not in ("兼職", SKIP_TYPE)}
+    # 2026-11-23 經營者（吳傑店長反映）：可支援那天真的去支援，前後接起來會連上幾天；超過公司上限就提醒不要排去支援
+    sup_run = {}
+    try:
+        mc = int(ext.get("max_consec") or LAW_MAX_CONSEC)
+        oth = _other_store_days(st["store"], st["ym"], set(parsed), sibs)
+        tl = _prev_tail_all(st["ym"], set(parsed))
+        dl = [x["d"] for x in info["days"]]
+        for eid, ds in support.items():
+            busy = {x["d"] for x in info["days"] if parsed[eid][x["d"]]["segs"]} | set((oth.get(eid) or {}).keys())
+            for d0 in ds:
+                n, x = 1, d0 - 1
+                while x >= dl[0] and x in busy:
+                    n, x = n + 1, x - 1
+                if x < dl[0]:
+                    n += int(tl.get(eid) or 0)
+                x = d0 + 1
+                while x <= dl[-1] and x in busy:
+                    n, x = n + 1, x + 1
+                sup_run.setdefault(eid, {})[str(d0)] = n
+                if n > mc:
+                    warns.append(f"{names[eid]} {d0} 號標「可支援」，但這天去支援的話會連上 {n} 天（公司上限 {mc} 天），這天不要排去支援")
+    except Exception:   # noqa: BLE001 — 算不出來不影響其他檢查
+        pass
     return {"ok": not errors, "errors": errors, "warns": warns, "hours": hours, "cover": cover,
-            "support": {k: v for k, v in support.items() if v}}
+            "support": {k: v for k, v in support.items() if v}, "support_run": sup_run}
 
 
 def check_text(chk):
@@ -2148,6 +2197,8 @@ def _note_texts(st, cfg, ms):
             continue
         if (v.get("note") or "").strip():
             L.append(f"{e['id']} {e['name']}（{v.get('type', '正職')}）的個人備註：{v['note'].strip()}")
+    for t, every in conds_of(st, cfg):
+        L.append(f"排班條件（{'每個月' if every else '本月'}，一定要照做）：{t}")
     if (cfg.get("rules") or "").strip():
         L.append("店規：" + cfg["rules"].strip().replace("\n", "；"))
     if (cfg.get("support") or "").strip():
@@ -2392,7 +2443,8 @@ def live_summary(st, chk=None):
     typ = {e.get("id"): e.get("type") for e in ext.get("employees") or []}
     sup = chk.get("support") or {}
     rows = [{"id": h["id"], "name": h["name"], "type": typ.get(h["id"], ""), "hours": h["hours"], "days": h["days"],
-             "target": h.get("target"), "min": h.get("min"), "support": sup.get(h["id"]) or []} for h in chk.get("hours") or []
+             "target": h.get("target"), "min": h.get("min"), "support": sup.get(h["id"]) or [],
+             "support_run": (chk.get("support_run") or {}).get(h["id"]) or {}} for h in chk.get("hours") or []
             if not (typ.get(h["id"]) == SKIP_TYPE and not h.get("hours"))]   # 「不排」又沒排班的外店夥伴不列
     cover = chk.get("cover") or []
     return {"rows": rows, "has_demand": bool(cover),
@@ -2430,7 +2482,13 @@ def live_report(st):
         L += ["", f"**正職{SUPPORT_TXT}的日子**（本店這幾天不缺人，可以排去別店上班補時數；沒去的話，匯入 104 時這天標「彈性挪假」）"]
         for r in sup:
             tg = f"／目標 {float(r['target']):g}h" if r["target"] else ""
-            L.append(f"- {r['name']}：{'、'.join(str(d) for d in r['support'])} 號（共 {len(r['support'])} 天；本月 {r['hours']:g}h{tg}）")
+            sr = r.get("support_run") or {}
+            ds = "、".join(f"{d}" + (f"（去支援會連上 {sr[str(d)]} 天，不要排）" if sr.get(str(d), 0) > LAW_MAX_CONSEC else "") for d in r["support"])
+            L.append(f"- {r['name']}：{ds} 號（共 {len(r['support'])} 天；本月 {r['hours']:g}h{tg}）")
+    skip_n = (dm or {}).get("nuo_skip") or {}
+    if skip_n:
+        L += ["", "**時數還不足、但沒有標可支援的**（剩下的休息日去支援都會連上超過 5 天，所以沒標）"]
+        L += [f"- {nm}：還少約 {n} 天" for nm, n in skip_n.items()]
     try:   # 調店：去別店的看本店班表（崗位填別店的格子），來本店的看同區各店班表
         info = st["template"]["info"]
         names = {e["id"]: e["name"] for e in info["emps"]}
@@ -2541,6 +2599,7 @@ def _draft_worker(store, ym):
             names_ = {e["id"]: e["name"] for e in info["emps"]}
             st["plans"], st["plan"] = {}, "pt"   # 只排一個方案，不再有「兩個方案比較」
             st["draft"] = {"mode": "pt", "at": time.time(), "rules": [_rule_text(r, names_) for r in rules], "bad": list(bad),
+                           "nuo_skip": {names_.get(eid, eid): n for eid, n in (res.get("nuo_skip") or {}).items()},
                            "unmet": [f"{_rule_text(u['rule'], names_)}：{'、'.join(str(d) for d in u['days'])} 號沒做到" for u in res.get("unmet") or []]}
             nsup = sum(len(v) for v in (chk.get("support") or {}).values())
             # 2026-11-13 經營者：對話要自然、不要機械感
@@ -3135,6 +3194,7 @@ CHAT_RULES = """
  7. 回覆用繁體中文，不要夾雜英文字。
 - 「本月設定」是店長填的設定表；格子開頭的 [指休]、[包館] 等是 104 班表上的標籤。說「設定表上是指休」只能根據本月設定的【指休】日期，不可以用格子標籤推論。
 - 店長問「別家店能不能派人來補班」「缺的人能不能請 X 號店支援」：一定先用 support_eval 評估（約 1～3 分鐘）。它會把本店和那幾家店的人放在一起重新排一次，看本店補不補得滿、來支援的店會不會反而缺人——**只是評估，不會改任何一家店的班表**。你也**絕對不可以**改別家店的班表（apply_changes 只能改本店的人；別家店的人不在本店名單上，也寫不進本店班表）。回覆時用白話說：本店缺的日子能不能補滿、建議誰哪天來支援、對方店會不會因此缺人、他們的工時會不會超過或不足、有沒有 104 崗位要先加；最後提醒「真的要調，請魔導師在『區域排班』採用，或請兩家店長自己協調後各改各的班表」。店長沒說哪家店：先評估同區的店；本店不在任何一區（或同區沒有別家店），就問店長想找哪幾家店。
+- **排班條件要記下來**（2026-11-23：店長反映在對話裡交代的條件，重排初稿就忘了）：店長交代的是「之後也要照做」的條件——例：某人哪幾天不排、某人只上早班或不上晚班、兩個人不要同一天上班、某天某班要幾個人、某人某天一定上某班、每週幾固定怎樣——除了用 apply_changes 把班表改好，**也要用 save_condition 記下來**（用一句白話寫清楚人名、日期或星期、班別）。店長說「每週、每個月、以後、固定、一直」→ every_month＝true；只講這個月的事 → false。已經在【排班條件】裡的不要重複記；店長說某條不用了 → remove_condition。回覆時順口說一句「已記在排班條件，重排初稿也會照做」。店長只是叫你換一格、試排看看，不用記。
 - 店長說某個平日「視為假日／當假日／照假日排」（或反過來改回平日）：先用 set_day_type 改那天的需求（檢查會改照假日班），再用 apply_changes 排人。不要叫店長去改設定表。
 """
 
@@ -3154,6 +3214,15 @@ TOOLS = [
      "strict": True},
     {"name": "undo", "description": "復原上一次改動（不論是你改的還是店長在日曆上改的）。",
      "input_schema": {"type": "object", "additionalProperties": False, "properties": {}}, "strict": True},
+    {"name": "save_condition", "description": "把店長交代、之後也要照做的排班條件記到「排班條件」清單（重排初稿、區域排班都會照做）。不會改班表。",
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["text", "every_month"], "properties": {
+         "text": {"type": "string", "description": "一句白話條件，寫清楚人名、日期或星期、班別，例：「小明週三不排晚班」「12/24 假日晚班要 3 人」"},
+         "every_month": {"type": "boolean", "description": "true＝每個月都套用（店長說每週、以後、固定）；false＝只有這個月"}}},
+     "strict": True},
+    {"name": "remove_condition", "description": "店長說某條排班條件不用了 → 從清單刪掉（文字照清單上的寫）。不會改班表。",
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["text"], "properties": {
+         "text": {"type": "string", "description": "要刪的那條條件文字（照【排班條件】上的寫）"}}},
+     "strict": True},
     {"name": "support_eval", "description": "【只評估、不改任何班表】把本店和別家店的人放在一起重新排一次，看別家店能不能派人來補本店缺的班、對方店會不會因此缺人。約 1～3 分鐘。回傳評估結果（不會存檔）。",
      "input_schema": {"type": "object", "additionalProperties": False, "required": ["stores"], "properties": {
          "stores": {"type": "array", "items": {"type": "integer"}, "description": "要評估的支援店店號（1～14）；空陣列＝本店同區的其他店"}}},
@@ -3348,6 +3417,8 @@ def _chat_turn(st, text, model, k, tag=" "):
                 elif b.name == "set_day_type":
                     chk = _set_day_type(st, b.input.get("days") or [], b.input.get("holiday"))
                     out = "已改日子類型。\n" + check_text(chk)
+                elif b.name in ("save_condition", "remove_condition"):
+                    out = _cond_tool(st, b.name, b.input)
                 else:
                     chk = _apply(st, b.input.get("changes") or [], "對話：" + text[:40])
                     changed += len(b.input.get("changes") or [])
@@ -3359,6 +3430,36 @@ def _chat_turn(st, text, model, k, tag=" "):
         st["api_messages"].append({"role": "user", "content": results})
     reply = "".join(b.text for b in msg.content if b.type == "text").strip()
     return reply or "（我剛剛沒有產生回覆，請再說一次。）", changed
+
+
+def _cond_tool(st, name, inp):
+    """對話：記下／刪掉排班條件（每個月的存店別設定、本月的存本月設定）"""
+    t = re.sub(r"\s+", " ", str(inp.get("text") or "")).strip()[:200]
+    if not t:
+        return "沒有寫條件內容，沒有記"
+    ms = st.setdefault("mset", {})
+    cfg = cfg_load(st["store"])
+    if name == "save_condition":
+        if any(x["text"] == t for x in (cfg.get("conds") or []) + (ms.get("conds") or [])):
+            return f"「{t}」已經在排班條件裡了"
+        if inp.get("every_month"):
+            cfg["conds"] = conds_clean((cfg.get("conds") or []) + [{"text": t, "src": "對話"}])
+            cfg_save(st["store"], cfg)
+        else:
+            ms["conds"] = conds_clean((ms.get("conds") or []) + [{"text": t, "src": "對話"}])
+        ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+        return f"已記在排班條件（{'每個月' if inp.get('every_month') else '本月'}）：{t}"
+    hit = False
+    if any(x["text"] == t for x in cfg.get("conds") or []):
+        cfg["conds"] = [x for x in cfg["conds"] if x["text"] != t]
+        cfg_save(st["store"], cfg)
+        hit = True
+    if any(x["text"] == t for x in ms.get("conds") or []):
+        ms["conds"] = [x for x in ms["conds"] if x["text"] != t]
+        hit = True
+    if hit:
+        ms["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    return f"已從排班條件刪掉：{t}" if hit else f"排班條件裡沒有「{t}」這一條（要照清單上的文字）"
 
 
 def _chat_worker(store, ym, text):
@@ -4547,6 +4648,7 @@ def handle(path, body):
         except ValueError as ex:
             return 400, {"ok": False, "error": str(ex)}
         with lk:
+            cfg["conds"] = cfg_load(store).get("conds") or []   # 排班條件在本月設定那張表改，這裡照舊保留
             cfg_save(store, cfg)
             st = _load(store, ym)
             if st.get("schedule"):
@@ -4563,6 +4665,14 @@ def handle(path, body):
                 st["mset"] = mset_clean(st, body.get("mset") or {})
             except ValueError as ex:
                 return 400, {"ok": False, "error": str(ex)}
+            cl = (body.get("mset") or {}).get("conds")
+            if isinstance(cl, list):
+                st["mset"]["conds"] = conds_clean([x for x in cl if not (x or {}).get("every")])
+                c0 = cfg_load(store)
+                every = conds_clean([x for x in cl if (x or {}).get("every")])
+                if every != (c0.get("conds") or []):
+                    c0["conds"] = every
+                    cfg_save(store, c0)
             if st.get("schedule"):
                 st["check"] = run_check(st)
             _save(st)
