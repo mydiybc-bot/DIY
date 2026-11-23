@@ -3,7 +3,11 @@
      店員在平板開這頁（書籤）→ 選客人的語言（英／日／韓／越／印尼／泰）→ 點甜點 → 食譜畫面照後台平板版型（tablet-recipe-view.js）。
      只列「主廚／管理者核准放行」的食譜（經營者 10/24：「完成後還是要一一打開比對，確認沒有問題才可以放行」；核准在 tablet-recipe-review.html）。
      資料：申請單 API（GAS recipe-req，i18n.gs）i18nList／i18nGet；平板密碼＝權限中心 dim_auth 的 tablet_i18n（閘門通過時順便記在這台平板，之後看食譜用同一組）。
-     中文、英文客人照舊用後台平板食譜。 -->
+     中文、英文客人照舊用後台平板食譜。
+     2026-11-24 依類別分組（經營者：「應該要用類別分類來顯示，不然一次出現 92 個食譜在一個語言中，太多，不容易找到要使用的食譜」）：
+     清單每支帶 cats（後台類別，i18n.gs 的 i18nListCats_ 從食譜演化表取）→ 本頁 GROUPS／grpOf 歸成給外國客人看的大類（一支只放一類），
+     上方類別按鈕（全部＋各類，數字＝這個語言有幾支）＋搜尋框（中文、外文品名都搜得到；照 IME-GUARD 只重畫結果區）。
+     清單沒有 cats（後端還沒更新、舊快取）→ 不顯示類別按鈕，照舊整片列出。大類名稱 7 種語言是固定寫好的，不呼叫翻譯 API。 -->
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
@@ -405,6 +409,25 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
 .card .nm{font-size:18px;font-weight:800;padding:10px 12px 2px}
 .card .en{font-size:12px;color:var(--muted);padding:0 12px 10px}
 .empty{padding:30px 16px;text-align:center;font-size:18px;color:var(--muted)}
+.grid .empty{grid-column:1/-1}
+/* 2026-11-24 類別按鈕＋搜尋框（按鈕會換行，不左右捲，窄螢幕不會把畫面撐寬） */
+.tools{padding:4px 16px 0}
+.srch{width:100%;max-width:460px;font:inherit;font-size:17px;padding:10px 12px;border:2px solid var(--line);border-radius:12px;background:#fff;color:var(--brown)}
+.srch:focus{outline:none;border-color:#e7b93a}
+.cats{display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px 2px}
+.cats:empty{display:none}
+.cats button{display:inline-flex;align-items:center;gap:7px;min-height:48px;max-width:100%;padding:6px 14px;border:2px solid var(--line);background:#fff;border-radius:999px;font:inherit;font-size:17px;font-weight:800;color:var(--brown);cursor:pointer;text-align:left;line-height:1.15}
+.cats button.on{background:var(--brown);border-color:var(--brown);color:#fff}
+.cats button .t{min-width:0;overflow-wrap:anywhere}
+.cats button .c{display:block;font-size:11px;font-weight:600;color:var(--muted)}
+.cats button.on .c{color:#e9dccf}
+.cats button .n{flex:0 0 auto;font-size:13px;font-weight:800;background:#f1e9e2;color:var(--brown);border-radius:999px;padding:1px 8px;min-width:24px;text-align:center}
+.cats button.on .n{background:var(--y)}
+.sec{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;font-size:20px;font-weight:800;margin:12px 0 -2px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+.sec:first-child{margin-top:0}
+.sec .c{font-size:13px;color:var(--muted);font-weight:600}
+@media(max-width:480px){.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:8px 10px 22px}.card .nm{font-size:16px;padding:8px 9px 2px}.card .en{padding:0 9px 8px;overflow-wrap:anywhere}
+  .cats{padding:8px 10px 2px;gap:6px}.cats button{font-size:15px;min-height:44px;padding:5px 11px}.tools{padding:4px 10px 0}.sec{font-size:18px}}
 .foot{padding:10px 16px 30px;font-size:13px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;align-items:center}
 .foot a{color:var(--muted)}
 .load{position:fixed;inset:0;z-index:9500;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;flex-direction:column;gap:12px}
@@ -421,6 +444,8 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
 <div class="top"><h1>🌏 Recipe ｜ 外語食譜</h1></div>
 <div class="langs" id="langs"></div>
 <div class="ask" id="ask"></div>
+<div class="tools"><input type="search" class="srch" id="q" autocomplete="off" enterkeyhint="search"></div>
+<div class="cats" id="cats"></div>
 <div class="grid" id="grid"></div>
 <div class="foot"><span>店員：先選客人的語言，再點甜點。做完按左下「☰」回到這裡。中文客人請用後台平板食譜。</span><a href="hub.html">⬅ 回首頁</a></div>
 <script src="tablet-recipe-view.js?v=20261117"></script>
@@ -431,7 +456,48 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
   var LANGS = [['en', 'English', '英文'], ['ja', '日本語', '日文'], ['ko', '한국어', '韓文'], ['vi', 'Tiếng Việt', '越南文'], ['id', 'Bahasa Indonesia', '印尼文'], ['th', 'ภาษาไทย', '泰文'], ['zh', '中文', '試看']];   /* zh：中文試看（2026-11-17），只列後端 I18N_ZH 指定的食譜 */
   var ASK = { en: 'Choose the dessert you will make', ja: '作るデザートを選んでください', ko: '만들 디저트를 선택하세요', vi: 'Chọn món bánh bạn sẽ làm', id: 'Pilih dessert yang akan dibuat', th: 'เลือกขนมที่จะทำ', zh: '請選擇要製作的甜點' };
   var NONE = { en: 'Coming soon', ja: '準備中です', ko: '준비 중입니다', vi: 'Đang chuẩn bị', id: 'Sedang disiapkan', th: 'กำลังเตรียม', zh: '準備中' };
-  var S = { lang: lsGet('tr:lang') || 'en', list: null, at: '', view: null, cand: '' };
+  /* 2026-11-24 類別：後台類別（清單的 cats）→ 給外國客人看的大類。名稱 7 種語言固定寫好（經營者 11/23：外語食譜不用翻譯 API）；陣列順序＝按鈕順序 */
+  var GROUPS = [
+    ['season', '⏳', { en: 'Seasonal', ja: '季節限定', ko: '시즌 한정', vi: 'Theo mùa', id: 'Edisi Musiman', th: 'เมนูตามฤดูกาล', zh: '季節限定' }],
+    ['new', '✨', { en: 'New', ja: '新メニュー', ko: '신메뉴', vi: 'Món mới', id: 'Menu Baru', th: 'เมนูใหม่', zh: '新品' }],
+    ['cake', '🍰', { en: 'Cakes', ja: 'ケーキ', ko: '케이크', vi: 'Bánh kem', id: 'Kue', th: 'เค้ก', zh: '蛋糕' }],
+    ['birthday', '🎂', { en: 'Birthday & Celebration', ja: '誕生日・お祝い', ko: '생일・축하', vi: 'Sinh nhật & Kỷ niệm', id: 'Ulang Tahun & Perayaan', th: 'วันเกิดและฉลอง', zh: '生日・慶祝' }],
+    ['cookie', '🍪', { en: 'Cookies & Snacks', ja: 'クッキー・焼き菓子', ko: '쿠키・구움과자', vi: 'Bánh quy & bánh nhỏ', id: 'Kukis & Camilan', th: 'คุกกี้และขนมอบ', zh: '點心・餅乾' }],
+    ['tart', '🥧', { en: 'Tarts & Pies', ja: 'タルト・パイ', ko: '타르트・파이', vi: 'Bánh tart & bánh pie', id: 'Tart & Pai', th: 'ทาร์ตและพาย', zh: '塔派' }],
+    ['bread', '🍞', { en: 'Bread', ja: 'パン', ko: '빵', vi: 'Bánh mì', id: 'Roti', th: 'ขนมปัง', zh: '麵包' }],
+    ['club', '🌙', { en: 'Club Night Specials', ja: '会員イベント限定', ko: '회원 이벤트 전용', vi: 'Dành cho sự kiện thành viên', id: 'Khusus Acara Member', th: 'เฉพาะกิจกรรมสมาชิก', zh: '同好夜・群友專用' }],
+    ['other', '🧁', { en: 'Others', ja: 'その他', ko: '기타', vi: 'Khác', id: 'Lainnya', th: 'อื่น ๆ', zh: '其他' }]
+  ];
+  var GNAME = {}; GROUPS.forEach(function (g) { GNAME[g[0]] = g; });
+  var ALL = { en: 'All', ja: 'すべて', ko: '전체', vi: 'Tất cả', id: 'Semua', th: 'ทั้งหมด', zh: '全部' };
+  var FIND = { en: 'Search', ja: '検索', ko: '검색', vi: 'Tìm kiếm', id: 'Cari', th: 'ค้นหา', zh: '搜尋' };
+  var NOHIT = { en: 'No matching desserts', ja: '該当するデザートがありません', ko: '해당하는 디저트가 없습니다', vi: 'Không tìm thấy món phù hợp', id: 'Tidak ada dessert yang cocok', th: 'ไม่พบขนมที่ตรงกัน', zh: '找不到符合的甜點' };
+  /* 一支只放一類：由上往下，第一個對得到的就是它（有限制的先：限當日壽星、同好夜、期間限定；再來新品；最後依甜點種類） */
+  var RULES = [
+    ['birthday', /壽星|慶祝|雙人|生日/],
+    ['club', /同好夜|群友/],
+    ['season', /限定|季|節|\d{1,2}\/\d{1,2}\s*[~～\-－]\s*\d{1,2}\/\d{1,2}/],
+    ['new', /新品|大菜單/],
+    ['bread', /麵包|吐司|bread/i],
+    ['tart', /塔|派(?!對)|tart|\bpie/i],
+    ['cookie', /餅乾|點心|cookie|snack/i],
+    ['cake', /蛋糕|cake/i]
+  ];
+  /* 後台沒有類別（例：只有英文版、中文版已停用）→ 看品名 */
+  var NAME_RULES = [
+    ['bread', /麵包|吐司|布里歐|bread|brioche/i],
+    ['tart', /塔|派(?!對)|tart|\bpie\b/i],
+    ['cookie', /餅乾|酥|瑪德蓮|布朗尼|達克瓦茲|泡芙|cookie|brownie/i],
+    ['cake', /蛋糕|戚風|乳酪|巴斯克|提拉米蘇|cake/i]
+  ];
+  function grpOf(it) {
+    var nm = String(it.name || ''), cats = Array.isArray(it.cats) ? it.cats : [], i, j;
+    if (/限當日壽星/.test(nm)) return 'birthday';   /* 只有壽星當天能做：不論後台放哪一類，都放「生日・慶祝」 */
+    for (i = 0; i < RULES.length; i++) for (j = 0; j < cats.length; j++) if (RULES[i][1].test(String(cats[j]))) return RULES[i][0];
+    if (!cats.length) for (i = 0; i < NAME_RULES.length; i++) if (NAME_RULES[i][1].test(nm)) return NAME_RULES[i][0];
+    return 'other';
+  }
+  var S = { lang: lsGet('tr:lang') || 'en', list: null, at: '', view: null, cand: '', grp: 'all', q: '' };
   function $(id) { return document.getElementById(id); }
   function esc(s) { return window.TRView.esc(s); }
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -494,28 +560,66 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
   function renderLangs() {
     $('langs').innerHTML = LANGS.map(function (l) { return '<button type="button" data-l="' + l[0] + '"' + (l[0] === S.lang ? ' class="on"' : '') + ' lang="' + l[0] + '">' + esc(l[1]) + '<span class="c">' + esc(l[2]) + '</span></button>'; }).join('');
   }
+  function hasCats() { return !!S.list && S.list.some(function (it) { return Array.isArray(it.cats); }); }
+  function norm(x) { return String(x || '').replace(/\s+/g, '').toLowerCase(); }
+  function hit(it) {   /* 搜尋：中文名、英文名、各語言品名都比 */
+    if (!S.q) return true;
+    var loc = it.local || {}, hay = it.name, k;
+    for (k in loc) if (Object.prototype.hasOwnProperty.call(loc, k)) hay += ' ' + loc[k];
+    return norm(hay).indexOf(norm(S.q)) >= 0;
+  }
+  function liveOf(lg) { return (S.list || []).filter(function (it) { return it.langs && it.langs[lg] === 'live'; }); }
+  function card(it, lg) {
+    var nm = (it.local || {})[lg] || it.name.split('｜')[0];
+    return '<button type="button" class="card" data-id="' + esc(it.id) + '"><img src="' + esc(it.cover) + '" alt="" loading="lazy"><div class="nm" lang="' + lg + '">' + esc(nm) + '</div><div class="en">' + esc(lg === 'zh' ? '' : lg === 'en' ? (it.name.split('｜')[1] || '') : it.name) + '</div></button>';
+  }
+  function gLabel(g, lg) { return g[2][lg] || g[2].en; }
+  /* 類別按鈕（只重畫按鈕列，不動搜尋框）：全部＋這個語言（與搜尋）有甜點的類別，數字＝幾支 */
+  function renderCats() {
+    var lg = S.lang, el = $('cats');
+    if (!S.list || !hasCats()) { el.innerHTML = ''; S.grp = 'all'; return; }
+    var cnt = {}, tot = 0;
+    liveOf(lg).forEach(function (it) { if (!hit(it)) return; var g = grpOf(it); cnt[g] = (cnt[g] || 0) + 1; tot++; });
+    if (S.grp !== 'all' && !cnt[S.grp]) S.grp = 'all';
+    var sub = function (t) { return lg === 'zh' ? '' : '<span class="c">' + esc(t) + '</span>'; };
+    var b = '<button type="button" data-g="all"' + (S.grp === 'all' ? ' class="on"' : '') + '><span class="t" lang="' + lg + '">' + esc(ALL[lg] || ALL.en) + sub(ALL.zh) + '</span><span class="n">' + tot + '</span></button>';
+    GROUPS.forEach(function (g) {
+      if (!cnt[g[0]]) return;
+      b += '<button type="button" data-g="' + g[0] + '"' + (S.grp === g[0] ? ' class="on"' : '') + '><span aria-hidden="true">' + g[1] + '</span><span class="t" lang="' + lg + '">' + esc(gLabel(g, lg)) + sub(g[2].zh) + '</span><span class="n">' + cnt[g[0]] + '</span></button>';
+    });
+    el.innerHTML = b;
+  }
+  /* 結果區（只重畫 #grid）：有類別 → 依類別分段（選了某一類就只列那一類）；沒有類別資料 → 照舊整片列出 */
   function renderGrid() {
     var lg = S.lang; $('ask').textContent = ASK[lg]; $('ask').lang = lg;
+    $('q').placeholder = '🔍 ' + (FIND[lg] || FIND.en) + (lg === 'zh' ? '' : '／搜尋');
     if (!S.list) { $('grid').innerHTML = '<div class="empty">讀取中…</div>'; return; }
-    var live = S.list.filter(function (it) { return it.langs[lg] === 'live'; });
+    var live = liveOf(lg);
     if (!live.length) { $('grid').innerHTML = '<div class="empty" lang="' + lg + '">' + esc(NONE[lg]) + '<br><span style="font-size:13px">（這個語言還沒有體驗中心核准放行的食譜）</span></div>'; return; }
-    $('grid').innerHTML = live.map(function (it) {
-      var nm = (it.local || {})[lg] || it.name.split('｜')[0];
-      return '<button type="button" class="card" data-id="' + esc(it.id) + '"><img src="' + esc(it.cover) + '" alt="" loading="lazy"><div class="nm" lang="' + lg + '">' + esc(nm) + '</div><div class="en">' + esc(lg === 'zh' ? '' : lg === 'en' ? (it.name.split('｜')[1] || '') : it.name) + '</div></button>';
+    var shown = live.filter(hit);
+    if (!shown.length) { $('grid').innerHTML = '<div class="empty" lang="' + lg + '">' + esc(NOHIT[lg] || NOHIT.en) + (lg === 'zh' ? '' : '<br><span style="font-size:13px">（找不到符合的甜點）</span>') + '</div>'; return; }
+    if (!hasCats()) { $('grid').innerHTML = shown.map(function (it) { return card(it, lg); }).join(''); return; }
+    var by = {};
+    shown.forEach(function (it) { var g = grpOf(it); (by[g] = by[g] || []).push(it); });
+    var zk = function (it) { var p = it.name.split('｜'); return p.length > 1 ? p.slice(1).join('｜') : p[0]; };
+    Object.keys(by).forEach(function (g) { by[g].sort(function (x, y) { return zk(x).localeCompare(zk(y), 'zh-Hant'); }); });   /* 同類裡照中文名排，同一款的不同版本排在一起 */
+    $('grid').innerHTML = GROUPS.filter(function (g) { return by[g[0]] && (S.grp === 'all' || S.grp === g[0]); }).map(function (g) {
+      return '<div class="sec"><span aria-hidden="true">' + g[1] + '</span><span lang="' + lg + '">' + esc(gLabel(g, lg)) + '</span>' + (lg === 'zh' ? '' : '<span class="c">' + esc(g[2].zh) + '</span>') + '<span class="c">' + by[g[0]].length + '</span></div>'
+        + by[g[0]].map(function (it) { return card(it, lg); }).join('');
     }).join('');
   }
   function renderDsb() {
     if (!S.list) return;
     var c = LANGS.map(function (l) { return l[2] + ' ' + S.list.filter(function (it) { return it.langs[l[0]] === 'live'; }).length; }).join('、');
-    $('dsb').innerHTML = '資料狀態：<b>' + esc(S.at || '') + '</b> 讀取｜已放行（' + esc(c) + '）｜食譜 ' + S.list.length + ' 支';
+    $('dsb').innerHTML = '資料狀態：<b>' + esc(S.at || '') + '</b> 讀取｜已放行（' + esc(c) + '）｜食譜 ' + S.list.length + ' 支｜' + (hasCats() ? '依類別分組' : '沒有類別資料（整片列出）');
   }
   function loadList() {
     var c = lsGet('tr:list');
-    if (c) { try { var o = JSON.parse(c); S.list = o.items; S.at = o.at + '（上次）'; renderGrid(); renderDsb(); } catch (e) { } }
+    if (c) { try { var o = JSON.parse(c); S.list = o.items; S.at = o.at + '（上次）'; renderCats(); renderGrid(); renderDsb(); } catch (e) { } }
     return call({ action: 'i18nList' }, 60000).then(function (j) {
       if (!j.ok) throw new Error(j.msg || '讀取失敗');
       S.list = j.data.items; S.at = j.data.at; lsSet('tr:list', JSON.stringify({ at: j.data.at, items: j.data.items }));
-      renderGrid(); renderDsb();
+      renderCats(); renderGrid(); renderDsb();
     }).catch(function (e) { if (!S.list) $('grid').innerHTML = '<div class="empty">讀不到食譜清單：' + esc(e.message || e.msg || e) + '<br><button type="button" id="retry">再試一次</button></div>'; $('dsb').textContent = '資料狀態：讀取失敗（' + (e.message || e.msg || e) + '）'; });
   }
   /* 2026-11-09 經營者：「打開每一個食譜的時間很久，要縮短到 3 秒以內，客人是從第一頁開始看，不需要一次下載全部的頁面」
@@ -539,12 +643,24 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
     load();
   }
   document.addEventListener('click', function (e) {
-    var t = e.target.closest && e.target.closest('[data-l],[data-id],#retry'); if (!t) return;
+    var t = e.target.closest && e.target.closest('[data-l],[data-g],[data-id],#retry'); if (!t) return;
     if (t.id === 'retry') { loadList(); return; }
-    if (t.hasAttribute('data-l')) { S.lang = t.getAttribute('data-l'); lsSet('tr:lang', S.lang); renderLangs(); renderGrid(); return; }
+    if (t.hasAttribute('data-l')) { S.lang = t.getAttribute('data-l'); lsSet('tr:lang', S.lang); renderLangs(); renderCats(); renderGrid(); return; }
+    if (t.hasAttribute('data-g')) { S.grp = t.getAttribute('data-g'); renderCats(); renderGrid(); var c = $('cats'); if (c.getBoundingClientRect().top < 0) c.scrollIntoView({ block: 'start' }); return; }
     if (t.hasAttribute('data-id')) openRecipe(t.getAttribute('data-id'));
   });
-  function start() { if (S.cand) lsSet('tr:tpw', S.cand); renderLangs(); renderGrid(); loadList(); }
+  /* 搜尋框（規則：儀表板輸入框一定要能打中文）：輸入框只在 HTML 建一次，打字只重畫類別按鈕列與結果區；
+     選字中（IME-GUARD 的 __ime.on 或 isComposing）不搜尋，選完字 IME-GUARD 會補送一次 input */
+  function onQ(e) {
+    if ((e && e.isComposing) || (window.__ime && window.__ime.on)) return;
+    var v = $('q').value.trim(); if (v === S.q) return;
+    S.q = v; if (v) S.grp = 'all';   /* 搜尋＝從全部找 */
+    renderCats(); renderGrid();
+  }
+  $('q').addEventListener('input', onQ);
+  $('q').addEventListener('compositionend', function () { setTimeout(onQ, 0); });
+  $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { try { e.target.blur(); } catch (_) { } } });   /* 平板按「搜尋」收鍵盤 */
+  function start() { if (S.cand) lsSet('tr:tpw', S.cand); renderLangs(); renderCats(); renderGrid(); loadList(); }
   if (window.__tablet_i18nAuthed) start(); else window.__tablet_i18nStartApp = start;
 })();
 </script>

@@ -941,7 +941,64 @@ function i18nListData_() {
     o.langs.en = 'live'; o.ver.en = i18nHash_([s.fp, s.upd, 'en'].join('|')).slice(0, 12);
     return o;
   });
+  try { var cm = i18nListCats_(out); if (cm) out.forEach(function (o) { o.cats = cm[o.id] || []; }); } catch (e) { /* 類別讀不到 → 不帶 cats，平板照舊不分類（不會變空白） */ }
   return { data: { at: now_(), items: out } };
+}
+/* ---------------- 平板清單的「類別」（2026-11-24 經營者：「應該要用類別分類來顯示，不然一次出現 92 個食譜在一個語言中，太多，不容易找到要使用的食譜」） ----------------
+   清單每支多帶 cats＝後台類別（去掉備份／English／訓練這些不是給客人看的分類）；平板頁（tablet-recipe.html 的 GROUPS）再歸成給外國客人看的大類。
+   來源：🧬 食譜演化表 recipe_lineage 的 cat 欄（每天 1～2 點從後台 /Recipes 清單更新），不另外讀後台。
+   怎麼找（兩種原文都能用）：①這支自己就有類別（原文改成中文食譜本身時）②英文食譜「英文名｜中文名」→ 同名的台灣中文食譜（啟用中優先）
+   ③同一款（kuan，名稱去掉版本字樣後相同）的台灣中文啟用中食譜。都找不到 → []（平板放「其他」）。 */
+var I18N_CAT_SKIP = /備份$|^English (Menu|Recipe)|^訓練&材料$/;
+function i18nCatSplit_(s) {   /* 後台類別用頓號串起來，但類別名稱本身也有頓號（例：吳寶春大獎麵包 (限信義、高雄店製作)）→ 括號還沒關就接回去 */
+  var out = [], cur = '';
+  String(s || '').split('、').forEach(function (p) {
+    cur = cur ? cur + '、' + p : p;
+    if ((cur.match(/[(（]/g) || []).length <= (cur.match(/[)）]/g) || []).length) { cur = cur.trim(); if (cur) out.push(cur); cur = ''; }
+  });
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+function i18nCatClean_(s) { return i18nCatSplit_(s).filter(function (c) { return !I18N_CAT_SKIP.test(c); }); }
+function i18nCatNameKey_(n) { return String(n || '').replace(/（/g, '(').replace(/）/g, ')').replace(/\s+/g, '').toLowerCase(); }
+/* rows：recipe_lineage 的列（{recipe_id, name, lang, region, status, cat, kuan}）；items：[{id, name}] → {id: [類別…]}（純計算，可在本機測） */
+function i18nCatsCompute_(rows, items) {
+  var byId = {}, byName = {}, byKuan = {};
+  rows.forEach(function (r) {
+    var id = String(r.recipe_id || '').toLowerCase(); if (!id) return;
+    var o = { cats: i18nCatClean_(r.cat), on: r.status === 'Active', kuan: String(r.kuan || '') };
+    byId[id] = o;
+    if (r.region !== '台灣' || r.lang !== '繁體中文' || !o.cats.length) return;
+    var nk = i18nCatNameKey_(r.name);
+    (byName[nk] = byName[nk] || []).push(o);
+    if (o.on && o.kuan) (byKuan[o.kuan] = byKuan[o.kuan] || []).push(o);
+  });
+  var union = function (list) {   /* 啟用中的優先；同名好幾支就合併它們的類別 */
+    var act = list.filter(function (o) { return o.on; }), use = act.length ? act : list, seen = {}, out = [];
+    use.forEach(function (o) { o.cats.forEach(function (c) { if (!seen[c]) { seen[c] = 1; out.push(c); } }); });
+    return out;
+  };
+  var m = {};
+  items.forEach(function (it) {
+    var id = String(it.id || '').toLowerCase(), me = byId[id], segs = String(it.name || '').split('｜');
+    var zhName = segs.length > 1 ? segs.slice(1).join('｜') : segs[0];
+    var cats = me && me.cats.length ? me.cats.slice() : [];
+    if (!cats.length && byName[i18nCatNameKey_(zhName)]) cats = union(byName[i18nCatNameKey_(zhName)]);
+    if (!cats.length && me && me.kuan && byKuan[me.kuan]) cats = union(byKuan[me.kuan]);
+    m[id] = cats;
+  });
+  return m;
+}
+/* 讀食譜演化表算類別；結果快取 6 小時（食譜演化表每天重算一次，LG_DATE 換了快取自動作廢）。表不在 → null */
+function i18nListCats_(items) {
+  var c = CacheService.getScriptCache(), key = 'i18n:cats:' + i18nHash_(i18nProp_('LG_DATE') + '|' + items.map(function (x) { return x.id + '~' + x.name; }).join('|'));
+  var hit = c.get(key); if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var sh = ss_().getSheetByName(LG_TAB); if (!sh || sh.getLastRow() < 2) return null;
+  var v = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues(), H = v[0];
+  var rows = v.slice(1).map(function (r) { var o = {}; H.forEach(function (h, i) { o[h] = r[i]; }); return o; });
+  var m = i18nCatsCompute_(rows, items), s = JSON.stringify(m);
+  if (s.length < 90000) c.put(key, s, 21600);
+  return m;
 }
 /* 譯文裡的品名（「在地名｜中文名」取前段）；快取 6 小時，核准或原文改了 ver 會換 */
 function i18nTrName_(sh, r, ver) {
