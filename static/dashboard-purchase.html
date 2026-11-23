@@ -1762,7 +1762,7 @@ function adjField(st,s){ // 這個品項「可調的那一格」是什麼
   if(softPar(st,s))return {key:"parB",label:"標配數量",unit:(pqEff(st,s)>0?s.buyUnit:s.useUnit),cur:num(pOf(st,s).par)/cv,
     hint:"本店應備數量（以採購單位）。盤點低於標配就補到標配，不看 POS 用量；改回 0 就恢復用量預測。",step:"0.1"};
   if(hasPOS(st,s))return {key:"weight",label:"權數",unit:"倍",cur:(num(pOf(st,s).weight)||1),
-    hint:"1＝照系統推算。本店報廢/教學/試作較多就調高，例如 1.2＝多兩成。",step:"0.05"};
+    hint:"多拿／耗損倍率：1＝照配方。客人常多拿、撒出、失敗重做就調高，例如 1.2＝多兩成；最多 "+W_MAX+" 倍。",step:"0.05"};
   return {key:"manualWeekly",label:"手動週用量",unit:(pqEff(st,s)>0?s.buyUnit:s.useUnit),
     cur:manualOf(st,s)/cv,hint:"此品項沒有 POS 推算（備品），週用量請在這裡設定。",step:"0.1"};}
 function adjCurrent(st,s){ // 目前基準值，以 adjUnit 表示
@@ -1817,7 +1817,7 @@ function adjBreak(st,s,fv){ // 訂貨點拆解表；fv 為 null 時用現值
     var cw=ocw+lead/7;
     if(f.key==="weight"){
       rows+='<tr><td class="k">週用量</td><td class="v">'+dec(base/cv)+' '+u+'</td><td class="n"><span class="alock">🔒 POS×配方自動推算 · 不可調</span></td></tr>';
-      rows+='<tr><td class="k">× 權數</td><td class="v">'+iv+'</td><td class="n">'+f.hint+'</td></tr>';
+      rows+='<tr><td class="k">× 多拿／耗損</td><td class="v">'+iv+'</td><td class="n">'+f.hint+'</td></tr>';
     }else{
       rows+='<tr><td class="k">週用量</td><td class="v">'+iv+' '+u+'</td><td class="n">'+f.hint+'</td></tr>';
     }
@@ -1848,7 +1848,8 @@ function adjSave(store){
   var s=SKU[ST.adjSku];if(!s)return;
   var el=$("#adjVal"),v=el?el.value:"";if(v===""||isNaN(+v)||+v<0){toast("請輸入有效數字");return;}
   var f=adjField(store,s);
-  if(f.key==="weight"&&+v<=0){toast("權數必須大於 0");return;}
+  if(f.key==="weight"&&+v<=0){toast("多拿／耗損倍率必須大於 0");return;}
+  if(f.key==="weight"&&+v>W_MAX){toast("多拿／耗損倍率最多 "+W_MAX+" 倍。真的超過請找總部確認",5000);return;}   /* 2026-11-23 */
   var nt=($("#adjNote")&&$("#adjNote").value||"").trim();
   var pl=adjPlan(store,s,+v),fl={};fl[pl.label]=pl.to;
   postParam(store,s.id,fl,function(ok){
@@ -2628,6 +2629,8 @@ function useEqTxt(st,s,v){
    （本店 ≥3 且 ≥ 全公司中位數 2 倍），最極端 4 號店保鮮膜 ×15 → 建議 813 卷。
    注意：底盤／廚房紙巾／塑膠袋這類 10–12 店都設 2–5 的，是 BOM 沒算到門市清潔與破損的合理補償，
    所以門檻用「與其他店比」而不是絕對值，避免把全公司一致的設定也標成錯。 */
+/* 2026-11-23 店長用權數調「多拿／耗損」：上限 W_MAX，超過不給存；舊資料超過的照算但標紅（經營者裁示不做各店排行）。 */
+var W_MAX=10;   /* 經營者 2026-11-23：上限 10 倍 */
 var WMED=null;
 function wMedOf(id){
   if(!WMED){WMED={};var acc={};
@@ -2639,10 +2642,10 @@ function wOutlier(st,s){if(parMode(st,s))return null;   /* 2026-09-08 bd 批：�
      完全不用 weight。此時再跳「權數離群」等於叫店長去改一個不影響任何計算的欄位＝假警報。
      經營者 2026-09-08 決定讓店長把廚房紙巾／塑膠袋改填標配，這條若不加，12 店會集體踩到。 */
   var p=pOf(st,s),w=(p.weight==null||p.weight==="")?1:num(p.weight);
-  if(w<3)return null;var m=wMedOf(s.id)||1;if(w<m*2)return null;return {w:w,med:m};}
+  var m=wMedOf(s.id)||1;if(w>W_MAX)return {w:w,med:m,over:1};if(w<3)return null;if(w<m*2)return null;return {w:w,med:m};}
 function wBadge(st,s){var o=wOutlier(st,s);if(!o)return '';
-  return '<div class="sub" style="color:#B3261E;font-weight:600">⚠️ 本店權數 ×'+dec(o.w)+'，其他店多為 ×'+dec(o.med)
-    +'<span class="muted" style="font-weight:400">　訂貨點被放大約 '+dec(o.w/o.med)+' 倍。若本店不是真的特別耗，請到「店別參數」把權數改回 '+dec(o.med)+' 再訂。</span></div>';}
+  return '<div class="sub" style="color:#B3261E;font-weight:600">⚠️ 本店「多拿／耗損」倍率 ×'+dec(o.w)+'，其他店多為 ×'+dec(o.med)
+    +'<span class="muted" style="font-weight:400">　訂貨點被放大約 '+dec(o.w/o.med)+' 倍。若本店不是真的特別耗，請到「店別參數」把「多拿／耗損」改回 '+dec(o.med)+' 再訂。</span></div>';}
 /* ===== 2026-09-04 al 批 ③：盤點卡片顯示「上週用量」 =====
    經營者需求：店長在盤點頁填數字時，手上只有「訂貨點」這一個參考值，看不出這項東西上週到底用掉多少。
    來源＝aggOf(st,s).week ＝ 訂貨引擎的上一完整週用量（agg_purchase，每日 07:05 重算），
@@ -4551,7 +4554,7 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
   +(_dn?alertBig("warn","✏️ 有 "+_dn+" 項改了還沒存","全部改完按右上<b>「💾 儲存並更新」</b>一次送出，存好會顯示「✓ 已存」。<b>沒按就離開，改的東西不會生效。</b>"):'')
   +'<div class="note">門市：'+storeChip(store)+'<span class="tabhelp">　·　<b>這頁做什麼：</b>設定'+(isHQ?'各店':'本店')+'每個品項「要常備多少」，系統照這個算建議訂貨量。<br><b>什麼時候來：</b>新品項要開始用、某樣東西常缺或常剩、本店不用某樣東西時。<br><b>怎麼做：</b>① 上面選分類或搜尋品名　② 改要改的欄位（最常用的是「📌 標配」）　③ 全部改完，按右上「💾 儲存並更新」。</span></div>'
   +'<details class="pdet"><summary>📖 填寫說明（點開）</summary><div class="note" style="margin-top:6px">'
-  +'① <b>有 POS 銷售的品項</b>（綠字）：週用量系統自動算，<b>「週用」不用填</b>（填了也不會生效）；需要時才調「權」（倍數，1＝照系統算）和「交」（交期天數）。'
+  +'① <b>有 POS 銷售的品項</b>（綠字）：週用量系統自動算，<b>「週用」不用填</b>（填了也不會生效）；需要時才調「多拿／耗損」（倍數，1＝照配方算；客人常多拿、常撒出或失敗重做的品項才調，例：多拿一倍填 2，<b>最多 '+W_MAX+' 倍</b>）和「交」（交期天數）。'
   +'<br>② <b>沒有 POS 銷售的備品</b>（例：蠟燭、插牌，紅字提醒）：<b>一定要填「週用」</b>＝每週大約用多少；填 0＝不會建議補貨。'
   +'<br>③ <b>器具／模具</b>：只填「標配」＝本店要有幾個，盤點低於標配就補。'
   +'<br>④ <b>食材／耗材也可以改用「標配」</b>：在「標配」填數字（用採購單位），就會<b>跟器具模具一樣</b>——不看 POS 用量，盤點低於標配就補到標配。適合廚房紙巾、竹籤、保鮮膜這種「架上固定放幾個」的東西。<b>填回 0 就恢復用量預測。</b>'
@@ -4611,7 +4614,10 @@ function viewParams(){var store=ST.storeId,isHQ=(ST.role==="總部");
         +'</div>';
       var _spm=softPar(store,s);   /* 2026-09-08 bd 批：標配模式會靜默停用權數／交期／安全庫存（欄位還在、還能改，就是不進計算）。
          這是 skill 長期記錄的 UX 風險；趁 12 店要把廚房紙巾／塑膠袋改填標配，一併把「不生效」標出來。 */
-      g.push('<span class="pf"'+(_spm?' title="標配模式：建議量＝標配−現有，權數不列入計算"':'')+'><b>權</b>'+inN("p",s.id,"weight",sp.weight||1,56)+(_spm?'<span class="warn2" style="margin-left:3px">不生效</span>':'')+'</span>');
+      var _wv=(sp.weight==null||sp.weight==="")?1:num(sp.weight),_wo=_spm?null:wOutlier(store,s),_gm=multOf(s);   /* 2026-11-23：權數＝本店「多拿／耗損」倍率 */
+      g.push('<span class="pf" title="'+(_spm?'標配模式：建議量＝標配−現有，這格不列入計算':'實際用量是系統照配方算的幾倍（客人多拿、撒出、失敗重做）。1＝照配方；最多 '+W_MAX+' 倍。'+(_gm!==1?'主檔已含全公司 ×'+dec(_gm)+'，這裡只填本店再多的部分。':''))+'"><b>多拿／耗損 ×</b>'+inN("p",s.id,"weight",_wv,56)+(_spm?'<span class="warn2" style="margin-left:3px">不生效</span>':'')
+        +(_gm!==1&&!_spm?'<span class="hint" style="margin-left:3px">主檔已含 ×'+dec(_gm)+'</span>':'')
+        +(_wo?'<span class="warn2" style="margin-left:3px;font-weight:700">'+(_wo.over?'超過上限 '+W_MAX+' 倍，請改':'比其他店高（多為 ×'+dec(_wo.med)+'）')+'</span>':'')+'</span>');
       g.push('<span class="pf"'+(_spm?' title="標配模式：建議量＝標配−現有，交期不列入計算"':'')+'><b>交</b>'+inN("p",s.id,"leadDays",(sp.leadDays==null?DEFAULT_LEAD:sp.leadDays),48)+'天'+(_spm?'<span class="warn2" style="margin-left:3px">不生效</span>':'')+'</span>');
       if(auto){
         /* 2026-09-08 bi 批：標配模式下這個綠字會讓店長以為 POS 推算還在用，實際上 computeRow 走 par 分支完全不看它。
@@ -7346,6 +7352,11 @@ function wire(){
       v=nz.val;el.value=(nz.val===""?"":nz.val);}
     if(f==="safety"&&v!==""){var sk0=SKU[id];if(sk0&&pqEff(ST.storeId,sk0)>0)v=Math.round(+v*pqOf(ST.storeId,sk0)*100)/100;}   /* 2026-09-01 w 批：安全庫存以採購單位輸入，存回使用單位 */
     if(f==="parB"){var sk1=SKU[id];if(v!==""&&sk1&&pqEff(ST.storeId,sk1)>0)v=Math.round(+v*pqOf(ST.storeId,sk1)*100)/100;if(v==="")v=0;f="par";}   /* 2026-09-03 y 批：食材/耗材標配以採購單位輸入，存回使用單位 */
+    if(f==="weight"){var _w0=(function(){var p=(PARAM[ST.storeId]||{})[id]||{};return (p.weight==null||p.weight==="")?1:num(p.weight);})();   /* 2026-11-23：多拿／耗損倍率防呆 */
+      if(v==="")v=1;
+      if(!(+v>0)){toast("多拿／耗損倍率要大於 0（1＝照配方）");el.value=_w0;return;}
+      if(+v>W_MAX){toast("多拿／耗損倍率最多 "+W_MAX+" 倍。真的超過請找總部確認",5000);el.value=_w0;return;}
+      var _md=wMedOf(id)||1;if(+v>=3&&+v>=_md*2&&typeof confirm==="function"&&!confirm("其他店多為 ×"+dec(_md)+"，本店要設 ×"+dec(+v)+"？\n訂貨點會放大約 "+dec(+v/_md)+" 倍。")){el.value=_w0;return;}}
     paramMark(ST.storeId,id,f);   /* cp 批：記下是哪一店的修改＋改之前的值 */
     EDIT[id]=EDIT[id]||{};EDIT[id][f]=v;if(PSTATE[id])delete PSTATE[id];refreshPstBtn(id);PARAM[ST.storeId]=PARAM[ST.storeId]||{};PARAM[ST.storeId][id]=PARAM[ST.storeId][id]||{};PARAM[ST.storeId][id][f]=(v===""?null:v);
     refreshSaveAllBtn();};});   /* 2026-09-10 bp 批：只更新按鈕，整頁重繪會讓捲動位置跳掉 */
