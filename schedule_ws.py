@@ -4736,6 +4736,18 @@ def handle(path, body):
     if act in ("upload", "draft", "edit", "undo", "chat", "note", "cell_note", "cfg_save", "mset_save", "mark", "plan_pick", "remove_settings", "export") and running:
         return 409, {"ok": False, "error": "AI 還在處理上一個動作，請等它完成"}
 
+    if act == "conds_add":   # 2026-11-24 經營者「先幫各店填好」：總部替店加「每個月都套用」的排班條件（不動本月設定的其他資料）
+        if str(who) != "hq":
+            return 403, {"ok": False, "error": "只有總部可以替店加條件"}
+        texts = [str(t) for t in (body.get("texts") or []) if str(t or "").strip()][:20]
+        if not texts:
+            return 400, {"ok": False, "error": "沒有條件"}
+        with lk:
+            c0 = cfg_load(store)
+            c0["conds"] = conds_clean((c0.get("conds") or []) + [{"text": t} for t in texts])
+            cfg_save(store, c0)
+            return 200, _public(_load(store, ym))
+
     if act == "cfg_save":
         try:
             cfg = cfg_clean(body.get("cfg") or {})
