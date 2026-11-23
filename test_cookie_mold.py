@@ -159,3 +159,14 @@ def test_layout_body_only_for_full_body_pets(cm):
         assert cm.layout_of(chk or {}) == "head"
         assert "THE HEAD ONLY" in cm.draw_prompt("x", chk)
     assert "points to the same side" in cm.draw_prompt("x", {"subject": "pet", "framing": "full_body", "facing": "weird"})
+
+
+def test_accessory_kept_only_when_distinctive(cm):
+    """寵物身上顯眼的飾品（吊牌、鈴鐺、蝴蝶結）要保留；素面項圈、人物不算。"""
+    body = {"subject": "pet", "framing": "full_body", "facing": "right", "accessory": "heart-shaped tag with a small bell on the collar"}
+    assert "This pet wears: heart-shaped tag with a small bell on the collar. KEEP IT" in cm.draw_prompt("x", body)
+    assert "KEEP IT" in cm.draw_prompt("x", {"subject": "pet", "framing": "head", "accessory": "bow tie"})
+    for acc in ("", "none", "purple collar", "a plain red collar", "collar", None):
+        p = cm.draw_prompt("x", dict(body, accessory=acc))
+        assert "KEEP IT" not in p and "No tag, heart, bell" in p and "{" not in p
+    assert cm.draw_prompt("x", {"subject": "person", "accessory": "necklace"}) == cm.draw_prompt("x")

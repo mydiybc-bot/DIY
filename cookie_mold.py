@@ -224,6 +224,9 @@ CHECK_PROMPT = (
     "expression, ear type and how they are carried or hairstyle and hair colour (dark or light), face or muzzle shape, glasses / hat / beard, "
     "and exactly which parts of the face or head are dark and which are light, and for a pet also the body build if the body is visible: "
     "body length, leg length, tail, and how it stands or sits), "
+    "accessory (a short phrase naming the one most eye-catching thing a PET is wearing that its owner would recognise it by - for example 'heart-shaped tag "
+    "with a small bell on the collar', 'bow tie', 'bandana', 'bow on the ear', 'sweater'; an empty string if it wears nothing special or only a plain collar, "
+    "and always an empty string for a person), "
     "framing ('full_body' if the main subject is a PET whose whole body including legs or paws is visible in the photo; otherwise 'head'), "
     "facing ('left', 'right' or 'front': the side of the picture the subject's nose points to)."
 )
@@ -250,7 +253,7 @@ DRAW_BODY = (
     'but must stay clearly recognisable. The outer outline is one single continuous unbroken closed line all the way round the whole animal - only one '
     'outline, never a second line, halo or sticker edge around it. Legs are simple chunky rounded shapes with no toes, no claws and no paw lines; show at '
     'most four legs, each clearly separated by a wide white gap or else merged into one shape - never thin slits between them. A collar, if there is one, '
-    'is one simple curved band; no tag, heart, bell or leash. The animal fills about 90% of a square image, centred. Draw only the one main subject: no '
+    'is one simple curved band; no leash. {ACCESSORY}The animal fills about 90% of a square image, centred. Draw only the one main subject: no '
     'ground, grass, leaves, shadow, objects or background, and no circle, frame or badge around it. '
 )
 DRAW_BODY_PRINT = (
@@ -282,6 +285,34 @@ DRAW_PRINT = (
 )
 
 
+# 2026-11-23 下午 經營者：「狗胸前的鈴鐺，這類型的裝飾物，具有強烈的辨識度，應該要保留」。照片檢查回 accessory（寵物身上最顯眼的飾品），畫圖時保留成一個印得出來的大圖形。
+DRAW_ACC_BODY = (
+    'This pet wears: {ACC}. KEEP IT - the owner recognises the pet by it. Draw it in its real place as ONE bold simple solid black shape in its own real '
+    'form (do not turn it into something else), drawn BIG like a cartoon medal so it survives printing: roughly one fifth of the height of the '
+    'drawing (about 180 pixels). It hangs directly from the middle of the collar on the chest, its top touching the collar - no ring, chain, string or loop '
+    'between them - and it sits on open white chest with a wide white gap from the body outline, the legs and every other line. No small details, '
+    'holes or highlights inside it, no lettering. It and the collar are pure black and white like everything else - never red or any colour. '
+)
+DRAW_ACC_HEAD = (
+    'Exception to "nothing below the chin": this pet wears: {ACC}. KEEP IT - the owner recognises the pet by it. Draw it touching the bottom of the head '
+    'outline (or on the ear or head if that is where it is worn) as ONE bold simple solid black shape in its own real form (do not turn it into something '
+    'else), drawn BIG like a cartoon medal so it survives printing: about 180 pixels across, joined directly to the head - no ring, chain or string - '
+    'so the whole drawing is still one closed shape. No small details, holes or highlights inside it, no lettering. Pure black and white only - never '
+    'red or any colour. '
+)
+DRAW_ACC_NONE = 'No tag, heart, bell or other ornament. '
+
+
+def accessory_of(chk: dict) -> str:
+    if chk.get("subject") != "pet":
+        return ""
+    a = re.sub(r"[^A-Za-z0-9 ,'()-]+", " ", str(chk.get("accessory") or "")).strip()[:80]
+    low = a.lower()
+    if low in ("none", "no", "n a", "nothing") or re.fullmatch(r"(?:an? |the )?(?:[a-z-]+ ){0,3}(?:collar|harness|leash)", low):
+        return ""          # 只有素面項圈、胸背帶不算飾品（實測：米格魯只有紫色項圈，卻被畫出一顆愛心）
+    return a
+
+
 def layout_of(chk: dict) -> str:
     return "body" if chk.get("subject") == "pet" and chk.get("framing") == "full_body" else "head"
 
@@ -289,11 +320,13 @@ def layout_of(chk: dict) -> str:
 def draw_prompt(traits: str, chk: dict = None) -> str:
     chk = chk if isinstance(chk, dict) else {}
     t = re.sub(r"[\r\n]+", " ", str(traits or ""))[:500]
+    acc = accessory_of(chk)
     tr = f"The traits of this individual that MUST be visible in the drawing: {t} " if t else ""
     if layout_of(chk) == "body":
         facing = chk.get("facing") if chk.get("facing") in ("left", "right", "front") else "same side"
-        return DRAW_BODY.replace("{FACING}", facing) + DRAW_LIKE + tr + DRAW_PRINT + DRAW_BODY_PRINT
-    return DRAW_HEAD + DRAW_LIKE + tr + DRAW_PRINT
+        return (DRAW_BODY.replace("{FACING}", facing).replace("{ACCESSORY}", DRAW_ACC_BODY.replace("{ACC}", acc) if acc else DRAW_ACC_NONE)
+                + DRAW_LIKE + tr + DRAW_PRINT + DRAW_BODY_PRINT)
+    return DRAW_HEAD + (DRAW_ACC_HEAD.replace("{ACC}", acc) if acc else "") + DRAW_LIKE + tr + DRAW_PRINT
 
 
 # ---------------- 登入 ----------------
