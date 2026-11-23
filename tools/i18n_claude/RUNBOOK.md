@@ -1,6 +1,7 @@
 # 平板外語食譜：每日巡檢與翻譯作業手冊（Claude Code，2026-10-24；2026-11-05 改版）
 
-> **2026-11-05 晚起，平常不用這份手冊**：經營者改用 **Google 排程自動翻**（「改 Google，花 API」，Mac 不用開）。申請單 GAS v38（部署 @94）：每天 06:30 `i18nDaily` 更新原文 → `i18nAutoStart_` 讓 5 個語言各自接力（`i18nAuto_ja`…）直到全部翻完；Sonnet 只翻改到的頁 → AI 回讀（`i18nReview_`）→ 有問題修一輪 → 過了自動放行（放行人「AI 自動檢查」），沒過存待檢查、平板照舊顯示上一版。Claude 排程 `weekday-recipe-i18n-check` 已停用。
+> **2026-11-23 起改回這份手冊（經營者：「未來這個外語食譜的更新，不要使用 API，全部都由 Claude code 對話處理就好」）**：Google 自動翻譯已關（`i18nAutoSet` on:0，`I18N_AUTO`＝0），Google 只剩每天 06:30 `i18nDaily` 重抓原文、`i18nSnapTick` 推快照，**都不呼叫 API**。原文改版後新譯文放行前，平板照舊顯示上一版（不會下架）；新食譜要等 Claude Code 翻完才會出現在平板。翻譯一律照下面流程由 Claude Code（訂閱）做：翻譯員、回讀員都是 Claude Code 的 Agent，不要呼叫 `i18nKick`、`i18nAutoSet test`、`i18nZTry`／`i18nZReview`／`i18nZGloss`（這些都會花 API）。
+> （舊註記）2026-11-05 晚起，平常不用這份手冊：經營者改用 **Google 排程自動翻**（「改 Google，花 API」，Mac 不用開）。申請單 GAS v38（部署 @94）：每天 06:30 `i18nDaily` 更新原文 → `i18nAutoStart_` 讓 5 個語言各自接力（`i18nAuto_ja`…）直到全部翻完；Sonnet 只翻改到的頁 → AI 回讀（`i18nReview_`）→ 有問題修一輪 → 過了自動放行（放行人「AI 自動檢查」），沒過存待檢查、平板照舊顯示上一版。Claude 排程 `weekday-recipe-i18n-check` 已停用。
 > 這份手冊留著當**備用**：Google 那邊卡住（status.py 有待檢查／失敗）或經營者指定用 Claude Code 翻時才照下面做。開關：`i18nAutoSet`（投遞通行碼，on:0／1）。
 
 經營者裁定：

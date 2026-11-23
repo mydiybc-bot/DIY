@@ -5,7 +5,8 @@
    詞彙表、標題先翻、每 4 頁一段並行、硬檢查（頁數、數字、圖片位置）、AI 回讀、有問題修一輪 → 結果直接回傳給呼叫端（本機存檔比對）。
    ⚠ 不寫任何分頁（i18n_src／i18n_rcp／i18n_items／i18n_log 都不動）、不寫後台；平板與現有譯文完全不受影響。
    動作 i18nZTry（要投遞通行碼 wkey）：{zid 中文食譜 id, enid 對應的英文食譜 id（拿到店須知的在地品名、取放區英文名用；可空）, lang, dry:1 只回原文不翻}
-   試做結束、正式改版時再決定要不要併進 i18n.gs；不要了就刪掉這個檔。 */
+   試做結束、正式改版時再決定要不要併進 i18n.gs；不要了就刪掉這個檔。
+   ⚠ 2026-11-23 經營者：外語食譜的更新不要用 API、全部由 Claude Code 對話處理 → 這裡的 i18nZTry／i18nZReview／i18nZGloss 都會花 API，**不要再呼叫**；改版要做時，翻譯改由 Claude Code 的 Agent 做，這個檔只留讀原文、換圖影、檢查的部分當參考。 */
 var I18NZ_CHEF = 'https://cdn.jsdelivr.net/gh/mydiybc-bot/DIY@f9e57f9cf05bd011524e2b4f21c6b40f284cfab4/media/tablet-intro/chef-bear-';
 var I18NZ_MD5 = {   /* 主圖／主影片（認檔案指紋）：中文版 → 外國客人版 */
   'zwU1ifRZOqYg5KT5Bifb/Q==': { video: 1 },   /* 中文教學影片 → 熊主廚各語言版（英文版食譜目前也是這樣換） */
