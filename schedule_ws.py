@@ -654,14 +654,19 @@ def cfg_clean(body):
         out["shifts"].append({"name": name, "segs": segs, "wd": _num(r.get("wd"), 0, 0, 20, "平日人數"), "we": _num(r.get("we"), 0, 0, 20, "假日人數"),
                               # 2026-11-23：週六、週日可以各自填（空白＝照假日人數）
                               "sat": _num(r.get("sat"), None, 0, 20, "週六人數"), "sun": _num(r.get("sun"), None, 0, 20, "週日人數")})
-    # 2026-11-23 經營者裁定：各店自己決定的固定規則（空白＝不限）
-    out["max_consec"] = _num(body.get("max_consec"), LAW_MAX_CONSEC, 5, 6, "連續上班最多幾天")
-    out["wkoff_min"] = _num(body.get("wkoff_min"), None, 0, 10, "週末休假最少幾天")
-    out["wkoff_max"] = _num(body.get("wkoff_max"), None, 0, 10, "週末休假最多幾天")
+    # 2026-11-23 經營者裁定：各店自己決定的固定規則（空白＝不限）；2026-11-24 模擬：只收整數（原本 1.5 會被收下）
+    def _int(v, d, lo, hi, what):
+        x = _num(v, d, lo, hi, what)
+        if x is not None and not float(x).is_integer():
+            raise ValueError(f"{what}「{v}」要填整數")
+        return None if x is None else int(x)
+    out["max_consec"] = _int(body.get("max_consec"), LAW_MAX_CONSEC, 5, 6, "連續上班最多幾天")
+    out["wkoff_min"] = _int(body.get("wkoff_min"), None, 0, 10, "週末休假最少幾天")
+    out["wkoff_max"] = _int(body.get("wkoff_max"), None, 0, 10, "週末休假最多幾天")
     if out["wkoff_min"] is not None and out["wkoff_max"] is not None and out["wkoff_min"] > out["wkoff_max"]:
         raise ValueError("週末休假「最少」不能比「最多」多")
-    out["ft_off_max"] = _num(body.get("ft_off_max"), None, 1, 10, "同一天最多幾位正職休假")
-    out["rest2_after"] = _num(body.get("rest2_after"), None, 2, 6, "連上幾天後要連休 2 天")
+    out["ft_off_max"] = _int(body.get("ft_off_max"), None, 1, 10, "同一天最多幾位正職休假")
+    out["rest2_after"] = _int(body.get("rest2_after"), None, 2, 6, "連上幾天後要連休 2 天")
     out["hol_ft_work"] = bool(body.get("hol_ft_work"))
     _law(out)   # 連上天數只收 5 或 6、晚接早一律 0 次
     out["support"] = ""   # 2026-11-13：兩欄已刪，不再收
@@ -1931,16 +1936,29 @@ def run_check(st, schedule=None, guests=None, sibs=None):
     try:
         cfg_ = cfg_load(st["store"])
         lo_, hi_ = cfg_.get("wkoff_min"), cfg_.get("wkoff_max")
+        # 休假＝格子是例假日／休息日／國定假日、沒有時段（空白＝人在別家店名單上班，不算休）
+        off_ = lambda eid, d: not parsed[eid][d]["segs"] and parsed[eid][d]["type"] in ("例假日", "休息日", "國定假日")
+        fts_ = [eid for eid in parsed if etype.get(eid) not in ("兼職", SKIP_TYPE)]
         if lo_ is not None or hi_ is not None:
             wk_ = [d["d"] for d in info["days"] if d["wd"] in ("六", "日")]
-            for eid in parsed:
-                if etype.get(eid) in ("兼職", SKIP_TYPE):
-                    continue
-                n_ = sum(1 for d in wk_ if not parsed[eid][d]["segs"])
+            for eid in fts_:
+                n_ = sum(1 for d in wk_ if off_(eid, d))
                 if lo_ is not None and n_ < lo_:
                     warns.append(f"{names[eid]}：週末只休 {n_} 天，本店設定最少 {lo_} 天")
                 if hi_ is not None and n_ > hi_:
                     warns.append(f"{names[eid]}：週末休了 {n_} 天，本店設定最多 {hi_} 天")
+        # 2026-11-24 模擬：「國定假日正職不休」「同一天最多幾位正職休」做不到時（通常是人手不夠、挪了會讓別天缺人）也要讓店長看得到
+        mk_ = (mset_view(st) or {}).get("marks") or {}
+        if cfg_.get("hol_ft_work"):
+            for d in _gov_hol(st):
+                who_ = [names[eid] for eid in fts_ if off_(eid, d) and (mk_.get(eid) or {}).get(str(d)) not in ("指休", "特休")]
+                if who_:
+                    warns.append(f"{d} 號國定假日 {'、'.join(who_)} 休假（本店設定國定假日正職不休；通常是人手不夠，挪去別天會缺人）")
+        if cfg_.get("ft_off_max"):
+            for x in info["days"]:
+                who_ = [names[eid] for eid in fts_ if off_(eid, x["d"]) and (mk_.get(eid) or {}).get(str(x["d"])) != "指休"]
+                if len(who_) > int(cfg_["ft_off_max"]):
+                    warns.append(f"{x['label']}：{'、'.join(who_)} 同一天休假（本店設定同一天最多 {cfg_['ft_off_max']} 位正職休，指休不算）")
     except (KeyError, TypeError, ValueError):
         pass
     # 2026-11-11 經營者：同一人掛在別家店名單也有排班 → 連上天數要兩邊合起來算、同一天不可以兩家店都有班；
@@ -2377,7 +2395,8 @@ def _note_rules(st, cfg, ms):
                 # 改成那天固定用這個班別的格子
                 wkd0 = {x["d"] for x in info["days"] if x["wd"] in ("六", "日")} | holi
                 row = next(x for x in cfg["shifts"] if x["name"] == r["shift"])
-                zero = [dd for dd in r["days"] if not int(row.get("we" if dd in wkd0 else "wd") or 0)]
+                wdm = {x["d"]: x["wd"] for x in info["days"]}
+                zero = [dd for dd in r["days"] if not int(_shift_need(row, wdm.get(dd), dd in wkd0) or 0)]   # 2026-11-24：週六／週日各自的人數也要看
                 for dd in zero:
                     rules.append({"type": "fixed_cell", "emp": r["emp"], "day": dd, "cell": r["shift"]})
                 r["days"] = [dd for dd in r["days"] if dd not in zero]
@@ -3024,7 +3043,7 @@ def _rg_system(rg, ym, ctx):
     for s in stores:
         info = sts[s]["template"]["info"]
         parts.append(f"\n### {s} {_sname(s)}（104 班表：{info['title']}；調來這家店時崗位填「{_region_pos(rg, s)}」）")
-        parts.append("班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + f"；平日 {r.get('wd', 0)} 人、假日 {r.get('we', 0)} 人）" for r in cfgs[s]["shifts"]))
+        parts.append("班別：" + "、".join(f"{r['name']}（" + "、".join(f"{a}-{b}" for a, b in r["segs"]) + f"；平日 {r.get('wd', 0)} 人、假日 {r.get('we', 0)} 人" + (f"、週六 {r['sat']} 人" if r.get("sat") is not None else "") + (f"、週日 {r['sun']} 人" if r.get("sun") is not None else "") + "）" for r in cfgs[s]["shifts"]))
         parts.append("夥伴：" + "；".join(f"{e['id']} {e['name']}（{(mss[s]['emps'].get(e['id']) or {}).get('type', '正職')}" + ("" if can_move(mss[s]['emps'].get(e['id'])) else "，不調店") + "）" for e in info["emps"]))
         parts.append("本月設定：\n" + marks_text(sts[s]))
     parts.append("\n日期：" + "、".join(d["label"] for d in sts[stores[0]]["template"]["info"]["days"]))
