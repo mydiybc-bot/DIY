@@ -470,7 +470,7 @@ function rebuildEventLayer() {
   var name2sku = {};
   sku.forEach(function (r) {
     var id = String(r['sku_id'] || ''); if (!id) return;
-    var u = { id: id, name: String(r['品名'] || '').trim(), useUnit: String(r['使用單位'] || 'g'), cat: String(r['品類別'] || '').trim() };
+    var u = { id: id, name: String(r['品名'] || '').trim(), useUnit: String(r['使用單位'] || 'g'), cat: String(r['品類別'] || '').trim(), mult: r['實耗倍率'] };
     var pn = String(r['品名'] || '').trim(); if (pn) name2sku[pn] = u;
     /* v1.6：分隔符補全形「；，」。⚠️ 前端 split 只認 ; , ， 、 ⇒ 資料一律用「、」分隔最安全 */
     String(r['BOM別名'] || '').split(/[,，、;；／\/]/).forEach(function (a) {
@@ -481,7 +481,7 @@ function rebuildEventLayer() {
   function toUse(nm, qty, unit) { // BOM 量 → 使用單位量（v1.8.5：與主引擎 _conv 同規則，見 evConvFactor_）
     var cf = evConvFactor_(conv, name2sku, nm, unit);
     if (cf.warn && !toUseWarned[cf.key]) { toUseWarned[cf.key] = 1; log.push('⚠️ 未換算單位: ' + nm + ' / ' + cf.unit + '（暫以 1 計）'); }
-    return qty * cf.f;
+    return qty * cf.f * evMult_(name2sku[nm]);   /* 2026-11-23：含實耗倍率（器具模具不乘） */
   }
 
   // ---------- BOM 索引 ----------
@@ -1571,3 +1571,7 @@ function evRegDryRun_(fake) {
   Logger.log(out.join('\n'));
   return out.join('\n');
 }
+
+
+/* 2026-11-23 實耗倍率：與主引擎 _lossOf 同規則（空白＝1、只套食材耗材、上限 20）。收尾佔比是同料相除，倍率互消，不必乘。 */
+function evMult_(u){ if(!u)return 1; if(u.cat==='器具'||u.cat==='模具')return 1; var n=Number(String(u.mult==null?'':u.mult).replace(/[^0-9.]/g,'')); return (n>0&&n<=20)?n:1; }
