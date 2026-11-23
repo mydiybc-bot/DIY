@@ -85,6 +85,12 @@ function parsePendingFiles(){
 
     var ck = _canonicalKey(fname);
 
+    // 2026-11-23：2026-11 起班表只認 104 企業大師（經營者裁定）→ Drive 裡 202611 以後的 Excel 一律不解析，免得跟 104 的列重複
+    if(ck && ck.split('-')[1] >= DASH104_START_YM_){
+      Logger.log('SKIP: ' + ck + ' 是 ' + DASH104_START_YM_ + ' 以後的月份，班表只認 104');
+      continue;
+    }
+
     // ★ 2026-09-11 架構變更：清空舊資料從「上傳當下」移到「解析當下」。
     //   pending_ck_* 標記代表這個 canonical 剛被重新上傳,必須覆蓋既有資料。
     //   舊架構:_uploadSchedule 先 purge → 之後才 parse。中間若中斷(處理鎖擋住、
@@ -1148,7 +1154,7 @@ function doGet(e){
       var n = parseInt(e.parameter.n, 10) || 20;
       result = _getRecentImportLog(n);
     } else if(action === 'ping'){
-      result = {ok:true, time:new Date().toISOString(), version:'schedule-v6.0-104'};
+      result = {ok:true, time:new Date().toISOString(), version:'schedule-v6.1-104only'};
     } else {
       result = {ok:false, error:'unknown action: ' + action};
     }
@@ -1212,6 +1218,10 @@ function _uploadSchedule(payload){
   var base64 = String(payload.base64Data || '');
   if(!base64) return {ok:false, error:'base64Data 缺失'};
 
+  // 2026-11-23：2026-11 起班表只認 104 企業大師（經營者裁定）→ 不管 104 同步了沒，一律不收手動上傳
+  if(yyyymm >= DASH104_START_YM_){
+    return {ok:false, error: yyyymm + ' 是 2026 年 11 月以後的月份，班表一律由 104 企業大師每天自動同步，不能手動上傳；要改班請到 104 改，隔天自動跟上'};
+  }
   // 2026-11-09：這店這月已由 104 自動同步 → 不收手動上傳（會跟 104 的列重複；要改班請到 104 改）
   if(_has104Rows_(storeNum, yyyymm)){
     return {ok:false, error: storeNum + ' 店 ' + yyyymm + ' 已由 104 企業大師每天自動同步，不能再手動上傳；要改班請到 104 改，隔天自動跟上'};
@@ -3026,6 +3036,7 @@ function _dateKey_(v){
 // ====================================================================
 var DASH104_TOKEN_PROP_ = 'DASH104_TOKEN';
 var DASH104_SRC_PREFIX_ = '104:';
+var DASH104_START_YM_ = '202611';   // 2026-11-23：這個月（含）以後班表只認 104，手動上傳與 Drive 舊 Excel 都不收
 
 function _upsert104(payload){
   var token = PropertiesService.getScriptProperties().getProperty(DASH104_TOKEN_PROP_);
