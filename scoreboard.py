@@ -3,12 +3,18 @@
 只回傳姓名、店別與練習統計,不含員編、密碼或作答內容。
 只列門市(店別以店號開頭,例「4 台北士林店」)與「未設定店別」;北區、中南區、各部門、其他是主管或總部,
 不需要練習,不列(2026-10-13 經營者指示)。
+已離職的人不列(2026-11-23 經營者指示):名單在 data/scoreboard_hidden.json,只放「店號|姓名」的雜湊(repo 是公開的,不寫姓名);
+帳號與練習紀錄都不動,後台成績報表照樣看得到。要讓某人重新出現,把他那一筆從名單拿掉即可。
 同一位員工同一單元同一題若出現在多筆練習紀錄(中途結束後接續練),以最新一筆為準,避免重複計算。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from pathlib import Path
 
+HIDDEN_FILE = Path(__file__).parent / "data" / "scoreboard_hidden.json"
 _STORE_NO = re.compile(r"^\s*(\d+)\s*")
 _SCORE_ITEM = re.compile(r"^Q(\d+):(\d+)")
 UNASSIGNED = "未設定店別"
@@ -17,6 +23,23 @@ UNASSIGNED = "未設定店別"
 def is_listed_store(store: str) -> bool:
     """首頁成績表要列的分組:門市(店號開頭)與未設定店別。"""
     return bool(_STORE_NO.match(store)) or store == UNASSIGNED
+
+
+def hidden_key(store: str, name: str) -> str:
+    """隱藏名單用的代號:店號|姓名 的 sha256 前 16 碼(店別沒有店號就用整個店別字串)。"""
+    match = _STORE_NO.match(store or "")
+    store_part = match.group(1) if match else (store or "").strip()
+    return hashlib.sha256(f"{store_part}|{(name or '').strip()}".encode("utf-8")).hexdigest()[:16]
+
+
+def load_hidden_keys(path: Path | None = None) -> set[str]:
+    """讀隱藏名單;檔案不存在或格式壞掉就當作沒有人要隱藏(成績表照常顯示,不會整頁壞掉)。"""
+    try:
+        payload = json.loads((path or HIDDEN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    items = payload.get("hidden", []) if isinstance(payload, dict) else []
+    return {str(item.get("key", "")) for item in items if isinstance(item, dict) and item.get("key")}
 
 
 def _store_sort_key(store: str) -> tuple:
@@ -51,7 +74,11 @@ def _question_records(report: dict) -> list[dict]:
     return records
 
 
-def build_public_scoreboard(content: dict, auth: dict, reports: list[dict], progress: dict) -> dict:
+def build_public_scoreboard(
+    content: dict, auth: dict, reports: list[dict], progress: dict, hidden_keys: set[str] | None = None
+) -> dict:
+    if hidden_keys is None:
+        hidden_keys = load_hidden_keys()
     sections = [
         {"id": s["id"], "title": s["title"], "total": len(s.get("questions", []))}
         for s in content.get("sections", [])
@@ -70,6 +97,8 @@ def build_public_scoreboard(content: dict, auth: dict, reports: list[dict], prog
     for employee in auth.get("employees", []):
         store_name = (employee.get("store") or "").strip() or UNASSIGNED
         if not is_listed_store(store_name):
+            continue
+        if hidden_key(store_name, employee.get("employee_name", "")) in hidden_keys:
             continue
         employee_id = employee.get("employee_id", "")
         own_reports = sorted(employee_reports.get(employee_id, []), key=lambda r: r.get("created_at", ""))
