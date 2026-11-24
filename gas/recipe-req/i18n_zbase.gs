@@ -228,10 +228,13 @@ function i18nZHint_(zh, lang, NM, EZ, OD) {
   if (!h) return o;
   if (h.en.length) o.backend_en = h.en.join(' / ');
   if (h.vi) o.backend_vi = h.vi;
-  if (h.en.length === 1 && Object.keys(EZ[h.en[0].toLowerCase()] || {}).length === 1) {
+  /* 2026-11-24 經營者：「其他的這一些名詞，也還是按照後臺的英文名進行翻譯」→ 品名一律照後台英文名（第一個），不管有沒有歧義；
+     全部食譜上線後再逐一檢查中文名跟後台英文名配不配，不合適的提建議給經營者確認後再改 */
+  if (h.en.length) {
     var c = lang === 'en' ? h.en[0] : i18nLook_(OD, 'item', h.en[0], lang);
     if (c) o.cand = c;
-  } else if (h.en.length) o.warn = '後台英文名跟別的中文品項共用或不只一個，不可照英文翻，要照中文意思';
+    if (h.en.length > 1 || Object.keys(EZ[h.en[0].toLowerCase()] || {}).length > 1) o.note = '後台英文名跟別的中文品項共用或不只一個（照後台英文名翻，之後統一檢討）';
+  }
   return o;
 }
 /* 到店須知頁的在地品名（客人在那頁看到的名字，翻譯要一致）：中文名對；對不到用舊英文原文的名字對 */
@@ -261,7 +264,8 @@ function i18nZHan_(s, lang) { return lang !== 'ja' && /[㐀-鿿]/.test(String(s 
 var I18N_ZTERMS = [   /* 內文固定用語（2026-11-18～19 試做踩到的；11/24 補攪拌球、巧克力奶油、冷凍庫） */
   '自己做 / 自己做烘焙聚樂部 = "DIYBC" (Latin letters, never Chinese). 小教室 / 自己做小教室 / DIY小教室 = "DIY Tip" (exactly in English, e.g. "※DIY Tip:").',
   '自己人 / 自己人募集中 = the store\'s membership program ("DIYBC members"); 裝飾物加購 = add-on decorations you can buy; 透明盒 / 六吋透明盒包裝 = clear (transparent) cake box / packing in a 6-inch clear box.',
-  '克林姆 = custard cream (made from custard powder; NOT whipped cream, NOT 生クリーム / 생크림 / kem tươi); 動植鮮 / 動植鮮奶油 = whipped topping cream (dairy + vegetable fat); 鮮奶油 / 動物鮮奶油 = whipping cream (dairy); 巧克力奶油 = chocolate buttercream (NOT whipped cream).',
+  'Ingredient, tool, mold, box and area names: ALWAYS use the glossary name exactly, in the steps too — the glossary follows the store\'s backend English names (2026-11-24 經營者：「其他的這一些名詞，也還是按照後臺的英文名進行翻譯」), even when the Chinese would suggest another word.',
+  '克林姆 = the store\'s whipping cream: always use the glossary name (English "Whipping cream"; ja 生クリーム, ko 생크림, vi Kem tươi, id Whipping cream, th วิปปิ้งครีม). It is NOT custard — never write custard / カスタード / 커스터드 / kem custard / krim custard / คัสตาร์ด for 克林姆 (2026-11-24 經營者：「不是卡仕達醬，沿用後台的英文名稱」). 動植鮮 / 動植鮮奶油 = whipped topping cream (dairy + vegetable fat); 巧克力奶油 = chocolate buttercream.',
   '麵糊 = batter (the mixed liquid dough); never the same word as flour / cake flour (低筋麵粉). 蛋白霜 = meringue. 蛋黃液 = liquid egg yolk (an ingredient, not egg wash).',
   '攪拌機 = electric stand mixer (not a hand mixer); 攪拌球 = the wire whisk attachment of the mixer; 手持攪拌機 = hand mixer; 刮刀 = rubber spatula; 抹刀 = frosting (palette) spatula; 擠花袋 = piping bag; 花嘴 = piping tip; 剪花嘴 = cut-tip piping bag.',
   '冷凍庫 = freezer; 冷藏 / 冰箱 = refrigerator (chill); 冷凍 = freeze. 平匙 = a level spoonful; 半平匙 = half a spoonful. 打發 = whip; 拌勻 = mix well; 過篩 = sift; 取放區 / 取料區 = the pick-up area in the store; 計時器 = timer.',
@@ -353,7 +357,7 @@ function i18nZDict_(p) {
     L.forEach(function (l) { if (z && String(z[l] || '').trim()) o.cur[l] = String(z[l]).trim(); });
     if (x.kind === 'item') {
       var h = i18nZHint_(x.zh, 'en', NM, EZ, OD);
-      ['backend_en', 'backend_vi', 'warn'].forEach(function (f) { if (h[f]) o[f] = h[f]; });
+      ['backend_en', 'backend_vi', 'note'].forEach(function (f) { if (h[f]) o[f] = h[f]; });
       if (h.cand) o.hint.en = h.cand;
       I18N_LANGS.forEach(function (l) { var hh = i18nZHint_(x.zh, l, NM, EZ, OD); if (hh.cand) o.hint[l] = hh.cand; });
     }
@@ -376,7 +380,10 @@ function i18nZListItem_(s, o, rc, sh, z, okm, zhm, names) {   /* names：{id: �
     if (o.langs[l] !== 'live') { all = false; return; }
     o.ver[l] = i18nHash_([s.fp, s.upd, r.fp, r.appr_fp, r.appr_at].join('|')).slice(0, 12);
   });
-  if (!all && z.old && okm[z.old]) return null;
+  if (!all && z.old && okm[z.old]) {   /* 舊英文那支還在平板上 → 中文版先不列；但同時是中文試看的，「中文」那一格照常（2026-11-24 修：之前整支不見） */
+    if (!zhm[s.id]) return null;
+    return { id: s.id, name: s.name, cover: s.cover, langs: { zh: 'live' }, ver: { zh: i18nHash_([s.fp, s.upd, 'zh'].join('|')).slice(0, 12) }, local: { zh: zhm[s.id] } };
+  }
   var oldName = '';
   if (z.old) oldName = names[z.old] || '';
   i18nZLangs_().forEach(function (l) {

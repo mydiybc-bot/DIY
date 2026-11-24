@@ -1325,8 +1325,8 @@ function i18nPull_(p) {
       var o = { kind: x.kind, zh: x.en }, h = x.kind === 'item' ? i18nZHint_(x.en, lang, ZN, EZ, OD) : {};
       if (h.backend_en) o.backend_en = h.backend_en;
       if (lang === 'vi' && h.backend_vi) o.backend = h.backend_vi;   /* 越南文：後台已有的名稱優先 */
-      if (h.cand) o.cand = h.cand;
-      if (h.warn) o.warn = h.warn;
+      if (h.cand) o.cand = h.cand;   /* 2026-11-24：品名照後台英文名（cand＝後台英文名或它在舊詞典的譯名） */
+      if (h.note) o.note = h.note;
       miss.push(o);
     });
   } else {
