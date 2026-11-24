@@ -400,3 +400,44 @@ function i18nZOldName_(src) {   /* 對應的舊英文原文名稱（到店須知
   var r = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows.filter(function (x) { return x.id === old; })[0];
   return r ? r.name : '';
 }
+
+/* ---------------- 已上線譯文批次替換（2026-11-24 經營者「改回」：救急時把克林姆改成卡士達醬，改回後台英文名 Whipping cream） ----------------
+   動作 i18nLiveReplace（投遞通行碼 wkey）：{pairs:{lang:[[舊字,新字],…]}, skip:'英文原文有這個字的頁不改（正規式）', dict:{kind,en,vals:{lang:譯名}}, apply:1}
+   只動「舊英文原文」（不是中文原文）而且這一版放行中（appr_fp＝fp）的譯文；apply 沒給＝試算（只回會改幾頁），不寫。改完照樣是放行狀態（放行人「Claude 改回」）。 */
+function i18nLiveReplace_(p) {
+  i18nWriteKey_(p);
+  var pairs = p.pairs || {}, skip = p.skip ? new RegExp(String(p.skip), 'i') : null, apply = !!Number(p.apply), res = { rows: 0, pages: 0, hits: [], dict: 0 };
+  var ZM = i18nZMap_(), sm = i18nMeta_('i18n_src', I18N_SRC_HEAD), srcRow = {}; sm.rows.forEach(function (r) { srcRow[r.id] = r; });
+  var run = function () {
+    var rm = i18nMeta_('i18n_rcp', I18N_RCP_HEAD);
+    rm.rows.forEach(function (r) {
+      var pl = pairs[r.lang]; if (!pl || !pl.length || ZM[r.id] || !srcRow[r.id] || srcRow[r.id].state !== 'ok') return;
+      if (!(r.appr_by && r.appr_fp === r.fp && r.fp === srcRow[r.id].fp)) return;
+      var j = i18nReadJ_(rm.sh, r._r, I18N_RCP_HEAD); if (!j || !j.slides) return;
+      var src = i18nReadJ_(sm.sh, srcRow[r.id]._r, I18N_SRC_HEAD) || { slides: [] }, n = 0;
+      var rep = function (s) { pl.forEach(function (x) { s = String(s || '').split(x[0]).join(x[1]); }); return s; };
+      j.slides.forEach(function (s, i) {
+        var so = src.slides[i]; if (skip && so && skip.test(String(so.t || '') + ' ' + String(so.h || ''))) return;
+        var h = rep(s.h), t = rep(s.t); if (h !== s.h || t !== s.t) { s.h = h; s.t = t; n++; }
+      });
+      if (!n) return;
+      res.rows++; res.pages += n; res.hits.push(r.key + '：' + n + '頁');
+      if (apply) { j.at = now_(); i18nUpsert_('i18n_rcp', I18N_RCP_HEAD, 'key', { key: r.key, appr_by: 'Claude 改回', appr_at: now_() }, j); }
+    });
+    if (apply && p.dict && p.dict.en) {
+      var m = i18nMeta_('i18n_items', I18N_ITEM_HEAD);
+      m.rows.forEach(function (r) {
+        if (r.kind !== p.dict.kind || String(r.en).toLowerCase() !== String(p.dict.en).toLowerCase()) return;
+        Object.keys(p.dict.vals || {}).forEach(function (l) { r[l] = p.dict.vals[l]; });
+        r.how = (r.how ? r.how + ' ' : '') + 'revert-20261124'; r.at = now_();
+        m.sh.getRange(r._r, 1, 1, I18N_ITEM_HEAD.length).setNumberFormat('@').setValues([I18N_ITEM_HEAD.map(function (h) { return r[h] == null ? '' : String(r[h]); })]);
+        res.dict++;
+      });
+    }
+  };
+  if (apply) i18nLock_(run); else run();
+  if (apply) i18nLog_('Claude Code', 'live-replace', '', '', 'ok', '改 ' + res.rows + ' 組 ' + res.pages + ' 頁；詞典 ' + res.dict + ' 列');
+  return { data: res };
+}
+ACTIONS.i18nLiveReplace = function (p, a) { return i18nLiveReplace_(p, a); };
+NOAUTH.i18nLiveReplace = 1; SELFLOCK.i18nLiveReplace = 1;
