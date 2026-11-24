@@ -500,6 +500,7 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
   var S = { lang: lsGet('tr:lang') || 'en', list: null, at: '', view: null, cand: '', grp: 'all', q: '' };
   function $(id) { return document.getElementById(id); }
   function esc(s) { return window.TRView.esc(s); }
+  function untag(s) { return String(s || '').replace(/\d{3}\s*\d{1,2}月[^_｜]{0,12}_\s*/g, ''); }   /* 2026-11-25：中文名開頭的檔期標籤（例「115 11月大菜單_」）只在顯示時拿掉；分類配對照用原名 */
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 空間滿只是下次重讀 */ } }
 
@@ -571,7 +572,7 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
   function liveOf(lg) { return (S.list || []).filter(function (it) { return it.langs && it.langs[lg] === 'live'; }); }
   function card(it, lg) {
     var nm = (it.local || {})[lg] || it.name.split('｜')[0];
-    return '<button type="button" class="card" data-id="' + esc(it.id) + '"><img src="' + esc(it.cover) + '" alt="" loading="lazy"><div class="nm" lang="' + lg + '">' + esc(nm) + '</div><div class="en">' + esc(lg === 'zh' ? '' : lg === 'en' ? (it.name.split('｜')[1] || '') : it.name) + '</div></button>';
+    return '<button type="button" class="card" data-id="' + esc(it.id) + '"><img src="' + esc(it.cover) + '" alt="" loading="lazy"><div class="nm" lang="' + lg + '">' + esc(nm) + '</div><div class="en">' + esc(untag(lg === 'zh' ? '' : lg === 'en' ? (it.name.split('｜')[1] || '') : it.name)) + '</div></button>';
   }
   function gLabel(g, lg) { return g[2][lg] || g[2].en; }
   /* 類別按鈕（只重畫按鈕列，不動搜尋框）：全部＋這個語言（與搜尋）有甜點的類別，數字＝幾支 */
@@ -630,13 +631,14 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
     if (!it) return;
     if (c) { try { o = JSON.parse(c); } catch (e) { o = null; } }
     var exit = function () { S.view = null; window.scrollTo(0, 0); };
-    if (o && o.ver === ver && o.fmt === 3 && o.data) { S.view = window.TRView.mount(document.body, o.data, lg, { onExit: exit }); return; }
-    var nm = it.name.split('｜'), head = { name: ((it.local || {})[lg] || nm[0]) + (nm[1] ? '｜' + nm[1] : ''), cover: it.cover, slides: null };
+    if (o && o.ver === ver && o.fmt === 3 && o.data) { o.data.name = untag(o.data.name); S.view = window.TRView.mount(document.body, o.data, lg, { onExit: exit }); return; }
+    var nm = it.name.split('｜'), head = { name: untag(((it.local || {})[lg] || nm[0]) + (nm[1] ? '｜' + nm[1] : '')), cover: it.cover, slides: null };
     var v = S.view = window.TRView.mount(document.body, head, lg, { onExit: exit, onRetry: load });
     function load() {
       call({ action: 'i18nGet', id: id, lang: lg }, 90000).then(function (j) {
         if (!j.ok) { v.fail(j.msg || ''); loadList(); return; }
         lsSet(key, JSON.stringify({ ver: ver, fmt: 3, data: j.data }));   /* fmt 3：2026-11-03 熊主廚開場動畫換各語言版，舊快取作廢 */
+        if (j.data) j.data.name = untag(j.data.name);
         v.fill(j.data);
       }).catch(function (e) { v.fail(e.message || e.msg || e); });
     }
