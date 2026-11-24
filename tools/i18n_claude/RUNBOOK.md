@@ -37,3 +37,11 @@
    8. 主控端自己要修譯文時，也用 Edit 工具改 `tr.json`，不要用 `sed`。
 4. **收尾**：`python3 …/status.py --clean` → 各語言 live／review 數，清掉已上線那幾組的暫存檔（留 `opus_backup/`）。
 5. **報告**（口語、給老闆看）：翻了幾組（各幾頁）、放行幾組、卡在待檢查的幾組與原因（平板仍顯示上一版）、剩幾組（應為 0）、有沒有發現詞典錯誤。
+
+## 總檢（2026-11-25，大批上線後或懷疑某類誤譯時）
+回讀員常漏看固定幾類錯（剪花嘴、撕下再貼、多出尺寸、冷藏冷凍、表面／側面、擀／揉、店內無借冰、保持乾燥、熱水燙、重置）。做法（都不花 API、只用唯讀預覽通行碼讀）：
+1. `python3 zsweep.py [id8 …]` 讀回上線譯文與原文 → `WORK/sweep/<id8>_<lang>.json`
+2. `python3 zflag.py` → `python3 zflag2.py` → `python3 zpack.py`：標記、各語言關鍵字自動判、切成 `sweep/_review_<lang>.json`
+3. 每語言派一位核對員（sonnet），照 `WORK/sweep/TASK_CHECK.md` 寫 `sweep/_found_<lang>.json`（old／new 片段）
+4. `python3 zfix.py <lang> --dry` 試算 → `python3 zfix.py <lang>`：改 tr.json（備份到 sweep/backup/）、partial 投遞＋放行
+5. 再跑一次 zsweep 確認新字已上線。
