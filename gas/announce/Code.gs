@@ -30,7 +30,9 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
+var VERSION = 'announce-api-v10';   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
+// 以下為 v9 說明：
+var VERSION_V9_NOTE = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
 var AUTH_SEC = 7200, LIST_TTL = 300;
 var TZ = 'Asia/Taipei';
@@ -373,7 +375,8 @@ function fixAttIndex20261004() {
 
 function workView_(r) {
   return { work_id: r.work_id, src: r.src, nueip_id: r.nueip_id, item: r.item, owner: r.owner, creator: r.creator, date: r.date, due_date: r.due_date, done_date: r.done_date,
-    progress: r.progress, importance: r.importance, origin: r.origin, text: r.content_text, html: str_(r.content_html_1) + str_(r.content_html_2), updated_at: r.updated_at };
+    progress: r.progress, importance: r.importance, origin: r.origin, text: r.content_text, html: str_(r.content_html_1) + str_(r.content_html_2), updated_at: r.updated_at,
+    created_at: r.created_at, creator_store: r.creator_store || '' };   /* v10：加 created_at、creator_store（手機 App 判斷「我發的」與能不能改） */
 }
 function workList_(p, who) {
   /* v5.2：結果暫存 5 分鐘（同公告清單的 ann:ver 版本號；寫入後 listCacheClear_ 換號＝失效）；放不進去就照常每次讀 */
@@ -1127,4 +1130,116 @@ function promoAttDel_(p, who) {
   att = att.filter(function (a) { return a.aid !== aid; });
   putCols_(t, row._row, { att: att.length ? JSON.stringify(att) : '', updated_at: now_(), updated_by: who }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
   return { id: id, data: { aid: aid }, msg: '刪除活動附件 ' + x.name };
+}
+
+/* =====================================================================
+ * v10（2026-11-26，經營者：「104 的工作清單限制太多，改用工作清單儀表板，做成店長能裝在手機上的 App」；「店長和體驗中心的人員都可以發送工作清單」）
+ *   前端：static/work-app.html（可加到手機主畫面）。登入沿用決策中心：
+ *     店長＝幾號店＋店密碼（dim_auth store_N）；體驗中心＝總部密碼（task_hq）。名字由使用者自己填（留言、發工作都記名字＋身分）。
+ *   appAuth     驗密碼，回身分（不寫入）。
+ *   appWork     工作清單精簡版：未完成＋近 APP_DAYS 天內完成／更新／有留言的，含留言（免密碼，同 workList；用同一份 5 分鐘暫存）。
+ *   appWorkSave 新增／修改工作。店長只能改「自己店發的」；體驗中心全部可改。新工作記 creator_store（1～12 或 hq）、src＝app。
+ *               沒帶 text 就不動內容（電腦版用富文字寫的工作，在手機改進度不會把格式洗掉）。
+ *   appWorkDel  標記刪除，權限同上。
+ *   fact_work 第 21 欄 creator_store：第一次 appWorkSave／appWorkDel 時自動補表頭；補之前先把 fact_work 整張複製成 backup_fact_work_20261126（已有就不再複製）。
+ *   舊的 workSave（電腦版管理者）不寫這欄（put_ 遇到沒給的欄位會跳過），不受影響。
+ * ===================================================================== */
+TABS.fact_work.push('creator_store');
+ACTIONS.appAuth = appAuth_; ACTIONS.appWork = appWork_; ACTIONS.appWorkSave = appWorkSave_; ACTIONS.appWorkDel = appWorkDel_;
+['appAuth', 'appWork', 'appWorkSave', 'appWorkDel'].forEach(function (a) { OPEN[a] = 1; });   /* 自己驗密碼（店密碼或體驗中心密碼），不走 announce 密碼 */
+['appWorkSave', 'appWorkDel'].forEach(function (a) { WRITES[a] = 1; });
+var APP_DAYS = 30, APP_NAME_MAX = 20, APP_OWNER_MAX = 300, APP_TEXT_MAX = 5000, APP_IMP = ['', '★', '★★', '★★★'];
+
+/* 身分：p.as＝'hq' 或店號 1～12；p.pw＝密碼。只驗選的那一種 */
+function appWho_(p) {
+  var as = String(p.as == null ? '' : p.as).trim();
+  if (as === 'hq') {
+    try { auth_(p.pw, DASH_HQ); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '體驗中心密碼不對').replace('請輸入密碼', '請輸入體驗中心密碼'), 'auth'); }
+    return { key: 'hq', label: '體驗中心', hq: true };
+  }
+  var st = storeOf_(as);
+  try { auth_(p.pw, 'store_' + st.id); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '店密碼不對').replace('請輸入密碼', '請輸入店密碼'), 'auth'); }
+  return { key: String(st.id), label: st.id + '號店', short: st.short, hq: false };
+}
+function appName_(p) {
+  var n = cleanTxt_(p.name, APP_NAME_MAX + 10).replace(/\s+/g, ' ').trim();
+  if (!n) throw fail_('請填你的名字', 'invalid');
+  return n.slice(0, APP_NAME_MAX);
+}
+function appAuth_(p) {
+  var w = appWho_(p);
+  return { data: { as: w.key, label: w.label, hq: w.hq, stores: STORE_DEF.map(function (s) { return { id: s[0], short: s[2] }; }) } };
+}
+function appWork_(p, who) {
+  var all = workList_(p, who).data.rows, d = new Date(); d.setDate(d.getDate() - APP_DAYS);
+  var cut = Utilities.formatDate(d, TZ, 'yyyy-MM-dd');
+  var rows = all.filter(function (r) {
+    if (r.progress !== '已完成') return true;
+    var last = (r.discuss && r.discuss.length) ? String(r.discuss[r.discuss.length - 1].ts || '') : '';
+    return String(r.done_date || '') >= cut || String(r.updated_at || '') >= cut || last >= cut;
+  });
+  return { data: { rows: rows, today: today_(), days: APP_DAYS, total: all.length } };
+}
+/* fact_work 補第 21 欄表頭（先備份）。呼叫端已拿到腳本鎖 */
+function appWorkCols_() {
+  var ss = ss_(), sh = ss.getSheetByName('fact_work'), H = TABS.fact_work, col = H.length;
+  var cur = String(sh.getRange(1, col).getValue()).trim();
+  if (cur === H[col - 1]) return;
+  if (cur) throw fail_('fact_work 第 ' + col + ' 欄表頭是「' + cur + '」，應為「' + H[col - 1] + '」，停止寫入', 'setup');
+  var bk = 'backup_fact_work_20261126';
+  if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
+  if (sh.getMaxColumns() < col) sh.insertColumnsAfter(sh.getMaxColumns(), col - sh.getMaxColumns());
+  sh.getRange(1, col).setValue(H[col - 1]).setFontWeight('bold').setBackground('#FFF3E0');
+  log_('升級程式', 'appWorkCols', '', true, 'fact_work 補表頭 ' + H[col - 1] + '；備份 ' + bk + '；資料列 ' + Math.max(0, sh.getLastRow() - 1));
+}
+function appCanEdit_(w, row) { return w.hq || String(row.creator_store || '') === w.key; }
+function appText2Html_(t) {
+  return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\n/g, '<br>');
+}
+function appWorkSave_(p) {
+  var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
+  rate_('appw:' + w.key, 20, 60, '1 分鐘內存檔太多次，請稍後再按');
+  appWorkCols_();
+  var x = p.work || {}, t = load_('fact_work'), id = str_(x.work_id), row = null;
+  if (id) {
+    row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
+    if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
+    if (!appCanEdit_(w, row)) throw fail_('這件不是你們店發的，只能留言回覆', 'deny');
+    if (x.base_updated && String(x.base_updated) !== String(row.updated_at)) throw fail_('這件工作剛被別人改過，請重新整理再改', 'conflict');
+  }
+  var item = cleanTxt_(x.item, 200).replace(/\s+/g, ' ').trim(); if (!item) throw fail_('工作項目必填', 'invalid');
+  var imp = cleanTxt_(x.importance, 10).trim(); if (APP_IMP.indexOf(imp) < 0) imp = row ? row.importance : '';
+  var prog = cleanTxt_(x.progress, 20).trim() || (row ? row.progress : '未開始');
+  var progOk = load_('dim_option').rows.some(function (o) { return o.kind === 'progress' && o.value === prog; });
+  if (!progOk) throw fail_('進度「' + prog + '」不在選單裡', 'invalid');
+  var o = {
+    item: item, owner: cleanTxt_(x.owner, APP_OWNER_MAX).replace(/\s+/g, ' ').trim(), due_date: normDate_(x.due_date), importance: imp, progress: prog,
+    done_date: prog === '已完成' ? ((row && row.done_date) || today_()) : '', updated_at: now_(), updated_by: by
+  };
+  if (x.text !== undefined && x.text !== null) {
+    var text = cleanTxt_(x.text, APP_TEXT_MAX + 50).replace(/\r\n?/g, '\n').trim();
+    if (text.length > APP_TEXT_MAX) throw fail_('工作內容最多 ' + APP_TEXT_MAX + ' 字', 'invalid');
+    o.content_text = text; o.content_html_1 = appText2Html_(text); o.content_html_2 = '';
+  }
+  if (!row) {
+    id = 'W' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
+    o.work_id = id; o.src = 'app'; o.nueip_id = ''; o.creator = by; o.creator_store = w.key; o.date = today_(); o.origin = '';
+    o.created_at = o.updated_at; o.deleted = ''; o.deleted_at = '';
+    if (o.content_text === undefined) { o.content_text = ''; o.content_html_1 = ''; o.content_html_2 = ''; }
+    put_(t, nextRow_(t), o);
+  } else {
+    putCols_(t, row._row, o, function (h) { return o[h] !== undefined; });
+  }
+  try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
+  return { id: id, data: { work_id: id, updated_at: o.updated_at }, msg: (row ? '手機改工作：' : '手機發工作：') + item + '｜' + by };
+}
+function appWorkDel_(p) {
+  var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
+  appWorkCols_();
+  var id = str_(p.work_id), t = load_('fact_work'), row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
+  if (!appCanEdit_(w, row)) throw fail_('這件不是你們店發的，不能刪', 'deny');
+  putCols_(t, row._row, { deleted: 'Y', deleted_at: now_(), updated_by: by }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'updated_by'; });
+  try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
+  return { id: id, data: { work_id: id }, msg: '手機刪工作（標記）：' + row.item + '｜' + by };
 }
