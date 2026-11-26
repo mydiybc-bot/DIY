@@ -7,9 +7,12 @@
   /api/push/key    → {ok, key}            App 訂閱時要的公開金鑰（任何人可讀，本來就是公開的）
   /api/push/setup  {hq_pw}                → {ok, token}  體驗中心密碼（dim_auth task_hq）驗過才發送件通行碼；
                                             每次 setup 都換新通行碼（舊的失效），通行碼只存雜湊
+  /api/push/due-now {hq_pw}              → 立刻跑一次到期提醒（測試／補發）
   /api/push/send   {token, items:[{sub:{endpoint,keys:{p256dh,auth}}, payload:{title,body,url,n,tag}}]}
                    → {ok, sent, gone:[endpoint], errors:[...]}   gone＝手機已取消訂閱（404／410），GAS 會刪掉
 金鑰與通行碼雜湊存在資料夾 TRAINING_DATA_DIR（Render 掛的硬碟，重開不會掉）：push_vapid.pem、push_vapid.json。
+每天 09:30（台灣時間）背景執行緒呼叫工作清單 GAS appPushDue（帶通行碼），由 GAS 算誰有今天／明天到期、還沒回覆的工作並送提醒。
+（GAS 的時間觸發要在編輯器手動建，內建瀏覽器沒登入 Google 時建不了，所以排程放這裡；同 schedule_ws 每天 06:05 的 104 同步）
 """
 from __future__ import annotations
 
@@ -29,6 +32,8 @@ from storage_paths import FILE_LOCK, atomic_write_json, data_file
 AUTH_API = "https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec"
 SUB_CLAIM = "https://diybc-dash.onrender.com"   # VAPID 聯絡方式（不放個人信箱）
 MAX_ITEMS = 300
+ANNOUNCE_API = "https://script.google.com/macros/s/AKfycbz1cOKkrsLOoLMHbXYgPuFPEsFqUjTqQavSYQsFq7VhTZqR65ivkR1jeIbgxttIJIVd/exec"
+DUE_HHMM = (9, 30)   # 每天提醒時間（台灣）
 _KEY_LOCK = threading.Lock()
 
 
@@ -134,6 +139,7 @@ def handle(path: str, data: dict) -> tuple[int, dict]:
         st = _ensure_keys()
         token = secrets.token_urlsafe(32)
         st["token_sha256"] = hashlib.sha256(token.encode()).hexdigest()
+        st["token"] = token   # 每天 09:30 呼叫 GAS appPushDue 要用（硬碟只有伺服器讀得到）
         with FILE_LOCK:
             atomic_write_json(data_file("push_vapid.json"), st)
         return 200, {"ok": True, "token": token, "key": st["public"]}
@@ -149,4 +155,50 @@ def handle(path: str, data: dict) -> tuple[int, dict]:
         return 200, {"ok": True, "sent": sum(1 for r in res if r[0] == "ok"),
                      "gone": [r[1] for r in res if r[0] == "gone"],
                      "errors": [{"endpoint": r[1][:80], "msg": r[2]} for r in res if r[0] == "err"]}
+    if path == "/api/push/due-now":   # 手動跑一次到期提醒（測試／補發用，要體驗中心密碼）
+        if not _verify_hq(data.get("hq_pw")):
+            return 403, {"ok": False, "msg": "體驗中心密碼不對"}
+        return 200, {"ok": True, "result": _due_tick(force=True), "last": _state().get("due_last", "")}
     return 404, {"ok": False, "msg": "沒有這個網址"}
+
+
+# ===== 每天 09:30 到期提醒（背景執行緒；伺服器重開會自己再起來，今天跑過就不重跑）=====
+def _due_tick(force: bool = False) -> str:
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    st = _state()
+    today = now.strftime("%Y-%m-%d")
+    if not st.get("token"):
+        return "還沒設定通行碼"
+    if not force:
+        if st.get("due_last") == today:
+            return ""
+        if (now.hour, now.minute) < DUE_HHMM or now.hour >= DUE_HHMM[0] + 2:   # 09:30～11:29 之間補跑（剛好重開錯過也會補）
+            return ""
+    body = json.dumps({"action": "appPushDue", "token": st["token"]}).encode()
+    req = urllib.request.Request(ANNOUNCE_API, data=body, headers={"Content-Type": "text/plain;charset=utf-8"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120, context=_ssl_ctx()) as r:
+            res = r.read().decode("utf-8", "replace")[:300]
+    except Exception as e:
+        res = "錯誤 " + str(e)[:200]
+    with FILE_LOCK:
+        st = _state()
+        if not force:
+            st["due_last"] = today
+        st["due_result"] = now.strftime("%Y-%m-%d %H:%M ") + ("（手動）" if force else "") + res
+        atomic_write_json(data_file("push_vapid.json"), st)
+    return res
+
+
+def _due_loop() -> None:
+    import time
+    while True:
+        try:
+            _due_tick()
+        except Exception:
+            pass
+        time.sleep(60)
+
+
+threading.Thread(target=_due_loop, name="push-due-daily", daemon=True).start()

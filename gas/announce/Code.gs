@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v12';   // 2026-11-26 晚 v12：手機推播（新工作、轉交、留言、每天 09:30 到期提醒；送件交給 diybc-training /api/push/send）
+var VERSION = 'announce-api-v12.1';   // 2026-11-26 晚 v12：手機推播（新工作、轉交、留言、每天 09:30 到期提醒；送件交給 diybc-training /api/push/send）
 // v11.2：   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
 // v10 說明：   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
 // 以下為 v9 說明：
@@ -1440,14 +1440,21 @@ function appWorkAttDel_(p) {
  * v12（2026-11-26 晚，經營者：「好，做推播」）手機推播：誰該收到在這裡算，真正送到手機交給 diybc-training /api/push/send（GAS 做不了 Web Push 簽章加密）。
  *   訂閱：dim_app_push（一支手機／瀏覽器一列，endpoint 為鍵）；appPushSub 登入身分驗過才記；appPushUnsub 取消；appPushTest 送一則測試。
  *   何時送：①新工作→交辦對象（不含發的人）②轉交／加人→只送新加的③留言→交辦對象回覆就送發工作的人；發工作的人回覆就送交辦對象
- *          ④每天 09:30（pushDueDaily 時間觸發）→ 今天／明天到期、還沒回覆的人。
+ *          ④每天 09:30（diybc-training 背景執行緒呼叫 appPushDue → pushDueDaily）→ 今天／明天到期、還沒回覆的人。
  *   每則推播帶「這個人的待處理件數」n，手機桌面圖示跟著變。送出失敗不影響存檔（只記 log）。
  *   通行碼：Script Properties PUSH_TOKEN（appPushSetup：體驗中心密碼驗過，向 diybc-training 換通行碼並存起來）。每日觸發在編輯器手動建。
  * --------------------------------------------------------------------- */
 TABS.dim_app_push = ['endpoint', 'p256dh', 'auth', 'as', 'name', 'ua', 'created_at', 'updated_at', 'last_ok', 'fails'];
 var PUSH_BASE = 'https://diybc-training.onrender.com/api/push/', APP_URL = 'https://diybc-dash.onrender.com/static/work-app.html';
-ACTIONS.appPushSub = appPushSub_; ACTIONS.appPushUnsub = appPushUnsub_; ACTIONS.appPushTest = appPushTest_; ACTIONS.appPushSetup = appPushSetup_;
-['appPushSub', 'appPushUnsub', 'appPushTest', 'appPushSetup'].forEach(function (a) { OPEN[a] = 1; WRITES[a] = 1; });
+ACTIONS.appPushSub = appPushSub_; ACTIONS.appPushUnsub = appPushUnsub_; ACTIONS.appPushTest = appPushTest_; ACTIONS.appPushSetup = appPushSetup_; ACTIONS.appPushDue = appPushDue_;
+['appPushSub', 'appPushUnsub', 'appPushTest', 'appPushSetup', 'appPushDue'].forEach(function (a) { OPEN[a] = 1; WRITES[a] = 1; });
+/* 每天 09:30 由 diybc-training push_service 背景執行緒呼叫（帶推播通行碼）；GAS 時間觸發要在編輯器手動建，改放伺服器 */
+function appPushDue_(p) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PUSH_TOKEN');
+  if (!tk || String(p.token || '') !== tk) { Utilities.sleep(600); throw fail_('通行碼不對', 'auth'); }
+  var n = pushDueDaily();
+  return { id: 'due', data: { sent: n }, msg: '到期提醒送 ' + n + ' 則' };
+}
 
 function appPushSub_(p) {
   var w = appWho_(p), name = appName_(p), sub = p.sub || {}, keys = sub.keys || {};
