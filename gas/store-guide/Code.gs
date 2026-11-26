@@ -1,9 +1,17 @@
 /* 外國客人到店須知 API（2026-10-23 經營者交辦）
-   每天 23:00 讀官網 English Menu（品項、售價、尺寸、說明、照片）→ 翻 7 語 → 自我檢查 → 通過才發佈 → 發佈後再從網址讀回比對。
-   頁面：DIY static/store-guide.html（客人用，免密碼）；?hq=1 顯示總部看的更新狀態。
-   翻譯：每款記下官網英文原文（src）；原文沒變就沿用（第一次用 Seed.gs 的人工翻譯），原文變了或新品才用 LanguageApp 機器翻譯，並列在狀態的「機器翻譯」清單。
-   檢查沒過 → 不發佈、保留上一版，狀態顯示原因。 */
+   ★ 2026-11-26 起改版（經營者：「QR code 掃描後的資料還是停留在 26 支食譜，這不對…未來要能和每天的外語食譜更新一起進行更新檢查」；
+     「88 支都要上，不要自行合併」；介紹「一律用後台中文食譜」）：
+     甜點清單＝平板外語食譜「中文原文」上線中的每一支；售價／尺寸／製作時間／產品特色讀門市食譜後台（申請單 GAS guideSrc），
+     外語品名＝平板已放行的譯名，產品特色逐行由 Claude Code 照中文翻（不花 API）。由 DIY tools/i18n_claude/guide.py 組好後 POST action=put 送來，
+     這裡檢查過才發佈（沒過保留上一版）、發佈後從網址讀回比對。Claude 排程「週一到週五 10:00 平板外語食譜」巡檢時一起跑。
+     逐行譯文存 lines 分頁（key＝中文行 sha1 前 12 碼）；doGet action=lines 給 guide.py 判斷哪些行還沒翻。
+     舊的「每天 23:00 讀官網 English Menu」停用：sync() 不再改資料（排程留著也不會動到）；程式保留以便回滾。
+   （舊說明）每天 23:00 讀官網 English Menu（品項、售價、尺寸、說明、照片）→ 翻 7 語 → 自我檢查 → 通過才發佈 → 發佈後再從網址讀回比對。
+   頁面：DIY static/store-guide.html（客人用，免密碼）；?hq=1 顯示總部看的更新狀態。 */
 
+var PUT_KEY_SHA256 = '4aa0e6221ffdc414af98d5a3606f7845bceaa8873b3993e5775bb37afdb9a34d';   /* 寫入通行碼（經營者本機 secrets.env 的 I18N_PUT_KEY）的雜湊；原文不放程式裡 */
+var LINES_TAB = 'lines', LINES_COLS = ['key', 'zh', 'en', 'ja', 'ko', 'vi', 'id', 'th', 'at'];
+var RETIRED = true;   /* true＝官網同步停用（2026-11-26）；要回滾改 false 並重新部署 */
 var MENU_URL = 'https://mydiybc.com/home/menu?id=6c236c58-cf38-49a4-8591-616e933de566';
 var LANGS = ['en', 'zh', 'ja', 'ko', 'vi', 'id', 'th'];
 var GT = { en: 'en', zh: 'zh-TW', ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th' };
@@ -18,6 +26,7 @@ function doGet(e) {
     if (a === 'data') res = data_();
     else if (a === 'status') res = { ok: true, status: status_() };
     else if (a === 'sync') res = syncThrottled_();
+    else if (a === 'lines') res = { ok: true, lines: readLines_() };
     else if (a === 'ping') res = { ok: true, at: now_() };
     else res = { ok: false, error: 'unknown action' };
   } catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
@@ -46,10 +55,11 @@ function setup() {   /* 第一次授權＋建分頁＋設每天 23:00 排程（�
   Logger.log('setup 完成：排程 sync 每天 23 點；官網讀取測試 ' + UrlFetchApp.fetch(MENU_URL, { muteHttpExceptions: true }).getResponseCode()
     + '；翻譯測試 ' + LanguageApp.translate('Chocolate', 'en', 'ja'));
 }
-function sync() { return sync_('排程'); }
-function syncNow() { return sync_('手動'); }
+function sync() { if (RETIRED) return { result: 'retired' }; return sync_('排程'); }
+function syncNow() { if (RETIRED) return { result: 'retired' }; return sync_('手動'); }
 
 function syncThrottled_() {
+  if (RETIRED) return { ok: false, error: '官網同步已停用（2026-11-26 起改由平板外語食譜巡檢更新，週一到週五 10:00）', status: status_() };
   var pr = PropertiesService.getScriptProperties(), last = Number(pr.getProperty('sync_ms') || 0);
   if (Date.now() - last < SYNC_GAP_MS) return { ok: false, error: '剛更新過，' + Math.ceil((SYNC_GAP_MS - (Date.now() - last)) / 60000) + ' 分鐘後再試', status: status_() };
   var r = sync_('體驗中心按鈕');
