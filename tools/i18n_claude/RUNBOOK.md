@@ -8,7 +8,7 @@
 
 經營者裁定：
 - 2026-10-24：用 Claude Code（訂閱）翻，不花 API；主廚不核准，**Claude 自己檢查通過就放行**。
-- 2026-11-05：**每天早上 06:40**（原文 06:30 更新後）抓到有改的就動手翻，**不設組數上限，全部改完才算完成**；改的過程**平板不下架**（照舊顯示上一版，頁面不提示），新版通過才換上；**全程不能跳「允許」要人按**。
+- 2026-11-05：**每天早上 06:40**（原文 06:30 更新後）抓到有改的就動手翻（**2026-11-26 經營者改成週一到週五 10:00、排程與子代理都用 Opus 5.5 中等思考**），**不設組數上限，全部改完才算完成**；改的過程**平板不下架**（照舊顯示上一版，頁面不提示），新版通過才換上；**全程不能跳「允許」要人按**。
 
 後台怎麼運作（2026-11-05 起，申請單 GAS v37）：
 - 只改食材份量／名稱／單位、圖片、影片 → **不算改版**，翻譯照常上線（份量與圖影平板直接拿最新原文）。
@@ -28,8 +28,8 @@
 2. **全部做完，不設上限**：5 個語言同時開工，**同一語言一次只做一組**（詞典每語言共用，同語言同時翻新詞會不一致）；一組放行後，該語言接著做下一組，直到 `pull.py` 回待翻 0。優先順序：「平板沒有」的（新食譜）→ 原文改版的。
 3. **每一組**（依序）：
    1. `python3 /Users/diybc/Desktop/Claude/Code/DIY/tools/i18n_claude/pull.py <id前8碼> <語言>` → 產生 `<tag>.src.json` 與 `.brief.txt`；印出「全部 N 頁，要翻 M 頁（沿用 K 頁）」。
-   2. 派 **翻譯員**（Agent，model=sonnet）：照 `TRANSLATE.md` 翻（只翻 src.json 裡的頁），寫 `<tag>.tr.json`，跑 `precheck.py` 到全過。
-   3. 派 **獨立回讀員**（另一個 Agent，model=sonnet，沒參與翻譯）：照 `REVIEW.md` 逐頁對照，寫 `<tag>.review.json`。
+   2. 派 **翻譯員**（Agent，model=opus、effort=medium；2026-11-26 起）：照 `TRANSLATE.md` 翻（只翻 src.json 裡的頁），寫 `<tag>.tr.json`，跑 `precheck.py` 到全過。
+   3. 派 **獨立回讀員**（另一個 Agent，model=opus、effort=medium，沒參與翻譯）：照 `REVIEW.md` 逐頁對照，寫 `<tag>.review.json`。
    4. 回讀 `verdict=pass`（沒有 block）→ `python3 …/put.py <tag> --approve`（伺服器再驗一次硬檢查，過了就放行，放行人「Claude」，平板換新版）。
    5. 回讀有 block → 交回原翻譯員修（SendMessage），改完重跑 precheck 與回讀，**最多修一輪**。還是不過 → `python3 …/put.py <tag>`（不帶 --approve，存成待檢查；**平板照舊顯示上一版**），報告列出。
    6. 伺服器硬檢查回 `review`（例：多了原文沒有的數字）→ 看 check 訊息，用 Edit 工具改 tr.json（通常是拿掉多的量詞 1장、1本）→ 重新 pull → precheck → put --approve。
