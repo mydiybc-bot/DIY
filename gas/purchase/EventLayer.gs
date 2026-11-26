@@ -707,6 +707,17 @@ function rebuildEventLayer() {
           remain = taken >= EV_CFG.TAKEOVER_DAYS ? 0 : Math.max(0, target - sold);
         }
         var weeklyServ = (planT[nm] ? planEst : (pool[stn] || 0) * share[nm]) / Math.max(1, L / 7);   /* 器具/模具維持 v1.5 輸入；v1.9 有預估改用 T */
+        /* ★ 2026-11-26 經營者：器具／模具「開賣前用系統預估，開賣後用 POS 實際銷量」。
+           開賣（C.start＝第一筆實際銷售日）滿 EV_CFG.RESPLIT_MIN_DAYS 天：取本店近 7 天（不足 7 天取開賣後全部完整天）實際份數換成週份數；
+           開賣未滿 7 天取「預估」與「實際」較大者（開賣初期量少，避免少備）；滿 7 天完全用實際。 */
+        var fullDays = Math.floor((today - C.start) / 864e5);   /* 開賣後到昨天的完整天數 */
+        var itemDaysT = (instItemStoreDay[k] || {})[nm];   /* 這個甜點有逐店逐日 POS（限定檔期品才有；常態菜單沒有 → 照舊用預估） */
+        if (itemDaysT && fullDays >= EV_CFG.RESPLIT_MIN_DAYS) {
+          var ddT = itemDaysT[stn] || {}, winT = Math.min(7, fullDays), fromT = evYmd_(evAddDays_(today, -winT)), sT = 0;
+          Object.keys(ddT).forEach(function (y) { if (y >= fromT && y < nowTs) sT += ddT[y]; });
+          var actWk = sT / winT * 7;
+          weeklyServ = fullDays >= 7 ? actWk : Math.max(weeklyServ, actWk);
+        }
         var durServ = Math.ceil(weeklyServ * 2 / 7);
         rows.forEach(function (b) {
           var u = name2sku[b.mat]; if (!u) { return; }

@@ -1681,7 +1681,7 @@ function planPush_(rid) {
     if (Object.keys(haveSt).length) stores = stores.filter(function (n) { return haveSt[n]; });
     newTools.forEach(function (r) {
       var l = lineBy[r.name] || {};
-      if (!(l.perStore > 0)) { warn.push('新' + r.cat + '「' + r.name + '」申請表沒填「每店要幾個」：各店標配是 0（採購系統不會提醒補貨），請體驗中心到採購系統店別參數設定'); return; }
+      if (!(l.perStore > 0)) { warn.push('新' + r.cat + '「' + r.name + '」沒填「每店要幾個」（選填）：採購系統會依 BOM 每份用量 × 各店預估銷量自動算每家店要幾個，開賣前 14 天起出現在訂貨單；開賣後改用 POS 實際銷量'); return;   /* 2026-11-26 經營者：每店要幾個改選填 */ }
       if (!P.par) { warn.push('店別參數讀不到（' + P.parerr + '）：新' + r.cat + '「' + r.name + '」每店 ' + l.perStore + ' 個要請體驗中心手動設定標配'); return; }
       stores.forEach(function (st) {
         var o = { '店號': st, 'sku_id': r.sku_id, '標配數量': l.perStore };
