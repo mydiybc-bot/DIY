@@ -120,6 +120,13 @@ def shown_content(it):
     return '\n'.join(lines)
 
 
+def free_ok(it):
+    base = re.sub(r'^\d{3}\s*\d{1,2}月[^_｜]{0,12}_\s*', '', it['name'])
+    base = re.sub(r'\s*[(（][^)）]*[)）]', '', base).split('_')[0].strip()
+    c = (it.get('edit') or {}).get('content') or ''
+    return bool(base) and bool(re.search(re.escape(base) + r'\s*[：:][^\n]*免費', c))
+
+
 def build():
     S = json.load(open(os.path.join(GW, 'src.json')))
     have = gget('lines').get('lines') or {}
@@ -133,6 +140,9 @@ def build():
         e = it.get('edit') or {}
         if it.get('err') or not e: miss.append(it['name'] + '：後台讀不到'); continue
         price = float(e.get('price') or 'nan') if re.fullmatch(r'\s*\d+(\.\d+)?\s*', e.get('price') or '') else None
+        # 2026-11-26 經營者：「很多品項寫免費，這是不對的」→ 後台售價 0 多半是還沒定價（例：1 月草莓季）；
+        # 只有產品特色明寫「本品名：…｜免費」的（我的生日蛋糕）才算免費，其他 0 一律不給價（頁面顯示「售價待定」，經營者：「改成待定，等到未來上市就會有價格了」）
+        if price == 0 and not free_ok(it): price = None
         content = shown_content(it)
         t = {'zh': ['', content, e.get('size') or '']}
         for lg in LANGS:
