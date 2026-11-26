@@ -1137,7 +1137,7 @@ function promoAttDel_(p, who) {
  *   前端：static/work-app.html（可加到手機主畫面）。登入沿用決策中心：
  *     店長＝幾號店＋店密碼（dim_auth store_N）；體驗中心＝總部密碼（task_hq）。名字由使用者自己填（留言、發工作都記名字＋身分）。
  *   appAuth     驗密碼，回身分（不寫入）。
- *   appWork     工作清單精簡版：未完成＋近 APP_DAYS 天內完成／更新／有留言的，含留言（免密碼，同 workList；用同一份 5 分鐘暫存）。
+ *   appWork     工作清單精簡版：未完成＋近 APP_DAYS 天內完成／有留言的，含留言（免密碼，同 workList；用同一份 5 分鐘暫存）。
  *   appWorkSave 新增／修改工作。店長只能改「自己店發的」；體驗中心全部可改。新工作記 creator_store（1～12 或 hq）、src＝app。
  *               沒帶 text 就不動內容（電腦版用富文字寫的工作，在手機改進度不會把格式洗掉）。
  *   appWorkDel  標記刪除，權限同上。
@@ -1176,7 +1176,7 @@ function appWork_(p, who) {
   var rows = all.filter(function (r) {
     if (r.progress !== '已完成') return true;
     var last = (r.discuss && r.discuss.length) ? String(r.discuss[r.discuss.length - 1].ts || '') : '';
-    return String(r.done_date || '') >= cut || String(r.updated_at || '') >= cut || last >= cut;
+    return String(r.done_date || '') >= cut || last >= cut;   /* 不看 updated_at：11/02 NUEIP 補搬的 728 件 updated_at 都是當天 */
   });
   return { data: { rows: rows, today: today_(), days: APP_DAYS, total: all.length } };
 }
