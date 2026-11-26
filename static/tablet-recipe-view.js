@@ -84,6 +84,7 @@
     + '.trv-title{position:sticky;top:0;z-index:3;background:#fdd35d;color:#40210f;font-weight:800;font-size:calc(var(--u)*3.2);padding:.75em 1em;display:flex;align-items:center;gap:.6em}'
     + '.trv-title .n{flex:0 0 auto;opacity:.75}.trv-title .t{flex:1}'
     + '.trv-lbtn{flex:0 0 auto;border:none;background:rgba(255,255,255,.55);border-radius:6px;font-size:calc(var(--u)*2.8);padding:.2em .6em;cursor:pointer;color:#40210f}'
+    + '.trv-zh{margin:1.2em 0 0;padding:.7em .9em;background:#f4f1ea;border-left:4px solid #b9a57a;border-radius:8px;font-size:.85em;line-height:1.6;color:#444}.trv-zh .zt{font-weight:700;color:#7a6a45;margin-bottom:.3em}.trv-zh p{margin:0 0 .4em}'
     + '.trv-body{font-size:calc(var(--u)*3.2);padding:1em 1em calc(var(--u)*12);line-height:1.65}.trv-body p{margin:0 0 .6em}.trv-body p.c{text-align:center}.trv-body img{max-width:100%;height:auto;cursor:zoom-in}'
     + '.trv-cont{background:url(' + BACK + '/img/container.png) no-repeat center top/100% auto;height:calc(var(--u)*40);display:flex;flex-wrap:wrap;font-weight:800;text-align:center}'
     + '.trv-cont .b{width:50%;font-size:calc(var(--u)*3.4);padding-top:calc(var(--u)*20)}'
@@ -177,7 +178,9 @@
         } else {
           if (s.video) h += '<div class="trv-vwrap"><video class="trv-video" controls playsinline preload="none" data-src="' + esc(s.video) + '"></video></div>';
           else if (s.img) h += '<img class="trv-img" data-lz="' + esc(s.img) + '" alt="" data-zoom="' + esc(s.img) + '">';
-          h += head + '<div class="trv-body">' + lz(safeHtml(s.h)) + '</div>';
+          h += head + '<div class="trv-body">' + lz(safeHtml(s.h))
+            + (s.zh ? '<div class="trv-zh" lang="zh-Hant"><div class="zt">中文步驟（給夥伴看）｜' + esc(s.zt || '') + '</div>' + safeHtml(s.zh) + '</div>' : '')   /* 2026-11-27 經營者：日文步驟下方加中文，夥伴協助客人時看得懂（試做：老奶奶檸檬蛋糕 ja，名單在 i18n.gs I18N_ZHSUB） */
+            + '</div>';
         }
         slides.push({ kind: 'step', html: h, n: i });
       });
