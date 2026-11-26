@@ -129,7 +129,7 @@ function i18nDivSpan_(html, start) {
 function i18nTxt_(s) {   /* 去標籤、保留換行（<br>→換行），每行整理空白 */
   return rbDecode_(String(s || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ')).split('\n').map(rbTrim_).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
-function i18nParse_(html, id) {
+function i18nParse_(html, id, seq) {   /* seq：標題照步驟清單順序對（自選版頁面多一張重複的拿托盤頁，用頁序對會錯一格，2026-11-26） */
   var o = { id: id, name: '', cover: '', pres: '', areaPre: '', areaHas: [], slides: [] };
   var t = (html.match(/<title>([^<]*)<\/title>/i) || ['', ''])[1];
   o.name = rbTrim_(rbDecode_(t).replace(/\s*-\s*自己做烘焙聚樂部\s*$/, ''));
@@ -145,6 +145,7 @@ function i18nParse_(html, id) {
     var tr = /data-slide-to="(\d+)"\s*>\s*<span>[^<]*<\/span>([\s\S]*?)<\/div>/gi, tm;
     while ((tm = tr.exec(block))) titles[tm[1]] = i18nTxt_(tm[2]);
   }
+  var tl = Object.keys(titles).sort(function (a, b) { return a - b; }).map(function (k) { return titles[k]; });
   /* 每一頁 */
   var re = /<div class="carousel-item\b([^"]*)"[^>]*>/gi, m, starts = [];
   re.lastIndex = inner;
@@ -152,7 +153,7 @@ function i18nParse_(html, id) {
   starts.forEach(function (s, idx) {
     var sp2 = i18nDivSpan_(html, s.at), ch = html.slice(sp2[0], sp2[1]);
     if (/hasOption/.test(s.cls)) {
-      var sl = { k: o.slides.length, t: titles[String(idx)] || '', video: '', img: '', h: '', imgs: [], ings: [] };
+      var sl = { k: o.slides.length, t: (seq ? tl[o.slides.length] : titles[String(idx)]) || '', video: '', img: '', h: '', imgs: [], ings: [] };
       sl.video = ((ch.match(/<source\b[^>]*data-src="([^"]+)"/i) || [])[1]) || '';
       var it = (ch.match(/<img\b[^>]*class="titleImage"[^>]*>/i) || [''])[0]; sl.img = it ? rbAttr_(it, 'src') : '';
       var rc = ch.indexOf('class="recipeContent"');
@@ -326,7 +327,72 @@ function i18nFetchPages_(ids) {
     rbDropSession_(); sess.jar = rbFreshSession_().jar; rs = UrlFetchApp.fetchAll(mk());
   }
   rbSaveSession_(sess);
-  return rs.map(function (r) { return { code: r.getResponseCode(), text: r.getResponseCode() === 200 ? r.getContentText() : '' }; });
+  return rs.map(function (r, i) {
+    var code = r.getResponseCode(), loc = String(r.getHeaders().Location || r.getHeaders().location || '');
+    if (code === 302 && I18N_PICK_RE.test(loc)) {   /* 自選版（2026-11-26）：後台先跳選擇頁 → 讀全部選項的完整食譜＋每個選項的步驟 */
+      try { return i18nPickFetch_(ids[i], sess); } catch (e) { return { code: 0, err: '自選版：' + errMsg_(e), text: '' }; }
+    }
+    return { code: code, text: code === 200 ? r.getContentText() : '' };
+  });
+}
+
+/* ---------------- 自選版（客人先選蛋糕體／夾餡，2026-11-26） ----------------
+   經營者：「生日蛋糕只有海綿蛋糕有外語版，價購內餡的版本沒有」→「照方案 A 做」。
+   後台：/steps/recipedetails/{id} → 302 到 /Steps/Picker/{id}（每組一個下拉選單）→ 按下一步開
+         /steps/recipedetailscode/{id}?stepList=選項值,…（共用步驟＋選到的選項步驟）。stepList 帶全部選項＝全部步驟。
+   做法：原文＝全部選項的完整食譜；每個選項各抓一次（這組只帶它、其他組全帶），跟完整的比對 → 這個選項自己的步驟（src.pick[].opts[].ks）。
+   選項名稱走詞典（kind＝pick，5 支同一組選項只翻一次）；平板先出選擇頁，選完只顯示共用＋選到的步驟。 */
+var I18N_PICK_RE = /\/Steps\/Picker\//i;
+function i18nPickGroups_(html) {
+  var out = [], re = /<label[^>]*class="control-label"[^>]*>([\s\S]*?)<\/label>\s*<select\b[^>]*>([\s\S]*?)<\/select>/gi, m;
+  while ((m = re.exec(String(html || '')))) {
+    var g = { label: i18nTxt_(m[1]), opts: [] }, orx = /<option\b[^>]*value="([^"]+)"[^>]*>([\s\S]*?)<\/option>/gi, o;
+    while ((o = orx.exec(m[2]))) g.opts.push({ v: o[1], label: i18nTxt_(o[2]) });
+    if (g.label && g.opts.length) out.push(g);
+  }
+  return out;
+}
+function i18nPickSig_(s) { return JSON.stringify([s.t, s.h, s.video, s.img, (s.ings || []).map(function (g) { return [g.n, g.q, g.u]; })]); }
+function i18nPickFetch_(id, sess) {
+  var H = { 'User-Agent': RB_UA, Cookie: rbJarStr_(sess.jar) }, opt = function (u) { return { url: u, method: 'get', muteHttpExceptions: true, followRedirects: false, headers: H }; };
+  var pr = UrlFetchApp.fetch(RB_BASE + '/Steps/Picker/' + id, opt(''));
+  if (pr.getResponseCode() !== 200) throw fail_('選擇頁回 HTTP ' + pr.getResponseCode(), 'rbnet');
+  var G = i18nPickGroups_(pr.getContentText());
+  if (!G.length) throw fail_('選擇頁讀不到選項（後台可能改版）', 'rbpage');
+  var u = function (list) { return RB_BASE + '/steps/recipedetailscode/' + id + '?stepList=' + list.join(','); }, all = [], urls = [];
+  G.forEach(function (g) { g.opts.forEach(function (o) { all.push(o.v); }); });
+  urls.push(u(all));
+  G.forEach(function (g, gi) { g.opts.forEach(function (o) { var l = []; G.forEach(function (h, hi) { if (hi === gi) l.push(o.v); else h.opts.forEach(function (x) { l.push(x.v); }); }); urls.push(u(l)); }); });
+  var rs = UrlFetchApp.fetchAll(urls.map(opt));
+  rs.forEach(function (r) { if (r.getResponseCode() !== 200) throw fail_('選項步驟頁回 HTTP ' + r.getResponseCode(), 'rbnet'); });
+  var k = 1;
+  G.forEach(function (g) { g.opts.forEach(function (o) { o.sigs = i18nParse_(rs[k++].getContentText(), id, true).slides.map(i18nPickSig_); }); });
+  return { code: 200, text: rs[0].getContentText(), pick: G };
+}
+/* 完整原文 src＋每個選項抓到的頁 → src.pick＝[{label, opts:[{v, label, ks:[頁碼]}]}]；對不上就丟錯（這支原文標失敗，不上平板） */
+function i18nPickApply_(src, G) {
+  var full = src.slides.map(i18nPickSig_), used = {};
+  var has = function (sigs) {   /* 選項那次的頁 → 在完整原文的哪幾頁（照順序對） */
+    var set = {}, j = 0;
+    sigs.forEach(function (s) { while (j < full.length && full[j] !== s) j++; if (j >= full.length) throw fail_('自選版：選項的步驟頁對不上完整食譜', 'rbpage'); set[j++] = 1; });
+    return set;
+  };
+  src.pick = G.map(function (g) {
+    var P = g.opts.map(function (o) { return has(o.sigs); });
+    var opts = g.opts.map(function (o, i) {
+      var ks = [];
+      full.forEach(function (x, kk) { if (P[i][kk] && !P.some(function (q, j) { return j !== i && q[kk]; })) ks.push(kk); });
+      ks.forEach(function (kk) { if (used[kk]) throw fail_('自選版：第 ' + (kk + 1) + ' 頁同時屬於兩個選項', 'rbpage'); used[kk] = 1; });
+      return { v: o.v, label: o.label, ks: ks };
+    });
+    opts.forEach(function (o, i) {   /* 檢查：只選這個時的頁數＝全部 − 同組其他選項的頁 */
+      var want = full.length - opts.reduce(function (n, x, j) { return n + (j === i ? 0 : x.ks.length); }, 0);
+      if (g.opts[i].sigs.length !== want) throw fail_('自選版：選項「' + o.label + '」頁數對不上（' + g.opts[i].sigs.length + '／' + want + '）', 'rbpage');
+    });
+    if (opts.every(function (o) { return !o.ks.length; })) throw fail_('自選版：「' + g.label + '」每個選項都找不到自己的步驟', 'rbpage');
+    return { label: g.label, opts: opts };
+  });
+  return src;
 }
 /* 更新原文：後台更新日期變了（或還沒抓過、上次失敗）才重抓；回傳 {checked, fetched, changed, gone, errors} */
 function i18nRefresh_(force, deadline) {
@@ -336,13 +402,13 @@ function i18nRefresh_(force, deadline) {
   for (var i = 0; i < todo.length; i += 5) {
     if (deadline && Date.now() > deadline) { res.errors.push('時間到，剩 ' + (todo.length - i) + ' 支下次再抓'); break; }
     var batch = todo.slice(i, i + 5), pages = i18nFetchPages_(batch.map(function (s) { return s.id; }));
-    var parsed = batch.map(function (s, j) { try { return pages[j].code === 200 ? i18nParse_(pages[j].text, s.id) : null; } catch (e) { return e; } });
+    var parsed = batch.map(function (s, j) { try { return pages[j].code === 200 ? (pages[j].pick ? i18nPickApply_(i18nParse_(pages[j].text, s.id, true), pages[j].pick) : i18nParse_(pages[j].text, s.id)) : null; } catch (e) { return e; } });   /* 自選版：附上每個選項的步驟（2026-11-26） */
     var zu = []; batch.forEach(function (s, j) { var o = parsed[j]; if (s.base === 'zh' && o && o.slides) zu = zu.concat(i18nZMediaUrls_(o)); });
     var md5 = zu.length ? i18nZMd5_(zu) : {};   /* 中文原文：教學影片、烤熟測試圖的指紋（換外國客人版用；2026-11-24） */
     batch.forEach(function (s, j) {
       var pg = pages[j], row = { id: s.id, name: s.name, upd: s.upd, at: now_() };
       try {
-        if (pg.code !== 200) throw fail_('後台回 HTTP ' + pg.code + '（可能已下架或上架日期不在期間內）', 'rbnet');
+        if (pg.code !== 200) throw fail_(pg.err || ('後台回 HTTP ' + pg.code + '（可能已下架或上架日期不在期間內）'), 'rbnet');
         if (parsed[j] instanceof Error || !parsed[j]) throw parsed[j] || fail_('讀不到平板頁', 'rbpage');
         var src = parsed[j];
         if (s.base === 'zh') { src.old = s.old || ''; i18nZPrep_(src, md5).forEach(function (w) { res.errors.push(s.name + '：' + w); }); }
@@ -382,6 +448,7 @@ function i18nSplitName_(n) { var m = String(n).match(/^【([^】]*)】\s*(.*)$/)
 function i18nTerms_(src) {   /* 這支食譜要查詞典的詞：[{kind, en}] */
   var seen = {}, out = [], add = function (kind, en) { en = rbTrim_(en); if (!en) return; var k = kind + '|' + en.toLowerCase(); if (seen[k]) return; seen[k] = 1; out.push({ kind: kind, en: en }); };
   src.slides.forEach(function (s) { s.ings.forEach(function (g) { add('item', i18nSplitName_(g.n).core); add('unit', g.u); add('area', g.an); }); });
+  (src.pick || []).forEach(function (g) { add('pick', g.label); g.opts.forEach(function (o) { add('pick', o.label); }); });   /* 自選版選擇頁的組名、選項名（2026-11-26） */
   return out;
 }
 function i18nDictRows_() {
@@ -1136,8 +1203,13 @@ function i18nBuild_(src, tr, D, lang, row, NM0) {
     return o;
   });
   if (!Z) i18nVSwap_(slides, lang);
-  return { id: src.id, lang: lang, name: tr.name || src.name, en: src.name, cover: src.cover, pres: tr.pres || src.pres, areas: areas, slides: slides,
+  var b = { id: src.id, lang: lang, name: tr.name || src.name, en: src.name, cover: src.cover, pres: tr.pres || src.pres, areas: areas, slides: slides,
     status: row.status, check: row.check, at: row.at, model: row.model };
+  if (src.pick) b.pick = src.pick.map(function (g) {   /* 自選版（2026-11-26）：平板先選；ks＝這個選項自己的頁（沒選到的不顯示） */
+    var tl = function (x) { return lang === 'zh' ? x : (i18nLook_(D, 'pick', x, lang) || x); };
+    return { label: tl(g.label), zh: g.label, opts: g.opts.map(function (o) { return { label: tl(o.label), zh: o.label, ks: o.ks }; }) };
+  });
+  return b;
 }
 
 /* 共用影片換成各語言版（2026-11-03）：外語食譜第一頁的「熊主廚」開場動畫只有英文 → 認檔案指紋（Azure Content-MD5，每支食譜網址不同但檔案同一支）換成該語言版。
@@ -1342,6 +1414,7 @@ function i18nPull_(p) {
       if (lang === 'vi' && h.backend_vi) o.backend = h.backend_vi;   /* 越南文：後台已有的名稱優先 */
       if (h.cand) o.cand = h.cand;   /* 2026-11-24：品名照後台英文名（cand＝後台英文名或它在舊詞典的譯名） */
       if (h.note) o.note = h.note;
+      if (x.kind === 'pick') o.note = '平板選擇頁的文字（自選版：客人做之前先選蛋糕體口味、夾餡；組名或選項名），照中文逐字翻、要短';
       miss.push(o);
     });
   } else {
@@ -1433,6 +1506,8 @@ function i18nPut_(p) {
   if (src.pres && !out.pres) check += (check ? '；' : '') + '保存方式是空的';
   if (Z && src.pres && out.pres && (out.pres === src.pres || i18nZHan_(out.pres, lang))) check += (check ? '；' : '') + '保存方式沒翻（還是中文）';
   if (Z && out.name && i18nZHan_(out.name.split('｜')[0], lang)) check += (check ? '；' : '') + '品名譯名還有中文字';
+  var pmiss = i18nTerms_(src).filter(function (x) { if (x.kind !== 'pick') return false; var tr = i18nLook_(D2, 'pick', x.en, lang); return !tr || (Z && i18nZHan_(tr, lang)); }).map(function (x) { return x.en; });
+  if (pmiss.length) check += (check ? '；' : '') + '選擇頁沒翻：' + pmiss.join('、');   /* 自選版（2026-11-26） */
   var status = !out.name ? 'fail' : (check ? 'review' : 'ok');
   if (!out.name) check = '名稱是空的' + (check ? '；' + check : '');
   var key = id + '|' + lang, prev = i18nMeta_('i18n_rcp', I18N_RCP_HEAD).rows.filter(function (r) { return r.key === key; })[0];

@@ -391,6 +391,20 @@ window.__ime=(function(){
 })();
 </script>
 <style>
+.pk{position:fixed;inset:0;z-index:9500;background:#fff8e6;overflow-y:auto;color:#40210f;-webkit-user-select:none;user-select:none}
+.pk-in{max-width:760px;margin:0 auto;padding:6vh 20px 40px}
+.pk-nm{font-size:20px;font-weight:700;color:#8a6a4a;text-align:center}
+.pk-h{font-size:28px;font-weight:800;text-align:center;margin:8px 0 18px}
+.pk-g{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.pk-gl{font-size:22px;font-weight:800;margin-bottom:10px}
+.pk-gl span,.pk-o span{display:block;font-size:14px;font-weight:400;color:#8a6a4a;margin-top:2px}
+.pk-o{display:block;width:100%;text-align:left;font-size:20px;padding:12px 14px;margin:8px 0;border:2px solid #e6d3b3;border-radius:12px;background:#fff;color:#40210f;cursor:pointer}
+.pk-o.on{border-color:#e0a100;background:#fdd35d;font-weight:800}
+.pk-b{display:flex;gap:12px;margin-top:20px}
+.pk-b button{flex:1;font-size:22px;padding:14px;border-radius:12px;border:0;cursor:pointer}
+.pk-back{background:#efefef;color:#40210f}
+.pk-go{background:#fdd35d;color:#40210f;font-weight:800}
+.pk-go:disabled{opacity:.4;cursor:default}
 :root{--brown:#40210f;--y:#fdd35d;--bg:#fbf7f3;--line:#e6d8cf;--muted:#8a7a70}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif}
@@ -626,12 +640,48 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
   /* 2026-11-09 經營者：「打開每一個食譜的時間很久，要縮短到 3 秒以內，客人是從第一頁開始看，不需要一次下載全部的頁面」
      → 點甜點立刻開食譜畫面（開場說明、封面、注意事項、拿托盤用清單上已有的資料），步驟頁在背景向後端要，到了再補上；
        這台平板讀過、版本沒變的照舊直接從快取開。 */
+  /* 自選版（2026-11-26 經營者：「生日蛋糕只有海綿蛋糕有外語版，價購內餡的版本沒有」→ 方案 A）：
+     跟後台平板一樣，先選蛋糕體口味、夾餡（每組一個），只顯示共用步驟＋選到的選項步驟。
+     資料 d.pick＝[{label, zh, opts:[{label, zh, ks:[頁碼]}]}]（i18n.gs i18nBuild_）；選項下面小字附中文給夥伴看。 */
+  var PK = { en: ['Please choose', 'Next'], ja: ['お選びください', '次へ'], ko: ['선택해 주세요', '다음'], vi: ['Vui lòng chọn', 'Tiếp'], id: ['Silakan pilih', 'Lanjut'], th: ['กรุณาเลือก', 'ถัดไป'], zh: ['請選擇', '下一步'] };
+  function pickFilter(d, sel) {
+    var drop = {}, c = {}, x;
+    d.pick.forEach(function (g, gi) { g.opts.forEach(function (o, oi) { if (oi !== sel[gi]) o.ks.forEach(function (k) { drop[k] = 1; }); }); });
+    for (x in d) c[x] = d[x];
+    c.slides = d.slides.filter(function (s, i) { return !drop[i]; });
+    return c;
+  }
+  function askPick(d, lg, done, back) {
+    var P = PK[lg] || PK.en, T = (window.TRView.T[lg] || window.TRView.T.en), sel = d.pick.map(function () { return -1; });
+    var w = document.createElement('div'); w.className = 'pk';
+    var paint = function () {
+      var ok = sel.every(function (x) { return x >= 0; });
+      w.innerHTML = '<div class="pk-in"><div class="pk-nm">' + esc(d.name || '') + '</div><div class="pk-h">' + esc(P[0]) + '</div>'
+        + d.pick.map(function (g, gi) {
+          return '<div class="pk-g"><div class="pk-gl">' + esc(g.label) + (lg !== 'zh' && g.zh !== g.label ? '<span>' + esc(g.zh) + '</span>' : '') + '</div>'
+            + g.opts.map(function (o, oi) { return '<button type="button" class="pk-o' + (sel[gi] === oi ? ' on' : '') + '" data-pg="' + gi + '" data-po="' + oi + '">' + esc(o.label) + (lg !== 'zh' && o.zh !== o.label ? '<span>' + esc(o.zh) + '</span>' : '') + '</button>'; }).join('') + '</div>';
+        }).join('')
+        + '<div class="pk-b"><button type="button" class="pk-back" data-pk="back">' + esc(T.backMenu || T.menu || 'Menu') + '</button><button type="button" class="pk-go" data-pk="go"' + (ok ? '' : ' disabled') + '>' + esc(P[1]) + ' ►</button></div></div>';
+    };
+    w.addEventListener('click', function (e) {
+      var t = e.target.closest && e.target.closest('[data-pg],[data-pk]'); if (!t) return;
+      e.stopPropagation();
+      if (t.hasAttribute('data-pg')) { sel[Number(t.getAttribute('data-pg'))] = Number(t.getAttribute('data-po')); paint(); return; }
+      if (t.getAttribute('data-pk') === 'back') { w.parentNode.removeChild(w); back(); return; }
+      if (sel.every(function (x) { return x >= 0; })) { w.parentNode.removeChild(w); done(sel); }
+    });
+    paint(); document.body.appendChild(w);
+  }
   function openRecipe(id) {
     var lg = S.lang, it = S.list.filter(function (x) { return x.id === id; })[0], ver = it && it.ver ? it.ver[lg] : '', key = 'tr:r:' + id + '|' + lg, c = lsGet(key), o = null;
     if (!it) return;
     if (c) { try { o = JSON.parse(c); } catch (e) { o = null; } }
     var exit = function () { S.view = null; window.scrollTo(0, 0); };
-    if (o && o.ver === ver && o.fmt === 4 && o.data) { o.data.name = untag(o.data.name); S.view = window.TRView.mount(document.body, o.data, lg, { onExit: exit }); return; }
+    if (o && o.ver === ver && o.fmt === 4 && o.data) {
+      o.data.name = untag(o.data.name);
+      if (o.data.pick) { askPick(o.data, lg, function (sel) { S.view = window.TRView.mount(document.body, pickFilter(o.data, sel), lg, { onExit: exit }); }, exit); return; }
+      S.view = window.TRView.mount(document.body, o.data, lg, { onExit: exit }); return;
+    }
     var nm = it.name.split('｜'), head = { name: untag(((it.local || {})[lg] || nm[0]) + (nm[1] ? '｜' + nm[1] : '')), cover: it.cover, slides: null };
     var v = S.view = window.TRView.mount(document.body, head, lg, { onExit: exit, onRetry: load });
     function load() {
@@ -639,6 +689,7 @@ html,body{margin:0;background:var(--bg);color:var(--brown);font-family:system-ui
         if (!j.ok) { v.fail(j.msg || ''); loadList(); return; }
         lsSet(key, JSON.stringify({ ver: ver, fmt: 4, data: j.data }));   /* fmt 4：2026-11-27 加中文步驟對照（s.zh），舊快取作廢；fmt 3：2026-11-03 熊主廚開場動畫換各語言版，舊快取作廢 */
         if (j.data) j.data.name = untag(j.data.name);
+        if (j.data && j.data.pick) { askPick(j.data, lg, function (sel) { v.fill(pickFilter(j.data, sel)); }, function () { v.destroy(); exit(); }); return; }   /* 自選版：先選再看步驟 */
         v.fill(j.data);
       }).catch(function (e) { v.fail(e.message || e.msg || e); });
     }

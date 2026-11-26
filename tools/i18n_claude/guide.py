@@ -127,6 +127,22 @@ def free_ok(it):
     return bool(base) and bool(re.search(re.escape(base) + r'\s*[：:][^\n]*免費', c))
 
 
+def pick_price(it, S):
+    """自選版（2026-11-26，客人先選蛋糕體＋夾餡）：後台售價是 0、產品特色也沒寫價錢。
+    價錢＝同一款「海綿蛋糕版」的價錢（免費算 0；待定就待定）＋海綿版產品特色寫的「+$69口味＆夾餡升級」。
+    回 'no'＝不是自選版；None＝算不出來（顯示售價待定）。"""
+    if '自選版' not in it['name']: return 'no'
+    k = re.sub(r'\s+', '', it['name'].replace('_自選版', ''))
+    for s in S['items']:
+        if '海綿蛋糕版' not in s['name'] or re.sub(r'\s+', '', s['name'].replace('_海綿蛋糕版', '')) != k: continue
+        e = s.get('edit') or {}
+        p = float(e['price']) if re.fullmatch(r'\s*\d+(\.\d+)?\s*', e.get('price') or '') else None
+        if p == 0 and not free_ok(s): p = None
+        m = re.search(r'\+\s*(?:NT)?\$\s*(\d+)\s*口味', e.get('content') or '')
+        return p + int(m.group(1)) if (p is not None and m) else None
+    return None
+
+
 def build():
     S = json.load(open(os.path.join(GW, 'src.json')))
     have = gget('lines').get('lines') or {}
@@ -143,6 +159,8 @@ def build():
         # 2026-11-26 經營者：「很多品項寫免費，這是不對的」→ 後台售價 0 多半是還沒定價（例：1 月草莓季）；
         # 只有產品特色明寫「本品名：…｜免費」的（我的生日蛋糕）才算免費，其他 0 一律不給價（頁面顯示「售價待定」，經營者：「改成待定，等到未來上市就會有價格了」）
         if price == 0 and not free_ok(it): price = None
+        pp = pick_price(it, S)
+        if pp != 'no': price = pp
         content = shown_content(it)
         t = {'zh': ['', content, e.get('size') or '']}
         for lg in LANGS:
