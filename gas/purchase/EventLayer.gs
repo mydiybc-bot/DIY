@@ -710,7 +710,9 @@ function rebuildEventLayer() {
         /* ★ 2026-11-26 經營者：器具／模具「開賣前用系統預估，開賣後用 POS 實際銷量」。
            開賣（C.start＝第一筆實際銷售日）滿 EV_CFG.RESPLIT_MIN_DAYS 天：取本店近 7 天（不足 7 天取開賣後全部完整天）實際份數換成週份數；
            開賣未滿 7 天取「預估」與「實際」較大者（開賣初期量少，避免少備）；滿 7 天完全用實際。 */
-        var fullDays = Math.floor((today - C.start) / 864e5);   /* 開賣後到昨天的完整天數 */
+        /* 開賣日＝對照表「起始有效日」與第一筆實際銷售日取較晚者（試賣期間量很少，不拿來算器具；例：2026 聖誕節 11/21 試賣、11/26 正式） */
+        var offStart = (C.items[nm] && C.items[nm].start && C.items[nm].start > C.start) ? C.items[nm].start : C.start;
+        var fullDays = Math.floor((evAddDays_(today, 0) - evAddDays_(offStart, 0)) / 864e5);   /* 開賣後到昨天的完整天數 */
         var itemDaysT = (instItemStoreDay[k] || {})[nm];   /* 這個甜點有逐店逐日 POS（限定檔期品才有；常態菜單沒有 → 照舊用預估） */
         if (itemDaysT && fullDays >= EV_CFG.RESPLIT_MIN_DAYS) {
           var ddT = itemDaysT[stn] || {}, winT = Math.min(7, fullDays), fromT = evYmd_(evAddDays_(today, -winT)), sT = 0;
