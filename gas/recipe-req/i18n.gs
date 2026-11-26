@@ -994,7 +994,7 @@ function i18nStatus_() {
   var okm = {}; src.forEach(function (s) { if (s.state === 'ok') okm[s.id] = 1; });
   var ret = i18nZRetired_(ZM, rcm, okm), retBy = {}; Object.keys(ret).forEach(function (k) { retBy[ret[k]] = k; });
   var matrix = src.filter(function (s) { return s.state === 'ok'; }).map(function (s) {
-    var z = ZM[s.id], o = { id: s.id, name: s.name, cover: s.cover, slides: s.slides, upd: s.upd, local: z ? {} : guide[i18nNameKey_(s.name)] || {}, st: {}, appr: {}, on: i18nOn_(pm, s.id) };
+    var z = ZM[s.id], o = { id: s.id, name: s.name, cover: i18nCover_(s), slides: s.slides, upd: s.upd, local: z ? {} : guide[i18nNameKey_(s.name)] || {}, st: {}, appr: {}, on: i18nOn_(pm, s.id) };
     if (z) { o.base = 'zh'; o.old = z.old; o.replaced = !!retBy[s.id]; } else if (ret[s.id]) o.retired = ret[s.id];   /* replaced：已取代舊英文原文；retired：被中文版取代（不再列、不再翻） */
     (z ? i18nZLangs_() : I18N_LANGS).forEach(function (l) { var r = rcm[s.id + '|' + l]; o.st[l] = i18nState_(r, s.fp); if (r && o.st[l] === 'live') o.appr[l] = r.appr_by + ' ' + r.appr_at; });
     return o;
@@ -1027,7 +1027,7 @@ function i18nListData_() {
   var ret = i18nZRetired_(ZM, rc, okm);   /* 中文版 6 種語言都好了 → 舊英文原文那支不列（2026-11-24） */
   var out = okRows.filter(function (s) { return !ret[s.id]; }).map(function (s) {
     var g = guide[i18nNameKey_(s.name)] || {}, loc = {};
-    var o = { id: s.id, name: s.name, cover: s.cover, langs: {}, ver: {}, local: loc };
+    var o = { id: s.id, name: s.name, cover: i18nCover_(s), langs: {}, ver: {}, local: loc };
     if (ZM[s.id]) return i18nZListItem_(s, o, rc, rm.sh, ZM[s.id], okm, zhm, names);   /* 中文原文（i18n_zbase.gs） */
     if (zhm[s.id]) { o.langs.zh = 'live'; o.ver.zh = i18nHash_([s.fp, s.upd, 'zh'].join('|')).slice(0, 12); return o; }   /* 中文試看：只有「中文」這一格（2026-11-17） */
     I18N_LANGS.forEach(function (l) {
@@ -1179,6 +1179,11 @@ function i18nApprove_(p, auth) {
   return { id: key, msg: (p.undo ? '收回 ' : '核准 ') + key, data: { key: key, state: p.undo ? (r.status === 'ok' ? 'wait' : r.status) : 'live', appr_by: o.appr_by, appr_at: o.appr_at } };
 }
 /* 合成平板要的完整內容：版面照原文，文字換譯文，食材／取放區／單位換詞典 */
+/* 2026-11-27 經營者：「要把圖片補上去」→ 後台沒設封面的食譜，平板借用同款的封面（不動後台）；鍵＝食譜 id */
+var I18N_COVER = {
+  '80b02265-e6c2-49fe-b6e0-ee6386ce1137': 'https://diybcstorage.blob.core.windows.net/recipeimages/c5951d5d-b7f5-4b1b-b2bc-dc304d5de0fd/c5951d5d-b7f5-4b1b-b2bc-dc304d5de0fd.jpg?v=261117024659'   /* 草莓生日蛋糕(限當日壽星)_自選版 ← 海綿蛋糕版 */
+};
+function i18nCover_(s) { return (s && s.cover) || I18N_COVER[String(s && s.id || '').toLowerCase()] || ''; }
 /* 2026-11-27 經營者：「在日文步驟內容的下方加入中文步驟內容，讓我們的夥伴可以在協助客人的時候看得懂」→ 先試做老奶奶檸檬蛋糕日文；鍵＝食譜id|語言 */
 var I18N_ZHSUB = { 'a0662719-fe28-4c37-a1b3-db63c7477a48|ja': 1 };
 function i18nBuild_(src, tr, D, lang, row, NM0) {
@@ -1203,7 +1208,7 @@ function i18nBuild_(src, tr, D, lang, row, NM0) {
     return o;
   });
   if (!Z) i18nVSwap_(slides, lang);
-  var b = { id: src.id, lang: lang, name: tr.name || src.name, en: src.name, cover: src.cover, pres: tr.pres || src.pres, areas: areas, slides: slides,
+  var b = { id: src.id, lang: lang, name: tr.name || src.name, en: src.name, cover: i18nCover_(src), pres: tr.pres || src.pres, areas: areas, slides: slides,
     status: row.status, check: row.check, at: row.at, model: row.model };
   if (src.pick) b.pick = src.pick.map(function (g) {   /* 自選版（2026-11-26）：平板先選；ks＝這個選項自己的頁（沒選到的不顯示） */
     var tl = function (x) { return lang === 'zh' ? x : (i18nLook_(D, 'pick', x, lang) || x); };

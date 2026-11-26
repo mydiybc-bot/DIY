@@ -50,7 +50,7 @@
 - 原本「每天 23:00 讀官網 English Menu」已停用（到店須知 GAS `RETIRED=true`，回滾改 false 重新部署）。
 
 ## 總檢（2026-11-25，大批上線後或懷疑某類誤譯時）
-回讀員常漏看固定幾類錯（剪花嘴、撕下再貼、多出尺寸、冷藏冷凍、表面／側面、擀／揉、店內無借冰、保持乾燥、熱水燙、重置）。做法（都不花 API、只用唯讀預覽通行碼讀）：
+回讀員常漏看固定幾類錯（剪花嘴、撕下再貼、多出尺寸、冷藏冷凍、表面／側面、擀／揉、店內無借冰（＝店裡不幫客人把甜點放店內冰箱冷藏，不是不借冰塊；2026-11-27 經營者更正）、保持乾燥、熱水燙、重置）。做法（都不花 API、只用唯讀預覽通行碼讀）：
 1. `python3 zsweep.py [id8 …]` 讀回上線譯文與原文 → `WORK/sweep/<id8>_<lang>.json`
 2. `python3 zflag.py` → `python3 zflag2.py` → `python3 zpack.py`：標記、各語言關鍵字自動判、切成 `sweep/_review_<lang>.json`
 3. 每語言派一位核對員（sonnet），照 `WORK/sweep/TASK_CHECK.md` 寫 `sweep/_found_<lang>.json`（old／new 片段）

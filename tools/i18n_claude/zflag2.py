@@ -25,7 +25,7 @@ for f in F:
         if zr and not zf and tf: why = '冷藏→譯成冷凍'
         elif zf and not zr and not tf: why = '冷凍→沒譯出冷凍'
         elif zr and not tr_ and not tf: why = '冷藏→沒譯出冷藏'
-    elif r == 'B無借冰' and re.search(r'냉동 ?보관|保冷剤を?(お)?貸|冷凍保管|penitipan|freezer storage|ice ?packs? (are not|is not) (lent|provided)|no ice ?packs?', t, re.I): why = '店內無借冰→譯成不借保冷劑／不提供冷凍保管'
+    elif r == 'B無借冰' and re.search(r'냉동 ?보관|保冷剤を?(お)?貸|冷凍保管|freezer storage|ice ?packs? (are not|is not) (lent|provided)|no ice ?packs?|\bice\b(?!.?pack)|氷の|얼음|nước đá|cho mượn đá|es batu|pinjam es|meminjamkan es|น้ำแข็ง', t, re.I): why = '店內無借冰（＝店裡不幫客人把甜點放店內冰箱冷藏；2026-11-27 經營者更正）→譯成不借冰塊／保冷劑／冷凍保管'
     elif r == 'B表面抹平' and re.search(SIDE[l][0], t, re.I) and not re.search(SIDE[l][1], t, re.I): why = '表面→譯成側面'
     elif r == 'B重置' and re.search(REPLAY[l], t, re.I): why = '重置→譯成重播'
     elif r == 'B套入' and re.search(OVER[l], t, re.I): why = '套入→可能譯成罩上／倒扣（要人看）'
