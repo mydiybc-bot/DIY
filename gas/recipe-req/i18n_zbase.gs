@@ -238,10 +238,27 @@ function i18nZHint_(zh, lang, NM, EZ, OD) {
   return o;
 }
 /* 到店須知頁的在地品名（客人在那頁看到的名字，翻譯要一致）：中文名對；對不到用舊英文原文的名字對 */
+/* 2026-11-25 經營者：外語品名自訂（優先於到店須知名）；鍵＝中文名去掉所有括號備註 */
+var I18N_ZNAME = {
+  '動物奶油餅乾': { en: 'Animal-Shaped Cookies', ja: 'どうぶつ型クッキー', ko: '동물 모양 쿠키', vi: 'Bánh quy hình thú', id: 'Kue Kering Bentuk Hewan', th: 'คุกกี้รูปสัตว์' }   /* 「叫做動物造型餅乾」 */
+};
+/* 2026-11-25 經營者：「要讓外語標題也寫出全素」→ 中文名有 (全素)／(可做全素)、在地名沒寫時自動補 */
+var I18N_ZVEG = {
+  v: { en: ' (Vegan)', ja: '（ヴィーガン）', ko: ' (비건)', vi: ' (thuần chay)', id: ' (Vegan)', th: ' (วีแกน)' },
+  o: { en: ' (Can Be Made Vegan)', ja: '（ヴィーガン対応可）', ko: ' (비건 가능)', vi: ' (có thể làm thuần chay)', id: ' (Bisa Dibuat Vegan)', th: ' (ทำแบบวีแกนได้)' }
+};
 function i18nZLocal_(src, lang, oldName) {
-  var g = i18nGuideNames_(), k = i18nNameKey_(src.name), k2 = i18nNameKey_(String(src.name || '').replace(/\s*[(（][^)）]*[)）]\s*$/, ''));
-  var hit = g['z:' + k] || g['z:' + k2] || (oldName ? g[i18nNameKey_(oldName)] : null) || {};
-  return hit[lang] || '';
+  var nm = String(src.name || ''), base = nm.replace(/\s*[(（][^)）]*[)）]/g, '').trim(), fix = I18N_ZNAME[base], t;
+  if (fix) t = fix[lang] || '';
+  else {
+    var g = i18nGuideNames_(), k = i18nNameKey_(nm), k2 = i18nNameKey_(nm.replace(/\s*[(（][^)）]*[)）]\s*$/, ''));
+    var hit = g['z:' + k] || g['z:' + k2] || (oldName ? g[i18nNameKey_(oldName)] : null) || {};
+    t = hit[lang] || '';
+  }
+  if (!t) return '';
+  var veg = /[(（]\s*可做全素\s*[)）]/.test(nm) ? 'o' : /[(（]\s*全素\s*[)）]/.test(nm) ? 'v' : '';
+  if (veg && I18N_ZVEG[veg][lang] && !/vegan|ヴィーガン|비건|chay|วีแกน/i.test(t)) t += I18N_ZVEG[veg][lang];
+  return t;
 }
 
 /* ---------------- 檢查（中文原文） ---------------- */
