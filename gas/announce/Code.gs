@@ -30,7 +30,7 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v11';   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
+var VERSION = 'announce-api-v11.2';   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
 // v10 說明：   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
 // 以下為 v9 說明：
 var VERSION_V9_NOTE = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
@@ -1269,15 +1269,21 @@ function appGroupSave_(p) {
 function appStaffSave_(p) {
   var w = appWho_(p), name = appName_(p); if (!w.hq) throw fail_('只有體驗中心可以改人員名單', 'deny');
   var unit = String(p.unit || ''); if (['hq', 'dc'].indexOf(unit) < 0) throw fail_('單位要是體驗中心或出貨中心', 'invalid');
-  var mem = (Array.isArray(p.members) ? p.members : []).map(function (x) { return cleanTxt_(x, APP_NAME_MAX).replace(/\s+/g, ' ').trim(); }).filter(Boolean);
-  mem = mem.filter(function (x, i) { return mem.indexOf(x) === i; }).slice(0, 80);
+  /* v11.2：members 可以是姓名字串，或 {name, role}（role＝104 部門，例：體驗設計部）；沒給 role 就沿用原本的 */
+  var oldRole = {}; appSheet_('dim_app_staff').rows.forEach(function (x) { if (x.unit === unit) oldRole[x.name] = x.role || ''; });
+  var mem = (Array.isArray(p.members) ? p.members : []).map(function (x) {
+    var n = cleanTxt_(typeof x === 'object' && x ? x.name : x, APP_NAME_MAX).replace(/\s+/g, ' ').trim();
+    var r = (typeof x === 'object' && x && x.role !== undefined) ? cleanTxt_(x.role, 30).trim() : (oldRole[n] || '');
+    return { name: n, role: r };
+  }).filter(function (x) { return x.name; });
+  mem = mem.filter(function (x, i) { return mem.map(function (y) { return y.name; }).indexOf(x.name) === i; }).slice(0, 80);
   var t = appSheet_('dim_app_staff'), keep = t.rows.filter(function (x) { return x.unit !== unit && x.unit; });
   var out = keep.map(function (x) { return [x.unit, x.name, x.role, x.active, x.updated_at, x.updated_by]; });
-  mem.forEach(function (n) { out.push([unit, n, '', 'Y', now_(), name + '（體驗中心）']); });
+  mem.forEach(function (m) { out.push([unit, m.name, m.role, 'Y', now_(), name + '（體驗中心）']); });
   var sh = t.sh, H = t.H;
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, H.length).clearContent();
   if (out.length) sh.getRange(2, 1, out.length, H.length).setNumberFormat('@').setValues(out.map(function (r) { return r.map(function (v) { return safe_(str_(v)); }); }));
-  return { id: unit, data: { meta: appMetaData_() }, msg: (unit === 'hq' ? '體驗中心' : '出貨中心') + '人員 ' + mem.length + ' 人：' + mem.join('、') };
+  return { id: unit, data: { meta: appMetaData_() }, msg: (unit === 'hq' ? '體驗中心' : '出貨中心') + '人員 ' + mem.length + ' 人：' + mem.map(function (m) { return m.name; }).join('、') };
 }
 
 /* ===== 工作 ===== */

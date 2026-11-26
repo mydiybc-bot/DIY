@@ -132,6 +132,12 @@ textarea{min-height:96px;resize:vertical}
 .inst .x{margin-left:auto;background:transparent;border:0;color:inherit;font-size:18px;line-height:1;padding:0 4px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + env(safe-area-inset-bottom));background:rgba(20,30,30,.92);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;z-index:90;display:none;max-width:90vw}
 .hide{display:none!important}
+/* 待處理數字（紅色圓點） */
+.dock button{position:relative}
+.bdg{display:inline-block;min-width:18px;height:18px;line-height:18px;padding:0 5px;border-radius:999px;background:#E5484D;color:#fff;font-size:11px;font-weight:700;text-align:center}
+.dock .bdg{position:absolute;top:0;left:calc(50% + 6px)}
+.tabs .bdg{margin-left:4px;vertical-align:1px}
+.todo-tag{color:#E5484D;font-weight:700}
 .seg{display:flex;gap:6px}.seg button{flex:1;border:1px solid var(--border);background:var(--card);border-radius:10px;padding:9px 4px;font-size:14px}
 .seg button.on{border-color:var(--main);background:var(--tint);color:var(--main-dark);font-weight:700}
 .tg{display:flex;flex-wrap:wrap;gap:6px}.tg button{border:1px solid var(--border);background:var(--card);border-radius:999px;padding:7px 12px;font-size:14px}
@@ -185,13 +191,13 @@ textarea{min-height:96px;resize:vertical}
   <header class="top"><div class="wrap">
     <div class="row"><h1 id="secTitle">📋 工作清單</h1><div class="me" id="meBox"></div><button class="hbtn hide" id="btnAdmin" aria-label="名單管理">⚙︎</button><button class="hbtn" id="btnRef" aria-label="重新整理">↻</button></div>
     <div class="tabs" id="tabs">
-      <button data-t="mine">交辦給我<span class="n" id="nMine"></span></button>
+      <button data-t="mine">交辦給我<span class="bdg hide" id="bMine"></span><span class="n" id="nMine"></span></button>
       <button data-t="sent">我發的<span class="n" id="nSent"></span></button>
       <button data-t="all">全部<span class="n" id="nAll"></span></button>
     </div>
   </div></header>
   <div class="wrap">
-    <div id="instB"></div>
+    <div id="instB"></div><div id="badgeTip"></div>
     <div class="bar"><input type="search" id="q" placeholder="搜尋工作、負責人、內容" enterkeyhint="search"><label><input type="checkbox" id="showDone">含已完成</label></div>
     <div class="msg" id="listMsg"></div>
     <div id="list"></div>
@@ -328,7 +334,7 @@ $('lgOk').addEventListener('click', function(){
 function logout(){
   if (!confirm('要登出嗎？')) return;
   var keep = S.auth ? { as:S.auth.as, name:S.auth.name } : null;
-  lsDel(K_AUTH); S.auth = keep; showLogin(); S.auth = null;
+  lsDel(K_AUTH); S.auth = keep; showLogin(); S.auth = null; updateBadge();
 }
 function authFail(e){
   if (e && e.code==='auth') { toast('密碼可能已更換，請重新登入', 3500); var keep=S.auth; lsDel(K_AUTH); S.auth=keep?{as:keep.as,name:keep.name}:null; showLogin(); S.auth=null; return true; }
@@ -414,6 +420,35 @@ function isMine(w){
 }
 function isSent(w){ var a=S.auth; if (!a) return false; return String(w.creator_store||'')===String(a.as); }
 function canEdit(w){ var a=S.auth; return !!a && (a.hq || String(w.creator_store||'')===String(a.as)); }
+/* ===== 待處理數字（經營者 2026-11-26：「被指定處理的人員，如何知道有工作清單需要處理，我希望 APP 上面出現數字」）=====
+   待處理＝交辦給我（或我的店）＋還沒完成、沒暫停＋交辦後我還沒回覆（店的工作＝這家店任何人回過就算）。
+   顯示在：功能列「工作清單」、分頁「交辦給我」、清單卡片「待你回覆」、網頁標題，以及桌面圖示（支援的手機／電腦）。 */
+function repliedByMe(w){
+  var a=S.auth, st=Number(a.as)||0, after=String(w.created_at||'').slice(0,10);
+  return (w.discuss||[]).some(function(d){
+    if (/系統紀錄/.test(d.role||'')) return false;
+    if (after && String(d.ts||'').slice(0,10) < after) return false;
+    return (st && storeOfRole(d.role)===st) || nameMatch(d.author, a.name);
+  });
+}
+function isPending(w){ return !!S.auth && isMine(w) && w.progress!=='已完成' && w.progress!=='暫停' && !repliedByMe(w); }
+function pendingCount(){ return S.auth ? S.rows.filter(isPending).length : 0; }
+function updateBadge(){
+  var n = pendingCount(), t = n>99 ? '99+' : String(n);
+  ['bMine','bdg_work'].forEach(function(id){ var el=$(id); if (!el) return; el.textContent=t; el.classList.toggle('hide', !n); });
+  document.title = (n ? '('+t+') ' : '') + '自己做 | 自己做烘焙聚樂部';
+  try { if (navigator.setAppBadge) { if (n) navigator.setAppBadge(n).catch(function(){}); else navigator.clearAppBadge().catch(function(){}); } } catch(_){}
+  badgeTip();
+}
+/* iPhone：桌面圖示要顯示數字，得先允許「通知」（iOS 規定）；只在加到主畫面後的 App 裡問一次 */
+function badgeTip(){
+  var el=$('badgeTip'); if (!el) return;
+  var need = standalone() && navigator.setAppBadge && window.Notification && Notification.permission==='default' && !lsGet('wa_badge_off');
+  el.innerHTML = need ? '<div class="inst"><div>🔴 讓桌面「自己做」圖示顯示待處理件數：按「開啟」，再按「允許」。<br><button class="btn" id="badgeGo" style="padding:6px 12px;font-size:14px;margin-top:6px">開啟</button></div><button class="x" aria-label="不再顯示">×</button></div>' : '';
+  if (!need) return;
+  el.querySelector('.x').onclick=function(){ lsSet('wa_badge_off','1'); el.innerHTML=''; };
+  $('badgeGo').onclick=function(){ Notification.requestPermission().then(function(){ el.innerHTML=''; updateBadge(); }).catch(function(){}); };
+}
 
 /* ===== 清單 ===== */
 function markTab(){ [].forEach.call($('tabs').querySelectorAll('button'), function(b){ b.classList.toggle('on', b.getAttribute('data-t')===S.tab); }); }
@@ -430,7 +465,7 @@ function renderList(){
   var base = S.rows.slice();
   var cnt = { mine:0, sent:0, all:0 };
   base.forEach(function(w){ if (w.progress==='已完成') return; cnt.all++; if (isMine(w)) cnt.mine++; if (isSent(w)) cnt.sent++; });
-  $('nMine').textContent = cnt.mine?'('+cnt.mine+')':''; $('nSent').textContent = cnt.sent?'('+cnt.sent+')':''; $('nAll').textContent = cnt.all?'('+cnt.all+')':'';
+  $('nMine').textContent = cnt.mine?'('+cnt.mine+')':''; updateBadge(); $('nSent').textContent = cnt.sent?'('+cnt.sent+')':''; $('nAll').textContent = cnt.all?'('+cnt.all+')':'';
   var rows = base.filter(function(w){
     if (!showDone && w.progress==='已完成') return false;
     if (S.tab==='mine' && !isMine(w)) return false;
@@ -439,6 +474,7 @@ function renderList(){
     return true;
   });
   rows.sort(function(a,b){
+    if (S.tab==='mine') { var pa=isPending(a), pb=isPending(b); if (pa!==pb) return pa?-1:1; }
     var rk=function(w){ return w.progress==='已完成'?2:(w.progress==='暫停'?1:0); }; if (rk(a)!==rk(b)) return rk(a)-rk(b);   /* 進行中／未開始 → 暫停 → 已完成 */
     var x=a.due_date||'9999', y=b.due_date||'9999'; if (x!==y) return x<y?-1:1;
     return String(b.created_at||b.date||'').localeCompare(String(a.created_at||a.date||''));
@@ -450,7 +486,7 @@ function renderList(){
     var last = (w.discuss&&w.discuss.length) ? w.discuss[w.discuss.length-1] : null;
     return '<button class="card wk" data-w="'+esc(w.work_id)+'">'+
       '<div class="t">'+(w.importance?'<span style="color:var(--orange)">'+esc(w.importance)+'</span> ':'')+esc(w.item)+'</div>'+
-      '<div class="m"><span class="pill '+progCls(w.progress)+'">'+esc(w.progress||'未開始')+'</span>'+
+      '<div class="m">'+(isPending(w)?'<span class="todo-tag">🔴 待你回覆</span>':'')+'<span class="pill '+progCls(w.progress)+'">'+esc(w.progress||'未開始')+'</span>'+
       (w.due_date?'<span class="'+(late?'late':'')+'">期限 '+esc(w.due_date.slice(5))+(late?' 已過期':'')+'</span>':'')+
       (rs.length?'<span class="rep '+(ok===rs.length?'all':(ok?'part':''))+'">已回 '+ok+'/'+rs.length+'</span>':'')+
       (w.owner?'<span>👤 '+esc(w.owner.length>24?w.owner.slice(0,24)+'…':w.owner)+'</span>':'')+
@@ -820,7 +856,8 @@ function prepFee(){
   if (S.auth.name && !lsGet('hqapply_who')) lsSet('hqapply_who', S.auth.name);
 }
 function renderDock(){
-  $('dock').innerHTML = FEATURES.map(function(f){ return '<button data-k="'+f.k+'"><span class="i">'+f.i+'</span>'+esc(f.t)+'</button>'; }).join('');
+  $('dock').innerHTML = FEATURES.map(function(f){ return '<button data-k="'+f.k+'"><span class="i">'+f.i+'</span>'+esc(f.t)+'<span class="bdg hide" id="bdg_'+f.k+'"></span></button>'; }).join('');
+  updateBadge();
 }
 $('dock').addEventListener('click', function(e){ var b=e.target.closest('[data-k]'); if (b) setSection(b.getAttribute('data-k')); });
 function fitFrame(){
