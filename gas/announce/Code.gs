@@ -30,7 +30,8 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v10';   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
+var VERSION = 'announce-api-v11';   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
+// v10 說明：   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
 // 以下為 v9 說明：
 var VERSION_V9_NOTE = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
 // 舊註解：v5.2   // 2026-10-07 v5.2：工作清單暫存 5 分鐘（加快 104 連過來）；v5.1：留言誰都不能刪（拿掉 discussDel）；v5：工作清單留言 discussAdd（免密碼、可附檔）；v4：工作清單 workList 也免密碼、bundle 不帶密碼回三份；v3：公告免密碼（list／get／options／active），工作清單仍要密碼；v2＝2026-10-04 併入 v1.1 修正（setSharing 被拒略過＋fixAttIndex20261004）
@@ -376,7 +377,9 @@ function fixAttIndex20261004() {
 function workView_(r) {
   return { work_id: r.work_id, src: r.src, nueip_id: r.nueip_id, item: r.item, owner: r.owner, creator: r.creator, date: r.date, due_date: r.due_date, done_date: r.done_date,
     progress: r.progress, importance: r.importance, origin: r.origin, text: r.content_text, html: str_(r.content_html_1) + str_(r.content_html_2), updated_at: r.updated_at,
-    created_at: r.created_at, creator_store: r.creator_store || '' };   /* v10：加 created_at、creator_store（手機 App 判斷「我發的」與能不能改） */
+    created_at: r.created_at, creator_store: r.creator_store || '',
+    targets: (function () { try { return r.targets ? JSON.parse(r.targets) : null; } catch (e) { return null; } })(),
+    att: (function () { try { var a = r.att ? JSON.parse(r.att) : null; if (a && a.files) a.files = a.files.map(function (f) { return { aid: f.aid, name: f.name, size: f.size, mime: f.mime, url: f.url }; }); return a; } catch (e) { return null; } })() };   /* v11：交辦對象、附件 */   /* v10：加 created_at、creator_store（手機 App 判斷「我發的」與能不能改） */
 }
 function workList_(p, who) {
   /* v5.2：結果暫存 5 分鐘（同公告清單的 ann:ver 版本號；寫入後 listCacheClear_ 換號＝失效）；放不進去就照常每次讀 */
@@ -1144,21 +1147,36 @@ function promoAttDel_(p, who) {
  *   fact_work 第 21 欄 creator_store：第一次 appWorkSave／appWorkDel 時自動補表頭；補之前先把 fact_work 整張複製成 backup_fact_work_20261126（已有就不再複製）。
  *   舊的 workSave（電腦版管理者）不寫這欄（put_ 遇到沒給的欄位會跳過），不受影響。
  * ===================================================================== */
-TABS.fact_work.push('creator_store');
+/* ---------------------------------------------------------------------
+ * v11（2026-11-26 晚，經營者：「參考 104 的工作清單欄位讓我填寫」「我需要有上傳附件的功能」「人員異動後，如何發送工作清單給新人」→ 名單選「從 104 班表自動帶」）
+ *   交辦對象（fact_work 第 22 欄 targets，JSON）：{ all:1（全體店長）, stores:[店號], groups:['甜點試做'], people:['姓名'] }。
+ *     「交辦給誰」只記位置／群組，打開時才對名單 → 換店長、群組加新人，不用重發。owner 欄照舊寫成一句話給電腦版看。
+ *   附件（第 23 欄 att，JSON）：{ note:'附件說明', files:[{aid,name,size,mime,id,url}] }；appWorkUpload 一次傳一個（≤10MB、每件最多 10 個），appWorkAttDel 搬到 _已刪除。
+ *   人員名單 appMeta：門市＝排班資料倉 fact_schedule 這個月＋下個月（104 每天同步），每人歸到排班天數最多的那家店；
+ *     體驗中心／出貨中心＝dim_app_staff（App 裡體驗中心維護）；群組＝dim_app_group（App 裡體驗中心維護）。名單暫存 6 小時。
+ *   轉交：修改交辦對象時，自動在留言留一則「系統紀錄」（加了誰、拿掉誰）。
+ *   出貨中心可登入（as＝'dc'，dim_auth purchase_dc）。
+ * --------------------------------------------------------------------- */
+TABS.fact_work.push('creator_store', 'targets', 'att');
+TABS.dim_app_group = ['group', 'name', 'sort', 'updated_at', 'updated_by'];
+TABS.dim_app_staff = ['unit', 'name', 'role', 'active', 'updated_at', 'updated_by'];
 ACTIONS.appAuth = appAuth_; ACTIONS.appWork = appWork_; ACTIONS.appWorkSave = appWorkSave_; ACTIONS.appWorkDel = appWorkDel_;
-['appAuth', 'appWork', 'appWorkSave', 'appWorkDel'].forEach(function (a) { OPEN[a] = 1; });   /* 自己驗密碼（店密碼或體驗中心密碼），不走 announce 密碼 */
-['appWorkSave', 'appWorkDel'].forEach(function (a) { WRITES[a] = 1; });
+ACTIONS.appMeta = appMeta_; ACTIONS.appGroupSave = appGroupSave_; ACTIONS.appStaffSave = appStaffSave_;
+ACTIONS.appWorkUpload = appWorkUpload_; ACTIONS.appWorkAttDel = appWorkAttDel_;
+['appAuth', 'appWork', 'appWorkSave', 'appWorkDel', 'appMeta', 'appGroupSave', 'appStaffSave', 'appWorkUpload', 'appWorkAttDel'].forEach(function (a) { OPEN[a] = 1; });   /* 自己驗密碼（店密碼／體驗中心／出貨中心），不走 announce 密碼 */
+['appWorkSave', 'appWorkDel', 'appGroupSave', 'appStaffSave', 'appWorkUpload', 'appWorkAttDel'].forEach(function (a) { WRITES[a] = 1; });
 var APP_DAYS = 30, APP_NAME_MAX = 20, APP_OWNER_MAX = 300, APP_TEXT_MAX = 5000, APP_IMP = ['', '★', '★★', '★★★'];
+var APP_ATT_MAX = 10, APP_ATT_NOTE_MAX = 500, APP_ROSTER_TTL = 21600;
+var SCHED_SS_ID = '19X3cqX70aWNTc6KFTP5jushG5S06xNicYV1ulDXl-hM';   /* 排班分析資料倉（fact_schedule：104 班表每天同步進來） */
 
-/* 身分：p.as＝'hq' 或店號 1～12；p.pw＝密碼。只驗選的那一種 */
+/* 身分：p.as＝'hq'｜'dc'｜店號 1～12；p.pw＝密碼。只驗選的那一種 */
 function appWho_(p) {
   var as = String(p.as == null ? '' : p.as).trim();
-  if (as === 'hq') {
-    try { auth_(p.pw, DASH_HQ); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '體驗中心密碼不對').replace('請輸入密碼', '請輸入體驗中心密碼'), 'auth'); }
-    return { key: 'hq', label: '體驗中心', hq: true };
-  }
+  function chk(dash, label) { try { auth_(p.pw, dash); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, label + '密碼不對').replace('請輸入密碼', '請輸入' + label + '密碼'), 'auth'); } }
+  if (as === 'hq') { chk(DASH_HQ, '體驗中心'); return { key: 'hq', label: '體驗中心', hq: true }; }
+  if (as === 'dc') { chk('purchase_dc', '出貨中心'); return { key: 'dc', label: '出貨中心', hq: false }; }
   var st = storeOf_(as);
-  try { auth_(p.pw, 'store_' + st.id); } catch (e) { Utilities.sleep(600); throw fail_(errMsg_(e).replace(/^密碼不對/, '店密碼不對').replace('請輸入密碼', '請輸入店密碼'), 'auth'); }
+  chk('store_' + st.id, '店');
   return { key: String(st.id), label: st.id + '號店', short: st.short, hq: false };
 }
 function appName_(p) {
@@ -1168,7 +1186,7 @@ function appName_(p) {
 }
 function appAuth_(p) {
   var w = appWho_(p);
-  return { data: { as: w.key, label: w.label, hq: w.hq, stores: STORE_DEF.map(function (s) { return { id: s[0], short: s[2] }; }) } };
+  return { data: { as: w.key, label: w.label, hq: w.hq, stores: STORE_DEF.map(function (s) { return { id: s[0], short: s[2] }; }), meta: appMetaData_() } };
 }
 function appWork_(p, who) {
   var all = workList_(p, who).data.rows, d = new Date(); d.setDate(d.getDate() - APP_DAYS);
@@ -1180,21 +1198,127 @@ function appWork_(p, who) {
   });
   return { data: { rows: rows, today: today_(), days: APP_DAYS, total: all.length } };
 }
-/* fact_work 補第 21 欄表頭（先備份）。呼叫端已拿到腳本鎖 */
+
+/* ===== 名單：門市（104 班表）＋體驗中心／出貨中心（手動）＋群組 ===== */
+function appSheet_(name) { var ss = ss_(); if (!ss.getSheetByName(name)) ensureTab_(ss, name); return load_(name); }
+function appRoster_() {
+  var c = CacheService.getScriptCache(), hit = c.get('app:roster');
+  if (hit) { try { return JSON.parse(hit); } catch (e) { } }
+  var now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  function ym(yy, mm) { var d = new Date(yy, mm, 1); return Utilities.formatDate(d, TZ, 'yyyy-MM'); }
+  var cur = ym(y, m), next = ym(y, m + 1), prev = ym(y, m - 1);
+  var sh = SpreadsheetApp.openById(SCHED_SS_ID).getSheetByName('fact_schedule'), last = sh.getLastRow(), rows = last > 1 ? sh.getRange(2, 1, last - 1, 6).getValues() : [];
+  var H = sh.getRange(1, 1, 1, 6).getValues()[0].map(function (x) { return String(x).trim(); });
+  var iD = H.indexOf('date'), iS = H.indexOf('store_id'), iI = H.indexOf('employee_id'), iN = H.indexOf('employee_name'), iR = H.indexOf('role');
+  if ([iD, iS, iN].some(function (i) { return i < 0; })) throw fail_('排班資料倉 fact_schedule 表頭對不上', 'setup');
+  var have = {};   /* 每家店有哪些月份的班表 */
+  var cnt = {};    /* key（員工ID或姓名）→ {name, role, ym:{cur/next/prev:{store:days}}} */
+  rows.forEach(function (r) {
+    var d = r[iD] instanceof Date ? Utilities.formatDate(r[iD], TZ, 'yyyy-MM-dd') : String(r[iD]).slice(0, 10), mon = d.slice(0, 7);
+    if (mon !== cur && mon !== next && mon !== prev) return;
+    var s = Number(r[iS]), n = String(r[iN] || '').trim(); if (!s || !n) return;
+    (have[s] = have[s] || {})[mon] = 1;
+    var k = String(r[iI] || '').trim() || n, o = cnt[k] = cnt[k] || { name: n, role: '', id: String(r[iI] || '').trim(), m: {} };
+    if (iR >= 0 && String(r[iR]).trim()) o.role = String(r[iR]).trim();
+    var mm = o.m[mon] = o.m[mon] || {}; mm[s] = (mm[s] || 0) + 1;
+  });
+  var stores = {};
+  STORE_DEF.forEach(function (sd) { stores[sd[0]] = []; });
+  Object.keys(cnt).forEach(function (k) {
+    var o = cnt[k];
+    /* 這個月或下個月有排班才算在職；歸到這兩個月排班天數最多的店（只有上個月有班＝離職或調走，不列） */
+    var tot = {}; [cur, next].forEach(function (mon) { var mm = o.m[mon] || {}; Object.keys(mm).forEach(function (s) { tot[s] = (tot[s] || 0) + mm[s]; }); });
+    var best = Object.keys(tot).sort(function (a, b) { return tot[b] - tot[a]; })[0];
+    if (!best) return;
+    if (stores[best]) stores[best].push({ name: o.name, role: o.role, days: tot[best] });
+  });
+  Object.keys(stores).forEach(function (s) {
+    stores[s].sort(function (a, b) { return (/資深|店長|魔導/.test(b.role) ? 1 : 0) - (/資深|店長|魔導/.test(a.role) ? 1 : 0) || b.days - a.days; });
+  });
+  /* 有在營業（這個月或下個月有班表）的店：全體店長＝這些店 */
+  var open = STORE_DEF.filter(function (sd) { var h = have[sd[0]] || {}; return h[cur] || h[next]; }).map(function (sd) { return sd[0]; });
+  var res = { stores: stores, open: open.length ? open : STORE_DEF.map(function (sd) { return sd[0]; }), months: [cur, next], at: now_() };
+  try { c.put('app:roster', JSON.stringify(res), APP_ROSTER_TTL); } catch (e) { }
+  return res;
+}
+function appMetaData_() {
+  var r = appRoster_(), g = {}, staff = { hq: [], dc: [] };
+  appSheet_('dim_app_group').rows.sort(function (a, b) { return (Number(a.sort) || 0) - (Number(b.sort) || 0); }).forEach(function (x) { if (x.group && x.name) (g[x.group] = g[x.group] || []).push(x.name); });
+  appSheet_('dim_app_staff').rows.forEach(function (x) { if (x.name && x.active !== 'N' && staff[x.unit]) staff[x.unit].push({ name: x.name, role: x.role || '' }); });
+  return { stores: r.stores, open: r.open, months: r.months, rosterAt: r.at, groups: g, staff: staff,
+    storeNames: STORE_DEF.map(function (s) { return { id: s[0], short: s[2], name: s[1] }; }) };
+}
+function appMeta_(p) { appWho_(p); return { data: appMetaData_() }; }
+/* 群組名單（只有體驗中心可改）：整組換掉。members＝姓名陣列；空陣列＝刪除這個群組 */
+function appGroupSave_(p) {
+  var w = appWho_(p), name = appName_(p); if (!w.hq) throw fail_('只有體驗中心可以改群組', 'deny');
+  var grp = cleanTxt_(p.group, 20).replace(/\s+/g, '').trim(); if (!grp) throw fail_('請填群組名稱', 'invalid');
+  if (['全體店長', '專案編組'].indexOf(grp) >= 0) throw fail_('「' + grp + '」是保留名稱', 'invalid');
+  var mem = (Array.isArray(p.members) ? p.members : []).map(function (x) { return cleanTxt_(x, APP_NAME_MAX).replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  mem = mem.filter(function (x, i) { return mem.indexOf(x) === i; }).slice(0, 60);
+  var t = appSheet_('dim_app_group'), old = t.rows.filter(function (x) { return x.group === grp; });
+  var keep = t.rows.filter(function (x) { return x.group !== grp && x.group; }), base = keep.length ? Math.max.apply(null, keep.map(function (x) { return Number(x.sort) || 0; })) : 0;
+  var out = keep.map(function (x) { return [x.group, x.name, x.sort, x.updated_at, x.updated_by]; });
+  mem.forEach(function (n, i) { out.push([grp, n, base + i + 1, now_(), name + '（體驗中心）']); });
+  var sh = t.sh, H = t.H;
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, H.length).clearContent();
+  if (out.length) sh.getRange(2, 1, out.length, H.length).setNumberFormat('@').setValues(out.map(function (r) { return r.map(function (v) { return safe_(str_(v)); }); }));
+  return { id: grp, data: { meta: appMetaData_() }, msg: '群組「' + grp + '」' + old.length + ' 人 → ' + mem.length + ' 人：' + mem.join('、') };
+}
+/* 體驗中心／出貨中心人員（門市不用，門市從 104 班表帶）：unit＝hq｜dc，整單位換掉 */
+function appStaffSave_(p) {
+  var w = appWho_(p), name = appName_(p); if (!w.hq) throw fail_('只有體驗中心可以改人員名單', 'deny');
+  var unit = String(p.unit || ''); if (['hq', 'dc'].indexOf(unit) < 0) throw fail_('單位要是體驗中心或出貨中心', 'invalid');
+  var mem = (Array.isArray(p.members) ? p.members : []).map(function (x) { return cleanTxt_(x, APP_NAME_MAX).replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  mem = mem.filter(function (x, i) { return mem.indexOf(x) === i; }).slice(0, 80);
+  var t = appSheet_('dim_app_staff'), keep = t.rows.filter(function (x) { return x.unit !== unit && x.unit; });
+  var out = keep.map(function (x) { return [x.unit, x.name, x.role, x.active, x.updated_at, x.updated_by]; });
+  mem.forEach(function (n) { out.push([unit, n, '', 'Y', now_(), name + '（體驗中心）']); });
+  var sh = t.sh, H = t.H;
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, H.length).clearContent();
+  if (out.length) sh.getRange(2, 1, out.length, H.length).setNumberFormat('@').setValues(out.map(function (r) { return r.map(function (v) { return safe_(str_(v)); }); }));
+  return { id: unit, data: { meta: appMetaData_() }, msg: (unit === 'hq' ? '體驗中心' : '出貨中心') + '人員 ' + mem.length + ' 人：' + mem.join('、') };
+}
+
+/* ===== 工作 ===== */
+/* fact_work 補第 21～23 欄表頭（先備份）。呼叫端已拿到腳本鎖 */
 function appWorkCols_() {
-  var ss = ss_(), sh = ss.getSheetByName('fact_work'), H = TABS.fact_work, col = H.length;
-  var cur = String(sh.getRange(1, col).getValue()).trim();
-  if (cur === H[col - 1]) return;
-  if (cur) throw fail_('fact_work 第 ' + col + ' 欄表頭是「' + cur + '」，應為「' + H[col - 1] + '」，停止寫入', 'setup');
-  var bk = 'backup_fact_work_20261126';
+  var ss = ss_(), sh = ss.getSheetByName('fact_work'), H = TABS.fact_work, need = [];
+  var cur = sh.getRange(1, 1, 1, Math.min(sh.getMaxColumns(), H.length)).getValues()[0].map(function (x) { return String(x).trim(); });
+  for (var i = 20; i < H.length; i++) { if (cur[i] === H[i]) continue; if (cur[i]) throw fail_('fact_work 第 ' + (i + 1) + ' 欄表頭是「' + cur[i] + '」，應為「' + H[i] + '」，停止寫入', 'setup'); need.push(i); }
+  if (!need.length) return;
+  var bk = 'backup_fact_work_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd') + '_v11';
   if (!ss.getSheetByName(bk)) sh.copyTo(ss).setName(bk);
-  if (sh.getMaxColumns() < col) sh.insertColumnsAfter(sh.getMaxColumns(), col - sh.getMaxColumns());
-  sh.getRange(1, col).setValue(H[col - 1]).setFontWeight('bold').setBackground('#FFF3E0');
-  log_('升級程式', 'appWorkCols', '', true, 'fact_work 補表頭 ' + H[col - 1] + '；備份 ' + bk + '；資料列 ' + Math.max(0, sh.getLastRow() - 1));
+  if (sh.getMaxColumns() < H.length) sh.insertColumnsAfter(sh.getMaxColumns(), H.length - sh.getMaxColumns());
+  need.forEach(function (i) { sh.getRange(1, i + 1).setValue(H[i]).setFontWeight('bold').setBackground('#FFF3E0'); });
+  log_('升級程式', 'appWorkCols', '', true, 'fact_work 補表頭 ' + need.map(function (i) { return H[i]; }).join('、') + '；備份 ' + bk + '；資料列 ' + Math.max(0, sh.getLastRow() - 1));
 }
 function appCanEdit_(w, row) { return w.hq || String(row.creator_store || '') === w.key; }
 function appText2Html_(t) {
   return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\n/g, '<br>');
+}
+function appParseJson_(s, def) { try { var v = JSON.parse(String(s || '')); return v && typeof v === 'object' ? v : def; } catch (e) { return def; } }
+/* 交辦對象整理＋轉成一句話（owner 欄，給電腦版與舊畫面看） */
+function appTargets_(x) {
+  x = x || {};
+  var names = function (a, max) { a = (Array.isArray(a) ? a : []).map(function (v) { return cleanTxt_(v, APP_NAME_MAX).replace(/\s+/g, ' ').trim(); }).filter(Boolean); return a.filter(function (v, i) { return a.indexOf(v) === i; }).slice(0, max); };
+  var t = { all: x.all ? 1 : 0, stores: (Array.isArray(x.stores) ? x.stores : []).map(Number).filter(function (n) { return STORE_DEF.some(function (s) { return s[0] === n; }); }),
+    groups: names(x.groups, 10), people: names(x.people, 60) };
+  t.stores = t.stores.filter(function (n, i) { return t.stores.indexOf(n) === i; }).sort(function (a, b) { return a - b; });
+  if (t.all) t.stores = [];
+  return t;
+}
+function appTargetsText_(t) {
+  var a = []; if (t.all) a.push('全體店長');
+  t.stores.forEach(function (n) { a.push(n + '號店'); });
+  t.groups.forEach(function (g) { a.push(g); });
+  t.people.forEach(function (n) { a.push(n); });
+  return a.join('、');
+}
+function appTargetsDiff_(o, n) {
+  var tx = function (t) { var a = []; if (t.all) a.push('全體店長'); t.stores.forEach(function (s) { a.push(s + '號店'); }); t.groups.forEach(function (g) { a.push('群組' + g); }); t.people.forEach(function (p) { a.push(p); }); return a; };
+  var A = tx(o), B = tx(n), add = B.filter(function (x) { return A.indexOf(x) < 0; }), del = A.filter(function (x) { return B.indexOf(x) < 0; });
+  return { add: add, del: del };
 }
 function appWorkSave_(p) {
   var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
@@ -1204,42 +1328,98 @@ function appWorkSave_(p) {
   if (id) {
     row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
     if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
-    if (!appCanEdit_(w, row)) throw fail_('這件不是你們店發的，只能留言回覆', 'deny');
+    if (!appCanEdit_(w, row)) throw fail_('這件不是你們發的，只能留言回覆', 'deny');
     if (x.base_updated && String(x.base_updated) !== String(row.updated_at)) throw fail_('這件工作剛被別人改過，請重新整理再改', 'conflict');
   }
   var item = cleanTxt_(x.item, 200).replace(/\s+/g, ' ').trim(); if (!item) throw fail_('工作項目必填', 'invalid');
+  var due = normDate_(x.due_date); if (!row && !due) throw fail_('完成期限必填', 'invalid');
   var imp = cleanTxt_(x.importance, 10).trim(); if (APP_IMP.indexOf(imp) < 0) imp = row ? row.importance : '';
   var prog = cleanTxt_(x.progress, 20).trim() || (row ? row.progress : '未開始');
   var progOk = load_('dim_option').rows.some(function (o) { return o.kind === 'progress' && o.value === prog; });
   if (!progOk) throw fail_('進度「' + prog + '」不在選單裡', 'invalid');
-  var o = {
-    item: item, owner: cleanTxt_(x.owner, APP_OWNER_MAX).replace(/\s+/g, ' ').trim(), due_date: normDate_(x.due_date), importance: imp, progress: prog,
-    done_date: prog === '已完成' ? ((row && row.done_date) || today_()) : '', updated_at: now_(), updated_by: by
-  };
+  var o = { item: item, due_date: due, importance: imp, progress: prog,
+    done_date: prog === '已完成' ? ((row && row.done_date) || today_()) : '', updated_at: now_(), updated_by: by };
+  var tg = null, diff = null;
+  if (x.targets) {
+    tg = appTargets_(x.targets);
+    if (!tg.all && !tg.stores.length && !tg.groups.length && !tg.people.length) throw fail_('請選交辦對象', 'invalid');
+    o.targets = JSON.stringify(tg); o.owner = appTargetsText_(tg).slice(0, APP_OWNER_MAX);
+    if (row) { var old = appTargets_(appParseJson_(row.targets, null) || { people: owners_(row.owner) }); diff = appTargetsDiff_(old, tg); if (!diff.add.length && !diff.del.length) diff = null; }
+  } else if (x.owner !== undefined) {
+    o.owner = cleanTxt_(x.owner, APP_OWNER_MAX).replace(/\s+/g, ' ').trim();
+  }
   if (x.text !== undefined && x.text !== null) {
     var text = cleanTxt_(x.text, APP_TEXT_MAX + 50).replace(/\r\n?/g, '\n').trim();
     if (text.length > APP_TEXT_MAX) throw fail_('工作內容最多 ' + APP_TEXT_MAX + ' 字', 'invalid');
     o.content_text = text; o.content_html_1 = appText2Html_(text); o.content_html_2 = '';
+  }
+  if (x.att_note !== undefined) {
+    var att = row ? appParseJson_(row.att, { files: [] }) : { files: [] };
+    att.note = cleanTxt_(x.att_note, APP_ATT_NOTE_MAX).trim(); att.files = att.files || [];
+    o.att = JSON.stringify(att);
   }
   if (!row) {
     id = 'W' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
     o.work_id = id; o.src = 'app'; o.nueip_id = ''; o.creator = by; o.creator_store = w.key; o.date = today_(); o.origin = '';
     o.created_at = o.updated_at; o.deleted = ''; o.deleted_at = '';
     if (o.content_text === undefined) { o.content_text = ''; o.content_html_1 = ''; o.content_html_2 = ''; }
+    if (o.owner === undefined) o.owner = '';
     put_(t, nextRow_(t), o);
   } else {
     putCols_(t, row._row, o, function (h) { return o[h] !== undefined; });
+    if (diff) {   /* 轉交／加人：留一則系統紀錄 */
+      var d = load_('fact_work_discuss');
+      put_(d, nextRow_(d), { work_id: id, author: name, ts: now_(), role: w.label + '・系統紀錄',
+        text: '交辦對象變更' + (diff.add.length ? '｜加入：' + diff.add.join('、') : '') + (diff.del.length ? '｜移除：' + diff.del.join('、') : ''),
+        disc_id: 'S' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + Math.floor(Math.random() * 900 + 100), att: '', src: 'app', deleted: '', deleted_at: '' });
+    }
   }
   try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
-  return { id: id, data: { work_id: id, updated_at: o.updated_at }, msg: (row ? '手機改工作：' : '手機發工作：') + item + '｜' + by };
+  return { id: id, data: { work_id: id, updated_at: o.updated_at }, msg: (row ? '手機改工作：' : '手機發工作：') + item + '｜' + by + (diff ? '｜交辦對象 +' + diff.add.join('、') + ' -' + diff.del.join('、') : '') };
 }
+function owners_(s) { return String(s || '').split(/[、,，;；\/\s]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
 function appWorkDel_(p) {
   var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
   appWorkCols_();
   var id = str_(p.work_id), t = load_('fact_work'), row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
   if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
-  if (!appCanEdit_(w, row)) throw fail_('這件不是你們店發的，不能刪', 'deny');
+  if (!appCanEdit_(w, row)) throw fail_('這件不是你們發的，不能刪', 'deny');
   putCols_(t, row._row, { deleted: 'Y', deleted_at: now_(), updated_by: by }, function (h) { return h === 'deleted' || h === 'deleted_at' || h === 'updated_by'; });
   try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
   return { id: id, data: { work_id: id }, msg: '手機刪工作（標記）：' + row.item + '｜' + by };
+}
+/* 附件：一次一個（手機網路慢，一次一個比較穩、失敗只重傳那一個）。p.name＝上傳者名字、p.fname＝檔名（不可混用） */
+function appWorkUpload_(p) {
+  var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
+  appWorkCols_();
+  var id = str_(p.work_id), t = load_('fact_work'), row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
+  if (!appCanEdit_(w, row)) throw fail_('這件不是你們發的，請用留言附檔案', 'deny');
+  var att = appParseJson_(row.att, { files: [] }); att.files = att.files || [];
+  if (att.files.length >= APP_ATT_MAX) throw fail_('每件工作最多 ' + APP_ATT_MAX + ' 個附件', 'invalid');
+  var fname = cleanTxt_(p.fname, 150).replace(/[\\\/:*?"<>|]/g, '_').trim() || 'file', m = fname.match(/\.([A-Za-z0-9]{1,5})$/), ext = m ? m[1].toLowerCase() : '';
+  if (DISC_EXT.indexOf(ext) < 0) throw fail_('「' + fname + '」的檔案類型不收（可上傳：' + DISC_EXT.join('、') + '）', 'invalid');
+  var bytes = Utilities.base64Decode(String(p.b64 || ''));
+  if (!bytes.length) throw fail_('「' + fname + '」是空的', 'invalid');
+  if (bytes.length > DISC_MAX_FILE) throw fail_('「' + fname + '」超過 10MB', 'invalid');
+  rate_('appup:' + w.key, 40, 60, '1 分鐘內上傳太多，請稍後再傳');
+  var f = subOf_(sub_('工作附檔'), id).createFile(Utilities.newBlob(bytes, cleanTxt_(p.mime, 100) || 'application/octet-stream', fname));
+  try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (se) { }
+  var it = { aid: 'A' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHHmmss') + Math.floor(Math.random() * 900 + 100), name: fname, size: bytes.length, mime: f.getMimeType(), id: f.getId(), url: f.getUrl() };
+  att.files.push(it);
+  putCols_(t, row._row, { att: JSON.stringify(att), updated_at: now_(), updated_by: by }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
+  return { id: id, data: { file: { aid: it.aid, name: it.name, size: it.size, mime: it.mime, url: it.url } }, msg: '工作附件 ' + fname + '｜' + by };
+}
+function appWorkAttDel_(p) {
+  var w = appWho_(p), name = appName_(p), by = name + '（' + w.label + '）';
+  appWorkCols_();
+  var id = str_(p.work_id), aid = str_(p.aid), t = load_('fact_work'), row = t.rows.filter(function (r) { return r.work_id === id && r.deleted !== 'Y'; })[0];
+  if (!row) throw fail_('找不到這件工作（可能已刪除）', 'notfound');
+  if (!appCanEdit_(w, row)) throw fail_('這件不是你們發的，不能刪附件', 'deny');
+  var att = appParseJson_(row.att, { files: [] }), x = (att.files || []).filter(function (a) { return a.aid === aid; })[0];
+  if (!x) throw fail_('找不到附件', 'notfound');
+  try { var f = DriveApp.getFileById(x.id); if (inRoot_(f)) f.moveTo(sub_('_已刪除')); } catch (e) { }
+  att.files = att.files.filter(function (a) { return a.aid !== aid; });
+  putCols_(t, row._row, { att: JSON.stringify(att), updated_at: now_(), updated_by: by }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
+  return { id: id, data: { aid: aid }, msg: '刪除工作附件 ' + x.name + '｜' + by };
 }
