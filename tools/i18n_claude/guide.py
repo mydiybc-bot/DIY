@@ -143,6 +143,15 @@ def pick_price(it, S):
     return None
 
 
+def pick_cover(it, S):
+    """自選版後台沒放封面（例：116 1月草莓季_草莓生日蛋糕 自選版，2026-11-26）→ 暫用同款海綿蛋糕版的封面（同一個蛋糕外觀）。"""
+    if '自選版' not in it['name']: return ''
+    k = re.sub(r'\s+', '', it['name'].replace('_自選版', ''))
+    for s in S['items']:
+        if '海綿蛋糕版' in s['name'] and re.sub(r'\s+', '', s['name'].replace('_海綿蛋糕版', '')) == k: return s.get('cover') or ''
+    return ''
+
+
 def build():
     S = json.load(open(os.path.join(GW, 'src.json')))
     have = gget('lines').get('lines') or {}
@@ -161,6 +170,7 @@ def build():
         if price == 0 and not free_ok(it): price = None
         pp = pick_price(it, S)
         if pp != 'no': price = pp
+        cover = it['cover'] or pick_cover(it, S)
         content = shown_content(it)
         t = {'zh': ['', content, e.get('size') or '']}
         for lg in LANGS:
@@ -172,7 +182,7 @@ def build():
             desc = '\n'.join(tr(l) for l in content.split('\n'))
             t[lg] = [it['names'].get(lg) or '', desc, tr(e.get('size') or '')]
         items.append({'v': 2, 'id': it['id'], 'en': it['names'].get('en') or '', 'zh': it['name'], 'p': int(round(price)) if price is not None else None,
-                      'img': it['cover'], 's': size_of(e.get('size') or ''), 'size_raw': e.get('size') or '',
+                      'img': cover, 's': size_of(e.get('size') or ''), 'size_raw': e.get('size') or '',
                       'prep': float(e['prep']) if re.fullmatch(r'\s*\d+(\.\d+)?\s*', e.get('prep') or '') else None,
                       'tags': tags_of(it), 'cats': e.get('cats') or [], 't': t})
     used = {}

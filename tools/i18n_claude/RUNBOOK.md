@@ -56,3 +56,9 @@
 3. 每語言派一位核對員（sonnet），照 `WORK/sweep/TASK_CHECK.md` 寫 `sweep/_found_<lang>.json`（old／new 片段）
 4. `python3 zfix.py <lang> --dry` 試算 → `python3 zfix.py <lang>`：改 tr.json（備份到 sweep/backup/）、partial 投遞＋放行
 5. 再跑一次 zsweep 確認新字已上線。
+
+## 自選版（客人先選蛋糕體／夾餡，2026-11-26）
+後台「自選版」食譜（例：我的生日蛋糕 自選版）打開會先跳選擇頁 `/Steps/Picker`。申請單 GAS 會自己讀全部選項的完整步驟，並記下每個選項自己的頁（`src.pick`）；平板 `tablet-recipe.html` 先出外語選擇頁，只顯示共用＋選到的頁。
+- 翻譯照常（全部頁都翻）；`missing` 會多 kind＝`pick` 的詞（組名、選項名），寫進 `dict`，各支一致、跟步驟標題口味名一致。投遞時選擇頁沒翻會被擋成待檢查。
+- 到店須知：自選版售價＝同款海綿版售價＋海綿版產品特色寫的「+$69口味＆夾餡升級」（`guide.py pick_price`）；沒封面就暫用海綿版封面（`pick_cover`）。
+- 地雷：自選版頁面多一張重複的拿托盤頁，標題要照步驟清單順序對（`i18nParse_` 的 seq），不能用頁序。
