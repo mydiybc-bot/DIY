@@ -1205,6 +1205,16 @@ ACTIONS.i18nList = function (p, a) { return i18nList_(p, a); };
 ACTIONS.i18nGet = function (p, a) { return i18nGet_(p, a); };
 ACTIONS.i18nKick = function (p, a) { return i18nKick_(p, a); };
 ACTIONS.i18nPreview = function (p, a) { return i18nPreview_(p, a); };
+/* 2026-11-26 唯讀：放行中的譯文原樣（[[IMGn]] 佔位不展開），給 Claude Code 批次改詞（只讀、要唯讀預覽通行碼） */
+function i18nRaw_(p) {
+  if (!(p.pkey && i18nHash_(String(p.pkey)) === I18N_PREVIEW_HASH)) throw fail_('要通行碼', 'auth');
+  var id = String(p.id || '').trim().toLowerCase(), lang = String(p.lang || '').trim();
+  var m = i18nMeta_('i18n_rcp', I18N_RCP_HEAD), r = m.rows.filter(function (x) { return x.key === id + '|' + lang; })[0];
+  var c = r ? i18nLiveContent_(m.sh, r) : null; if (!c) throw fail_('這支這個語言沒有放行中的譯文', 'notyet');
+  return { data: { id: id, lang: lang, fp: c.fp, name: c.name, pres: c.pres, slides: c.slides, cur_fp: r.fp } };
+}
+ACTIONS.i18nRaw = function (p) { return i18nRaw_(p); };
+READS.i18nRaw = 1; NOAUTH.i18nRaw = 1;   /* 身分在函式裡驗（唯讀預覽通行碼） */
 ACTIONS.i18nApprove = function (p, a) { return i18nApprove_(p, a); };
 ACTIONS.i18nPick = function (p, a) { return i18nPick_(p, a); };   /* 2026-10-26 勾選；跟 i18nApprove 一樣走一般寫入路徑（鎖、回條、身分密碼） */
 READS.i18nPreview = 1; NOAUTH.i18nPreview = 1;   /* 身分在函式裡驗（主廚／管理者密碼，或唯讀預覽通行碼） */   /* i18nApprove 走一般寫入路徑（有鎖、有回條、寫紀錄） */
