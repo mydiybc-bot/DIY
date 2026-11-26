@@ -32,6 +32,7 @@ import schedule_ws   # 🗓 門市排班工作台（2026-10-26，經營者同意
 import gas_proxy     # 儀表板 → Google Apps Script 代轉（2026-10-27，經營者同意加這一行）
 import i18n_snap     # 🌏 平板外語食譜快照（2026-11-09，經營者同意加這一行）
 import cookie_mold  # 🍪 AI 專屬餅乾模第二階段（2026-11-18，經營者同意加這一行）
+import push_service  # 🔔 自己做 App 推播（2026-11-26，經營者同意加這一行）
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -327,6 +328,9 @@ class TrainingHandler(BaseHTTPRequestHandler):
             status_code, resp_data = cookie_mold.handle(parsed.path, self.read_body_bytes())
             self.send_json(resp_data, status=status_code)
             return
+        if parsed.path.startswith("/api/push/"):   # 🔔 自己做 App 推播：整個交給 push_service.py（2026-11-26 經營者同意）
+            status_code, resp_data = push_service.handle(parsed.path, self.read_json())
+            self.send_json(resp_data, status=status_code); return
 
         session = self._require_auth()
         if not session:

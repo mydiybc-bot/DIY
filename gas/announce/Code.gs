@@ -30,7 +30,8 @@
  * v5.2（2026-10-07 傍晚，經營者「從 104 點連結開留言區太久」）：workList 結果放 CacheService 5 分鐘（鍵帶 ann:ver，任何寫入含留言做完就換版本＝失效），
  *       bundle 也吃同一份。直接改試算表（不經本 API）→ 工作清單最多 5 分鐘後才看到。回傳欄位不變。
  */
-var VERSION = 'announce-api-v11.2';   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
+var VERSION = 'announce-api-v12';   // 2026-11-26 晚 v12：手機推播（新工作、轉交、留言、每天 09:30 到期提醒；送件交給 diybc-training /api/push/send）
+// v11.2：   // 2026-11-26 晚 v11：交辦對象（全體店長／店／群組／人）、工作附件、人員名單（104 班表）、群組與人員維護、轉交紀錄、出貨中心登入
 // v10 說明：   // 2026-11-26 v10：手機版工作清單 App（appAuth／appWork／appWorkSave／appWorkDel；店長與體驗中心都能發工作；fact_work 第 21 欄 creator_store）
 // 以下為 v9 說明：
 var VERSION_V9_NOTE = 'announce-api-v9';   // 2026-11-04 v9：活動與優惠辦法（promoList／promoSave／promoDel／promoUpload／promoAttDel，分頁 fact_promo）；2026-10-30 v8：門市雜記（noteList／noteAdd／noteDel，店密碼；可附圖片）；2026-10-22 v7.1：加一次性 closeWorkDue20261015（期限 10/15 以前的工作改已完成），API 動作未改；2026-10-17 v7：三頁合併成「自己做決策中心」——總部密碼（task_hq）可看任何一店、交辦全部、發佈公告／工作；店密碼（store_N）可交辦自己店；v6.1 2026-10-13：團體名單改讀近期訂位（打開就更新）；v6   // 2026-10-13 v6：門市今日（交辦事項＋團體聯絡資料，各店密碼）；
@@ -456,6 +457,7 @@ function discussAdd_(p, who) {
     role: role, att: att.length ? JSON.stringify(att) : '', src: 'web', deleted: '', deleted_at: '' };
   put_(d, nextRow_(d), o);
   d.rows.push(o);
+  pushReply_(id, author, role);   /* v12 推播 */
   return { id: id, data: { disc_id: o.disc_id, discuss: discBy_(d.rows)[id] || [] },
     msg: '留言 ' + o.disc_id + '：' + author + (role ? '（' + role + '）' : '') + '｜' + row.item + (att.length ? '｜附檔 ' + att.length + ' 個' : '') };
 }
@@ -1381,6 +1383,10 @@ function appWorkSave_(p) {
     }
   }
   try { CacheService.getScriptCache().remove('stat'); } catch (ce) { }
+  /* v12 推播：新工作送全部交辦對象；轉交／加人只送新加的 */
+  if (tg && !row) pushNewWork_(id, item, tg, by, w.key, name, due, false);
+  else if (tg && diff) { var oldTg = appTargets_(appParseJson_(row.targets, null) || { people: owners_(row.owner) }), addTg = { all: tg.all && !oldTg.all ? 1 : 0, stores: tg.stores.filter(function (x) { return oldTg.stores.indexOf(x) < 0; }), groups: tg.groups.filter(function (x) { return oldTg.groups.indexOf(x) < 0; }), people: tg.people.filter(function (x) { return oldTg.people.indexOf(x) < 0; }) };
+    if (addTg.all || addTg.stores.length || addTg.groups.length || addTg.people.length) pushNewWork_(id, item, addTg, by, w.key, name, due || row.due_date, true); }
   return { id: id, data: { work_id: id, updated_at: o.updated_at }, msg: (row ? '手機改工作：' : '手機發工作：') + item + '｜' + by + (diff ? '｜交辦對象 +' + diff.add.join('、') + ' -' + diff.del.join('、') : '') };
 }
 function owners_(s) { return String(s || '').split(/[、,，;；\/\s]+/).map(function (x) { return x.trim(); }).filter(Boolean); }
@@ -1428,4 +1434,133 @@ function appWorkAttDel_(p) {
   att.files = att.files.filter(function (a) { return a.aid !== aid; });
   putCols_(t, row._row, { att: JSON.stringify(att), updated_at: now_(), updated_by: by }, function (h) { return h === 'att' || h === 'updated_at' || h === 'updated_by'; });
   return { id: id, data: { aid: aid }, msg: '刪除工作附件 ' + x.name + '｜' + by };
+}
+
+/* ---------------------------------------------------------------------
+ * v12（2026-11-26 晚，經營者：「好，做推播」）手機推播：誰該收到在這裡算，真正送到手機交給 diybc-training /api/push/send（GAS 做不了 Web Push 簽章加密）。
+ *   訂閱：dim_app_push（一支手機／瀏覽器一列，endpoint 為鍵）；appPushSub 登入身分驗過才記；appPushUnsub 取消；appPushTest 送一則測試。
+ *   何時送：①新工作→交辦對象（不含發的人）②轉交／加人→只送新加的③留言→交辦對象回覆就送發工作的人；發工作的人回覆就送交辦對象
+ *          ④每天 09:30（pushDueDaily 時間觸發）→ 今天／明天到期、還沒回覆的人。
+ *   每則推播帶「這個人的待處理件數」n，手機桌面圖示跟著變。送出失敗不影響存檔（只記 log）。
+ *   通行碼：Script Properties PUSH_TOKEN（appPushSetup：體驗中心密碼驗過，向 diybc-training 換通行碼並存起來）。每日觸發在編輯器手動建。
+ * --------------------------------------------------------------------- */
+TABS.dim_app_push = ['endpoint', 'p256dh', 'auth', 'as', 'name', 'ua', 'created_at', 'updated_at', 'last_ok', 'fails'];
+var PUSH_BASE = 'https://diybc-training.onrender.com/api/push/', APP_URL = 'https://diybc-dash.onrender.com/static/work-app.html';
+ACTIONS.appPushSub = appPushSub_; ACTIONS.appPushUnsub = appPushUnsub_; ACTIONS.appPushTest = appPushTest_; ACTIONS.appPushSetup = appPushSetup_;
+['appPushSub', 'appPushUnsub', 'appPushTest', 'appPushSetup'].forEach(function (a) { OPEN[a] = 1; WRITES[a] = 1; });
+
+function appPushSub_(p) {
+  var w = appWho_(p), name = appName_(p), sub = p.sub || {}, keys = sub.keys || {};
+  var ep = String(sub.endpoint || '');
+  if (!/^https:\/\//.test(ep) || ep.length > 1000 || !keys.p256dh || !keys.auth) throw fail_('通知訂閱資料不完整', 'invalid');
+  rate_('push:sub:' + w.key, 30, 60, '太頻繁，請稍後再試');
+  var t = appSheet_('dim_app_push'), row = t.rows.filter(function (r) { return r.endpoint === ep; })[0];
+  var o = { endpoint: ep, p256dh: cleanTxt_(keys.p256dh, 200), auth: cleanTxt_(keys.auth, 100), as: w.key, name: name, ua: cleanTxt_(p.ua, 120), updated_at: now_(), fails: '0' };
+  if (row) putCols_(t, row._row, o, function (h) { return o[h] !== undefined; });
+  else { o.created_at = now_(); o.last_ok = ''; put_(t, nextRow_(t), o); }
+  return { id: w.key, data: { ok: true }, msg: '通知訂閱：' + name + '（' + w.label + '）' };
+}
+function appPushUnsub_(p) {
+  var ep = String(p.endpoint || ''), t = appSheet_('dim_app_push'), row = t.rows.filter(function (r) { return r.endpoint === ep; })[0];
+  if (row) t.sh.deleteRow(row._row);
+  return { id: '', data: { removed: !!row }, msg: '取消通知訂閱' };
+}
+function appPushSetup_(p) {
+  var w = appWho_(p); if (!w.hq) throw fail_('只有體驗中心可以設定推播', 'deny');
+  var r = UrlFetchApp.fetch(PUSH_BASE + 'setup', { method: 'post', contentType: 'application/json', payload: JSON.stringify({ hq_pw: p.pw }), muteHttpExceptions: true });
+  var j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) { }
+  if (!j.ok || !j.token) throw fail_('推播伺服器設定失敗（' + r.getResponseCode() + ' ' + (j.msg || '') + '）', 'setup');
+  PropertiesService.getScriptProperties().setProperty('PUSH_TOKEN', j.token);
+  /* 每天 09:30 到期提醒的時間觸發（pushDueDaily）在 Apps Script 編輯器「觸發條件」手動建（程式建要多一個 script.scriptapp 授權） */
+  return { id: 'push', data: { key: j.key }, msg: '推播通行碼已設定' };
+}
+
+/* ===== 誰算交辦對象、誰還沒回（跟 App 畫面同一套規則） ===== */
+function appNameMatch_(a, b) { a = String(a || '').trim(); b = String(b || '').trim(); if (!a || !b) return false; if (a === b) return true; return (a.length >= 2 && b.indexOf(a) >= 0) || (b.length >= 2 && a.indexOf(b) >= 0); }
+function appStoreOfRole_(r) { var m = String(r || '').match(/^(\d{1,2})號店/); return m ? Number(m[1]) : 0; }
+function appTgOf_(w, G) {
+  if (w.targets && typeof w.targets === 'object') return { all: !!w.targets.all, stores: w.targets.stores || [], groups: w.targets.groups || [], people: w.targets.people || [] };
+  var t = { all: false, stores: [], groups: [], people: [] };
+  owners_(w.owner).forEach(function (o) { var m = o.match(/^(\d{1,2})(號店|店)$/); if (o === '全體店長') t.all = true; else if (m) t.stores.push(Number(m[1])); else if (G[o]) t.groups.push(o); else t.people.push(o); });
+  return t;
+}
+function appHit_(tg, G, who) {   /* who＝{as, name} */
+  var st = Number(who.as) || 0;
+  if (st && (tg.all || tg.stores.indexOf(st) >= 0)) return true;
+  if (tg.people.some(function (n) { return appNameMatch_(n, who.name); })) return true;
+  return tg.groups.some(function (g) { return (G[g] || []).some(function (n) { return appNameMatch_(n, who.name); }); });
+}
+function appRepliedBy_(w, who) {
+  var st = Number(who.as) || 0, after = String(w.created_at || '').slice(0, 10);
+  return (w.discuss || []).some(function (d) {
+    if (/系統紀錄/.test(d.role || '')) return false;
+    if (after && String(d.ts || '').slice(0, 10) < after) return false;
+    return (st && appStoreOfRole_(d.role) === st) || appNameMatch_(d.author, who.name);
+  });
+}
+function appPendingFor_(rows, G, who) {
+  return rows.filter(function (w) { return w.progress !== '已完成' && w.progress !== '暫停' && appHit_(appTgOf_(w, G), G, who) && !appRepliedBy_(w, who); });
+}
+function appGroups_() { var g = {}; appSheet_('dim_app_group').rows.forEach(function (x) { if (x.group && x.name) (g[x.group] = g[x.group] || []).push(x.name); }); return g; }
+
+/* 送推播：pick(sub)→true 的訂閱都送；每則帶這個人的待處理件數。失敗只記 log，不丟錯 */
+function pushTo_(pick, title, body, wid, tag) {
+  try {
+    var token = PropertiesService.getScriptProperties().getProperty('PUSH_TOKEN'); if (!token) return 0;
+    var t = appSheet_('dim_app_push'); if (!t.rows.length) return 0;
+    listCacheClear_();   /* 這次寫入的工作要算進件數（寫入鎖還沒放、暫存還是舊的） */
+    var rows = appWork_({}, '系統').data.rows, G = appGroups_();
+    var items = [], subs = [];
+    t.rows.forEach(function (s) {
+      if (!s.endpoint || !pick(s, rows, G)) return;
+      var n = appPendingFor_(rows, G, { as: s.as, name: s.name }).length;
+      items.push({ sub: { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload: { title: title, body: String(body || '').slice(0, 300), url: APP_URL + (wid ? '#w=' + encodeURIComponent(wid) : ''), n: n, tag: tag || wid || 'ziji' } });
+      subs.push(s);
+    });
+    if (!items.length) return 0;
+    var r = UrlFetchApp.fetch(PUSH_BASE + 'send', { method: 'post', contentType: 'application/json', payload: JSON.stringify({ token: token, items: items }), muteHttpExceptions: true });
+    var j = {}; try { j = JSON.parse(r.getContentText()); } catch (e) { }
+    if (!j.ok) { log_('推播', 'push', wid || '', false, '送出失敗 ' + r.getResponseCode() + ' ' + (j.msg || '')); return 0; }
+    var gone = j.gone || [];
+    if (gone.length) {   /* 手機已取消訂閱 → 刪列（由下往上刪，列號才不會跑掉） */
+      t.rows.filter(function (s) { return gone.indexOf(s.endpoint) >= 0; }).map(function (s) { return s._row; }).sort(function (a, b) { return b - a; }).forEach(function (rn) { t.sh.deleteRow(rn); });
+    }
+    log_('推播', 'push', wid || '', true, title + '｜送 ' + j.sent + '／' + items.length + (gone.length ? '｜失效 ' + gone.length : '') + ((j.errors || []).length ? '｜錯 ' + j.errors.length : ''));
+    return j.sent || 0;
+  } catch (e) { log_('推播', 'push', wid || '', false, errMsg_(e)); return 0; }
+}
+function appSameWho_(s, as, name) { return String(s.as) === String(as) && appNameMatch_(s.name, name); }
+/* ① 新工作／② 轉交加人 */
+function pushNewWork_(wid, item, tgAdd, by, byAs, byName, due, isTransfer) {
+  var G = appGroups_();
+  return pushTo_(function (s) { return !appSameWho_(s, byAs, byName) && appHit_(tgAdd, G, { as: s.as, name: s.name }); },
+    (isTransfer ? '📋 工作轉給你：' : '📋 新工作：') + item, '交辦人：' + by + (due ? '｜期限 ' + due : '') + '｜點開回覆', wid, 'w' + wid);
+}
+/* ③ 留言 */
+function pushReply_(wid, author, role) {
+  try {
+    var w = load_('fact_work', true).rows.filter(function (x) { return x.work_id === wid && x.deleted !== 'Y'; })[0]; if (!w || /系統紀錄/.test(role || '')) return 0;
+    var G = appGroups_(), tg = appTgOf_({ targets: appParseJson_(w.targets, null), owner: w.owner }, G);
+    var cName = String(w.creator || '').replace(/（.*$/, '').trim(), cAs = String(w.creator_store || '');
+    var byCreator = appNameMatch_(author, cName) && (!cAs || appStoreOfRole_(role) === Number(cAs) || /體驗中心|出貨中心/.test(role || '') || cAs === 'hq' || cAs === 'dc');
+    var rAs = appStoreOfRole_(role) || (/體驗中心/.test(role || '') ? 'hq' : (/出貨中心/.test(role || '') ? 'dc' : ''));
+    var title = '💬 ' + author + '：' + w.item;
+    if (byCreator) return pushTo_(function (s) { return !appNameMatch_(s.name, author) && appHit_(tg, G, { as: s.as, name: s.name }); }, title, '交辦人留言了，點開看', wid, 'r' + wid);
+    return pushTo_(function (s) { return appNameMatch_(s.name, cName) && (!cAs || String(s.as) === cAs) && !(String(s.as) === String(rAs) && appNameMatch_(s.name, author)); }, title, (role ? role + ' ' : '') + '回覆了你交辦的工作', wid, 'r' + wid);
+  } catch (e) { log_('推播', 'pushReply', wid, false, errMsg_(e)); return 0; }
+}
+/* ④ 每天 09:30：今天／明天到期、還沒回覆 */
+function pushDueDaily() {
+  var d = new Date(); d.setDate(d.getDate() + 1); var tmr = Utilities.formatDate(d, TZ, 'yyyy-MM-dd'), tdy = today_();
+  var due = {};
+  return pushTo_(function (s, rows, G) {
+    var list = appPendingFor_(rows, G, { as: s.as, name: s.name }).filter(function (w) { return w.due_date && w.due_date <= tmr; });
+    due[s.endpoint] = list; return list.length > 0;
+  }, '⏰ 有工作快到期', '今天或明天到期、還沒回覆的工作，點開看', '', 'due-' + tdy);
+}
+function appPushTest_(p) {
+  var w = appWho_(p), name = appName_(p), ep = String(p.endpoint || '');
+  var n = pushTo_(function (s) { return s.endpoint === ep; }, '🔔 通知已開啟', name + '（' + w.label + '），之後有交辦給你的工作，這支手機會收到通知', '', 'test');
+  if (!n) throw fail_('測試通知沒送出（這支手機的訂閱可能還沒存好，請再按一次）', 'push');
+  return { id: '', data: { sent: n }, msg: '測試推播：' + name };
 }

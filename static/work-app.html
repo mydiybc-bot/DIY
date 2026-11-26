@@ -332,7 +332,8 @@ $('lgOk').addEventListener('click', function(){
   showList(); load(true);
 });
 function logout(){
-  if (!confirm('要登出嗎？')) return;
+  if (!confirm('要登出嗎？（這支手機也會停止收通知）')) return;
+  disablePush();
   var keep = S.auth ? { as:S.auth.as, name:S.auth.name } : null;
   lsDel(K_AUTH); S.auth = keep; showLogin(); S.auth = null; updateBadge();
 }
@@ -344,7 +345,7 @@ function showLogin(){ closeSheets(); $('vList').classList.add('hide'); $('vLogin
 function showList(){ $('vLogin').classList.add('hide'); $('vList').classList.remove('hide');
   $('meBox').innerHTML = '<div>'+esc(S.auth.name)+'</div><div>'+esc(S.auth.label)+' · <a href="#" id="lo" style="color:#FFD678">登出</a></div>';
   $('lo').onclick = function(e){ e.preventDefault(); logout(); };
-  markTab(); installBanner('instB'); renderDock(); setSection(S.sec || lsGet(K_SEC) || 'work');
+  markTab(); installBanner('instB'); renderDock(); setSection(S.sec || lsGet(K_SEC) || 'work'); badgeTip();
 }
 /* 名單（104 班表＋群組）：打開時背景更新一次 */
 function loadMeta(){
@@ -438,16 +439,54 @@ function updateBadge(){
   ['bMine','bdg_work'].forEach(function(id){ var el=$(id); if (!el) return; el.textContent=t; el.classList.toggle('hide', !n); });
   document.title = (n ? '('+t+') ' : '') + '自己做 | 自己做烘焙聚樂部';
   try { if (navigator.setAppBadge) { if (n) navigator.setAppBadge(n).catch(function(){}); else navigator.clearAppBadge().catch(function(){}); } } catch(_){}
-  badgeTip();
+  if (!updateBadge._tip) { updateBadge._tip=1; badgeTip(); }
 }
-/* iPhone：桌面圖示要顯示數字，得先允許「通知」（iOS 規定）；只在加到主畫面後的 App 裡問一次 */
+/* ===== 推播通知（2026-11-26 晚）=====
+   開啟後：有交辦給你的新工作、轉給你、有人回覆、每天 09:30 快到期 → 手機跳通知，桌面圖示顯示待處理件數（推播帶 n）。
+   iPhone：要先加到主畫面才能開（iOS 規定）；Android／電腦 Chrome：瀏覽器裡就能開。
+   手機訂閱（endpoint）存在工作清單 GAS dim_app_push；金鑰從 /api/push/key 拿（diybc-dash 轉給 diybc-training）。 */
+function pushOK(){ return ('serviceWorker' in navigator) && ('PushManager' in window) && window.Notification; }
+function urlB64(b){ var p='='.repeat((4-b.length%4)%4), s=atob((b+p).replace(/-/g,'+').replace(/_/g,'/')), a=new Uint8Array(s.length); for (var i=0;i<s.length;i++) a[i]=s.charCodeAt(i); return a; }
+function pushKey(){ return fetch('/api/push/key', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(function(r){ return r.json(); }).then(function(j){ if (!j.ok) throw new Error(j.msg||'拿不到通知金鑰'); return j.key; }); }
+function ensureSub(force){
+  if (!pushOK() || !S.auth || !S.auth.pw || Notification.permission!=='granted') return Promise.resolve(null);
+  return navigator.serviceWorker.ready.then(function(reg){
+    return reg.pushManager.getSubscription().then(function(sub){
+      return sub || pushKey().then(function(k){ return reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:urlB64(k) }); });
+    });
+  }).then(function(sub){
+    var j = sub.toJSON(), mark = j.endpoint+'|'+S.auth.as+'|'+S.auth.name;
+    if (!force && lsGet('wa_push_sync')===mark) return sub;
+    return call(authBody({ action:'appPushSub', sub:{ endpoint:j.endpoint, keys:j.keys }, ua:navigator.userAgent.slice(0,120) })).then(function(){ lsSet('wa_push_sync', mark); return sub; });
+  });
+}
+function enablePush(){
+  var el=$('badgeTip');
+  Notification.requestPermission().then(function(p){
+    if (p!=='granted') { if (el) el.innerHTML='<div class="inst"><div>通知沒有開成。要開的話：手機「設定」→ 通知 → 找到「自己做」或瀏覽器 → 允許通知。</div></div>'; return; }
+    if (el) el.innerHTML='<div class="msg">開啟中…</div>';
+    return ensureSub(true).then(function(sub){
+      return call(authBody({ action:'appPushTest', endpoint:sub.toJSON().endpoint })).then(function(){ toast('通知已開啟，應該會收到一則測試通知', 3500); });
+    }).catch(function(e){ if (!authFail(e)) toast('開啟通知失敗：'+e.message, 4000); }).finally(function(){ badgeTip(); });
+  });
+}
+function disablePush(){
+  if (!pushOK()) return Promise.resolve();
+  return navigator.serviceWorker.getRegistration('./work-app').then(function(reg){ return reg && reg.pushManager.getSubscription(); }).then(function(sub){
+    if (!sub) return;
+    var ep = sub.toJSON().endpoint; lsDel('wa_push_sync');
+    return call({ action:'appPushUnsub', endpoint:ep }).catch(function(){}).then(function(){ return sub.unsubscribe(); });
+  }).catch(function(){});
+}
 function badgeTip(){
   var el=$('badgeTip'); if (!el) return;
-  var need = standalone() && navigator.setAppBadge && window.Notification && Notification.permission==='default' && !lsGet('wa_badge_off');
-  el.innerHTML = need ? '<div class="inst"><div>🔴 讓桌面「自己做」圖示顯示待處理件數：按「開啟」，再按「允許」。<br><button class="btn" id="badgeGo" style="padding:6px 12px;font-size:14px;margin-top:6px">開啟</button></div><button class="x" aria-label="不再顯示">×</button></div>' : '';
-  if (!need) return;
-  el.querySelector('.x').onclick=function(){ lsSet('wa_badge_off','1'); el.innerHTML=''; };
-  $('badgeGo').onclick=function(){ Notification.requestPermission().then(function(){ el.innerHTML=''; updateBadge(); }).catch(function(){}); };
+  var ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  if (!pushOK() || !S.auth) { el.innerHTML = (ios && !standalone() && S.auth) ? '' : ''; return; }
+  if (Notification.permission==='granted') { el.innerHTML=''; ensureSub(false).catch(function(e){ authFail(e); }); return; }
+  if (Notification.permission==='denied' || lsGet('wa_push_off')) { el.innerHTML=''; return; }
+  el.innerHTML = '<div class="inst"><div>🔔 <b>開啟通知</b>：有交辦給你的工作、有人回覆、快到期時，手機會跳通知，桌面圖示也會顯示件數。<br><button class="btn" id="pushGo" style="padding:6px 12px;font-size:14px;margin-top:6px">開啟通知</button></div><button class="x" aria-label="不再顯示">×</button></div>';
+  el.querySelector('.x').onclick=function(){ lsSet('wa_push_off','1'); el.innerHTML=''; };
+  $('pushGo').onclick=enablePush;
 }
 
 /* ===== 清單 ===== */
