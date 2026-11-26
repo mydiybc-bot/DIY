@@ -240,7 +240,8 @@ function i18nZHint_(zh, lang, NM, EZ, OD) {
 /* 到店須知頁的在地品名（客人在那頁看到的名字，翻譯要一致）：中文名對；對不到用舊英文原文的名字對 */
 /* 2026-11-25 經營者：外語品名自訂（優先於到店須知名）；鍵＝中文名去掉所有括號備註 */
 var I18N_ZNAME = {
-  '動物奶油餅乾': { en: 'Animal-Shaped Cookies', ja: 'どうぶつ型クッキー', ko: '동물 모양 쿠키', vi: 'Bánh quy hình thú', id: 'Kue Kering Bentuk Hewan', th: 'คุกกี้รูปสัตว์' }   /* 「叫做動物造型餅乾」 */
+  '動物奶油餅乾': { en: 'Animal-Shaped Cookies', ja: 'どうぶつ型クッキー', ko: '동물 모양 쿠키', vi: 'Bánh quy hình thú', id: 'Kue Kering Bentuk Hewan', th: 'คุกกี้รูปสัตว์' },   /* 「叫做動物造型餅乾」 */
+  '焙茶柚香檸檬乳酪塔': { en: 'Hojicha Pomelo Lemon Cheesecake Tart', ja: 'ほうじ茶文旦レモンチーズタルト', ko: '호지차 포멜로 레몬 치즈 타르트', vi: 'Bánh tart phô mai chanh bưởi trà Hojicha', id: 'Tart Keju Lemon Pomelo Hojicha', th: 'ทาร์ตชีสเลมอนส้มโอโฮจิฉะ' }   /* 2026-11-26 經營者：柚子＝台灣文旦（到店須知寫 Yuzu） */
 };
 /* 2026-11-25 經營者：「要讓外語標題也寫出全素」→ 中文名有 (全素)／(可做全素)、在地名沒寫時自動補 */
 var I18N_ZVEG = {
