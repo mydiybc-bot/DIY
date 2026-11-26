@@ -467,7 +467,23 @@ function enablePush(){
     if (el) el.innerHTML='<div class="msg">開啟中…</div>';
     return ensureSub(true).then(function(sub){
       return call(authBody({ action:'appPushTest', endpoint:sub.toJSON().endpoint })).then(function(){ toast('通知已開啟，應該會收到一則測試通知', 3500); });
-    }).catch(function(e){ if (!authFail(e)) toast('開啟通知失敗：'+e.message, 4000); }).finally(function(){ badgeTip(); });
+    }).catch(function(e){ if (!authFail(e)) alert('開啟通知時出錯：'+e.message+'\n（通知可能已開啟，可按「測試通知」再試）'); }).finally(function(){ badgeTip(); });
+  });
+}
+/* 測試通知（2026-11-26 晚：經營者 Android 手機收不到推播 → 分兩步找原因）
+   ① 手機自己跳一則（不經伺服器）：失敗＝手機把「自己做」或 Chrome 的通知關了
+   ② 伺服器送一則：①成功但②10 秒內沒跳＝手機省電／背景限制擋住推播 */
+function pushDiag(){
+  var m=$('pushDiagMsg'), steps=[];
+  function show(){ m.innerHTML = steps.join('<br>'); }
+  m.textContent='測試中…';
+  navigator.serviceWorker.ready.then(function(reg){
+    return reg.showNotification('① 手機自己跳的測試通知', { body:'看到這則＝手機允許「自己做」顯示通知', tag:'diag1', icon:'work-app/icon-192.png' })
+      .then(function(){ steps.push('① 手機顯示通知：✅ 已要求顯示（如果沒看到，請到手機設定打開「自己做」和 Chrome 的通知）'); show(); }, function(e){ steps.push('① 手機顯示通知：❌ '+esc(e.message||e)); show(); })
+      .then(function(){ return ensureSub(true); })
+      .then(function(sub){ if (!sub) throw new Error('沒有訂閱（通知權限：'+Notification.permission+'）'); return call(authBody({ action:'appPushTest', endpoint:sub.toJSON().endpoint })); })
+      .then(function(d){ steps.push('② 伺服器送出：✅ 已送 '+(d&&d.sent)+' 則，10 秒內應跳「🔔 通知已開啟」；沒跳＝手機擋背景通知（設定 → 電池 → 允許背景執行）'); show(); })
+      .catch(function(e){ if (authFail(e)) return; steps.push('② 伺服器送出：❌ '+esc(e.message||e)); show(); });
   });
 }
 function disablePush(){
@@ -482,7 +498,11 @@ function badgeTip(){
   var el=$('badgeTip'); if (!el) return;
   var ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
   if (!pushOK() || !S.auth) { el.innerHTML = (ios && !standalone() && S.auth) ? '' : ''; return; }
-  if (Notification.permission==='granted') { el.innerHTML=''; ensureSub(false).catch(function(e){ authFail(e); }); return; }
+  if (Notification.permission==='granted') {
+    el.innerHTML = '<div class="msg" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">🔔 通知已開啟 <button class="btn sec2" id="pushDiag" style="padding:4px 10px;font-size:13px">測試通知</button><span id="pushDiagMsg"></span></div>';
+    $('pushDiag').onclick = pushDiag;
+    ensureSub(false).catch(function(e){ authFail(e); }); return;
+  }
   if (Notification.permission==='denied' || lsGet('wa_push_off')) { el.innerHTML=''; return; }
   el.innerHTML = '<div class="inst"><div>🔔 <b>開啟通知</b>：有交辦給你的工作、有人回覆、快到期時，手機會跳通知，桌面圖示也會顯示件數。<br><button class="btn" id="pushGo" style="padding:6px 12px;font-size:14px;margin-top:6px">開啟通知</button></div><button class="x" aria-label="不再顯示">×</button></div>';
   el.querySelector('.x').onclick=function(){ lsSet('wa_push_off','1'); el.innerHTML=''; };

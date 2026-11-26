@@ -1,7 +1,7 @@
 /* 2026-11-26 自己做 App 的 service worker（範圍只有 /static/work-app*，不影響其他儀表板）
    頁面與圖示：先連網、失敗才用快取（沒網路時還打得開，但資料要連網才更新）。API（script.google.com）不經過這裡。
    2026-11-26 晚 推播：收到推播 → 跳通知＋桌面圖示數字（payload.n）；點通知 → 打開那件工作。 */
-var CACHE = 'work-app-v7';
+var CACHE = 'work-app-v8';
 var FILES = ['work-app.html', 'work-app.manifest.json', 'work-app/icon-192.png', 'work-app/icon-512.png', 'work-app/apple-touch-icon.png', 'work-app/logo.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).catch(function () {}).then(function () { return self.skipWaiting(); }));
