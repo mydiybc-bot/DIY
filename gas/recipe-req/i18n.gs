@@ -912,6 +912,8 @@ function i18nKick_(p) {
 }
 function i18nDaily() {
   var t0 = Date.now(), ref = null;
+  try { var zp = i18nZPairDaily_(); if (zp.changed.length) i18nLog_('排程', 'zpair', zp.changed.join(','), '', 'ok', '中文原文自動配對舊英文原文：更新 ' + zp.changed.length + ' 支'); }   /* 2026-11-27：先更新配對，舊英文版被取代就不再列、不再翻 */
+  catch (e) { i18nLog_('排程', 'zpair', '', '', 'error', errMsg_(e)); }
   try { ref = i18nRefresh_(true, t0 + 180000); }   /* 2026-11-11 改全部重抓：後台「新增步驟」不會改食譜更新日（11/10 一平匙說明漏了 22 支）；只抓 38 頁約 16 秒，內容沒變指紋不變、不會重翻 */ catch (e) { i18nLog_('排程', 'refresh', '', '', 'error', errMsg_(e)); return; }
   i18nLog_('排程', 'refresh', '', '', 'ok', '檢查 ' + ref.checked + '、重抓 ' + ref.fetched + '、內容有變 ' + ref.changed + '、下架 ' + ref.gone + (ref.errors.length ? '；' + ref.errors.join('；') : ''));
   if (i18nProp_('I18N_AUTO') !== '1') return;

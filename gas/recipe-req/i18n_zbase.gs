@@ -79,6 +79,42 @@ function i18nZCands_() {
   });
   return zh;
 }
+/* 同步候選到 i18n_zsrc（i18nZSet 與每天 06:30 i18nDaily 共用）：新的記 on＝N；自動配對的 old 跟著更新，手動的不動；
+   op on／off／old 再套用到 ids。回 {rows, changed＝這次 old 有變的中文 id}。 */
+function i18nZSync_(C, op, ids, p, t) {
+  var changed = [];
+  var rows = i18nLock_(function () {
+    var sh = i18nSheet_('i18n_zsrc', I18N_ZSRC_HEAD), n = sh.getLastRow() - 1, have = {}, order = [];
+    if (n > 0) sh.getRange(2, 1, n, I18N_ZSRC_HEAD.length).getDisplayValues().forEach(function (r) {
+      var o = {}; I18N_ZSRC_HEAD.forEach(function (h, j) { o[h] = r[j]; }); o.id = String(o.id).trim().toLowerCase();
+      if (o.id && !have[o.id]) { have[o.id] = o; order.push(o.id); }
+    });
+    C.forEach(function (c) {
+      var o = have[c.id];
+      if (!o) { o = have[c.id] = { id: c.id, on: 'N', pair: c.old ? '自動' : '', old: c.old || '', at: t }; order.push(c.id); }
+      o.name = c.name; o.steps = String(c.steps);
+      if (o.pair !== '手動') { if (String(o.old || '') !== String(c.old || '')) changed.push(c.id); o.old = c.old || ''; o.pair = c.old ? '自動' : ''; }
+    });
+    (ids || []).forEach(function (id) {
+      var o = have[id]; if (!o) throw fail_('i18n_zsrc 沒有這支：' + id, 'bad');
+      if (op === 'on' || op === 'off') { o.on = op === 'on' ? 'Y' : 'N'; o.at = t; }
+      if (op === 'old') { o.old = String(p.old || '').trim().toLowerCase(); o.pair = '手動'; o.at = t; }
+    });
+    var vals = order.map(function (id) { var o = have[id]; return I18N_ZSRC_HEAD.map(function (h) { return o[h] == null ? '' : String(o[h]); }); });
+    if (vals.length) sh.getRange(2, 1, vals.length, I18N_ZSRC_HEAD.length).setNumberFormat('@').setValues(vals);
+    return order.map(function (id) { return have[id]; });
+  });
+  I18N_ZM = null;
+  return { rows: rows, changed: changed };
+}
+/* 每天 06:30（i18nDaily 重抓原文前）：只同步候選與自動配對，不開關任何一支。
+   2026-11-27 經營者：「加自動配對」——後台新增的台灣英文版（例：聖誕款）原本要有人跑 zset.py 才會配到中文版，
+   沒配到 → 平板英文清單同時列新舊兩份（英文 85、其他語言 75）。 */
+function i18nZPairDaily_() {
+  var C = i18nZCands_(); if (!C.length) return { changed: [] };   /* 食譜演化表讀不到 → 不動（避免把配對全清掉） */
+  var r = i18nZSync_(C, 'list', [], {}, now_());
+  return { changed: r.changed };
+}
 /* 動作 i18nZSet（投遞通行碼 wkey）：
    op list（預設）＝同步候選到 i18n_zsrc（新的記 on＝N；自動配對的 old 跟著更新，手動的不動）後回清單；
    op on／off＋ids＝打開／關掉（打開才收原文、進待翻）；op old＋id＋old＝手動指定對應的舊英文原文（old 空白＝沒有）。 */
@@ -89,28 +125,7 @@ function i18nZSet_(p) {
   var ids = (Array.isArray(p.ids) ? p.ids : p.id ? [p.id] : []).map(function (x) { return String(x || '').trim().toLowerCase(); }).filter(String);
   if (op === 'on') ids.forEach(function (id) { if (!cm[id]) throw fail_('不是候選的中文食譜（台灣區、繁中、啟用中、客人用、非裝飾蛋糕）：' + id, 'bad'); });
   if ((op === 'on' || op === 'off' || op === 'old') && !ids.length) throw fail_('沒有指定食譜', 'bad');
-  var out = i18nLock_(function () {
-    var sh = i18nSheet_('i18n_zsrc', I18N_ZSRC_HEAD), n = sh.getLastRow() - 1, have = {}, order = [];
-    if (n > 0) sh.getRange(2, 1, n, I18N_ZSRC_HEAD.length).getDisplayValues().forEach(function (r) {
-      var o = {}; I18N_ZSRC_HEAD.forEach(function (h, j) { o[h] = r[j]; }); o.id = String(o.id).trim().toLowerCase();
-      if (o.id && !have[o.id]) { have[o.id] = o; order.push(o.id); }
-    });
-    C.forEach(function (c) {
-      var o = have[c.id];
-      if (!o) { o = have[c.id] = { id: c.id, on: 'N', pair: c.old ? '自動' : '', old: c.old || '', at: t }; order.push(c.id); }
-      o.name = c.name; o.steps = String(c.steps);
-      if (o.pair !== '手動') { o.old = c.old || ''; o.pair = c.old ? '自動' : ''; }
-    });
-    ids.forEach(function (id) {
-      var o = have[id]; if (!o) throw fail_('i18n_zsrc 沒有這支：' + id, 'bad');
-      if (op === 'on' || op === 'off') { o.on = op === 'on' ? 'Y' : 'N'; o.at = t; }
-      if (op === 'old') { o.old = String(p.old || '').trim().toLowerCase(); o.pair = '手動'; o.at = t; }
-    });
-    var vals = order.map(function (id) { var o = have[id]; return I18N_ZSRC_HEAD.map(function (h) { return o[h] == null ? '' : String(o[h]); }); });
-    if (vals.length) sh.getRange(2, 1, vals.length, I18N_ZSRC_HEAD.length).setNumberFormat('@').setValues(vals);
-    return order.map(function (id) { return have[id]; });
-  });
-  I18N_ZM = null;
+  var out = i18nZSync_(C, op, ids, p, t).rows;
   if (op === 'off') i18nLock_(function () {   /* 關掉 → 原文立刻下架（不等明天重抓；不然會被當成英文原文） */
     var sm = i18nMeta_('i18n_src', I18N_SRC_HEAD).rows;
     ids.forEach(function (id) { if (sm.some(function (r) { return r.id === id && r.state !== 'gone'; }) && !i18nZh_()[id]) i18nUpsert_('i18n_src', I18N_SRC_HEAD, 'id', { id: id, state: 'gone', at: now_() }, null); });
