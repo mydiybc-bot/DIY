@@ -55,7 +55,7 @@
   };
   var HTML_LANG = { en: 'en', ja: 'ja', ko: 'ko', vi: 'vi', id: 'id', th: 'th', zh: 'zh-Hant' };
 
-  var CSS = '.trv{position:fixed;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;overflow:clip;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
+  var CSS = '.trv{position:fixed;top:0;right:0;bottom:0;left:0;inset:0;z-index:9000;background:#fff;color:#40210f;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans",sans-serif;--u:min(1vw,0.78vh);overflow:hidden;overflow:clip;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}'
     + '.trv *{box-sizing:border-box}'
     + '.trv-track{position:absolute;left:0;right:0;top:0;bottom:calc(var(--u)*9.6);display:flex;flex-wrap:nowrap;transition:transform .32s ease;will-change:transform}'
     + '.trv-slide{flex:0 0 100%;width:100%;min-width:100%;height:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;position:relative;background:#fff}'
@@ -102,7 +102,7 @@
     + '.trv-list h3{margin:0;background:#fdd35d;padding:.7em 1em;font-size:1em;position:sticky;top:0}'
     + '.trv-list button{display:flex;gap:.6em;width:100%;text-align:left;border:none;background:none;padding:.65em 1em;font-size:1em;color:#40210f;cursor:pointer;border-bottom:1px solid #e2d8d0}'
     + '.trv-list button.on{background:#fff3c4;font-weight:800}.trv-list .n{flex:0 0 2.2em;opacity:.7}'
-    + '.trv-lb{position:absolute;inset:0;z-index:20;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}'
+    + '.trv-lb{position:absolute;top:0;right:0;bottom:0;left:0;inset:0;z-index:20;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}'
     + '.trv-lb img{max-width:96vw;max-height:84vh;object-fit:contain}.trv-lb button{font-size:18px;padding:8px 22px;border-radius:999px;border:none;font-weight:800}'
     + '.trv-toast{position:absolute;left:50%;top:40%;transform:translateX(-50%);background:#40210f;color:#fff;padding:.7em 1.4em;border-radius:999px;font-size:calc(var(--u)*3.2);z-index:30;font-weight:700}';
 
