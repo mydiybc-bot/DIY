@@ -42,7 +42,7 @@ function guideSrc_(p) {
 function guideLocalName_(nm, lang, trName) {
   nm = String(nm || '');
   var base = nm.replace(/\s*[(（][^)）]*[)）]/g, '').trim(), fix = I18N_ZNAME[base];
-  var t = fix ? (fix[lang] || '') : rbTrim_(trName || '');
+  var t = (fix && fix[lang]) || rbTrim_(trName || '');   /* 2026-11-28 修：固定品名沒列的語言改用譯文名（原本留空白 → 到店須知檢查擋下） */
   if (!t) return '';
   var veg = /[(（]\s*可做全素\s*[)）]/.test(nm) ? 'o' : /[(（]\s*全素\s*[)）]/.test(nm) ? 'v' : '';
   if (veg && I18N_ZVEG[veg][lang] && !/vegan|ヴィーガン|비건|chay|วีแกน/i.test(t)) t += I18N_ZVEG[veg][lang];

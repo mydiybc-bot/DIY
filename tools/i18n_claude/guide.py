@@ -127,6 +127,12 @@ def free_ok(it):
     return bool(base) and bool(re.search(re.escape(base) + r'\s*[：:][^\n]*免費', c))
 
 
+def sponge_of(s, k):
+    """s 是不是自選版 k 的同款海綿版：名稱帶「_海綿蛋糕版」的，或（2026-11-28 後台換新的壽星款）不帶後綴、同名的那支（例：我的生日蛋糕 (限當日壽星)）"""
+    if '自選版' in s['name']: return False
+    return re.sub(r'\s+', '', s['name'].replace('_海綿蛋糕版', '')) == k
+
+
 def pick_price(it, S):
     """自選版（2026-11-26，客人先選蛋糕體＋夾餡）：後台售價是 0、產品特色也沒寫價錢。
     價錢＝同一款「海綿蛋糕版」的價錢（免費算 0；待定就待定）＋海綿版產品特色寫的「+$69口味＆夾餡升級」。
@@ -134,7 +140,7 @@ def pick_price(it, S):
     if '自選版' not in it['name']: return 'no'
     k = re.sub(r'\s+', '', it['name'].replace('_自選版', ''))
     for s in S['items']:
-        if '海綿蛋糕版' not in s['name'] or re.sub(r'\s+', '', s['name'].replace('_海綿蛋糕版', '')) != k: continue
+        if not sponge_of(s, k): continue
         e = s.get('edit') or {}
         p = float(e['price']) if re.fullmatch(r'\s*\d+(\.\d+)?\s*', e.get('price') or '') else None
         if p == 0 and not free_ok(s): p = None
@@ -148,7 +154,7 @@ def pick_cover(it, S):
     if '自選版' not in it['name']: return ''
     k = re.sub(r'\s+', '', it['name'].replace('_自選版', ''))
     for s in S['items']:
-        if '海綿蛋糕版' in s['name'] and re.sub(r'\s+', '', s['name'].replace('_海綿蛋糕版', '')) == k: return s.get('cover') or ''
+        if sponge_of(s, k): return s.get('cover') or ''
     return ''
 
 
