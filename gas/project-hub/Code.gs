@@ -33,7 +33,7 @@
  *   - spoon_set 加 spoon_ml（量匙規格 ml）、real_g（1 平匙真實克數）；g_per_spoon 就是「食譜用克數」。
  *   - 新表 spoon_spec_log（規格每改一次記一列）、spoon_evo（每支甜點每一處乾料、每個版本的平匙數）。
  *   - 第一批資料在 seed.gs 的 EVO_SEED／SPEC_SEED（分頁第一次建立時放入）。 */
-var VER = 'v2.2';   /* v2.2（2026-10-29）：GET spoonSpec（各食材最新定案規格，給新品申請表／新食譜上傳提醒改平匙）；v2.1（2026-10-29）：確認轉換／記錄已套用改成每欄一次寫完（writeCols_），不再每列讀寫一次；v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
+var VER = 'v2.3';   /* v2.3（2026-11-27）：goals 目標表（專案頁「🎯 目標」分頁，取代原本的進度分頁）；v2.2（2026-10-29）：GET spoonSpec（各食材最新定案規格，給新品申請表／新食譜上傳提醒改平匙）；v2.1（2026-10-29）：確認轉換／記錄已套用改成每欄一次寫完（writeCols_），不再每列讀寫一次；v2.0（2026-10-29）：spoon_final 定案明細（平匙換算頁按「✅ 確認轉換到執行進度」寫入、已定案明細可手動調平匙數、記錄套用到後台）；spoon_lines 多 recipe_id／step_no／step_title／seq（spoon_feed.gs 讀後台時一起記）；v1.9（2026-10-28）：item_usage／recipes_tw（🔎 品項使用查詢：後台每個品項被哪些食譜用，瀏覽器掃描後 itemScanSave 上傳，GET items 讀）；v1.8（2026-10-27）：spoonSave 可帶 spoon_ml；v1.7（2026-10-22）：spoon_lines 多 use_step／purpose（食譜系統 spoon_feed.gs 每天自動更新快照）；v1.6（2026-10-22）：spoon_set 多 kind，deco＝裝飾乾料（specSave 不要求食譜用克數）；v1.5（2026-10-22）：spoon 每項多 purpose／use_step（使用目的，資料在 purpose.gs）；v1.4（2026-10-22）：projects 多 files（📎 專案檔案）；v1.3：specSave 免密碼 */
 var AUTH_API = 'https://script.google.com/macros/s/AKfycbyQ9LWY74Ix8VBe1gDoMdSF5eH74ratL7_f0EUUHi37IH3bXhkIJMx4WB2I-c-MLsWtLQ/exec';
 var AUTH_DASH = 'project', AUTH_SEC = 7200;
 var AUTHC_SS_ID = '1_aXfjX-JKo8rr9EJRjiRxhSR0zdMSJfL3I4f0FjIxj4', AUTHC_TAB = 'dim_auth';
@@ -45,6 +45,7 @@ var T = {
   phases:    { id: 'phase_id', cols: ['phase_id', 'project_id', 'no', 'title', 'start', 'end', 'owners', 'content', 'checkpoint', 'check_due', 'status', 'done_at', 'note', 'updated_at', 'deleted', 'lead', 'done_items'] },
   decisions: { id: 'dec_id', cols: ['dec_id', 'project_id', 'no', 'question', 'suggestion', 'answer', 'status', 'decided_at', 'updated_at', 'deleted', 'due', 'blocks'] },
   risks:     { id: 'risk_id', cols: ['risk_id', 'project_id', 'no', 'risk', 'action', 'status', 'updated_at', 'deleted'] },
+  goals:     { id: 'goal_id', cols: ['goal_id', 'project_id', 'no', 'title', 'baseline', 'target', 'measure', 'current', 'status', 'note', 'updated_at', 'deleted'] },   /* v2.3：baseline＝起點、target＝目標值、measure＝怎麼量、current＝目前 */
   people:    { id: 'person_id', cols: ['person_id', 'name', 'role', 'email', 'note', 'updated_at', 'deleted'] },
   spoon_lines: { id: '', cols: ['recipe', 'ingredient', 'grams', 'first_spoon', 'snap_date', 'source', 'use_step', 'purpose', 'recipe_id', 'step_no', 'step_title', 'seq'] },   /* v2.0：recipe_id＝後台食譜編號、step_no＝第幾步、seq＝同一步同食材同克數的第幾個 */
   /* v2.0 定案明細（2026-10-29 經營者：「平匙換算頁按確認就把當下資料轉到執行進度；已定案明細的平匙數可手動調；正式食譜依這份調整」）
@@ -60,8 +61,8 @@ var T = {
   log:       { id: '', cols: ['ts', 'action', 'table', 'target', 'detail'] }
 };
 var SCAN_TABLES = { item_usage: 1, recipes_tw: 1 };
-var EDITABLE = { projects: 1, phases: 1, decisions: 1, risks: 1, people: 1 };
-var ID_PREFIX = { projects: 'P', phases: 'PH', decisions: 'D', risks: 'R', people: 'U' };
+var EDITABLE = { projects: 1, phases: 1, decisions: 1, risks: 1, people: 1, goals: 1 };
+var ID_PREFIX = { projects: 'P', phases: 'PH', decisions: 'D', risks: 'R', people: 'U', goals: 'G' };
 
 /* ---------------- 進入點 ---------------- */
 function doGet(e) {
@@ -190,7 +191,7 @@ function log_(action, table, target, detail) {
 
 /* ---------------- 讀 ---------------- */
 function bundle_() {
-  return { projects: live_('projects'), phases: live_('phases'), decisions: live_('decisions'), risks: live_('risks'), people: live_('people') };
+  return { projects: live_('projects'), phases: live_('phases'), decisions: live_('decisions'), risks: live_('risks'), people: live_('people'), goals: live_('goals') };
 }
 /* ---------- v1.9 🔎 品項使用查詢 ---------- */
 function items_() {
