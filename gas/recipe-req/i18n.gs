@@ -1187,7 +1187,8 @@ var I18N_COVER = {
 };
 function i18nCover_(s) { return (s && s.cover) || I18N_COVER[String(s && s.id || '').toLowerCase()] || ''; }
 /* 2026-11-27 經營者：「在日文步驟內容的下方加入中文步驟內容，讓我們的夥伴可以在協助客人的時候看得懂」→ 先試做老奶奶檸檬蛋糕日文；鍵＝食譜id|語言 */
-var I18N_ZHSUB = { 'a0662719-fe28-4c37-a1b3-db63c7477a48|ja': 1 };
+/* 2026-11-27 經營者看過試做後：「擴大到全部日文」→ '*|語言'＝該語言全部中文原文食譜都附中文 */
+var I18N_ZHSUB = { '*|ja': 1 };
 function i18nBuild_(src, tr, D, lang, row, NM0) {
   var areas = {}, NM = NM0 || {}, Z = src.base === 'zh';   /* Z：中文原文（2026-11-24）——詞典 D 是中文索引；原文對照附中文名＋英文譯名 */
   if (!NM0 && !Z) { try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文 */ } }
@@ -1204,7 +1205,7 @@ function i18nBuild_(src, tr, D, lang, row, NM0) {
     });
     var o = { t: t.t || s.t, video: s.video, img: lang === 'zh' && s.img_zh ? s.img_zh : s.img, h: h, ings: ings };
     if (s.vtut) { o.video_orig = s.video; o.video = i18nZTut_(lang, s.video); }   /* 中文教學影片 → 熊主廚各語言版／英文共用版 */
-    if (Z && lang !== 'zh' && I18N_ZHSUB[src.id + '|' + lang] && !s.ings.length) {   /* 步驟頁下方附中文（給夥伴看）；圖片不重複放 */
+    if (Z && lang !== 'zh' && (I18N_ZHSUB['*|' + lang] || I18N_ZHSUB[src.id + '|' + lang]) && !s.ings.length) {   /* 步驟頁下方附中文（給夥伴看）；圖片不重複放 */
       o.zt = s.t; o.zh = String(s.h || '').replace(/\[\[IMG\d+\]\]/g, '').replace(/<img\b[^>]*>/gi, '');
     }
     return o;
@@ -1325,10 +1326,10 @@ function i18nSnapPost_(body) {
 /* force＝不問伺服器、全部重推；deadline＝毫秒時間點，到了就先停（清單照推；沒推到的那幾支平板會退回 GAS，下次再補） */
 /* done（2026-11-24）：全部重推時「今天已推過」的 {id|lang|ver: 1}，跳過並把這次推的加進去——一次推不完，下一次接著推，不從頭來
    （中文原文 93 支×6 語言，一次 4.5 分鐘推不完；原本每 15 分鐘從頭重推，會把 Google 每天的執行時間用光） */
-function i18nSnapPush_(force, deadline, done) {
+function i18nSnapPush_(force, deadline, done, only) {   /* only＝只推這個語言（2026-11-27，日文附中文後強制重推日文用） */
   var t0 = Date.now(); deadline = deadline || t0 + 270000; done = done || {};
   var L = i18nListData_().data, have = force ? {} : (i18nSnapPost_({ op: 'manifest' }).vers || {}), todo = [];
-  L.items.forEach(function (it) { I18N_LANGS.concat(['en']).forEach(function (l) { var k = it.id + '|' + l; if (it.langs[l] === 'live' && it.ver[l] && have[k] !== it.ver[l] && !done[k + '|' + it.ver[l]]) todo.push({ id: it.id, lang: l, ver: it.ver[l] }); }); });
+  L.items.forEach(function (it) { I18N_LANGS.concat(['en']).forEach(function (l) { var k = it.id + '|' + l; if (only && l !== only) return; if (it.langs[l] === 'live' && it.ver[l] && have[k] !== it.ver[l] && !done[k + '|' + it.ver[l]]) todo.push({ id: it.id, lang: l, ver: it.ver[l] }); }); });
   var ctx = todo.length ? i18nGetCtx_() : null, batch = [], size = 0, pushed = 0, failed = [], cut = false;
   var flush = function () { if (!batch.length) return; i18nSnapPost_({ op: 'put', items: batch }); batch.forEach(function (b) { done[b.id + '|' + b.lang + '|' + b.ver] = 1; }); pushed += batch.length; batch = []; size = 0; };
   for (var i = 0; i < todo.length; i++) {
@@ -1369,7 +1370,7 @@ function i18nSnapSet_(p) {
   if (p.key) i18nProp_('I18N_SNAP_KEY', String(p.key));
   if (p.on != null) { i18nDropTrig_('i18nSnapTick'); if (Number(p.on)) ScriptApp.newTrigger('i18nSnapTick').timeBased().everyMinutes(15).create(); }
   var r = null;
-  if (p.push) { var sig = i18nSnapSig_(); r = i18nSnapPush_(!!p.force, Date.now() + 300000); i18nProp_('I18N_SNAP_SIG', sig); i18nProp_('I18N_SNAP_LEFT', r.left || r.failed.length ? '1' : '0'); i18nLog_('Claude Code', 'snap', '', '', r.failed.length ? 'error' : 'ok', (p.force ? '全部重推；' : '') + '清單 ' + r.items + ' 支、推 ' + r.pushed + '/' + r.todo, r.sec); }
+  if (p.push) { var sig = i18nSnapSig_(); r = i18nSnapPush_(!!p.force, Date.now() + 300000, null, p.lang || ''); i18nProp_('I18N_SNAP_SIG', sig); i18nProp_('I18N_SNAP_LEFT', r.left || r.failed.length ? '1' : '0'); i18nLog_('Claude Code', 'snap', '', '', r.failed.length ? 'error' : 'ok', (p.force ? '全部重推；' : '') + '清單 ' + r.items + ' 支、推 ' + r.pushed + '/' + r.todo, r.sec); }
   var chk = null;
   if (p.check) {   /* 驗證：一次推（ctx）組出來的內容＝平板 i18nGet 單支組出來的，一字不差 */
     var ctx = i18nGetCtx_(), L = i18nListData_().data, n = 0, same = 0, diff = [];
