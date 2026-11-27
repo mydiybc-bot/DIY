@@ -179,7 +179,7 @@
           if (s.video) h += '<div class="trv-vwrap"><video class="trv-video" controls playsinline preload="none" data-src="' + esc(s.video) + '"></video></div>';
           else if (s.img) h += '<img class="trv-img" data-lz="' + esc(s.img) + '" alt="" data-zoom="' + esc(s.img) + '">';
           h += head + '<div class="trv-body">' + lz(safeHtml(s.h))
-            + (s.zh ? '<div class="trv-zh" lang="zh-Hant"><div class="zt">中文步驟（給夥伴看）｜' + esc(s.zt || '') + '</div>' + safeHtml(s.zh) + '</div>' : '')   /* 2026-11-27 經營者：日文步驟下方加中文，夥伴協助客人時看得懂（2026-11-27 擴大到全部日文；名單在 i18n.gs I18N_ZHSUB） */
+            + (s.zh ? '<div class="trv-zh" lang="zh-Hant"><div class="zt">中文步驟（給夥伴看）｜' + esc(s.zt || '') + '</div>' + safeHtml(s.zh) + '</div>' : '')   /* 2026-11-27 經營者：外語步驟下方加中文，夥伴協助客人時看得懂（2026-11-27 擴大到全部日文，同日再擴大到所有語言；名單在 i18n.gs I18N_ZHSUB） */
             + '</div>';
         }
         slides.push({ kind: 'step', html: h, n: i });

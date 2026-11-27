@@ -1188,7 +1188,8 @@ var I18N_COVER = {
 function i18nCover_(s) { return (s && s.cover) || I18N_COVER[String(s && s.id || '').toLowerCase()] || ''; }
 /* 2026-11-27 經營者：「在日文步驟內容的下方加入中文步驟內容，讓我們的夥伴可以在協助客人的時候看得懂」→ 先試做老奶奶檸檬蛋糕日文；鍵＝食譜id|語言 */
 /* 2026-11-27 經營者看過試做後：「擴大到全部日文」→ '*|語言'＝該語言全部中文原文食譜都附中文 */
-var I18N_ZHSUB = { '*|ja': 1 };
+/* 同日經營者：「擴大到其他語言也要有」→ 英韓越印泰也全部附 */
+var I18N_ZHSUB = { '*|ja': 1, '*|en': 1, '*|ko': 1, '*|vi': 1, '*|id': 1, '*|th': 1 };
 function i18nBuild_(src, tr, D, lang, row, NM0) {
   var areas = {}, NM = NM0 || {}, Z = src.base === 'zh';   /* Z：中文原文（2026-11-24）——詞典 D 是中文索引；原文對照附中文名＋英文譯名 */
   if (!NM0 && !Z) { try { NM = i18nNameMap_(); } catch (e) { /* 對照表讀不到 → 只附英文 */ } }
